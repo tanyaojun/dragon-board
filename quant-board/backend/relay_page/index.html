@@ -499,27 +499,6 @@
         <div class="hint" id="nodesHint" style="margin:6px 2px 0"></div>
       </div>
     </div>
-
-    <!-- ⑧ 题材周期（2026-10-25 v1）：龙头轨迹四阶段状态机，单源 analysis/hotlist/theme_cycle；
-        预登记 docs/hotlist-jev/theme-cycle-v1-preregistration.md。
-        对象=KPL 题材（外部事件驱动视角，mainTheme 跟强不跟弱归属），与板块节点（产业链
-        视角）并存互为对照；锚=龙头轨迹+人气股池，EOD 定档+事件流帧级时点。 -->
-    <div class="rv" id="rv-themeCycle">
-      <div class="card" style="margin-top:18px">
-        <div id="tcHead"></div>
-        <div class="board-row" id="tcChips"></div>
-        <div class="lf-bar" id="tcFilterBar" style="margin-top:6px">
-          <input class="lf-q" placeholder="搜题材 / 龙头名…（回车生效）" value=""
-                 onchange="tcSet('q', this.value)">
-          <select title="阶段筛选（确定性口径，非模型判读）" onchange="tcSet('stage', this.value)">
-            <option value="">阶段 · 全部</option>
-          </select>
-          <button onclick="tcClear()">清除筛选</button>
-        </div>
-        <table id="tcTable"></table>
-        <div class="hint" id="tcHint" style="margin:6px 2px 0"></div>
-      </div>
-    </div>
   </section>
 
   <section id="tab-labels" style="display:none">
@@ -594,7 +573,6 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
-  tcData: null, tcUi: { stage: '', q: '', open: {} },
   pulse: { loading: false, error: null, api: null, view: 'candidates' },   // V2c 盘中红盘提示
   pulseTimer: null,
   labelSort: { key: 'rank', dir: 1 },
@@ -1094,7 +1072,6 @@ async function loadAll(){
   renderRelayTab(); renderLabels(); renderQuotes(); renderDieban();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
-  tcFetch(date);   // 题材周期（rv-themeCycle 子视图）：按日期框当日取单日文档
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -2306,134 +2283,6 @@ function nodesAggCard(r){
     <div style="font-size:12px;color:var(--muted)">聚合锚对照（影子证据，不进节点判据）</div>
     ${activeLine}${staticLine}${spread}
   </div>`;
-}
-
-// ── 题材周期（rv-themeCycle，2026-10-25 v1）：龙头轨迹四阶段状态机 ──
-// 单源 analysis/hotlist/theme_cycle（判据见预登记 §四）；对象=KPL 题材（外部事件
-// 驱动视角，mainTheme 跟强不跟弱归属）；EOD 定档+事件流帧级时点（预登记 §四）。
-const TC_CN = { wzs: '弱转强', terminator: '终结者', weakening: '转弱',
-                mainline: '主升浪', emerging: '启动', normal: '平淡', unknown: '不可判' };
-const TC_BADGE = { wzs: 'b-green', terminator: 'b-red', weakening: 'b-amber',
-                   mainline: 'b-blue', emerging: 'b-purple', normal: 'b-gray',
-                   unknown: 'b-gray' };
-const TC_TIP = {
-  wzs: '弱转强：昨日转弱 → 今日人气股反包或新连板标杆≥3板（两路，低位首板不触发）',
-  terminator: '终结者：转弱后第 3 个交易日无反包/新标杆/新启动（再无新龙崛起）',
-  weakening: '转弱：龙头断板（真金考验；停牌不算断板）',
-  mainline: '主升浪：昨日龙头今日续板且真连板≥2（龙头角逐进行中）',
-  emerging: '启动：题材涨停 >3 只且龙头未成形/换血（全是首板也算启动）',
-  normal: '平淡：涨停数/龙头轨迹均未命中周期判据',
-  unknown: '不可判：今日题材涨停名单不可考（不伪装平淡）' };
-const TC_STATE_CN = { sealed: '续板', broken: '断板', suspended: '停牌',
-                      unknown: '不可考', none: '昨日无龙头' };
-let _tcSeq = 0;
-async function tcFetch(date){
-  if (!STATE.series || !STATE.series.length) return;
-  const seq = ++_tcSeq;
-  const bg = !!(STATE.tcData && STATE.tcData.doc);
-  STATE.tcData = { loading: !bg, error: null, api: null, doc: bg ? STATE.tcData.doc : null };
-  renderThemeCycle();
-  try {
-    const r = await jget('/api/hotlist-jev/theme-cycle?days=30'
-      + (date ? '&date=' + encodeURIComponent(date) : ''));
-    if (seq !== _tcSeq) return;
-    STATE.tcData = { loading: false,
-      error: (r && r.ok === false) ? (r.reason || '读库降级') : null, api: r, doc: (r && r.doc) || null };
-  } catch (e) {
-    if (seq !== _tcSeq) return;
-    STATE.tcData = { loading: false,
-      error: 'theme_cycle_read_failed: ' + (e && e.message ? e.message : e),
-      api: null, doc: bg ? STATE.tcData.doc : null };
-  }
-  renderThemeCycle();
-}
-function tcSet(key, val){ STATE.tcUi[key] = val; STATE.tcUi.open = {}; renderThemeCycle(); }
-function tcClear(){ STATE.tcUi = { stage: '', q: '', open: {} };
-  const bar = $('tcFilterBar');
-  const q = bar && bar.querySelector('input'); if (q) q.value = '';
-  const sel = bar && bar.querySelector('select'); if (sel) sel.value = '';
-  renderThemeCycle(); }
-function tcToggle(t){ const o = STATE.tcUi.open; o[t] = !o[t]; renderThemeCycle(); }
-function renderThemeCycle(){
-  const head = $('tcHead'); if (!head) return;
-  const d = STATE.tcData || {};
-  const doc = d.doc;
-  if (d.error && !doc){
-    head.innerHTML = '<div class="lf-warn">⚠️ 题材周期读口异常：' + esc(d.error) + '（非「无存档」）</div>';
-    $('tcChips').innerHTML = ''; $('tcTable').innerHTML = ''; $('tcHint').textContent = '';
-    return;
-  }
-  if (!doc){
-    head.innerHTML = '<div class="lf-warn">该日无题材周期存档（盘后链未跑 / 非交易日 / 早于 v1 投产日）</div>';
-    $('tcChips').innerHTML = ''; $('tcTable').innerHTML = ''; $('tcHint').textContent = '';
-    return;
-  }
-  const warns = [];
-  if (doc.status === 'degraded') warns.push('⚠️ 当日降级：' + esc((doc.degraded || []).join('；') || '原因未记录'));
-  head.innerHTML = warns.length ? '<div class="lf-warn">' + warns.join('<br>') + '</div>' : '';
-  const f = STATE.tcUi;
-  let rows = (doc.rows || []).slice();
-  const dist = {};
-  for (const r of rows) dist[r.stage] = (dist[r.stage] || 0) + 1;
-  $('tcChips').innerHTML = '<span class="k">阶段分布</span>'
-    + ['wzs', 'mainline', 'emerging', 'weakening', 'terminator', 'normal', 'unknown']
-      .filter(k => dist[k])
-      .map(k => '<span class="chip' + (f.stage === k ? ' on' : '') + '" title="' + esc(TC_TIP[k])
-        + '" onclick="tcSet(\'stage\', \'' + k + '\')">' + TC_CN[k] + ' ' + dist[k] + '</span>').join('');
-  if (f.stage) rows = rows.filter(r => r.stage === f.stage);
-  const sel = $('tcFilterBar') && $('tcFilterBar').querySelector('select');
-  if (sel){
-    const cur = f.stage || '';
-    sel.innerHTML = '<option value="">阶段 · 全部</option>'
-      + ['wzs', 'mainline', 'emerging', 'weakening', 'terminator', 'normal', 'unknown']
-        .map(k => `<option value="${k}"${cur === k ? ' selected' : ''}>${TC_CN[k]}</option>`).join('');
-  }
-  if (f.q) rows = rows.filter(r => (r.theme || '').includes(f.q)
-    || ((r.leader || {}).name || '').includes(f.q));
-  rows.sort((a, b) => (b.count || 0) - (a.count || 0));
-  const body = rows.map(r => {
-    const open = !!f.open[r.theme];
-    const ld = r.leader;
-    const ldTxt = ld ? esc(ld.name || ld.code || '?')
-      + (ld.streak != null ? ' ' + ld.streak + '板' : '') : '—';
-    const ls = r.leaderState
-      ? (r.leaderState === 'broken' ? ' <span class="badge b-red">断板</span>'
-        : r.leaderState === 'sealed' ? ' <span class="badge b-green" title="昨日龙头今日续板">续</span>'
-        : r.leaderState === 'suspended' ? ' <span class="badge b-amber">停牌</span>' : '')
-      : '';
-    const ev = (r.events || []).map(e => esc(e.cn + (e.detail ? '·' + e.detail : ''))).join('；') || '—';
-    const pctTxt = (p) => p == null ? '—' : Math.round(p * 100) + '%';
-    const kplDiff = (r.kplZtCount != null && r.count != null) ? r.kplZtCount - r.count : null;
-    const main = `<tr onclick="tcToggle('${esc(r.theme)}')" style="cursor:pointer">
-      <td><b>${esc(r.theme)}</b>${r.cycleN > 1 ? ' <span class="badge b-gray" title="同题材第 N 轮周期">第' + r.cycleN + '轮</span>' : ''}</td>
-      <td><span class="badge ${TC_BADGE[r.stage] || 'b-gray'}" title="${esc(TC_TIP[r.stage] || '')}">${TC_CN[r.stage] || r.stage}</span></td>
-      <td>${r.count ?? '—'}${r.prevCount != null ? ' <span style="color:var(--muted2)">(昨 ' + r.prevCount + ')</span>' : ''}</td>
-      <td>${ldTxt}${ls}</td>
-      <td>${ev}</td>
-      <td>${pctTxt(r.n5Pct)} / ${pctTxt(r.n10Pct)}</td>
-      <td>${r.kplZtCount ?? '—'}${kplDiff != null && kplDiff !== 0 ? ' <span style="color:var(--muted2)" title="KPL 题材成分口径差">(' + (kplDiff > 0 ? '+' : '') + kplDiff + ')</span>' : ''}</td>
-    </tr>`;
-    if (!open) return main;
-    const detail = [
-      r.basis && r.basis.length ? '<b>依据：</b>' + r.basis.map(esc).join('；') : '',
-      r.notes && r.notes.length ? '<b>注记：</b>' + r.notes.map(esc).join('；') : '',
-      (r.rewrapCodes || []).length ? '<b>反包：</b>' + r.rewrapCodes.map(s =>
-        esc((s.name || s.code) + (s.time ? ' ' + s.time : ''))).join('、') : '',
-      (r.benchmarkCodes || []).length ? '<b>新标杆：</b>' + r.benchmarkCodes.map(s =>
-        esc((s.name || s.code) + ' ' + (s.streak || '?') + '板')).join('、') : '',
-      (r.codes || []).length ? '<b>今日涨停名单（mainTheme 归属）：</b>'
-        + (r.names || []).map(s => esc((s.name || s.code) + (s.streak ? ' ' + s.streak + '板' : ''))).join('、') : '',
-    ].filter(Boolean).join('<br>');
-    return main + `<tr><td colspan="7" style="background:var(--bg2);font-size:12px;padding:8px 12px">${detail}</td></tr>`;
-  }).join('');
-  $('tcTable').innerHTML = '<tr><th>题材</th><th>阶段</th><th>涨停（昨）</th><th>龙头</th>'
-    + '<th>事件流（EOD 定档·时点=封板时刻）</th><th title="近5日/近10日家数分位（对照列，不进门）">N5/N10</th>'
-    + '<th title="KPL ztCount（题材成分口径，对照列）">KPL板</th></tr>'
-    + (body || '<tr><td colspan="7" style="text-align:center;color:var(--muted2)">无行</td></tr>');
-  $('tcHint').textContent = 'doc.version=' + (doc.version || '?')
-    + ' · meta.slot=' + ((doc.meta || {}).slot || '—')
-    + ' · 人气池=' + ((doc.meta || {}).poolWindowDays || '?') + '日窗口'
-    + ' · 序列 ' + ((STATE.tcData.api || {}).series || []).length + ' 日';
 }
 
 // ── V2c 盘中红盘提示（rv-nodes 内，2026-10-25，预登记 sector-nodes-v2c-intraday）──
@@ -4176,7 +4025,7 @@ function lgCopy(view, what, ev){
 //   一级 < 5 个，连板指数 5 个子视图各占一页（每页 ≤2 卡，杜绝一页长条）
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
-  ['nodes', '板块节点', '🧭'], ['themeCycle', '题材周期', '🌀'],
+  ['nodes', '板块节点', '🧭'],
                      ['leaders', '板块与龙头', '🐉'], ['themes', '题材龙头', '👑'],
                      // 2026-10-19 用户裁决：页名由「判定明细」改为「涨停分析」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
