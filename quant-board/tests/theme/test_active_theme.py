@@ -172,14 +172,24 @@ def test_normalize_name_strips_suffixes():
 def test_baseline_contents():
     assert "中证A50成分股" in GOVERNANCE_BASELINE["excludeThemeNames"]
     links = {l["child"]: l["parent"] for l in GOVERNANCE_BASELINE["familyLinks"]}
-    assert links == {"宇树机器人": "人形机器人", "优必选机器人": "人形机器人"}
+    # T3 正式挂靠 gov-v2：2 官方背书 + 16 重叠率实证晋升
+    assert links["宇树机器人"] == "人形机器人"
+    assert links["优必选机器人"] == "人形机器人"
+    assert links["卫星互联网"] == "商业航天"
+    assert links["液冷服务器"] == "AI硬件"
+    assert links["固态电池概念"] == "锂电池材料"  # 候选方向修正：细分挂大类
+    assert links["光伏辅材"] == "光伏"
+    assert len(links) == 18
+    # 横切/兄弟/事件关联拒绝名单（重叠率 <0.30 或方向反转）
+    assert "军工" not in links.values() or all(  # 军工是大类不作 child 之外的父挂靠检查
+        l["parent"] != "可控核聚变" for l in GOVERNANCE_BASELINE["familyLinks"])
     assert "涨价概念" in GOVERNANCE_BASELINE["crossCutBoards"]
 
 
 def test_apply_and_load_governance_idempotent():
     db = FakeDb()
     s1 = apply_governance(db)
-    assert s1["version"] == "gov-v1"
+    assert s1["version"] == "gov-v2"
     apply_governance(db)  # 幂等整写
     gov = load_governance(db)
     assert gov.found
