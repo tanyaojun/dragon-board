@@ -19,7 +19,7 @@ class SnapshotDerivationService:
 
     VERSION = "snapshot_derivation_v1"
 
-    def derive(self, fact: MarketFactBundle) -> SnapshotBundle:
+    def derive(self, fact: MarketFactBundle, *, theme_governance: Any = None) -> SnapshotBundle:
         slot = SnapshotSlot(
             snapshot_type=fact.snapshot_type,
             trading_date=fact.trading_date,
@@ -46,6 +46,7 @@ class SnapshotDerivationService:
             dataset_id=fact.dataset_id,
             source=fact.source,
             capture_mode=fact.capture_mode,
+            theme_governance=theme_governance,
         )
         derived_at = datetime.now(timezone.utc).isoformat()
         derivation_meta: dict[str, Any] = {

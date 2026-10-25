@@ -105,6 +105,49 @@ def test_theme_heat_and_risk_flags_derived_from_sector() -> None:
     assert row["themeRiskFlags"] == ["题材拥挤风险高"]
 
 
+def test_main_theme_resolves_by_day_strength_not_list_order() -> None:
+    """主题材判定（治理 P2 2026-10-25）：跟强不跟弱。
+
+    大业股份案例基准：themes 列表「轮胎」在前（mappings themeId 字符串序），
+    但当日人形机器人 zt=16 完胜轮胎 zt=1 → mainTheme 必须判人形机器人；
+    旧 themes[0] 口径判「轮胎」即本立项根因。
+    """
+    from backend.services.theme.dict_governance import GovernanceSpec
+
+    fact = _fact_no_pre_close_with_theme()
+    fact.stocks = [{
+        "code": "603278", "name": "大业股份", "rank": 1,
+        "price": 15.0, "pctChange": 10.0,
+    }]
+    fact.themes = {"603278": ["轮胎", "商业航天", "电力", "人形机器人"]}
+    fact.sectors = [
+        {"entityType": "hot_theme", "entityName": "轮胎",
+         "ztCount": 1, "heatScore": 44367.0, "rank": 79},
+        {"entityType": "hot_theme", "entityName": "人形机器人",
+         "ztCount": 16, "heatScore": 272276.0, "rank": 2},
+    ]
+    gov = GovernanceSpec({
+        "familyLinks": [{"parent": "人形机器人", "child": "宇树机器人"}],
+        "excludeThemeNames": ["中证A50成分股"],
+    })
+    bundle = SnapshotDerivationService().derive(fact, theme_governance=gov)
+    row = bundle.stock_rows[0]
+    assert row["mainTheme"] == "人形机器人"
+    assert row["sectorLabel"] == "人形机器人"
+    assert "ztCount=16" in row["mainThemeBasis"]
+
+
+def test_main_theme_none_when_no_sector_strength() -> None:
+    """强度全缺（如非 sector 帧）：mainTheme=None + basis 标注，不回退 themes[0]。"""
+    fact = _fact_no_pre_close_with_theme()
+    fact.sectors = []
+    fact.themes = {"000001": ["银行"]}
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    assert row.get("mainTheme") is None
+    assert row["mainThemeBasis"] == "sector_strength_missing"
+
+
 def test_high_low_price_aliases_from_quote() -> None:
     fact = _fact_no_pre_close_with_theme()
     fact.quotes = [

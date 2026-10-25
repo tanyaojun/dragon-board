@@ -32,6 +32,8 @@ class MongoThemeRepository:
                 "stockCode": str(item.get("stockCode") or ""),
                 "stockTags": item.get("tags") if isinstance(item.get("tags"), list) else [],
                 "stockReason": str(item.get("reason") or ""),
+                # KPL 题材内个股人气（HotNum，治理 P3 2026-10-25 起）；无键=旧代缺失
+                **({"stockHot": int(item["hot"])} if item.get("hot") is not None else {}),
                 "updatedAt": datetime.now(UTC),
             }
             for item in mappings
@@ -147,6 +149,9 @@ class MongoThemeRepository:
                         "id": str(theme.get("id") or ""),
                         "name": str(theme.get("name") or ""),
                         "zsCode": str(theme.get("zsCode") or ""),
+                        # 题材内个股人气（HotNum，治理 P3 2026-10-25 起）；旧代无此字段
+                        **({"hot": int(row["stockHot"])}
+                           if row.get("stockHot") is not None else {}),
                     }
                 )
             row_tags = row.get("stockTags")

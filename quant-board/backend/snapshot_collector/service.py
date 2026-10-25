@@ -349,6 +349,24 @@ class SnapshotCollectorService:
         self._theme_rotation_service = theme_rotation_service
         self._SnapshotIngestRequest = SnapshotIngestRequest
 
+    def _theme_governance(self) -> Any:
+        """题材治理层（人工层准静态，进程内缓存 10 分钟；apply 后自动生效）。
+
+        repo 无 db 属性或治理文档缺失 → None（降级为纯强度判定，采集不阻断）。
+        """
+        import time as _time
+
+        from backend.services.theme.dict_governance import load_governance
+
+        now = _time.monotonic()
+        cached = getattr(self, "_gov_cache", None)
+        if cached is not None and now - cached[0] < 600:
+            return cached[1]
+        db = getattr(self._repo, "db", None)
+        spec = load_governance(db) if db is not None else None
+        self._gov_cache = (now, spec)
+        return spec
+
     # ── run_once ──────────────────────────────────────────────────────────
 
     async def _collect_context(
@@ -470,7 +488,8 @@ class SnapshotCollectorService:
             limit_summary=dict(market_context.limit_summary),
             indices=dict(market_context.indices),
         )
-        derived = SnapshotDerivationService().derive(fact)
+        derived = SnapshotDerivationService().derive(
+            fact, theme_governance=self._theme_governance())
         if self._theme_rotation_service is not None and sector_rows_enabled:
             await self._theme_rotation_service.enrich_bundle(
                 derived,

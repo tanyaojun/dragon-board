@@ -172,7 +172,14 @@ def _extract_mappings(api_data: dict[str, Any]) -> list[dict[str, Any]]:
     tags_by_code: dict[str, list[dict[str, str]]] = {}
     reason_by_code: dict[str, str] = {}
 
-    # 从 StockList 提取 tags
+    # 从 StockList 提取 tags + 题材内热度（HotNum：KPL 个股在该题材的当日人气，
+    # 治理 P3 2026-10-25 前被丢弃；落库供主题材判定/审计，缺失=无该字段不伪造）
+    hot_by_code: dict[str, int] = {}
+    for item in stock_list:
+        code = str(item.get("StockID") or "").strip()
+        hot = item.get("HotNum")
+        if code and isinstance(hot, (int, float)) and not isinstance(hot, bool):
+            hot_by_code[code] = int(hot)
     for item in stock_list:
         code = str(item.get("StockID") or "").strip()
         if not code:
@@ -229,6 +236,7 @@ def _extract_mappings(api_data: dict[str, Any]) -> list[dict[str, Any]]:
                 "stockCode": code,
                 "tags": tags_by_code.get(code, []),
                 "reason": reason_by_code.get(code, ""),
+                "hot": hot_by_code.get(code),
             }
         )
     return mappings

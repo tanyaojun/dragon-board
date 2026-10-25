@@ -12,6 +12,7 @@ from typing import Any
 from backend.core.limit_rules import limit_ratio
 from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
+from backend.snapshot_derivation.active_theme import resolve_active_theme
 
 
 SECTOR_FACTOR_FIELDS = (
@@ -380,6 +381,7 @@ def build_ingest_payload(
     source: str = "quantboard_backend_collector",
     capture_mode: str = "real_time",
     quality_flags: list[str] | None = None,
+    theme_governance: Any = None,
 ) -> dict[str, Any]:
     """Build a minimal ingest payload dict from a slot and market context.
 
@@ -582,14 +584,21 @@ def build_ingest_payload(
             row["themes"] = stock["themes"]
         row_themes = row.get("themes")
         if isinstance(row_themes, list) and row_themes:
-            first_theme = row_themes[0]
-            if isinstance(first_theme, dict):
-                theme_name = str(first_theme.get("name") or first_theme.get("id") or "").strip()
-            else:
-                theme_name = str(first_theme or "").strip()
-            if theme_name:
-                row["sectorLabel"] = theme_name
-                row.setdefault("mainTheme", theme_name)
+            # 主题材判定（跟强不跟弱，2026-10-25 治理 P2）：题材名单 × 当日题材
+            # 强度（本帧 hot_theme sector 行）取最强，替换旧 themes[0] 口径——
+            # 旧顺序由 mappings 查询 themeId 字符串升序决定，与当日炒作无关
+            # （大业股份 603278 被锁死判「轮胎」的根因）。
+            gov = theme_governance
+            active = resolve_active_theme(
+                row_themes, sector_by_name,
+                family_links=gov.family_links if gov else None,
+                excluded_names=gov.exclude_names if gov else None,
+            )
+            main_name = active["mainTheme"]
+            if main_name:
+                row["sectorLabel"] = main_name
+                row.setdefault("mainTheme", main_name)
+            row.setdefault("mainThemeBasis", active["basis"])
 
         theme_role, theme_contribution, lead_status = _derive_theme_role_fields(row)
         row.setdefault("themeRole", theme_role)

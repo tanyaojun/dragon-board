@@ -51,7 +51,7 @@ def _ok_quality(**kwargs):
 async def test_persist_one_invokes_rotation_service(monkeypatch):
     rotation = FakeRotationService()
 
-    def fake_derive(self, fact):
+    def fake_derive(self, fact, *, theme_governance=None):
         return SnapshotBundle(
             frames=[{"snapshotId": "half_hour:2026-08-04:15:00", "metadata": {}, "indices": {}}],
             sector_rows=[{"themeId": "BKAI", "entityKey": "BKAI", "rank": 1, "heatScore": 80.0}],
