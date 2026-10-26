@@ -342,15 +342,17 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         # 单只重跑（页面【重跑】按钮）：只重建/调用命中的龙头，tokens 成本 ≈1 次调用
         # （2026-10-20 加，配合 POST /theme-leaders/rerun；不过滤会整日重跑烧 30K+）
         rows = [r for r in rows if r["code"] in codes]
-    # v3 门控收紧（用户 2026-10-22 裁决）：非题材粗分桶（公告/其他/新股/大消费/大农业/
-    # 医药医疗/医疗医药…）**不纳入 jev 判定范围**。归因实测：这些桶门控率 100%、
-    # 模型原答 49/49 自判 insufficient（均值 1.00）——调用纯属浪费 token。
+    # 行政桶门控（v3 收紧用户 2026-10-22 裁决 + 2026-10-26 收窄）：公告/新股/其他/ST板块
+    # **不纳入 jev 判定范围**。v3 原依据=粗分桶门控率 100%、模型 49/49 自判 insufficient；
+    # 2026-10-26 用户裁决摘除四个「大X」域桶（大消费/大农业/医药医疗/医疗医药）——真实
+    # 题材域，S3 补充映射上线后七桶 evidenceMissing 全 False（前提失效），10-26 大消费
+    # 龙头上海九百 4 板（当日最高板）漏判实锤（预登记 §20）。
     # v5 起排除行**不落库不显示**（用户 2026-10-23 裁决：换代后旧字段/空档位行污染前端；
     # 排除事实只留运行日志），库内只有真实判定的 ok/degraded 行。
     excluded = [r for r in rows if digest.normalize_name(r["board"]) in digest.NOT_A_THEME]
     excluded_boards = sorted({r["board"] for r in excluded})
     if excluded:
-        print(f"{date} 排除非题材粗分桶 {len(excluded)} 只龙头（{'、'.join(excluded_boards)}）"
+        print(f"{date} 排除非题材行政桶 {len(excluded)} 只龙头（{'、'.join(excluded_boards)}）"
               f"——不纳入 jev 判定（v3 收紧；v5 起不落库不显示，仅日志留痕）")
         rows = [r for r in rows if digest.normalize_name(r["board"]) not in digest.NOT_A_THEME]
     if reconcile_only:

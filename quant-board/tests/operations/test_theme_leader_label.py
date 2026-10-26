@@ -600,15 +600,17 @@ def test_single_transient_failure_does_not_abort(env, monkeypatch):
 
 
 def test_coarse_buckets_are_excluded_from_jev_scope(env, monkeypatch, capsys):
-    """v3 门控收紧（用户 2026-10-22 裁决）：非题材粗分桶（公告/其他/新股/大消费…）
+    """行政桶门控（v3 收紧用户 2026-10-22 裁决 + 2026-10-26 收窄）：公告/新股/其他/ST板块
     **不纳入 jev 判定范围**——零调用、零 token。v5 起（用户 2026-10-23 裁决）排除行
-    **不落库不显示**（换代后旧字段/空档位行污染前端），排除事实只留运行日志。"""
+    **不落库不显示**（换代后旧字段/空档位行污染前端），排除事实只留运行日志。
+    2026-10-26 用户裁决摘除四个「大X」域桶（大消费/大农业/医药医疗/医疗医药）：
+    真实题材域、S3 补充映射上线后 evidenceMissing 全 False（预登记 §20）。"""
     calls, db = env
     rows_with_coarse = ROWS + [
         {"date": "2026-10-19", "board": "公告", "code": "600293", "name": "三峡新材",
          "streak": 3, "time": "09:25:00", "boardN": 1, "othersN": 0, "ladderFollowers": 0,
          "prevPeers": 0, "prevBoardN": 0},
-        {"date": "2026-10-19", "board": "医疗医药", "code": "002940", "name": "昂利康",
+        {"date": "2026-10-19", "board": "其他", "code": "000609", "name": "闽发铝业",
          "streak": 2, "time": "10:52:00", "boardN": 7, "othersN": 6, "ladderFollowers": 6,
          "prevPeers": 2, "prevBoardN": 3},
     ]
@@ -616,17 +618,36 @@ def test_coarse_buckets_are_excluded_from_jev_scope(env, monkeypatch, capsys):
                         lambda db_, date, dataset_id=None: ([dict(r) for r in rows_with_coarse],
                                                             {"thsPoolFound": True}))
     out = L.run("2026-10-19", confirm_budget=True)
-    # 只对真题材桶调用（机器人/化工），粗分桶零调用：叙事里不得出现被排除的龙头
+    # 只对真题材桶调用（机器人/化工），行政桶零调用：叙事里不得出现被排除的龙头
     assert len(calls) == 2 and out["labeled"] == 2 and out["ok"] == 2
     assert out["excludedNotTheme"] == 2
     assert "公告" in out["excludedBoards"]
-    assert "医疗医药" in out["excludedBoards"], "字序变体也必须命中 NOT_A_THEME"
+    assert "其他" in out["excludedBoards"]
     for narrative, _q in calls:
-        assert "三峡新材" not in narrative and "昂利康" not in narrative
+        assert "三峡新材" not in narrative and "闽发铝业" not in narrative
     # v5：排除股不落库——库里只有真实判定的 ok/degraded 行，不得出现排除股文档
-    for code in ("600293", "002940"):
+    for code in ("600293", "000609"):
         assert "2026-10-19:" + code not in db[L.COLLECTION].docs, "排除股不得落库（v5 用户裁决）"
-    assert "排除非题材粗分桶 2 只" in capsys.readouterr().out
+    assert "排除非题材行政桶 2 只" in capsys.readouterr().out
+
+
+def test_domain_buckets_are_included_after_2026_1026(env, monkeypatch):
+    """2026-10-26 用户裁决：「大消费/大农业/医药医疗/医疗医药」是真实题材域，不再排除
+    （10-26 大消费龙头上海九百 4 板=当日最高板被漏判实锤；S3 上线后 evidenceMissing
+    全 False，预登记 §20）。"""
+    calls, db = env
+    rows_domain = ROWS + [
+        {"date": "2026-10-19", "board": "大消费", "code": "600838", "name": "上海九百",
+         "streak": 4, "time": "09:30:00", "boardN": 7, "othersN": 6, "ladderFollowers": 6,
+         "prevPeers": 2, "prevBoardN": 3},
+    ]
+    monkeypatch.setattr(L, "leaders_for",
+                        lambda db_, date, dataset_id=None: ([dict(r) for r in rows_domain],
+                                                            {"thsPoolFound": True}))
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["excludedNotTheme"] == 0 and out["excludedBoards"] == []
+    assert out["leaders"] == 3 and len(calls) == 3, "大消费龙头必须纳入投喂"
+    assert any("上海九百" in n for n, _q in calls)
 
 
 def test_dry_run_excludes_coarse_buckets_without_writing(env, monkeypatch):

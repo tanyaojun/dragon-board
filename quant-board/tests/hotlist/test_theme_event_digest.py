@@ -166,8 +166,10 @@ def test_shared_anchor_requires_cjk_and_length():
     assert D._shared_anchor("", "俄乌") is None
 
 
-def test_not_a_theme_includes_yiliao_yiyao_variant():
-    assert "医疗医药" in D.NOT_A_THEME and "医药医疗" in D.NOT_A_THEME
+def test_not_a_theme_scope_after_2026_1026():
+    """2026-10-26 用户裁决摘除四个「大X」域桶：名单只剩纯行政桶（预登记 §20）。"""
+    assert D.NOT_A_THEME == ("公告", "新股", "其他", "ST板块")
+    assert "大消费" not in D.NOT_A_THEME and "医疗医药" not in D.NOT_A_THEME
 
 
 # ── 证据块：产业树 + 开盘啦三节 ────────────────────────────────────────
