@@ -972,7 +972,7 @@ const THEME_CONT_NAMES: Record<string, string> = {
   strong_extend: '强延续', weak_extend: '弱延续', ending: '临近结束', insufficient: '证据不足',
 }
 const THEME_HEAD_NAMES: Record<string, string> = {
-  space_2plus: '空间≥2板', space_1: '空间≈1板', peak: '空间已尽', insufficient: '证据不足',
+  space_2plus: '≥2板', space_1: '1板', peak: '已尽', insufficient: '证据不足',
 }
 
 const THEME_GATE_NAMES: Record<string, string> = {
