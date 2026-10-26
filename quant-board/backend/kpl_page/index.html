@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>KPL 板块/个股实时行情</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.5 "Segoe UI", "Microsoft YaHei", monospace; background: #0d1117; color: #e6edf3; margin: 0; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  .bar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  button { background: #21262d; color: #e6edf3; border: 1px solid #30363d; padding: 6px 14px; cursor: pointer; border-radius: 6px; }
+  button:hover { background: #30363d; }
+  .status { padding: 4px 10px; border-radius: 6px; border: 1px solid #30363d; }
+  .ok { color: #3fb950; } .err { color: #f85149; } .warn { color: #d29922; }
+  #stats { color: #8b949e; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  th, td { border: 1px solid #21262d; padding: 5px 10px; text-align: left; }
+  th { background: #161b22; position: sticky; top: 0; }
+  .up { color: #3fb950; } .down { color: #f85149; }
+  #log { background: #010409; border: 1px solid #21262d; height: 180px; overflow-y: auto; padding: 8px; font-size: 12px; white-space: pre-wrap; margin-top: 12px; }
+  #log .e { color: #f85149; } #log .w { color: #d29922; }
+  .degraded { border: 1px solid #d29922; background: #2d2300; padding: 8px 12px; margin: 8px 0; display: none; }
+</style>
+</head>
+<body>
+<h1>KPL 板块/个股实时行情 <span id="status" class="status">disconnected</span></h1>
+<div class="bar">
+  <button id="btnStart">启动采集</button>
+  <button id="btnStop">停止</button>
+  <button id="btnClear">清空日志</button>
+  <span id="stats">pushes: 0 · events: 0 · sessions: 0</span>
+</div>
+<div id="degraded" class="degraded"></div>
+<table id="tbl">
+  <thead>
+    <tr><th>代码</th><th>名称</th><th>quotas（紧凑编码序列 · 推断语义）</th><th>更新时间</th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="log"></div>
+<script>
+const rows = new Map();          // stockId -> {name, quotas, ts}
+let pushes = 0, events = 0, ws = null, stopped = false;
+const logEl = document.getElementById('log'), rowsEl = document.getElementById('rows');
+const degradedEl = document.getElementById('degraded'), statusEl = document.getElementById('status');
+
+function log(msg, cls) {
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+  logEl.appendChild(div);
+  while (logEl.children.length > 300) logEl.removeChild(logEl.firstChild);
+}
+function setStatus(txt, cls) { statusEl.textContent = txt; statusEl.className = 'status ' + (cls || ''); }
+
+function showDegraded(msg) {
+  degradedEl.textContent = msg; degradedEl.style.display = 'block';
+}
+function hideDegraded() { degradedEl.style.display = 'none'; }
+
+function render() {
+  rowsEl.innerHTML = '';
+  for (const [id, r] of rows) {
+    const tr = document.createElement('tr');
+    // quotas[1] 涨速/涨跌幅（推断），含 '-' 视为下跌
+    let cls = '';
+    if (r.quotas.length > 1 && r.quotas[1].startsWith('-')) cls = 'down';
+    else if (r.quotas.length > 1 && parseFloat(r.quotas[1]) > 0) cls = 'up';
+    tr.innerHTML = `<td>${id}</td><td>${r.name}</td><td class="${cls}">${r.quotas.join(' | ')}</td><td>${r.ts}</td>`;
+    rowsEl.appendChild(tr);
+  }
+  document.getElementById('stats').textContent = `pushes: ${pushes} · events: ${events} · rows: ${rows.size}`;
+}
+
+function handleEvent(ev) {
+  events++;
+  switch (ev.type) {
+    case 'quotes':
+      pushes++;
+      hideDegraded();
+      for (const it of (ev.items || [])) {
+        rows.set(it.stock_id, { name: it.name || '—', quotas: it.quotas || [], ts: new Date(ev.ts * 1000).toLocaleTimeString() });
+      }
+      render();
+      break;
+    case 'auth':
+      if (ev.ok) log(`✔ 认证通过 (session ${ev.session}, serverIP=${ev.server_ip || '—'})`, 'ok');
+      else { log(`✘ 认证被拒: ${JSON.stringify(ev.error || {})}`, 'e'); showDegraded('认证被服务器拒绝 — ' + JSON.stringify(ev.error || {})); }
+      break;
+    case 'error':
+      log(`✘ ${ev.msg || JSON.stringify(ev.server || ev)}`, 'e');
+      showDegraded('采集错误（fail-visible 保留原始信息）: ' + (ev.msg || JSON.stringify(ev)));
+      setStatus('error', 'err');
+      break;
+    case 'status':
+      setStatus(ev.status, ev.status === 'streaming' ? 'ok' : 'warn');
+      if (ev.status === 'streaming') { hideDegraded(); log(`✔ session ${ev.session} streaming`, 'ok'); }
+      break;
+    case 'anti_cheat':
+      log('⚠ 261 反作弊轮到达（EXEC 未实现，仅监控）', 'w');
+      showDegraded('261 反作弊轮到达 — EXEC 未实现，连接可能即将被服务器断开');
+      break;
+    case 'version':
+      log(`版本应答 cmd=${ev.cmd} version=${ev.version} urls=${(ev.urls || []).join(', ')}`);
+      break;
+    case 'raw':
+      log(`raw cmd=${ev.cmd} len=${ev.payload_len} ${ev.payload_hex}`, 'w');
+      break;
+    case 'ping': /* keepalive */ break;
+    default: log('未知事件: ' + JSON.stringify(ev).slice(0, 120), 'w');
+  }
+}
+
+function connect() {
+  stopped = false;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/kpl-quotes`);
+  ws.onopen = () => { setStatus('connected', 'warn'); log('WS 已连接，等待采集事件…'); };
+  ws.onmessage = (m) => { try { handleEvent(JSON.parse(m.data)); } catch (e) { log('解析失败: ' + e + ' raw=' + m.data.slice(0, 80), 'e'); } };
+  ws.onclose = () => { setStatus('disconnected', 'err'); log('WS 断开' + (stopped ? '' : '，2s 后重连'), 'e'); if (!stopped) setTimeout(connect, 2000); };
+  ws.onerror = () => setStatus('error', 'err');
+}
+
+document.getElementById('btnStart').onclick = async () => {
+  const r = await fetch('/api/kpl/start', { method: 'POST' });
+  log('start → ' + JSON.stringify(await r.json()));
+};
+document.getElementById('btnStop').onclick = async () => {
+  const r = await fetch('/api/kpl/stop', { method: 'POST' });
+  log('stop → ' + JSON.stringify(await r.json()));
+};
+document.getElementById('btnClear').onclick = () => { logEl.innerHTML = ''; };
+
+connect();
+render();
+</script>
+</body>
+</html>

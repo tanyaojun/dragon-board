@@ -37,6 +37,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。RankTren
 | [optimization-long-task/task_plan.md](optimization-long-task/task_plan.md) | 长测优化任务计划、阶段和决策记录 |
 | [optimization-long-task/findings.md](optimization-long-task/findings.md) | 长测优化研究发现和 checkpoint 分析 |
 | [optimization-long-task/progress.md](optimization-long-task/progress.md) | 长测优化会话进度日志 |
+| [kpl-socket/README.md](kpl-socket/README.md) | KPL（开盘啦）socket 实时行情链路：协议合同、:8002 采集服务与 :8000 代理转发、运维 runbook、已知限制 |
 
 ## backend 子目录用途与新增代码归档要求
 

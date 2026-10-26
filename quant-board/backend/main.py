@@ -24,6 +24,7 @@ from backend.api.market_fund_routes import router as market_fund_router
 from backend.api.market_data_routes import router as market_data_router
 from backend.api.ranktrend_routes import router as ranktrend_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
+from backend.api.kpl_proxy_routes import router as kpl_proxy_router
 from backend.api.theme_heat_routes import router as theme_heat_router
 from backend.api.theme_history_routes import router as theme_history_router
 from backend.api.theme_momentum_routes import router as theme_momentum_router
@@ -117,6 +118,7 @@ app.include_router(hotlist_jev_dieban_router)
 app.include_router(phase_monitor_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)
+app.include_router(kpl_proxy_router)
 app.include_router(theme_heat_router)
 app.include_router(theme_history_router)
 app.include_router(theme_momentum_router)

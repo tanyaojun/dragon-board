@@ -210,3 +210,28 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   `JEV_SENTIMENT_ENABLED` 默认关；只落库只展示不回写、不进信号不进交易路径。
 - **改动边界**：改叙事/问题/合同先改 design 文档；`jev_client.py` 是 N15 保留件勿轻动；
   token 走 `JEV_CF_TOKEN` 环境变量不入仓；pytest 数据只入 `dragon_board_test`。
+
+## KPL Socket 实时行情链路（2026-10-27）
+
+协议合同、运维 runbook 与已知限制唯一来源：[kpl-socket/README.md](kpl-socket/README.md)
+（逆向攻坚过程记录在 `hotlist-jev/socket-push-handoff-20261026.md`，勿当运行手册）。
+
+- **定位**：KPL（开盘啦）私有 socket 协议的 PC 复刻链路——610 白盒签名认证、3001 板块 /
+  3006 个股订阅、0x60 推送帧解析、:8002 采集服务、:8000 `/api/kpl/*` REST+WS 代理转发、
+  浏览器实时面板。已上线实测（个股 000001 平安银行、板块 801044/885423 到流）。
+- **红线 1（测试禁真实连接）**：pytest 一律全 mock（FakeCodec/FakeSocket），
+  零真实 KPL 连接、零真实 WBE 调用；真实连接只走预登记的人工运维诊断路径。
+- **红线 2（App 保活）**：模拟器内开盘啦 App 必须保持正常可用；不 force-stop；
+  注入用 wrap prop 保持清空；PC 客户端与 App 同时在线实测互不踢。
+- **红线 3（单实例纪律）**：serve_kpl_socket 残留旧实例会与新实例采集线程互踢
+  （会话 ~6s 循环断连）；启动前确认唯一进程对（venv launcher+child 双 PID）。
+- **协议事实**：认证命令号是 **610 不是 601**；260 challenge 每连接随机；pb tag 是 varint
+  （f100→a2 06）；价格 ×10000 整数缩放；服务器会话寿命与认证速度相关（非固定 TTL），
+  稳定性合同=2s 重连链而非单连接长寿命；keepalive 必须递增 seq（重复 seq 立即断连）。
+- **已知缺陷与待办**：3006 负数 varint 已修复（`_signed64` 补码还原，含回归用例）；
+  3001 quotas 列语义为推断、接入正式消费前须与 App UI 对照（详见 kpl-socket 文档 §四/§八）。
+- **凭据红线（2026-10-27 提交前脱敏）**：KPL_USER_ID/KPL_TOKEN 代码零默认值（默认游客 userId=0），
+  正式账户值只走环境变量注入（本地参考值存 gitignored 的 `.tmp_review/kpl_credentials.env`）；
+  任何 KPL 凭据/token/盐值不得入仓。
+- **边界**：该链路是本地单机诊断/观察链路；下轮待办含 serve_kpl_socket.py 的
+  backend 根目录归档债与 quotas 列语义核对。
