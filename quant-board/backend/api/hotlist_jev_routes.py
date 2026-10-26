@@ -348,6 +348,9 @@ def get_sector_nodes(
 
     单日全行（date 给定或最新）+ 近 N 日序列摘要（节点分布/弱转强名单，不含重载荷行）；
     fail-visible：文档缺失/降级日原样透出 status=degraded 与 degraded 原因，不伪造。
+    盘中回退（2026-10-27 用户裁决）：指定日文档 16:20 盘后链才落库，查不到时回退
+    < 指定日的最新存档并带 dateFallback 标记，主表盘中可看最近可得节点（前端不加
+    横幅，KPI 卡自带「{tradingDate} 收盘定档」即实际档期）。
     """
     try:
         db = repository_factory.get_runtime_mongodb_database()
@@ -361,6 +364,14 @@ def get_sector_nodes(
             newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
             latest = str(newest.get("tradingDate")) if newest else None
         day_doc = col.find_one({"tradingDate": latest}) if latest else None
+        # 盘中回退：指定日无档（16:20 盘后链未跑）→ 取 < 指定日的最新存档，
+        # 响应带 dateFallback 标记（$ne None 与序列查询同守卫，防 null 档期混入）
+        date_fallback = None
+        if day_doc is None and latest:
+            day_doc = col.find_one({"tradingDate": {"$lt": latest, "$ne": None}},
+                                   sort=[("tradingDate", -1)])
+            if day_doc:
+                date_fallback = {"requested": latest, "served": day_doc.get("tradingDate")}
         series = list(col.find(
             {"tradingDate": {"$ne": None}},
             # 序列只带节点分布原料（rows 的 board/node/count 子集），全行仅选中日返回
@@ -399,7 +410,8 @@ def get_sector_nodes(
                           if r and r.get("status") != "ok"}
         return {"ok": True, "date": latest, "days": capped_days,
                 "series": series, "doc": day_doc,
-                "degradedCount": len(degraded_dates)}
+                "degradedCount": len(degraded_dates),
+                **({"dateFallback": date_fallback} if date_fallback else {})}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"sector_nodes_read_failed: {exc}"}
 
