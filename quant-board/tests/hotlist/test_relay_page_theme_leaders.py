@@ -111,21 +111,34 @@ def test_mixed_generation_row_badge_like_relay_chain(html: str) -> None:
     rows_fn = _fn(html, "tlRenderRows")
     assert "tlVerCtx.mixed = vers.length > 1" in rows_fn
     assert "(d.rows || [])" in rows_fn, "混版判定必须用区间全量行（非筛选子集）"
-    assert "题集混版" in rows_fn and "旧代题集" in rows_fn, "hint 带图例（中性措辞）"
     row = _fn(html, "tlRowHtml")
     assert "tlVerBadge(r)" in row, "行内（日期格）必须挂版本徽章"
     badge_fn = _fn(html, "tlVerBadge")
     assert "b-amber" in badge_fn and "b-gray" in badge_fn, "非最新代琥珀/最新代灰"
     assert "!tlVerCtx.mixed" in badge_fn, "单版序列不出徽章（保持干净）"
+    # 图例迁入徽章 tooltip（2026-10-27 用户裁决删左下角 hint 文字描述）
+    assert "题集混版" in badge_fn and "旧代题集" in badge_fn, "混版图例必须随徽章 title 保留"
     banner = _fn(html, "tlRenderBanner")
     assert "跨代不可比较" not in banner, "结项横幅不得回潮（徽章≠横幅）"
 
 
-def test_superseded_count_disclosed_in_count_text(html: str) -> None:
-    """单一龙头对账（2026-10-24）：退位行服务端已过滤，数量必须在计数行披露（fail-visible）。"""
-    fn = _fn(html, "filteredCountText")
-    assert "doc.supersededCount > 0" in fn
-    assert "退位" in fn and "审计查库" in fn
+def test_count_text_removed_pagination_top_right(html: str) -> None:
+    """右上/左下文字描述删除 + 分页移右上角（2026-10-27 用户裁决）。
+
+    删：右上角「题目集 vX · 日期区间 · 退位 N 行 · 共 N 只」计数文本（filteredCountText/
+    tlCnt）与左下角「共 N 页」独立行 + 图例 hint（tlHint）；分页控件（tlPager）挂筛选条
+    右端 host。退位行披露退回读口 supersededCount 字段（服务端过滤口径不变）。
+    """
+    bar = _fn(html, "tlRenderBar")
+    rows_fn = _fn(html, "tlRenderRows")
+    assert "filteredCountText" not in html, "计数文本函数必须删除（含调用点）"
+    assert "tlCnt" not in html and "tlHint" not in html, "计数/图例节点必须删除"
+    assert "id=\"tlPager\"" not in html, "表格下方独立分页行必须删除"
+    assert "tlPagerHost" in bar, "筛选条右端必须有分页 host"
+    assert "tlPager(pg.page, pg.total)" in rows_fn, "分页必须渲染进右上角 host"
+    # 退位行披露不丢：读口 supersededCount 字段仍在（服务端单一披露口）
+    api = Path(__file__).resolve().parents[2] / "backend" / "api" / "hotlist_jev_limitup_routes.py"
+    assert "supersededCount" in api.read_text(encoding="utf-8")
 
 
 # ── 展示硬约束 ──
@@ -416,8 +429,9 @@ def test_four_judgement_fields_carry_confidence_chips(html: str) -> None:
     for field in ("choiceConfidence", "themeSpeculationDepthConfidence",
                   "themeContinuationConfidence", "leaderHeadroomConfidence"):
         assert field in chip, f"出参 {field} 必须接到芯片"
-    # 提示行说明 P 与门的语义（P=模型置信度，红<35 两可勿当结论）
-    assert "P=模型置信度" in _fn(html, "tlRenderRows")
+    # 图例 hint 已随 2026-10-27 用户裁决删除（P=模型置信度说明不再常驻页面；
+    # 概率口径说明保留在单元格 tooltip 与守卫测试文本中）
+    assert "P=模型置信度" not in _fn(html, "tlRenderRows")
 
 
 def test_continue_probability_is_midpoint_weighted_expectation(html: str) -> None:

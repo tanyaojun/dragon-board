@@ -468,8 +468,6 @@
         <div class="board-row" id="tlBoardRow"></div>
         <div class="lf-bar" id="tlFilterBar" style="margin-top:2px"></div>
         <table id="tlTable"></table>
-        <div id="tlPager"></div>
-        <div class="hint" id="tlHint" style="margin:6px 2px 0"></div>
       </div>
     </div>
 
@@ -2472,7 +2470,8 @@ function tlRenderBar(){
     + '<label class="lf-chk"><input type="checkbox"' + (STATE.tlUi.gateOnly ? ' checked' : '')
       + ' onchange="tlSet(\'gateOnly\', this.checked)"> 仅看被证据门覆盖</label>'
     + '<button onclick="tlClear()">清除筛选</button>'
-    + '<span class="cnt" id="tlCnt"></span>';
+    // 分页控件挂筛选条右端（2026-10-27 用户裁决：右上角分页；右上计数/左下图例文本已删）
+    + '<span id="tlPagerHost" style="margin-left:auto;display:inline-flex;align-items:center;gap:10px"></span>';
 }
 
 // 表格：日期列 + 可排序表头 + 分页 20（relayPageSlice 同规格）；点行=选中该日（KPI 联动），
@@ -2484,25 +2483,23 @@ function tlRenderRows(){
   // 加载态只在「无旧数据可显示」时占整行（区间切换/首载）；后台静默刷新走旧数据
   if (d.loading && !(d.rows || []).length){
     el.innerHTML = '<tr><td class="empty">题材龙头投喂加载中…</td></tr>';
-    $('tlPager').innerHTML = ''; const c = $('tlCnt'); if (c) c.textContent = '';
+    const ph0 = $('tlPagerHost'); if (ph0) ph0.innerHTML = '';
     return;
   }
   if (d.error && !(d.rows || []).length){
     el.innerHTML = '<tr><td class="empty">读口异常，未能取数（非「区间内无投喂」）</td></tr>';
-    $('tlPager').innerHTML = ''; return;
+    const ph1 = $('tlPagerHost'); if (ph1) ph1.innerHTML = ''; return;
   }
   const doc = d.doc || {};
   if (doc.no_data){
     el.innerHTML = '<tr><td class="empty">' + esc((STATE.relayRange || {}).start || '最早')
       + ' ~ ' + esc((STATE.relayRange || {}).end || '最新')
       + ' 无题材龙头投喂记录（16:20 槽位未跑，或区间早于投产日）</td></tr>';
-    $('tlPager').innerHTML = ''; return;
+    const ph2 = $('tlPagerHost'); if (ph2) ph2.innerHTML = ''; return;
   }
   const rows = tlSorted(tlFiltered());
   const pg = relayPageSlice(rows, f.page);
   f.page = pg.page;
-  const hasFilter = !!(f.q || f.board || f.industry || f.origin || f.choice
-    || f.stage || f.outcome || f.gateOnly);
   // 判据代际混版守卫（P2，2026-10-24 review；与 relay 链 verBadge 同款 fail-visible）：
   // v8 前向验收窗内 v6 旧档与 v8 新行同表混显时逐行徽章（非最新代琥珀），单版保持干净。
   // 上下文取自区间全量行（非筛选子集），混版判定不随筛选漂移
@@ -2510,11 +2507,6 @@ function tlRenderRows(){
   const vers = [...new Set(allRows.map(r => r.questionSetVersion || '?'))];
   tlVerCtx.mixed = vers.length > 1;
   tlVerCtx.curVer = (allRows.find(r => r.questionSetVersion) || {}).questionSetVersion;
-  const hint = $('tlHint');
-  if (hint) hint.textContent = '左侧三角展开调用日志 · P=模型置信度（红<35 两可勿当结论） · 「门」=证据门强制 insufficient（程序覆盖非模型判定） · 续板概率=档位中值加权期望（非模型直读）'
-    + (tlVerCtx.mixed ? ' · 题集混版：行内琥珀徽章=旧代题集，灰=最新代（版本详见展开卡）' : '');
-  const cnt = $('tlCnt');
-  if (cnt) cnt.textContent = filteredCountText(rows.length, f, doc);
   const th = (label, key) => '<th class="sortable" onclick="tlSortBy(\'' + key + '\')">'
     + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
@@ -2523,16 +2515,7 @@ function tlRenderRows(){
     + '<th>结局</th>' + th('溢价', 'day2') + '</tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
       : '<tr><td class="empty" colspan="15">无匹配龙头（调整区间或筛选条件）</td></tr>');
-  $('tlPager').innerHTML = tlPager(pg.page, pg.total);
-}
-function filteredCountText(total, f, doc){
-  const parts = [];
-  const dates = doc.dates || [];
-  parts.push('题目集 ' + Object.keys(doc.versions || {}).join('/'));
-  parts.push(dates.length ? (dates[0] + ' ~ ' + dates[dates.length - 1] + '（' + dates.length + ' 个交易日）') : '');
-  // 单一龙头对账退位行（2026-10-24）：服务端已过滤不渲染，数量如实披露（fail-visible）
-  if (doc.supersededCount > 0) parts.push('退位 ' + doc.supersededCount + ' 行（旧推导，审计查库）');
-  return parts.join(' · ') + ' · 共 ' + total + ' 只';
+  const ph = $('tlPagerHost'); if (ph) ph.innerHTML = tlPager(pg.page, pg.total);
 }
 function tlPager(page, total){
   const nav = total > 1
@@ -2549,8 +2532,12 @@ function tlPager(page, total){
 const tlVerCtx = { mixed: false, curVer: null };
 function tlVerBadge(r){
   if (!tlVerCtx.mixed || !r.questionSetVersion) return '';
-  return badge(r.questionSetVersion,
-    r.questionSetVersion === tlVerCtx.curVer ? 'b-gray' : 'b-amber');
+  const cur = r.questionSetVersion === tlVerCtx.curVer;
+  // 图例随删 hint 迁入徽章 tooltip（2026-10-27 用户裁决删左下角文字描述）
+  const tip = cur ? '最新代题集'
+    : '旧代题集（题集混版：判据口径不同，勿跨代直比；版本详见展开卡）';
+  return '<span class="badge ' + (cur ? 'b-gray' : 'b-amber') + '" title="' + esc(tip)
+    + '">' + esc(r.questionSetVersion) + '</span>';
 }
 function tlRowHtml(r, f){
   const p = tlProb(r);
