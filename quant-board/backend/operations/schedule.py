@@ -431,22 +431,46 @@ def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict
             pending = col.count_documents({"tradingDate": day,
                                            "status": "ok",
                                            "outcomeSealedNextDay": None})
-            if not pending:
+            # 后日（T+2）打板溢价 pending（2026-10-26 用户口径裁定：打板=T+1 入场无浮盈，
+            # 博弈 T+2 溢价）：T+1 已封但 outcomeDay2 未回填的日子——注意 T+2 晚场景
+            # pending=0 而 pending_day2>0，两判都要过才算无事可做。
+            pending_day2 = col.count_documents({
+                "tradingDate": day, "status": {"$in": ["ok", "degraded"]},
+                "outcomeSealedNextDay": True,
+                "outcomeDay2.date": {"$exists": False}})
+            if not pending and not pending_day2:
                 continue
-            proc = subprocess.run(
-                [sys.executable, "scripts/theme_leader_pilot_eval.py",
-                 "--date", day, "--write-outcome"],
-                cwd=str(Path(__file__).resolve().parents[2]),
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=_THEME_LEADER_SETTLE_TIMEOUT_SECONDS,
-            )
-            lines_ = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
-            head = [ln for ln in lines_ if "→ 次日" in ln] or lines_[-1:]
-            results.append({
-                "ok": proc.returncode == 0, "date": day, "pending": pending,
-                "summary": head[0] if head else "",
-                # 成功时不把 stderr 噪声（如政策提示 banner）当 error 上抛，避免把正常当故障看
-                "error": ((proc.stderr or "")[-200:] or None) if proc.returncode else None})
+            if pending:
+                proc = subprocess.run(
+                    [sys.executable, "scripts/theme_leader_pilot_eval.py",
+                     "--date", day, "--write-outcome"],
+                    cwd=str(Path(__file__).resolve().parents[2]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=_THEME_LEADER_SETTLE_TIMEOUT_SECONDS,
+                )
+                lines_ = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+                head = [ln for ln in lines_ if "→ 次日" in ln] or lines_[-1:]
+                results.append({
+                    "ok": proc.returncode == 0, "date": day, "pending": pending,
+                    "summary": head[0] if head else "",
+                    # 成功时不把 stderr 噪声（如政策提示 banner）当 error 上抛，避免把正常当故障看
+                    "error": ((proc.stderr or "")[-200:] or None) if proc.returncode else None})
+            if pending_day2:
+                # day2 已收盘的日子本步结算 outcomeDay2；未到/pending 留给后续挂链自愈。
+                # advisory，失败不翻转本步 ok。
+                proc2 = subprocess.run(
+                    [sys.executable, "scripts/theme_leader_pilot_eval.py",
+                     "--date", day, "--write-day2"],
+                    cwd=str(Path(__file__).resolve().parents[2]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=_THEME_LEADER_SETTLE_TIMEOUT_SECONDS,
+                )
+                lines2 = [ln for ln in (proc2.stdout or "").splitlines() if ln.strip()]
+                head2 = [ln for ln in lines2 if "→ 后日" in ln] or lines2[-1:]
+                results.append({
+                    "ok": proc2.returncode == 0, "date": day, "pending": pending_day2,
+                    "step": "day2_premium", "summary": head2[0] if head2 else "",
+                    "error": ((proc2.stderr or "")[-200:] or None) if proc2.returncode else None})
     except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
         results.append({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
     return results

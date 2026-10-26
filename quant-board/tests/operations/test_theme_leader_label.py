@@ -219,6 +219,29 @@ def test_force_relabels(env):
     assert len(calls) == 2 and out["labeled"] == 2
 
 
+def test_rerun_preserves_backfilled_outcome(env):
+    """复跑安全（2026-10-26 用户报障）：replace_one 整文档覆写曾把已回填的 outcome* 抹掉
+    （页面【复跑】后结局列消失，要等下一条挂链自愈）——重建文档必须把旧档 outcome*
+    原样带走（结局是股票事实，与模型答案无关，保留恒正确）。"""
+    calls, db = env
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    # 模拟结算脚本已回填 T+1 结局与 T+2 溢价
+    col.docs["2026-10-19:603278"].update({
+        "outcomeSealedNextDay": True,
+        "outcomeBoardNNextDay": 5,
+        "outcomeMeta": {"nextDate": "2026-10-20"},
+        "outcomeDay2": {"date": "2026-10-21", "openPct": 2.5, "closePct": 1.3},
+    })
+    calls.clear()
+    out = L.run("2026-10-19", confirm_budget=True, force=True)
+    assert out["labeled"] == 2 and len(calls) == 2, "force 复跑照常重新调用模型"
+    doc = col.docs["2026-10-19:603278"]
+    assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
+    assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
+    assert doc["questionSetVersion"] == "v9", "outcome 之外字段照常重建"
+
+
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
     calls, _db = env
     monkeypatch.setattr(L, "leaders_for", lambda db, date, dataset_id=None: (None, {}))

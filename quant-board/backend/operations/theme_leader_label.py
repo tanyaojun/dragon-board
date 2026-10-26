@@ -311,9 +311,16 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")
             + ".%03d" % (int(time.time() * 1000) % 1000),   # 毫秒位：防同秒重跑 F6 误报
         "sampleOrigin": sample_origin,
-        # 结局字段故意留空：次日收盘后由评估脚本回填（label 时点不可见，防 look-ahead）
+        # 结局字段故意留空：次日收盘后由评估脚本回填（label 时点不可见，防 look-ahead）。
+        # 复跑安全（2026-10-26 用户报障）：replace_one 整文档覆写会把已回填的 outcome*
+        # 抹掉（结算自愈要等下一条挂链，页面复跑后立即读不到结局）——重建文档时把旧档
+        # outcome* 原样带走（结局是股票事实，与模型答案无关，保留恒正确）。
         "outcomeSealedNextDay": None,
     }
+    old = col.find_one({"_id": doc["_id"]}) or {}
+    for k, v in old.items():
+        if k.startswith("outcome"):
+            doc[k] = v
     col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     from backend.analysis.hotlist.jev_driver_ammo import _usage_tokens
     return bool(parsed["ok"]), _usage_tokens(parsed.get("usage"))

@@ -262,3 +262,103 @@ def test_backfill_samples_are_excluded_from_aggregate_metrics(patched):
     assert out["n"] == 1, out["n"]
     assert out["originMetrics"]["backfill"]["n"] == 1
     assert "回填" in (out.get("note") or "")
+
+
+# ── 后日（T+2）打板溢价结算（2026-10-26 用户口径裁定；价格源测试内打桩，零网络）──
+
+
+def _day2_db(patched, sealed, dates=("", "2026-10-20", "2026-10-21")):
+    dates = tuple(("2026-10-19",) if i == 0 else (d,) for i, d in enumerate(dates))
+    labels = [_label("603278", "大业股份", choice="high_ge65",
+                     probs={"high_ge65": 0.7, "insufficient": 0.3})]
+    db = patched(labels, sealed, dates=dates)
+    if sealed is not None:
+        db.labels.docs[0]["outcomeSealedNextDay"] = "603278" in sealed
+    return db
+
+
+def test_settle_day2_computes_premium_when_sealed(patched):
+    """T+1 封板=打板入场（入场价=T+1 收盘）→ 溢价=T+2 开/收 vs T+1 收盘。"""
+    db = _day2_db(patched, {"603278"})
+    bars = {"2026-10-20": {"open": 10.0, "close": 10.0},
+            "2026-10-21": {"open": 11.0, "close": 10.8}}
+    out = E.settle_day2(db, "2026-10-19", fetcher=lambda code: bars)
+    assert out["settled"] == 1 and out["skipped"] == 0 and not out["errors"]
+    d2 = db.labels.docs[0]["outcomeDay2"]
+    assert d2["date"] == "2026-10-21"
+    assert d2["openPct"] == 10.0 and d2["closePct"] == 8.0
+    assert d2["src"] == "tdx_daily_bars" and d2["computedAt"]
+
+
+def test_settle_day2_marks_no_entry_when_next_day_not_sealed(patched):
+    """T+1 断板 → 无打板入场，outcomeDay2 记 skipped（不再 pending）。"""
+    db = _day2_db(patched, set())
+    out = E.settle_day2(db, "2026-10-19", fetcher=lambda code: {})
+    assert out["skipped"] == 1 and out["settled"] == 0
+    d2 = db.labels.docs[0]["outcomeDay2"]
+    assert d2["skipped"] == "next_day_not_sealed" and d2["date"] == "2026-10-21"
+
+
+def test_settle_day2_pending_when_outcome_unknown(patched):
+    """T+1 结局 None → pending（先等 --write-outcome 封住 T+1），不写 outcomeDay2。"""
+    db = _day2_db(patched, {"603278"})
+    db.labels.docs[0]["outcomeSealedNextDay"] = None
+    out = E.settle_day2(db, "2026-10-19", fetcher=lambda code: {})
+    assert out["settled"] == 0 and out["skipped"] == 0
+    assert db.labels.docs[0].get("outcomeDay2") is None
+
+
+def test_settle_day2_missing_axis_is_self_healing_pending(patched):
+    """day2 不在交易日轴（未到/final 未采）→ 整日 pending，后续挂链自愈。"""
+    db = patched([_label("603278", "大业股份")], {"603278"},
+                 dates=(("2026-10-19",), ("2026-10-20",)))
+    db.labels.docs[0]["outcomeSealedNextDay"] = True
+    out = E.settle_day2(db, "2026-10-19", fetcher=lambda code: {})
+    assert out["day2Date"] is None and out["settled"] == 0
+    assert "自愈" in out["note"]
+    assert db.labels.docs[0].get("outcomeDay2") is None
+
+
+def test_settle_day2_fetch_error_stays_pending_fail_visible(patched):
+    """TDX 拉数失败 → 该股 pending + fail-visible 上报（advisory，下轮自愈）。"""
+    db = _day2_db(patched, {"603278"})
+
+    def boom(code):
+        raise RuntimeError("TDX 日线前 15 个探测节点不可用")
+
+    out = E.settle_day2(db, "2026-10-19", fetcher=boom)
+    assert out["settled"] == 0 and len(out["errors"]) == 1
+    assert db.labels.docs[0].get("outcomeDay2") is None
+
+
+def test_settle_day2_idempotent(patched):
+    """已结算（outcomeDay2.date 在）→ 不拉数不重写。"""
+    db = _day2_db(patched, {"603278"})
+    db.labels.docs[0]["outcomeDay2"] = {"date": "2026-10-21", "openPct": 1.0,
+                                        "closePct": 0.5}
+    codes: list[str] = []
+
+    def fetcher(code):
+        codes.append(code)
+        return {}
+
+    out = E.settle_day2(db, "2026-10-19", fetcher=fetcher)
+    assert out["settled"] == 0 and codes == []
+    assert db.labels.docs[0]["outcomeDay2"]["closePct"] == 0.5
+
+
+def test_superseded_rows_kept_for_outcome_but_excluded_from_metrics(patched):
+    """§18 评估口径：退位行结局照写留审计，但不进指标与名册（2026-10-26 实证：
+    10-23 赛福天 v6 退位行续板，现任 0/7 被它读成 1/8）。"""
+    labels = [_label("603278", "大业股份"), _label("603028", "赛福天")]
+    labels[1]["leaderSuperseded"] = True
+    db = patched(labels, {"603278", "603028"},
+                 dates=(("2026-10-19",), ("2026-10-20",)))
+    out = E.evaluate(db, "2026-10-19", write_outcome=True)
+    # 退位行结局照写（审计可查）
+    sup = [d for d in db.labels.docs if d["code"] == "603028"][0]
+    assert sup["outcomeSealedNextDay"] is True
+    # 但不进指标与名册
+    assert out["supersededCount"] == 1
+    assert out["evaluable"] == 1 and out["actualContinue"] == 1, "现任 1/1，不被退位行稀释"
+    assert all(r["code"] != "603028" for r in out["roster"])

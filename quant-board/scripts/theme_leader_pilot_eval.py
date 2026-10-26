@@ -20,6 +20,8 @@
 用法：
   ./.venv/Scripts/python.exe scripts/theme_leader_pilot_eval.py --date 2026-10-19
   ./.venv/Scripts/python.exe scripts/theme_leader_pilot_eval.py --date 2026-10-19 --write-outcome
+  ./.venv/Scripts/python.exe scripts/theme_leader_pilot_eval.py --date 2026-10-19 --write-day2
+    （后日 T+2 打板溢价：T+1 封板=入场前提，溢价=T+2 开/收 vs T+1 收盘；2026-10-26 用户裁定）
 
 注意：进程内其他模块（div-events 等）可能向 stdout 打噪声行，**JSON 消费者请从首个 `{` 起解析**
 （`json.loads(stdout[stdout.index('{'):])`，与 `schedule._settle_previous_theme_leader_day` 同口径）。
@@ -202,18 +204,24 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
     base = build_rows(db, meta.get("start"), meta.get("end")) if meta.get("start") else {"rows": []}
     lookup = baseline_rate_lookup(base["rows"])
 
+    # §18 评估口径：退位行（对账出的旧推导）结局照写留审计，但**不进指标与名册**——
+    # 混入会把现任读数拉偏（2026-10-26 实证：10-23 赛福天 v6 退位行续板，现任 7 只
+    # 0/7 被它读成 1/8）。
+    superseded_n = sum(1 for r in rows if r["doc"].get("leaderSuperseded"))
+    rows_eval = [r for r in rows if not r["doc"].get("leaderSuperseded")]
+
     # P2 修复（2026-10-20 review）：degraded（jev 通道没答上来，answers={}）不得混进模型
     # 指标口径——与 _label_one「不得把『没答上来』写成 insufficient」同一原则；
     # 指标只取 status=ok，degraded 单独计数 degradedShare（fail-visible，不静默混入）。
-    degraded_docs = [r["doc"] for r in rows
+    degraded_docs = [r["doc"] for r in rows_eval
                      if r["doc"].get("status") not in (None, "ok")]
-    ok_rows = [r for r in rows if r["doc"].get("status") in (None, "ok")]
+    ok_rows = [r for r in rows_eval if r["doc"].get("status") in (None, "ok")]
 
     # 已封样本（进指标）与全量名册（进展示；未封也逐只列出，不因结局未知而隐去）
     samples = [_sample_row(r["doc"], bool(r["outcome"]), lookup)
                for r in ok_rows if r["outcome"] is not None]
     roster = [_sample_row(r["doc"], None if r["outcome"] is None else bool(r["outcome"]), lookup)
-              for r in rows]
+              for r in rows_eval]
 
     n = len(samples)
     actual = sum(1 for s in samples if s["outcome"])
@@ -238,6 +246,7 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
         "versions": {}, "mixedVersions": False, "scored": 0, "perBucket": [],
         "origins": {}, "mixedOrigins": False,
         "degradedCount": 0, "degradedShare": None,
+        "supersededCount": superseded_n,
     }
     out["acceptance"] = {
         "minTradingDays": ACCEPTANCE_MIN_TRADING_DAYS,
@@ -290,6 +299,105 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
     return out
 
 
+# ── 后日（T+2）打板溢价回填（2026-10-26 用户口径裁定：打板=T+1 入场，当日封板无浮盈，
+# 博弈的是 T+2 溢价——溢价只算后日，回填时点=后日收盘后）──────────────────────────
+# 价格源=TDX 日线（backfill_total_amount 同款节点池探测；SetupCmd3 补丁根治官方主站软拒绝，
+# 见 python-bridge/main.py 同款 monkeypatch）。原始价未复权：T→T+2 两日内除权除息会失真，
+# 真实命中时以 outcomeMeta 审计为准（罕见，如实声明不伪装精确）。
+TDX_HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
+
+
+def fetch_daily_bars(code: str, offset: int = 15, max_probe: int = 15) -> dict[str, dict]:
+    """TDX 日线 → {"YYYY-MM-DD": {"open": f, "close": f}}；全池探测至出数，失败 raise。"""
+    def _setup_no3(self):
+        from tdxpy.parser.setup_commands import SetupCmd1, SetupCmd2
+        SetupCmd1(self.client).call_api()
+        SetupCmd2(self.client).call_api()
+
+    from tdxpy.hq import TdxHq_API
+    TdxHq_API.setup = _setup_no3
+    pool = json.loads(TDX_HOSTS_PATH.read_text(encoding="utf-8"))["candidates"]
+    market = 1 if str(code).startswith(("6", "9")) else 0
+    last_err: Exception | None = None
+    for h in pool[:max_probe]:
+        api = TdxHq_API()
+        try:
+            if not api.connect(h["ip"], int(h.get("port") or 7709), time_out=5):
+                continue
+            try:
+                bars = api.get_security_bars(9, market, str(code), 0, offset)
+            finally:
+                api.disconnect()
+            if bars:
+                return {f"{int(b['year']):04d}-{int(b['month']):02d}-{int(b['day']):02d}":
+                        {"open": float(b["open"]), "close": float(b["close"])} for b in bars}
+            last_err = RuntimeError(f"{h['ip']} 空 K 线")
+        except Exception as exc:   # 单节点失败换下一个
+            last_err = exc
+    raise RuntimeError(f"TDX 日线前 {max_probe} 个探测节点不可用: {last_err}")
+
+
+def settle_day2(db, date: str, fetcher=None) -> dict:
+    """后日（T+2）打板溢价回填：T+1 封板=打板入场前提（入场价=T+1 收盘/涨停价），
+    溢价 = T+2 开盘/收盘 vs T+1 收盘，写 `outcomeDay2`。
+
+    自愈语义（与 `--write-outcome` 同规）：
+    - day2 不在交易日轴（未到/当日 final 未采）→ 整日 pending，后续挂链自愈；
+    - T+1 结局 None → pending（先等 --write-outcome 封住 T+1）；
+    - T+1 断板 → 无打板入场，outcomeDay2 记 `skipped`（不再 pending）；
+    - TDX 拉数失败/日线缺 → 该股 pending + fail-visible 上报，下轮自愈。
+    """
+    col = db[COLLECTION]
+    docs = [d for d in col.find({"tradingDate": date})
+            if d.get("status") != "skipped" and not d.get("leaderSuperseded")]
+    if not docs:
+        return {"ok": True, "date": date, "settled": 0, "skipped": 0, "note": "no_docs"}
+    nxt = next_trading_date(db, date)
+    day2 = next_trading_date(db, nxt) if nxt else None
+    if not nxt or not day2:
+        return {"ok": True, "date": date, "nextDate": nxt, "day2Date": None,
+                "settled": 0, "skipped": 0, "pending": len(docs),
+                "note": "T+1/T+2 不在交易日轴（未到或 final 未采），自愈等后续挂链"}
+    fetcher = fetcher or fetch_daily_bars
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    settled = skipped = 0
+    errors: list[str] = []
+    bars_cache: dict[str, dict] = {}
+    for doc in docs:
+        if doc.get("outcomeSealedNextDay") is None:
+            continue
+        if isinstance(doc.get("outcomeDay2"), dict) and doc["outcomeDay2"].get("date"):
+            continue   # 已结算，幂等
+        if doc.get("outcomeSealedNextDay") is False:
+            col.update_one({"_id": doc["_id"]}, {"$set": {
+                "outcomeDay2": {"date": day2, "skipped": "next_day_not_sealed",
+                                "computedAt": now}}})
+            skipped += 1
+            continue
+        code = str(doc.get("code") or "")
+        try:
+            if code not in bars_cache:
+                bars_cache[code] = fetcher(code)
+            d1, d2 = bars_cache[code].get(nxt), bars_cache[code].get(day2)
+            if not d1 or not d2 or not d1.get("close"):
+                errors.append(f"{code}{doc.get('name') or ''}: T+1/T+2 日线缺（{nxt}/{day2}）")
+                continue
+            base = float(d1["close"])
+            col.update_one({"_id": doc["_id"]}, {"$set": {
+                "outcomeDay2": {
+                    "date": day2,
+                    "openPct": round((float(d2["open"]) - base) / base * 100, 2),
+                    "closePct": round((float(d2["close"]) - base) / base * 100, 2),
+                    "src": "tdx_daily_bars",
+                    "computedAt": now,
+                }}})
+            settled += 1
+        except Exception as exc:
+            errors.append(f"{code}{doc.get('name') or ''}: {type(exc).__name__}: {exc}")
+    return {"ok": True, "date": date, "nextDate": nxt, "day2Date": day2,
+            "settled": settled, "skipped": skipped, "errors": errors}
+
+
 def _sample_row(doc: dict, outcome: bool | None, lookup) -> dict:
     """单只样本行；`outcome=None` = 结局未封（fail-visible，不进指标）。"""
     ans = (doc.get("answers") or {}).get("leader_nextday_continue") or {}
@@ -335,12 +443,22 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", required=True)
     ap.add_argument("--write-outcome", action="store_true", help="把 outcomeSealedNextDay 回填到标签文档")
+    ap.add_argument("--write-day2", action="store_true",
+                    help="回填后日（T+2）打板溢价 outcomeDay2（T+1 封板=入场前提；2026-10-26 用户口径裁定）")
     ap.add_argument("--json", action="store_true", help="打印完整 JSON（默认打印摘要）")
     args = ap.parse_args()
     out = evaluate(_db(), args.date, write_outcome=args.write_outcome)
     if args.json or not out.get("ok"):
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return
+    if args.write_day2:
+        d2 = settle_day2(_db(), args.date)
+        if args.json:
+            print(json.dumps(d2, ensure_ascii=False, indent=1))
+        else:
+            print(f"[{d2['date']} → 后日 {d2.get('day2Date') or '未到/未采'}] "
+                  f"溢价回填 {d2.get('settled', 0)} 只，无入场跳过 {d2.get('skipped', 0)} 只"
+                  + (f"；pending：{d2.get('errors')}" if d2.get("errors") else ""))
     rate = "结局未封" if out["actualRate"] is None else f"{out['actualRate']:.1%}"
     nxt = out["nextDate"] or "无次日交易日（结局未封）"
     print(f"[{out['date']} → 次日 {nxt}] 投喂 {out['labeled']} 只；可判定 {out['evaluable']} 只；"
