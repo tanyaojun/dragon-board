@@ -359,16 +359,23 @@ def test_three_stage_fields_color_coded_by_bucket(html: str) -> None:
         assert map_name in row, f"{map_name} 必须接到徽章类（不能全灰）"
 
 
-def test_evidence_cell_shows_concrete_content(html: str) -> None:
-    """②题材证据列显示具体内容：事件标题/题材标签铺进单元格（CSS 截断 + tooltip 全文），
-    不再只给「+N事件 / +题材N」计数徽章——计数无法区分真驱动与凑数标签。"""
+def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
+    """②事件列（2026-10-27 用户裁决：题材证据→事件、徽章化省宽）：驱动上板的事件标题/
+    题材标签只出窄徽章（首版把全文铺进单元格，表格横向溢出、结局/溢价被挤出可视区），
+    完整文字进 tooltip。"""
+    rows_fn = _fn(html, "tlRenderRows")
+    assert "<th>事件</th>" in rows_fn, "列名必须为「事件」"
+    bar = _fn(html, "tlRenderBar")
+    assert "tlSel('事件'" in bar, "筛选条标签同步改名"
     row = _fn(html, "tlRowHtml")
     assert "r.evidenceEventTitles" in row and "r.evidenceKwordTags" in row, \
-        "事件标题与题材标签必须消费"
-    assert "tl-evtxt" in row and "tl-evtags" in row, "具体内容必须铺进单元格（截断样式）"
-    assert "+ r.evidenceEventTitles.length" not in row, "「+N事件」计数徽章不得回潮"
-    assert "briefN" not in row, "旧的计数变量不得残留"
-    assert "tl-evtxt" in html and "tl-evtags" in html, "截断样式必须存在"
+        "徽章计数与 tooltip 全文必须消费标题/标签"
+    assert "esc(evTitles.join" in row and "事件</span>" in row, \
+        "事件徽章必须带 tooltip 全文（title=完整事件描述）"
+    assert "esc(evTags.join" in row and "+题材' + evTags.length" in row, \
+        "题材标签徽章必须带 tooltip 全文"
+    assert "tl-evtxt" not in row and "tl-evtags" not in html, \
+        "首版铺文截断样式必须删除（防溢出回潮）"
 
 
 def test_premium_column_day2(html: str) -> None:

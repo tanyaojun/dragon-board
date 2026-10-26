@@ -218,14 +218,11 @@
             border:1px solid var(--border2);border-radius:7px;background:#fff;color:var(--muted);cursor:pointer}
   .icon-btn:hover{border-color:var(--cf-blue);color:var(--cf-blue)}
   /* ---------- 题材龙头台账（2026-10-20；面板/表格/展开完全复用涨停复盘样式） ---------- */
-  /* 只补涨停复盘没有的增量：证据门/证据内容/早报段/明细卡内标题。
+  /* 只补涨停复盘没有的增量：证据门/证据徽章/早报段/明细卡内标题。
      右三角、行展开、明细卡底、板块 chip、筛选条、KPI 条**一律复用**原样式，
      不另造并行类（用户 2026-10-20：样式风格须与涨停分析一致）。
-     回填行高亮与「回填」小标样式已随 2026-10-26 用户裁决删除。 */
-  .tl-evtxt{display:inline-block;max-width:300px;overflow:hidden;text-overflow:ellipsis;
-    white-space:nowrap;vertical-align:middle;margin-left:5px;font-size:11.5px;color:var(--text)}
-  .tl-evtags{display:inline-block;max-width:170px;overflow:hidden;text-overflow:ellipsis;
-    white-space:nowrap;vertical-align:middle;margin-left:5px;font-size:10.5px;color:#0369a1}
+     回填行高亮与「回填」小标样式已随 2026-10-26 用户裁决删除；
+     证据列首版的铺文截断样式已随 2026-10-27 徽章化裁决删除。 */
   .tl-ev{font-size:10px;padding:0 4px;border-radius:5px;background:#e0f2fe;color:#0369a1;
     white-space:nowrap}
   .lf-chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
@@ -2465,7 +2462,7 @@ function tlRenderBar(){
     '<input class="lf-q" placeholder="搜代码 / 名称 / 板块…" value="' + esc(STATE.tlUi.q)
       + '" oninput="tlQ(this.value)">'
     + tlSel('板块', 'board', boards)
-    + tlSel('题材证据', 'industry', uniq('evidenceIndustry').map(v => [v, v]))
+    + tlSel('事件', 'industry', uniq('evidenceIndustry').map(v => [v, v]))
     + tlSel('档位', 'choice', Object.entries(TL_CHOICE_CN))
     + tlSel('题材深度', 'stage', Object.entries(TL_DEPTH_CN))
     + tlSel('结局', 'outcome', [['sealed', '续板'], ['broken', '未续'], ['pending', '未封（等次日）']])
@@ -2520,7 +2517,7 @@ function tlRenderRows(){
     + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
     + th('板块', 'board') + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
-    + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th><th>题材证据</th>'
+    + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th><th>事件</th>'
     + '<th>结局</th>' + th('溢价', 'day2') + '</tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
       : '<tr><td class="empty" colspan="15">无匹配龙头（调整区间或筛选条件）</td></tr>');
@@ -2578,25 +2575,25 @@ function tlRowHtml(r, f){
       TL_HEAD_BADGE[r.leaderHeadroom] || 'b-gray')
     + tlConfChip(r, 'leader_headroom');
   // 题材证据分层（v3）：产业树节点 > 板内解析 > 缺失原因
-  // 2026-10-26 用户需求：证据列必须可读**具体内容**——驱动上板的事件标题、题材标签
-  // 直接铺进单元格（超长 CSS 截断 + tooltip 全文），不再只给「+N事件 / +题材N」计数徽章
-  //（计数无法区分真驱动与凑数标签）；「+板内解析」为语料抽屉入口徽章保留。
+  // 2026-10-27 用户裁决（列名改【事件】+ 徽章化省宽）：驱动上板的事件标题/题材标签
+  // 不再铺进单元格（首版把表格撑溢出）——只出窄徽章，全文进 tooltip；
+  // 「+板内解析」为语料抽屉入口徽章保留。
   const evTitles = r.evidenceEventTitles || [];
   const evTags = r.evidenceKwordTags || [];
-  const evTitleHtml = evTitles.length
-    ? '<span class="tl-evtxt" title="' + esc(evTitles.join('\n')) + '">'
-      + esc(evTitles.join('；')) + '</span>'
+  const evTitleBadge = evTitles.length
+    ? ' <span class="tl-ev" title="' + esc(evTitles.join('\n')) + '">+' + evTitles.length
+      + '事件</span>'
     : '';
-  const evTagHtml = evTags.length
-    ? '<span class="tl-evtags" title="' + esc(evTags.join(' / ')) + '">'
-      + esc(evTags.join(' ')) + '</span>'
+  const evTagBadge = evTags.length
+    ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length
+      + '</span>'
     : '';
   const l2Tag = r.evidenceBoardResolved
     ? ' <span class="tl-ev" title="韭研异动板内解析在场（龙头驱动+同伴标签，见投喂语料抽屉）">+板内解析</span>'
     : '';
   const evid = r.evidenceIndustry
       ? '<span style="color:var(--muted)">' + esc(r.evidenceIndustry) + '</span>'
-        + evTitleHtml + evTagHtml + l2Tag
+        + evTitleBadge + evTagBadge + l2Tag
       : (r.evidenceMissingReason
         ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
         : (r.evidenceBoardResolved || evTags.length
