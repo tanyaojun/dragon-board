@@ -385,7 +385,7 @@ def test_evidence_cell_shows_l2_resolution_badge_even_when_industry_mapped(html:
     S3 补充映射与板内解析证据在场却不可见。未映射分支维持「板内解析+题材N」蓝徽章不变。
     """
     row = _fn(html, "tlRowHtml")
-    assert "+板内解析" in row, "有映射分支必须渲染板内解析徽章"
     assert "evidenceBoardResolved" in row, "徽章判定必须消费 evidenceBoardResolved 出参"
-    badge_line = next(ln for ln in row.splitlines() if "+板内解析" in ln)
-    assert "title=" in badge_line, "徽章带 title 提示（点开投喂语料抽屉看全文）"
+    badge_lines = [ln for ln in row.splitlines() if "+板内解析" in ln]
+    assert any("title=" in ln for ln in badge_lines), \
+        "有映射分支必须渲染带 title 的板内解析徽章（注释行不算）"
