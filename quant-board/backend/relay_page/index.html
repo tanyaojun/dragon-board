@@ -2587,8 +2587,12 @@ function tlRowHtml(r, f){
     ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length
       + '</span>'
     : '';
+  // 板内解析徽章 tooltip = 叙事原文中的板内解析节（龙头驱动标签+解析摘录+同伴驱动全文，
+  // 读口 evidenceBoardDigest）；旧档无摘要时显式说明（不伪造内容）。
+  const l2Digest = r.evidenceBoardDigest || '';
   const l2Tag = r.evidenceBoardResolved
-    ? ' <span class="tl-ev" title="韭研异动板内解析在场（龙头驱动+同伴标签，见投喂语料抽屉）">+板内解析</span>'
+    ? ' <span class="tl-ev" title="' + esc(l2Digest
+      || '板内解析在场但摘要未存档（旧档无叙事原文，展开行可查看投喂语料）') + '">+板内解析</span>'
     : '';
   const evid = r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
       ? (evTitleBadge + evTagBadge + l2Tag

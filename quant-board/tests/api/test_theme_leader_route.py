@@ -191,6 +191,27 @@ def test_unsealed_outcome_is_null_not_false(monkeypatch):
     assert body["sealedCount"] == 0
 
 
+def test_board_digest_extracted_from_narrative(monkeypatch):
+    """2026-10-27 事件列徽章 tooltip 数据前提：读口从叙事原文抽「板内解析/板内同伴驱动」
+    行作 evidenceBoardDigest（完整题材驱动内容），不许「在场」占位话；无叙事旧档 → None。"""
+    with_digest = _doc("600001", "机器人", narrative=(
+        "2026-10-16 交易日 · 盘面事实：……\n"
+        "板内解析（韭研异动「机器人」12 只）：龙头 龙一股份（600001）驱动标签「周末产业："
+        "信息化'十五五'规划发布！」｜解析摘录：公司为……\n"
+        "板内同伴驱动：同伴A（消息面刺激）、同伴B（订单落地）\n"
+        "未来 7 日既定事件（开盘啦题材日历）：……"))
+    no_narrative = _doc("600002", "半导体")
+    no_narrative.pop("narrative")
+    c = _client(monkeypatch, [with_digest, no_narrative])
+    rows = {r["code"]: r for r in c.get("/api/hotlist-jev/theme-leaders",
+                                        params={"date": "2026-10-16"}).json()["leaders"]}
+    digest = rows["600001"]["evidenceBoardDigest"]
+    assert "板内解析（韭研异动「机器人」12 只）" in digest
+    assert "板内同伴驱动：同伴A" in digest
+    assert "盘面事实" not in digest, "只抽板内解析节，不整包叙事"
+    assert rows["600002"]["evidenceBoardDigest"] is None, "无叙事旧档不编造"
+
+
 def test_day2_premium_is_exposed_for_sealed_outcome(monkeypatch):
     """2026-10-26 前端溢价列的数据前提：settle_day2 回填的 outcomeDay2 原样透出
     （T+2 openPct/closePct vs T+1 收盘）；未回填文档缺字段 → None 不编造。"""

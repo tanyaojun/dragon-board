@@ -376,6 +376,9 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
         "题材标签徽章必须带 tooltip 全文"
     assert "esc(r.evidenceIndustry)" not in row, \
         "题材名称不得以文本渲染进事件列（只许徽章）"
+    assert "r.evidenceBoardDigest" in row, \
+        "板内解析徽章 tooltip 必须接读口摘要（完整题材驱动内容，非「在场」占位话）"
+    assert "见投喂语料抽屉" not in row, "旧静态占位 tooltip 不得残留"
     assert "tl-evtxt" not in row and "tl-evtags" not in html, \
         "首版铺文截断样式必须删除（防溢出回潮）"
 
@@ -441,9 +444,10 @@ def test_evidence_cell_shows_l2_resolution_badge_even_when_industry_mapped(html:
 
     上海九百观感缺口：映射节点名与板块同名（大消费→大消费）时整列只剩板块名，
     S3 补充映射与板内解析证据在场却不可见。未映射分支维持「板内解析+题材N」蓝徽章不变。
+    2026-10-27 追加：徽章 title 必须接读口 evidenceBoardDigest（完整驱动内容）。
     """
     row = _fn(html, "tlRowHtml")
     assert "evidenceBoardResolved" in row, "徽章判定必须消费 evidenceBoardResolved 出参"
-    badge_lines = [ln for ln in row.splitlines() if "+板内解析" in ln]
-    assert any("title=" in ln for ln in badge_lines), \
-        "有映射分支必须渲染带 title 的板内解析徽章（注释行不算）"
+    l2_block = row[row.index("const l2Tag"): row.index("const evid")]
+    assert "title=" in l2_block and "+板内解析" in l2_block, \
+        "板内解析徽章必须带 title（完整驱动内容 tooltip）"

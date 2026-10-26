@@ -244,6 +244,12 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 # （v5 起 status=skipped 不落库，读口无排除行）
                 "evidenceBoardResolved": d.get("evidenceBoardResolved"),
                 "evidenceKwordTags": d.get("evidenceKwordTags") or [],
+                # 板内解析摘要（2026-10-27 用户裁决：事件列徽章 tooltip 必须可读完整
+                # 题材驱动内容，不许「在场」占位话）——从叙事原文抽「板内解析/板内
+                # 同伴驱动」行（含龙头驱动标签+解析摘录+同伴驱动全文）；旧档无叙事=None
+                "evidenceBoardDigest": "\n".join(
+                    ln for ln in str(d.get("narrative") or "").splitlines()
+                    if ln.startswith(("板内解析", "板内同伴驱动"))) or None,
                 "baselineKey": d.get("baselineKey"),
                 "baselineMeta": d.get("baselineMeta"),
                 "outcomeSealedNextDay": d.get("outcomeSealedNextDay"),
