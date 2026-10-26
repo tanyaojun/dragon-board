@@ -47,7 +47,7 @@
 承接，无需市况口径。阴性只覆盖上述四口径×续板率×60 日窗；未试=更长窗口/溢价端
 （毒带研究已覆盖 corr=+0.235 是溢价非续板率）/昨日连板股今日溢价口径。
 
-### 1.3 10-23 八只现状（A 检验对象，v8 档 2026-10-24c 语料）
+### 1.3 10-23 现状（A 检验对象=七只现任，末行南矿系 10-22 对照不计入分母；v8 档 2026-10-24c 语料）
 
 | 板块 | 股票 | 连板 | 深度 | 延续 | 空间(conf) | 锚读数要点 |
 |---|---|---|---|---|---|---|
@@ -88,7 +88,8 @@
    `./.venv/Scripts/python.exe scripts/theme_leader_pilot_eval.py --date 2026-10-23 --write-outcome`
    （若盘后链 `_settle_previous_theme_leader_day` 已自动回填则跳过，先查
    `outcomeSealedNextDay` 非 null 再跑，避免重复）。
-3. **出对照表**：八只的「空间档 vs 10-26 实际续板」（`outcomeSealedNextDay`）+
+3. **出对照表**：七只现任的「空间档 vs 10-26 实际续板」（`outcomeSealedNextDay`；南矿为
+   10-22 行不计入）+
    `outcomeBoardNNextDay`（再走板数）。
 4. **判定标准（预先冻结，防事后归因）**：
    - **≥2 只续板 → 错杀实锤**：peak 在强市况修复日系统性误判，B+C 立项 urgency 高；

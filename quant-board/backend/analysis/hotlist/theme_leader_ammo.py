@@ -54,7 +54,11 @@ QUESTION_SET_VERSION_THEME_LEADER = "v8"
 # 封板股中今日仍封数，prevTotal−prevStill 恒 ≥0）；旧实现用 prevBoardN（今日成员交集，含昨日
 # 他板块迁入股），迁移场景减出负数甚至「昨日封 0 仍封 2」自相矛盾。同时修防御分支原始 None
 # 泄漏（「今日仍封 None 只」→「今日仍封不可考」）。
-AMMO_VERSION_THEME_LEADER = "2026-10-24d"
+# 2026-10-26a（空间锚每档基率化，2026-10-26 用户批准；预登记 §21.2）：Q1 空间锚行每档
+# 只给「平均再走 X 板」（实测全 <1 板）与档位语义（space_1≈1 板/peak=顶部）粒度错配，
+# 10-23 八龙头全 peak 塌缩归因之一——改为每档「再走≥1板率/≥2板率/中位再走/均值/样本量」，
+# 率值口径与档位判定直接对齐；题面 v8 判据零改动，hash 不变。
+AMMO_VERSION_THEME_LEADER = "2026-10-26a"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -453,6 +457,10 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
 
     历史 rows 为空 / 无可用周期 → None（叙事不出行：没有锚时题面锚规则不触发，
     模型自行判断——fail-visible，不编造基准）。
+    2026-10-26a 每档基率化：此前每档只给「平均再走 X 板」（实测全 <1 板）+ ≥2 板率，
+    与档位语义（space_1≈1 板/peak=顶部）粒度错配——10-23 八龙头全 peak 塌缩归因之一。
+    改为每档给「再走≥1板率/≥2板率/中位再走/均值/样本量」：率值口径与档位判定直接对齐
+    （≥1板率低→peak 侧，≥1板率高→space_侧），均值降为参考量；题面判据零改动。
     """
     from statistics import median
 
@@ -463,24 +471,26 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
     def _stat(pairs: list[tuple[dict, int]]) -> str:
         vals = [float(v) for _, v in pairs]
         n = len(vals)
-        return (f"{sum(vals) / n:.1f} 板（中位 {median(vals):.1f}，≥2 板率 "
-                f"{sum(1 for v in vals if v >= 2) / n:.1%}，{n} 样本）")
+        return (f"再走≥1板率 {sum(1 for v in vals if v >= 1) / n:.1%} · ≥2板率 "
+                f"{sum(1 for v in vals if v >= 2) / n:.1%} · 中位再走 {median(vals):.1f} 板"
+                f"（均值 {sum(vals) / n:.1f}，{n} 样本）")
 
     parts: list[str] = []
     ck = combo_key(row)
     combo_pairs = [p for p in kept if combo_key(p[0]) == ck]
     if len(combo_pairs) >= min_combo_n:
-        parts.append(f"同桶[{ck}] 历史自当日高度平均再走 {_stat(combo_pairs)}")
+        parts.append(f"同桶[{ck}] {_stat(combo_pairs)}")
     else:
         parts.append(f"同桶[{ck}] 样本不足（<{min_combo_n}），不出锚")
     sk = streak_bucket(row.get("streak"))
     streak_pairs = [p for p in kept if streak_bucket(p[0].get("streak")) == sk]
     if len(streak_pairs) >= min_combo_n:
-        parts.append(f"按连板高度[{sk}] 平均再走 {_stat(streak_pairs)}")
+        parts.append(f"按连板高度[{sk}] {_stat(streak_pairs)}")
     cen = (f"；剔右删失周期样本 {censored} 个（次日仍封但样本流断，周期未确认终结）"
            if censored else "")
-    return ("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：" + "；".join(parts)
-            + f"；总体平均再走 {_stat(kept)}{cen}")
+    return ("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔；"
+            "再走≥1板率=历史同结构龙头自当日高度至少再封一板的占比）："
+            + "；".join(parts) + f"；总体 {_stat(kept)}{cen}")
 
 
 def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladder: int,

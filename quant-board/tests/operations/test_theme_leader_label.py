@@ -191,7 +191,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["questionSetVersion"] == "v8"
     assert doc["questionSetHash"] == "b0914cdd3e7d"   # v8 越锚铸词内联定义（v1-v7 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-24d"
+    assert doc["ammoVersion"] == "2026-10-26a"   # 空间锚每档基率化（预登记 §21.2）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -299,7 +299,7 @@ def test_build_one_wires_history_and_headroom_anchor():
                         board_history={"机器人": [("2026-10-16", 3), ("2026-10-17", 5)]})
     n = built["narrative"]
     assert "近 2 日该板块封板家数（旧→新，缺口日不列）：10-16 3 · 10-17 5" in n
-    assert "空间锚" in n and "总体平均再走" in n
+    assert "空间锚" in n and "总体 再走≥1板率" in n   # 2026-10-26a 每档基率化
     # 2026-10-24c 三行：前向轴紧跟盘面行、梯队/炸板面紧跟结构行；昨日口径=总数−仍封出断板
     # （2026-10-19 是周一；weekday 桩=周一~五交易日）
     assert "交易日轴（前向）：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \

@@ -34,10 +34,13 @@ def test_question_set_frozen_hash_and_versions():
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
     **2026-10-24d review 处置**（断板改同名成员口径 prevStill，迁移场景不出负数；
-    防御分支原始 None 泄漏修复；前向轴非 bridge 源结果不缓存）。
+    防御分支原始 None 泄漏修复；前向轴非 bridge 源结果不缓存）→
+    **2026-10-26a 空间锚每档基率化**（预登记 §21.2：每档改「再走≥1板率/≥2板率/中位再走/
+    均值/样本量」，率值口径与档位判定对齐，10-23 八龙头全 peak 塌缩归因之一；题面 v8
+    判据零改动，hash 不变）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v8"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24d"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-26a"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "b0914cdd3e7d"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -276,17 +279,25 @@ def test_leader_cycles_segments_and_censoring():
 
 
 def test_headroom_anchor_line_fallbacks_and_disclosure():
-    """锚行与 baseline_line 同构：桶回退 + 样本量/删失全披露；无可用周期 → None。"""
+    """锚行与 baseline_line 同构：桶回退 + 样本量/删失全披露；无可用周期 → None。
+
+    2026-10-26a 每档基率化：每档必须给「再走≥1板率」（率值口径与档位判定对齐，
+    只给均值曾致 10-23 八龙头全 peak 塌缩）。
+    """
     row = {"streak": 4, "boardN": 9, "time": "09:20:00"}
     line = A.headroom_anchor_line(_cycle_rows(), row, min_combo_n=2)
-    assert line.startswith("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：")
-    assert "剔右删失周期样本 5 个" in line and "总体平均再走" in line
+    assert line.startswith("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔；"
+                           "再走≥1板率=历史同结构龙头自当日高度至少再封一板的占比）：")
+    assert "剔右删失周期样本 5 个" in line and "总体 再走≥1板率 33.3%" in line
     # 同桶（streak4+|n>=8|early）内 A10-15 与 E10-14 两样本（剩余均 0）→ 组合桶成立出锚
-    assert "同桶[streak4+|n>=8|early<=10:00] 历史自当日高度平均再走 0.0 板" in line
+    assert ("同桶[streak4+|n>=8|early<=10:00] 再走≥1板率 0.0% · ≥2板率 0.0% · "
+            "中位再走 0.0 板（均值 0.0，2 样本）") in line
+    # 每档基率齐备：连板高度档同样带再走≥1板率（模型可直接对档位）
+    assert "按连板高度[4+] 再走≥1板率 0.0%" in line
     # 小样本桶明说不出锚
     tight = A.headroom_anchor_line(_cycle_rows(), {"streak": 2, "boardN": 3, "time": "13:30:00"},
                                    min_combo_n=8)
-    assert "样本不足（<8），不出锚" in tight and "按连板高度[2] 平均再走" not in tight
+    assert "样本不足（<8），不出锚" in tight and "按连板高度[2] 再走≥1板率" not in tight
     # 无历史样本 / 全删失 → None（叙事不出行，不编造基准）
     assert A.headroom_anchor_line([], row) is None
     all_censored = [{"code": "G", "date": "2026-10-13", "streak": 2, "continued": True,
