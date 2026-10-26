@@ -248,6 +248,9 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 "baselineMeta": d.get("baselineMeta"),
                 "outcomeSealedNextDay": d.get("outcomeSealedNextDay"),
                 "outcomeMeta": d.get("outcomeMeta"),
+                # 后日 T+2 打板溢价（settle_day2 回填：openPct/closePct vs T+1 收盘；
+                # T+1 断板=无打板入场记 skipped；未到/缺日线=pending 挂链自愈）
+                "outcomeDay2": d.get("outcomeDay2"),
                 "status": d.get("status"),
                 "sampleOrigin": d.get("sampleOrigin") or "live",
                 "questionSetVersion": d.get("questionSetVersion"),

@@ -11,7 +11,8 @@
 
 展示硬约束（AGENTS §1.2-5 / §4.0）：落库口径为准，模型原答仅留展开卡审计
 （2026-10-22 用户裁决删表格「模型原答」「同桶基线」两列——对用户无参考价值）/
-结局 null=未封 / 回填样本标橙 / 读口异常 ≠ 无数据 / 多代际黄牌已结项（2026-10-22）。
+结局 null=未封 / 回填警示已下线（2026-10-26 用户裁决，来源留筛选与明细卡页脚）/
+读口异常 ≠ 无数据 / 多代际黄牌已结项（2026-10-22）。
 
 本测试是**静态源码守卫**（无浏览器、零网络、零 jev 调用，AGENTS §1.2-7）。
 """
@@ -137,7 +138,7 @@ def test_gated_row_shows_model_answer_and_reason(html: str) -> None:
     row = _fn(html, "tlRowHtml")
     assert "r.modelChoice" not in row, "表格行不得再拼模型原答单元格"
     assert "r.baselineKey" not in row, "表格行不得再拼同桶基线单元格"
-    assert "colspan=\"14\"" in row, "展开明细行跨列数须跟表头（14）"
+    assert "colspan=\"15\"" in row, "展开明细行跨列数须跟表头（15，含溢价列）"
     # 门/排除原因仍可见（档位/证据列）+ 展开卡里保留原答审计
     assert "TL_GATE_CN" in html
     assert "r.modelChoice" in _fn(html, "tlEntryResp")
@@ -160,13 +161,19 @@ def test_outcome_three_states_never_fake_broken(html: str) -> None:
     assert "未封" in row and "续板" in row and "未续" in row
 
 
-def test_backfill_and_mixed_generation_banner(html: str) -> None:
-    """回填警示保留；多代际黄牌已结项（2026-10-22 用户裁决：多日实测后确认
-    历史档不回改是设计内常态，行级版本徽标已可见，长期挂黄牌无增量信息）。"""
+def test_backfill_warning_display_removed(html: str) -> None:
+    """回填警示下线（2026-10-26 用户裁决）：黄牌横幅与名称旁「回填」标属视觉噪音，
+    来源语义保留在「来源」筛选与明细卡页脚（审计可考）；
+    多代际黄牌已结项（2026-10-22 用户裁决），均不得回潮。"""
     banner = _fn(html, "tlRenderBanner")
-    assert "回填" in banner and "未来信息" in banner
+    assert "回填" not in banner and "未来信息" not in banner, "回填警示横幅必须下线"
     assert "跨代不可比较" not in banner, "多代际警示已结项，不得回潮"
-    assert "tl-backfill" in html
+    row = _fn(html, "tlRowHtml")
+    assert "sampleOrigin === 'backfill'" not in row, "名称旁「回填」标必须删除"
+    assert "tl-backfill" not in html and "tl-origin" not in html, "行高亮/回填标样式必须删除"
+    # 审计层保留：来源筛选 + 明细卡页脚仍可见来源（fail-visible 的替代出口）
+    assert "TL_ORIGIN_CN" in _fn(html, "tlRenderBar")
+    assert "TL_ORIGIN_CN" in _fn(html, "tlDetailHtml")
 
 
 def test_read_error_is_fail_visible(html: str) -> None:
@@ -319,20 +326,62 @@ def test_silent_background_refresh(html: str) -> None:
 
 # ── 回归（2026-10-23 截图实测列错位）：行拼装丢 contCell → 表头 13 列/行 12 格 ──
 def test_header_and_row_column_counts_match(html: str) -> None:
-    """表头加「延续性」列后，tlRowHtml 必须同步发出 13 格——少一格后续列整体左移
+    """表头加「延续性」「溢价」列后，tlRowHtml 必须同步发出 15 格——少一格后续列整体左移
     （延续性空、证据/结局错位一格）。"""
     # 表头块限定在 tlRenderRows 函数体内（避免匹配到页面其他表的「结局」列）
     block = _fn(html, "tlRenderRows")
     import re as _re
-    n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z]+'\)", block)) + block.count("<th>")
+    n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z0-9]+'\)", block)) + block.count("<th>")
     row = _fn(html, "tlRowHtml")
-    # 展开明细行的 colspan 单独算：数据行 14 格（含空间列）+ 明细跨 14 列
+    # 展开明细行的 colspan 单独算：数据行 15 格（含空间列与溢价列）+ 明细跨 15 列
     n_td = row.count("<td") - row.count("<td colspan")
-    assert n_th == 14, f"表头应 14 列，实为 {n_th}"
-    assert n_td == 14, f"数据行应 14 格，实为 {n_td}（丢格 → 列错位）"
-    assert 'colspan="14"' in row, "展开明细行必须跨 14 列（跟表头同步）"
+    assert n_th == 15, f"表头应 15 列，实为 {n_th}"
+    assert n_td == 15, f"数据行应 15 格，实为 {n_td}（丢格 → 列错位）"
+    assert 'colspan="15"' in row, "展开明细行必须跨 15 列（跟表头同步）"
     assert "+ contCell +" in row or "+ contCell" in row, "延续性单元格必须拼进行"
     assert "+ headCell +" in row, "空间列（leaderHeadroom）必须拼进行——v5/v6 核心产出不得只在明细 JSON 里可见"
+    assert "+ premHtml +" in row, "溢价单元格必须拼进行（2026-10-26 用户需求）"
+
+
+# ── 2026-10-26 表格四项优化（用户截图需求） ─────────────────────────────
+
+def test_three_stage_fields_color_coded_by_bucket(html: str) -> None:
+    """①题材深度/延续性/空间分档配色：红=最热/最强、琥珀=中、蓝=冷却、灰=不可判，
+    与档位列（high_ge65 红 / mid 琥珀 / low 蓝）同热度语汇。"""
+    for map_name, hot, cool in (("TL_DEPTH_BADGE", "climax", "igniting"),
+                                ("TL_CONT_BADGE", "strong_extend", "ending"),
+                                ("TL_HEAD_BADGE", "space_2plus", "peak")):
+        m = re.search(rf"const {map_name} = \{{([^}}]+)\}}", html)
+        assert m, f"{map_name} 分档配色表缺失"
+        assert hot in m.group(1) and cool in m.group(1), f"{map_name} 关键档位缺失"
+    row = _fn(html, "tlRowHtml")
+    for map_name in ("TL_DEPTH_BADGE", "TL_CONT_BADGE", "TL_HEAD_BADGE"):
+        assert map_name in row, f"{map_name} 必须接到徽章类（不能全灰）"
+
+
+def test_evidence_cell_shows_concrete_content(html: str) -> None:
+    """②题材证据列显示具体内容：事件标题/题材标签铺进单元格（CSS 截断 + tooltip 全文），
+    不再只给「+N事件 / +题材N」计数徽章——计数无法区分真驱动与凑数标签。"""
+    row = _fn(html, "tlRowHtml")
+    assert "r.evidenceEventTitles" in row and "r.evidenceKwordTags" in row, \
+        "事件标题与题材标签必须消费"
+    assert "tl-evtxt" in row and "tl-evtags" in row, "具体内容必须铺进单元格（截断样式）"
+    assert "+ r.evidenceEventTitles.length" not in row, "「+N事件」计数徽章不得回潮"
+    assert "briefN" not in row, "旧的计数变量不得残留"
+    assert "tl-evtxt" in html and "tl-evtags" in html, "截断样式必须存在"
+
+
+def test_premium_column_day2(html: str) -> None:
+    """③溢价列：结局=续板（打板入场成立）→ 显示 T+2 溢价率（outcomeDay2.closePct，
+    settle_day2 挂链回填）；未续=无入场不显溢价；未回填显「待回填」不编造；可排序。"""
+    rows_fn = _fn(html, "tlRenderRows")
+    assert "th('溢价', 'day2')" in rows_fn, "溢价列必须可排序"
+    row = _fn(html, "tlRowHtml")
+    assert "outcomeDay2" in row and "closePct" in row, "溢价读 outcomeDay2.closePct"
+    assert "待回填" in row, "续板但溢价未回填必须显式（fail-visible）"
+    assert "outKey === 'sealed'" in row, "只给结局=续板的行显示溢价"
+    kv = _fn(html, "tlSorted")
+    assert "day2" in kv, "排序键必须接线"
 
 
 # ── 2026-10-24：四题置信芯片 + 续板概率改中值加权期望 ─────────────────────

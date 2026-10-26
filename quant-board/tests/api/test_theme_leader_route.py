@@ -191,6 +191,21 @@ def test_unsealed_outcome_is_null_not_false(monkeypatch):
     assert body["sealedCount"] == 0
 
 
+def test_day2_premium_is_exposed_for_sealed_outcome(monkeypatch):
+    """2026-10-26 前端溢价列的数据前提：settle_day2 回填的 outcomeDay2 原样透出
+    （T+2 openPct/closePct vs T+1 收盘）；未回填文档缺字段 → None 不编造。"""
+    settled = _doc("600001", "机器人", outcomeDay2={
+        "date": "2026-10-20", "openPct": 3.1, "closePct": 8.08,
+        "src": "tdx_daily_bars", "computedAt": "2026-10-20T18:10:00"})
+    pending = _doc("600002", "半导体", outcomeSealedNextDay=True)   # 后日未到 → 无 outcomeDay2
+    c = _client(monkeypatch, [settled, pending])
+    rows = {r["code"]: r for r in c.get("/api/hotlist-jev/theme-leaders",
+                                        params={"date": "2026-10-16"}).json()["leaders"]}
+    assert rows["600001"]["outcomeDay2"]["closePct"] == 8.08
+    assert rows["600001"]["outcomeDay2"]["openPct"] == 3.1
+    assert rows["600002"]["outcomeDay2"] is None, "未回填不得编造溢价"
+
+
 def test_superseded_leader_rows_hidden_but_counted(monkeypatch):
     """单一龙头对账（2026-10-24 双龙头事故）：退位行默认不出响应、supersededCount 披露。
 
