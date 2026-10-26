@@ -2569,9 +2569,16 @@ function tlRowHtml(r, f){
   const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-', 'b-gray')
     + tlConfChip(r, 'leader_headroom');
   // 题材证据分层（v3）：产业树节点 > 板内解析 > 缺失原因
+  // 2026-10-26：有映射分支也补「+板内解析」（evidenceBoardResolved）——上海九百观感缺口：
+  // 映射节点名与板块同名时整列只剩板块名，S3/板内解析证据在场却不可见（事件层零命中
+  // 是真实信息不伪造，但解析在场必须可读）。
   const briefN = (r.evidenceKwordTags || []).length;
+  const l2Tag = r.evidenceBoardResolved
+    ? ' <span class="tl-ev" title="韭研异动板内解析在场（龙头驱动+同伴标签，见投喂语料抽屉）">+板内解析</span>'
+    : '';
   const evid = r.evidenceIndustry
       ? esc(r.evidenceIndustry)
+        + l2Tag
         + (r.evidenceEventTitles && r.evidenceEventTitles.length
           ? ' <span class="tl-ev" title="' + esc(r.evidenceEventTitles.join(' / ')) + '">+'
             + r.evidenceEventTitles.length + '事件</span>' : '')

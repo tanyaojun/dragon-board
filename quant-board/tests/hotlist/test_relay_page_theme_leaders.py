@@ -376,3 +376,16 @@ def test_continue_probability_is_midpoint_weighted_expectation(html: str) -> Non
     # 单元格 tooltip 注明口径（中值加权期望，非模型直读）
     row = _fn(html, "tlRowHtml")
     assert "非模型直读" in row
+
+
+def test_evidence_cell_shows_l2_resolution_badge_even_when_industry_mapped(html: str) -> None:
+    """「+板内解析」徽章：有产业树映射时板内解析在场也必须显（2026-10-26 用户裁决）。
+
+    上海九百观感缺口：映射节点名与板块同名（大消费→大消费）时整列只剩板块名，
+    S3 补充映射与板内解析证据在场却不可见。未映射分支维持「板内解析+题材N」蓝徽章不变。
+    """
+    row = _fn(html, "tlRowHtml")
+    assert "+板内解析" in row, "有映射分支必须渲染板内解析徽章"
+    assert "evidenceBoardResolved" in row, "徽章判定必须消费 evidenceBoardResolved 出参"
+    badge_line = next(ln for ln in row.splitlines() if "+板内解析" in ln)
+    assert "title=" in badge_line, "徽章带 title 提示（点开投喂语料抽屉看全文）"
