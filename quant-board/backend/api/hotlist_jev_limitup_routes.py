@@ -18,7 +18,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from backend.data.repositories import repository_factory
-from backend.services.jev.jev_limitup_labels import collect_limitup_labels
+from backend.api.jev_view_date import resolve_view_date
+from backend.services.jev.jev_limitup_labels import PHASE_ORIGIN, collect_limitup_labels
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
 
@@ -29,9 +30,17 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
         return JSONResponse(status_code=422, content={"ok": False, "reason": "missing date"})
     try:
         db = repository_factory.get_runtime_mongodb_database()
+        # 盘中回退（2026-10-27 用户裁决）：指定日无打标存档（盘前/非交易日/打标链未跑）
+        # → 整体回退 < 指定日最新有档交易日，后续梯队/板块信息/连板/反包 join 全部
+        # 跟随生效日同口径，date 字段透出实际生效日 + dateFallback 标记。
+        date, date_fallback = resolve_view_date(
+            db["hotlist_jev_driver_labels"], date,
+            {"origin": {"$ne": PHASE_ORIGIN}})
         # with_raw=1（relay_page 调用日志展开用）：个股条目附带 narrative/questionsRaw 等
         # 原始调用字段；默认 0 保持既有合同（根前端消费方零变化）
         result = collect_limitup_labels(db, date, with_raw=bool(with_raw))
+        if date_fallback:
+            result["dateFallback"] = date_fallback
         # 2026-10-10 增补：梯队分布（韭研主源双源口径，只增字段向后兼容）
         try:
             from backend.operations.jev_label_jiuyan import _jiuyan_ladder

@@ -167,7 +167,12 @@ def get_hotlist_jev_series(
     dataset_id: str = "dragonboard_live",
     date: str | None = None,
 ) -> dict[str, Any]:
-    """单日 jev 观察轨道读口：槽位文档升序 + eod 文档；无任何文档时不报错不伪造。"""
+    """单日 jev 观察轨道读口：槽位文档升序 + eod 文档；无任何文档时不报错不伪造。
+
+    盘中回退（2026-10-27 用户裁决）：指定日全日无槽位/EOD 文档（盘前/节假日）→
+    回退 < 指定日最新有档交易日，date 字段透出实际生效日并带 dateFallback 标记；
+    盘中当日已有槽位帧时照常返回当日（实时读数优先于回退）。
+    """
     try:
         db = repository_factory.get_runtime_mongodb_database()
     except Exception as exc:
@@ -177,6 +182,11 @@ def get_hotlist_jev_series(
         trading_date = date or _latest_date(db, dataset_id)
         if not trading_date:
             return {"ok": True, "date": None, "slots": [], "eod": None, "degradedCount": 0}
+        date_fallback = None
+        if date:
+            from backend.api.jev_view_date import resolve_view_date
+            trading_date, date_fallback = resolve_view_date(
+                _slots_collection(db), trading_date, {"datasetId": dataset_id})
         rows = list(_slots_collection(db).find(
             {"datasetId": dataset_id, "tradingDate": trading_date}))
         slots = sorted(
@@ -189,7 +199,8 @@ def get_hotlist_jev_series(
         degraded_count = sum(
             1 for row in [*slots, eod] if row and row.get("status") in ("degraded", "no_data"))
         return {"ok": True, "date": trading_date, "slots": slots, "eod": eod,
-                "degradedCount": degraded_count}
+                "degradedCount": degraded_count,
+                **({"dateFallback": date_fallback} if date_fallback else {})}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"series_read_failed: {exc}", "slots": []}
 
@@ -272,9 +283,19 @@ def get_relay_index(
             newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
             latest = str(newest.get("tradingDate")) if newest else None
         day_doc = col.find_one({"tradingDate": latest}) if latest else None
+        # 盘中回退（2026-10-27 用户裁决）：relay-index 是收盘池口径（15:30 后出数），
+        # 盘中查当日必无档 → 回退 < 指定日的最新存档，接力四卡/今日连板情绪主表
+        # 盘中看上一交易日读数（date 字段透出实际生效日，带 dateFallback 标记）
+        date_fallback = None
+        if day_doc is None and latest:
+            day_doc = col.find_one({"tradingDate": {"$lt": latest, "$ne": None}},
+                                   sort=[("tradingDate", -1)])
+            if day_doc:
+                date_fallback = {"requested": latest, "served": day_doc.get("tradingDate")}
+                latest = str(day_doc.get("tradingDate"))
         series = list(col.find(
             {"tradingDate": {"$ne": None}},
-            # v6（2026-10-19）：relayStructure 只供选中日卡片，序列（≤400 天）不返——
+            # v6 投影边界：relayStructure 只供选中日卡片，序列（≤400 天）不返——
             # 避免载荷膨胀；缺字段的 v5 旧档由前端显「旧代未采集」（fail-visible）
             {"narrative": 0, "responseRaw": 0, "questionsRaw": 0, "relayStructure": 0},
         ).sort("tradingDate", -1).limit(capped_days))
@@ -330,6 +351,8 @@ def get_relay_index(
             "degradedCount": sum(1 for r in [*series, day_doc] if r and r.get("status") != "ok"),
             "wzsBaseline": wzs_baseline,
         }
+        if date_fallback:
+            payload["dateFallback"] = date_fallback
         if join_error:
             payload["dayTemperatureDegraded"] = join_error
         if wzs_error:
@@ -372,6 +395,7 @@ def get_sector_nodes(
                                    sort=[("tradingDate", -1)])
             if day_doc:
                 date_fallback = {"requested": latest, "served": day_doc.get("tradingDate")}
+                latest = str(day_doc.get("tradingDate"))
         series = list(col.find(
             {"tradingDate": {"$ne": None}},
             # 序列只带节点分布原料（rows 的 board/node/count 子集），全行仅选中日返回

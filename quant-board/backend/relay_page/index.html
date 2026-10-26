@@ -1081,8 +1081,9 @@ function renderKpis(){
   // 全空，而同一响应里的 STATE.slots 已带同题目盘中完整读数——有数据不展示。
   // 现改为 EOD 优先；EOD 未生成时降级到最新 ok 槽的**同题目**读数（档位/温度/拥挤
   // 三项一一对应），口径标签明示「盘中口径 · 最新槽 HH:MM」，与「收盘口径」可区分。
-  // relay-index 四卡是收盘池口径（涨停/晋级/炸板池），无盘中源：留 '-' 但给结构化
-  // 原因 + 参照日指数，不拿非当日值冒充当日（§4.0：缺失可见，不伪造）。
+  // relay-index 四卡原设计（2026-10-14）：收盘池口径无盘中源，留 '-' + 参照日指数。
+  // **2026-10-27 用户裁决推翻**：读口已改盘中回退（relay-index day 回退 < 指定日最新
+  // 存档），四卡盘中直接展示上一交易日读数（副标=实际档期日期），不再留空。
   // EOD 存在但 degraded/missing_token 时 answers/scores 全 null：此时它给不出任何读数，
   // 不能拿「收盘口径」标签配一片空白（那正是本次修的病灶），按不可用处理走盘中降级。
   // 该判定与 renderEod() 共用 isEodUsable，否则两处会对同一文档给出相反口径。
@@ -1110,17 +1111,17 @@ function renderKpis(){
   const stageSub = frame && frame !== stage ? `${stamp} · 当前帧 ${STAGE_CN[frame] || frame}` : stamp;
   const d = STATE.day || {};
   const relayReady = d.relayIndex != null;
-  // 上一交易日参照只进副标，主值仍为 '-'（明确不是当日值）
+  // 上一交易日参照只进副标（2026-10-27 裁决后 relayReady 为真时副标=实际档期日期）
   const prevRef = relayReady ? { row: null, label: '' } : prevTradingDayRef();
   const prev = prevRef.row;
   const relaySub = relayReady
     ? esc(d.tradingDate || '')
     : `收盘口径 · 15:30 后出数${prev ? `（${prevRef.label} ${esc(String(prev.tradingDate || '').slice(5))} = ${prev.relayIndex ?? '-'}）` : ''}`;
   const relayCard = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
-  // 降级原因通栏：grid-column:1/-1，不占卡片位；两条件独立，可同时成立
+  // 降级原因通栏：grid-column:1/-1，不占卡片位；仅剩盘中实时槽口径说明——
+  // relay 四卡已随 2026-10-27 裁决改回退显示，不再有「留空」降级通栏
   const why = [];
   if (intraday) why.push('EOD 日级文档未生成（daily:15:30 收盘快照后出数），前四张卡取最新 ok 槽的同题目实时读数');
-  if (!relayReady) why.push('连板指数为收盘池口径（涨停/晋级/炸板，15:30 后出数），接力四卡留空并附参照日指数');
   const note = why.length ? `<div class="kpi-note">⏳ 盘中降级：${why.join('；')}。</div>` : '';
   $('kpiRow').innerHTML = note + `
     <div class="kpi"><div class="k">市场阶段${intraday ? '（盘中）' : ' (EOD)'}</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${intraday ? stageSub : (PATTERN_CN[(ea.day_pattern||{}).choice] || '收盘口径')}</div></div>

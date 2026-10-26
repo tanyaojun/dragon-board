@@ -96,8 +96,8 @@ def test_intraday_falls_back_to_latest_available(client):
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
-    assert body["date"] == "2026-10-27"          # 请求日照常透出
-    assert body["doc"]["tradingDate"] == _D3     # 实际给的是最近可得档
+    assert body["date"] == _D3                          # date 字段=实际生效日
+    assert body["doc"]["tradingDate"] == _D3            # 实际给的是最近可得档
     assert body["dateFallback"] == {"requested": "2026-10-27", "served": _D3}
 
 
