@@ -84,7 +84,13 @@ QuantBoard 主后端 :8000
 ## 四、数据语义与已知限制
 
 - **价格是 ×10000 整数缩放**：113000=11.30 元、8900980=890.098（板块点位）。展示层需自行除以 10000 或标注口径。
-- **3001 `quotas` 数组顺序语义是推断**（Item.f100 顺序对应 App 展示列），未与 App UI 逐列对照——接入正式消费前建议收盘时段与 App 同屏核对。
+- **3001 `quotas` 关键字段语义已独立源核实（2026-10-27，东方财富公开行情接口交叉对照 + 字段间自洽验证）**：
+  - quotas[0]=板块归属标签（板块行空串、个股行为概念文字如「银行、业绩增长」）
+  - quotas[1]=最新价（板块行=板块指数点位）；quotas[2]=涨跌幅%；quotas[3]=成交额（元）
+  - quotas[7]/[8]/[9]=主力流入/流出（流出为负）/净额（[7]+[8]=[9] 自洽）
+  - quotas[10]/[11]/[12]=流入/流出/净额占成交额比%（除法自洽）
+  - 核对样本：000001 平安银行 quotas[1]=11.3↔11.30、[2]=0.89↔0.89%、[3]=1485999504↔1485999504.06 精确匹配
+  - 其余 60+ 列未逐一映射，接入新消费字段时按同样方法增量核对（独立源交叉 + 自洽验证）
 - ~~3006 负数 varint 缺陷~~（2026-10-27 提交前已修复）：`_signed64` 补码还原负 inc_price/inc_rate，含负数回归用例；不再出现 uint64 回绕值。
 - 3001 板块流与个股流会混合出现（stock_ids 可混合板块 ID 与股票代码）。
 - 订阅规模：实测 2 板块 + 1 股稳定；全市场 1571 板块未测。
@@ -120,7 +126,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 ## 六、测试合同
 
-- `backend/services/__tests__/test_kpl_socket_protocol.py`（16 用例，含负数 varint 回归）+ `test_kpl_collector_service.py`（7 用例）+ `tests/api/test_kpl_proxy_routes.py`（3 用例，mock 上游 502 fail-visible），`26 passed`。
+- `backend/services/__tests__/test_kpl_socket_protocol.py`（16 用例，含负数 varint 回归）+ `test_kpl_collector_service.py`（8 用例，含 signsvc EOF 哨兵回归）+ `tests/api/test_kpl_proxy_routes.py`（4 用例，mock 上游 502 fail-visible + WS 双向中继），`28 passed`。
 - **红线：pytest 一律全 mock（FakeCodec/FakeSocket），零真实 KPL 连接、零真实 WBE 调用**。真实连接只走预登记的开火路径（人工运维诊断）。
 - 会话状态机测试覆盖：全帧序（260/610/602/2301/2303/2304/3001/3006）、fail-visible 断言（解码失败必须广播 error 事件，不静默丢弃）。
 
@@ -137,9 +143,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 ## 八、遗留风险与后续工作
 
 1. ~~**3006 有符号 varint 修复**~~：已修复（§四，含负数回归用例）。
-2. **quotas 列语义与 App UI 对照**（§四）：接入正式研究/展示消费前必须核对。
-3. **261/262 反作弊轮**：未实测；若服务器开始下发需接入 signsvc EXEC。
-4. **`serve_kpl_socket.py` 归档债**：当前在 `backend/` 根目录（先例是 snapshot_collector 的 `collector_main` 独立入口模式）；下次触碰该链路时应迁入规范入口（如 `backend/collector_main` 风格或 api/ 适配层），迁移须与本文同步更新。
+2. ~~**quotas 列语义与 App UI 对照**~~：已完成（§四）——关键位（[0]/[1]/[2]/[3]/[7]-[12]）经独立源交叉对照与自洽验证确认；其余 60+ 列接入新消费字段时增量核对。
+3. **261/262 反作弊轮**（条件性，无法主动触发）：服务器从未下发 261；若开始下发需把 signsvc EXEC 注入接入 collector——触发时再处理。
+4. ~~**serve_kpl_socket.py 归档债**~~：已裁定（2026-10-27）——`backend/serve_relay_page.py + relay_page/` 是已入库的同款先例（独立进程入口 + 静态页目录），`serve_kpl_socket.py + kpl_page/` 布局遵循该先例，不再迁移。
 5. **凭据已 env 化**（2026-10-27 提交前修复）：代码无凭据默认值（默认游客），正式账户值须环境变量注入，本地参考值存 `.tmp_review/kpl_credentials.env`（gitignored）；转常驻生产服务时统一收进 `.env.local` 加载链并考虑 token 失效监控。
-6. 认证 token 轮换未跟踪（当前值失效时需重新提取）。
-7. **低危收流细节**：signsvc readline 无超时阻塞风险（deadline 只在两行间检查）、WS 中继路径未覆盖自动化测试（REST 502 已覆盖）。
+6. **认证 token 轮换未跟踪**（条件性）：当前值失效时需重新提取；失效表现为 610 拒绝（非 1002，认证会 fail-visible 报错）。
+7. ~~**低危收流细节**~~：已修复（2026-10-27 待办轮）——signsvc readline 改为守护读线程+队列+deadline 取行（adb 卡死不再永久阻塞采集线程，EOF 哨兵 fail-visible，含回归用例）；WS 中继路径已补 mock 测试覆盖（双向泵）；帧长度 8MB 上限已带。
+8. **全部 KPL 待办项已收口**（2026-10-27）；新增改动请同步更新本文档与 AI_COLLABORATION.md KPL 节。

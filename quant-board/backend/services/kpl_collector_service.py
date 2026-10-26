@@ -54,6 +54,17 @@ class SignSvcAdbCodec:
         self._ready_timeout = ready_timeout
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
+        # 守护读线程 + 队列：readline 在 Windows 管道上无法被超时中断，
+        # 必须由后台线程读行入队，消费侧才能带 deadline 取行（防 adb 卡死永久阻塞采集线程）
+        self._lines: "queue.Queue[str]" = queue.Queue()
+        self._reader: Optional[threading.Thread] = None
+
+    def _reader_loop(self, proc: subprocess.Popen) -> None:
+        """守护线程：读 signsvc stdout 入队；管道 EOF 时压入哨兵并退出。"""
+        assert proc.stdout is not None
+        for raw in iter(proc.stdout.readline, b""):
+            self._lines.put(raw.decode(errors="replace"))
+        self._lines.put("__EOF__")
 
     def _ensure_ready(self) -> subprocess.Popen:
         with self._lock:
@@ -65,34 +76,43 @@ class SignSvcAdbCodec:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
+            self._lines = queue.Queue()  # 重建即重置（旧队列可能残留 EOF 哨兵）
+            self._reader = threading.Thread(target=self._reader_loop, args=(proc,), daemon=True)
+            self._reader.start()
             deadline = time.time() + self._ready_timeout
             while time.time() < deadline:
-                line = proc.stdout.readline().decode(errors="replace").strip()  # type: ignore[union-attr]
+                try:
+                    line = self._lines.get(timeout=1.0).strip()
+                except queue.Empty:
+                    if proc.poll() is not None:
+                        raise SignSvcError("signsvc exited before READY")
+                    continue
                 if line == "READY":
                     self._proc = proc
                     return proc
-                if proc.poll() is not None:
-                    raise SignSvcError(f"signsvc exited before READY")
+                if line == "__EOF__":
+                    raise SignSvcError("signsvc exited before READY")
             raise SignSvcError("signsvc READY timeout")
 
     def _cmd(self, q: str) -> str:
         for attempt in range(2):
             try:
                 proc = self._ensure_ready()
-                assert proc.stdin is not None and proc.stdout is not None
+                assert proc.stdin is not None
                 proc.stdin.write((q + "\n").encode())
                 proc.stdin.flush()
-                eof = 0
-                while True:
-                    line = proc.stdout.readline().decode(errors="replace").strip()
+                deadline = time.time() + 15.0
+                while time.time() < deadline:
+                    try:
+                        line = self._lines.get(timeout=1.0).strip()
+                    except queue.Empty:
+                        if proc.poll() is not None:
+                            raise OSError("signsvc EOF (process exited)")
+                        continue  # 本秒无输出，等下一轮（deadline 兑现）
+                    if line == "__EOF__":
+                        raise OSError("signsvc EOF (pipe closed)")
                     if line.startswith(("RESH", "RES ", "ERR")):
                         return line
-                    if line == "":
-                        # 子进程 EOF（segfault 等）：readline 立即返回空串，避免死旋
-                        eof += 1
-                        if eof > 50:
-                            raise OSError("signsvc EOF")
-                        continue
                     # MARK 等杂音跳过
             except Exception:
                 if attempt == 1:
@@ -198,6 +218,17 @@ class KplCollectorService:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def set_subscriptions(self, stock_ids: List[str]) -> Dict[str, Any]:
+        """动态更新订阅清单（下一个 3001 构造即生效，轮询间隔 ~2s）。
+
+        fail-visible：空清单拒绝（保留现有订阅），变更结构化返回供调用方透出。
+        """
+        ids = [str(s).strip() for s in (stock_ids or []) if str(s).strip()]
+        if not ids:
+            return {"ok": False, "reason": "empty stock_ids rejected", "count": len(self._stock_ids)}
+        self._stock_ids = ids
+        return {"ok": True, "count": len(ids), "running": self.is_running()}
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()

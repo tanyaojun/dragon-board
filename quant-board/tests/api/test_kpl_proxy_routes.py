@@ -90,3 +90,44 @@ def test_start_stop_post_passthrough(client):
     ]
     assert client.post("/api/kpl/start").json()["running"] is True
     assert client.post("/api/kpl/stop").json()["running"] is False
+
+
+class TestWsRelay:
+    """WS /api/kpl/ws/kpl-quotes 双向中继：mock 上游 websockets.connect。"""
+
+    def test_ws_relay_downstream_and_upstream(self, client, monkeypatch):
+        import asyncio
+        import json as jsonlib
+
+        upstream_msgs = [jsonlib.dumps({"type": "ping", "n": 1}),
+                         jsonlib.dumps({"type": "stock_quotes", "items": []})]
+        upstream_sent = []
+
+        class _FakeUpstream:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def recv(self):
+                if upstream_msgs:
+                    await asyncio.sleep(0.01)
+                    return upstream_msgs.pop(0)
+                # 无更多上游消息后挂起，等测试端关闭
+                await asyncio.sleep(3600)
+
+            async def send(self, msg):
+                upstream_sent.append(msg)
+
+        def _fake_connect(*args, **kwargs):
+            return _FakeUpstream()
+
+        monkeypatch.setattr(kpl_proxy_routes.websockets, "connect", _fake_connect)
+        with client.websocket_connect("/api/kpl/ws/kpl-quotes") as ws:
+            first = ws.receive_json()
+            assert first["type"] == "ping"
+            second = ws.receive_json()
+            assert second["type"] == "stock_quotes"
+            # 下行：浏览器 → 上游
+            ws.send_text(jsonlib.dumps({"type": "ping", "n": 2}))

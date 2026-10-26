@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import queue
+import io
 import sys
 import threading
 from pathlib import Path
@@ -261,3 +262,27 @@ class TestSignSvcCodecErrors:
         # _cmd 在 ensure_ready 失败时应抛 SignSvcError（不吞异常）
         with pytest.raises(SignSvcError):
             codec._cmd("PING")
+
+    def test_cmd_eof_sentinel_is_fail_visible(self, monkeypatch):
+        # 读线程 EOF 哨兵 → _cmd 必须 fail-visible 抛错（不再靠 50 次空转计数）
+        codec = SignSvcAdbCodec.__new__(SignSvcAdbCodec)
+        codec._lock = threading.Lock()
+        codec._lines = queue.Queue()
+        killed = []
+
+        class _FakeProc:
+            stdin = io.BytesIO()
+
+            def poll(self):
+                return 1
+
+            def kill(self):
+                killed.append(1)
+
+        codec._proc = _FakeProc()
+        monkeypatch.setattr(SignSvcAdbCodec, "_ensure_ready", lambda self: codec._proc)
+        codec._lines.put("__EOF__")  # 第一次尝试：EOF
+        codec._lines.put("__EOF__")  # 重建重试：仍 EOF → 放弃
+        with pytest.raises(SignSvcError):
+            codec._cmd("ENC aa")
+        assert killed, "EOF 后必须触发 kill 重建路径"

@@ -22,7 +22,7 @@ import queue
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from backend.services.kpl_collector_service import KplCollectorService, SignSvcAdbCodec
@@ -81,6 +81,23 @@ async def stop() -> JSONResponse:
     async with _service_lock:
         svc.stop()
     return JSONResponse(content={"ok": True, **svc.status()})
+
+
+@app.post("/api/kpl/subscriptions")
+async def subscriptions(request: Request) -> JSONResponse:
+    """更新 3001/3006 订阅清单（body: {"stock_ids": ["801159", ...]}）。
+
+    下一个 3001 轮询即生效（~2s）；空清单拒绝并结构化返回（fail-visible）。
+    """
+    svc = _get_service()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = svc.set_subscriptions((body or {}).get("stock_ids") or [])
+    status_code = 200 if result.get("ok") else 400
+    return JSONResponse(content={"ok": result.pop("ok", False), "subscriptions": result,
+                                 **svc.status()}, status_code=status_code)
 
 
 @app.websocket("/ws/kpl-quotes")

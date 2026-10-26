@@ -228,10 +228,13 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
 - **协议事实**：认证命令号是 **610 不是 601**；260 challenge 每连接随机；pb tag 是 varint
   （f100→a2 06）；价格 ×10000 整数缩放；服务器会话寿命与认证速度相关（非固定 TTL），
   稳定性合同=2s 重连链而非单连接长寿命；keepalive 必须递增 seq（重复 seq 立即断连）。
-- **已知缺陷与待办**：3006 负数 varint 已修复（`_signed64` 补码还原，含回归用例）；
-  3001 quotas 列语义为推断、接入正式消费前须与 App UI 对照（详见 kpl-socket 文档 §四/§八）。
+- **已知缺陷与待办（2026-10-27 待办轮已全部收口）**：3006 负数 varint 已修复（`_signed64` 补码还原）；
+  3001 quotas 关键位语义已独立源核实（[0]板块标签/[1]最新价(板块=点位)/[2]涨跌幅%/[3]成交额/
+  [7]-[9]主力流入流出净额，东财接口交叉对照精确匹配）；signsvc readline 阻塞已改守护读线程
+  +deadline 取行；WS 中继已有 mock 测试。条件性遗留：261/262 反作弊轮（服务器从未下发，触发再接）
+  与 token 失效轮换（详见 kpl-socket 文档 §四/§八）。
 - **凭据红线（2026-10-27 提交前脱敏）**：KPL_USER_ID/KPL_TOKEN 代码零默认值（默认游客 userId=0），
   正式账户值只走环境变量注入（本地参考值存 gitignored 的 `.tmp_review/kpl_credentials.env`）；
   任何 KPL 凭据/token/盐值不得入仓。
-- **边界**：该链路是本地单机诊断/观察链路；下轮待办含 serve_kpl_socket.py 的
-  backend 根目录归档债与 quotas 列语义核对。
+- **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
+  `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。
