@@ -189,8 +189,8 @@ def test_run_writes_docs_and_is_idempotent(env):
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v8"
-    assert doc["questionSetHash"] == "b0914cdd3e7d"   # v8 越锚铸词内联定义（v1-v7 hash 留档在预登记文档）
+    assert doc["questionSetVersion"] == "v9"
+    assert doc["questionSetHash"] == "8a4454b879bd"   # v9 零区分度处置（v1-v8 hash 留档在预登记文档）
     assert doc["ammoVersion"] == "2026-10-26a"   # 空间锚每档基率化（预登记 §21.2）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响

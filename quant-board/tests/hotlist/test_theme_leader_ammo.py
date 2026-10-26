@@ -27,9 +27,14 @@ def test_question_set_frozen_hash_and_versions():
     =开盘啦：题材事件/新闻(Kword)/日历，韭研 timeline 退役，hash `56dbb0709335`）；
     v6 = 2026-10-23 四题判据增档（hash `1d098c87e07e`，14 只样本）；v7 = 2026-10-24
     置信度归因后空间题加历史锚规则（空间题 conf 均值 0.435 全场最差且无锚，hash
-    `40c7184a790e`，零样本——首批 10-26 才开火即被 v8 取代）；**v8 = 2026-10-24
-    「越锚」铸词内联定义**（review P3：模型直读可能不解裸铸词，改「要选高于锚的
-    档位（越锚）时」，hash `b0914cdd3e7d`）——**跨代标签不得混评**（评估按版本分组）。
+    `40c7184a790e`，零样本——首批 10-26 才开火即被 v8 取代）；v8 = 2026-10-24
+    「越锚」铸词内联定义（review P3：模型直读可能不解裸铸词，改「要选高于锚的
+    档位（越锚）时」，hash `b0914cdd3e7d`）；**v9 = 2026-10-26 零区分度处置
+    （A 检验 0/7 判对但零信息量；用户批准 §21.3 三项，hash `8a4454b879bd`）：
+    ①硬规则②单向改双向（偏离锚上调或下调都须引用锚行数字+锚未覆盖新证据）
+    ②新增默认起判档规则③（1-3 板→peak、4+ 板→space_1，分层杀伤证据非桶众数）
+    ③space_1/peak criteria 绑锚行「再走≥1板率」读数（三成上下/不足三成）**——
+    跨代标签不得混评（评估按版本分组）。
     AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
@@ -37,11 +42,11 @@ def test_question_set_frozen_hash_and_versions():
     防御分支原始 None 泄漏修复；前向轴非 bridge 源结果不缓存）→
     **2026-10-26a 空间锚每档基率化**（预登记 §21.2：每档改「再走≥1板率/≥2板率/中位再走/
     均值/样本量」，率值口径与档位判定对齐，10-23 八龙头全 peak 塌缩归因之一；题面 v8
-    判据零改动，hash 不变）。
+    判据零改动，hash 不变；v9 题面换代与其同批落地）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v8"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v9"
     assert A.AMMO_VERSION_THEME_LEADER == "2026-10-26a"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "b0914cdd3e7d"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "8a4454b879bd"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -52,6 +57,15 @@ def test_question_set_frozen_hash_and_versions():
         assert "insufficient" in q["criteria"], "每题必须留证据不足档，禁止逼模型硬填"
     # v7 锚规则只加在空间题 instructions（criteria 门不动，space_2plus 零命中先观察）
     assert "空间锚" in A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
+    # v9 三项（预登记 §21.3，2026-10-26 用户批准）：双向化 + 默认起判档 + criteria 锚读数
+    ins = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
+    assert "无论上调还是下调" in ins, "硬规则②双向：下调偏离锚同样须引用锚行数字+新证据"
+    assert "1-3 板 → peak 起判" in ins and "space_1 起判" in ins, "默认起判档映射在场"
+    assert "连板高度不可算时无默认档" in ins, "高度不可算 fail-visible 不硬套默认档"
+    crit = A.QUESTIONS_THEME_LEADER["leader_headroom"]["criteria"]
+    assert "再走≥1板率三成上下" in crit["space_1"], "space_1 绑锚行读数（非写死绝对阈值）"
+    assert "再走≥1板率不足三成" in crit["peak"], "peak 绑锚行读数"
+    assert "锚行读数参照" not in crit["space_2plus"], "space_2plus 零命中先观察，不加校准（§21.3 范围）"
 
 
 def test_bucket_functions_stable_keys():
