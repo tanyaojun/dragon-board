@@ -360,9 +360,9 @@ def test_three_stage_fields_color_coded_by_bucket(html: str) -> None:
 
 
 def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
-    """②事件列（2026-10-27 用户裁决：题材证据→事件、徽章化省宽）：驱动上板的事件标题/
-    题材标签只出窄徽章（首版把全文铺进单元格，表格横向溢出、结局/溢价被挤出可视区），
-    完整文字进 tooltip。"""
+    """②事件列（2026-10-27 用户裁决两轮定稿：题材证据→事件、**只出徽章**）：
+    驱动上板的事件标题/题材标签只出窄徽章，完整事件文字描述进 tooltip；
+    **题材名称（产业树节点）一律不显示**——首版铺文、二版残留名称文本均被用户纠偏。"""
     rows_fn = _fn(html, "tlRenderRows")
     assert "<th>事件</th>" in rows_fn, "列名必须为「事件」"
     bar = _fn(html, "tlRenderBar")
@@ -374,6 +374,8 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
         "事件徽章必须带 tooltip 全文（title=完整事件描述）"
     assert "esc(evTags.join" in row and "+题材' + evTags.length" in row, \
         "题材标签徽章必须带 tooltip 全文"
+    assert "esc(r.evidenceIndustry)" not in row, \
+        "题材名称不得以文本渲染进事件列（只许徽章）"
     assert "tl-evtxt" not in row and "tl-evtags" not in html, \
         "首版铺文截断样式必须删除（防溢出回潮）"
 

@@ -2574,10 +2574,9 @@ function tlRowHtml(r, f){
   const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-',
       TL_HEAD_BADGE[r.leaderHeadroom] || 'b-gray')
     + tlConfChip(r, 'leader_headroom');
-  // 题材证据分层（v3）：产业树节点 > 板内解析 > 缺失原因
-  // 2026-10-27 用户裁决（列名改【事件】+ 徽章化省宽）：驱动上板的事件标题/题材标签
-  // 不再铺进单元格（首版把表格撑溢出）——只出窄徽章，全文进 tooltip；
-  // 「+板内解析」为语料抽屉入口徽章保留。
+  // 题材证据分层（v3）：板内解析 / 缺失原因
+  // 2026-10-27 用户裁决（两轮纠偏定稿）：事件列**只出窄徽章、题材名称一律不显示**
+  //（名称与「板块」列重复，占宽）；完整题材驱动事件文字描述进 tooltip。
   const evTitles = r.evidenceEventTitles || [];
   const evTags = r.evidenceKwordTags || [];
   const evTitleBadge = evTitles.length
@@ -2591,14 +2590,12 @@ function tlRowHtml(r, f){
   const l2Tag = r.evidenceBoardResolved
     ? ' <span class="tl-ev" title="韭研异动板内解析在场（龙头驱动+同伴标签，见投喂语料抽屉）">+板内解析</span>'
     : '';
-  const evid = r.evidenceIndustry
-      ? '<span style="color:var(--muted)">' + esc(r.evidenceIndustry) + '</span>'
-        + evTitleBadge + evTagBadge + l2Tag
+  const evid = r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
+      ? (evTitleBadge + evTagBadge + l2Tag
+        || '<span class="badge b-gray" title="产业树已映射但无事件/标签证据">-</span>')
       : (r.evidenceMissingReason
         ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
-        : (r.evidenceBoardResolved || evTags.length
-          ? badge('板内解析' + (evTags.length ? '+题材' + evTags.length : ''), 'b-blue')
-          : '<span class="badge b-gray">-</span>'));
+        : '<span class="badge b-gray">-</span>');
   // 溢价列（2026-10-26 用户需求）：结局=续板（T+1 封板=打板入场成立）→ 显示后日 T+2
   // 溢价率（T+2 收盘 vs T+1 收盘，settle_day2 挂链回填）；未续=无入场不显示溢价，
   // 未封/后日未到='-'；续板但溢价未回填=「待回填」（fail-visible，挂链自愈）。
