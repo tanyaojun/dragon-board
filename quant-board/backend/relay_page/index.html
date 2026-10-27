@@ -591,6 +591,29 @@
     </div>
   </section>
 
+  <section id="tab-kplvane" style="display:none">
+    <div class="ph-line" style="margin-bottom:14px"></div>
+    <div class="card">
+      <div class="flex" style="margin-bottom:10px">
+        <span class="kpl-sub kpl-uni" id="kplVaneStats"></span>
+        <span style="flex:1"></span>
+        <span class="kpl-sub">数据源：KPL App 打板·风向标页签（socket 2103 pidType=6 订阅快照，实时推送）</span>
+      </div>
+      <div id="kplVaneBanner" class="kpl-note" style="display:none"></div>
+      <div class="kpl-layout">
+        <div class="card" style="padding:10px 12px">
+          <input class="lg-filter" id="kplVanePlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="kplDabanRender('kplvane')">
+          <div class="kpl-wrap"><table id="kplVanePlateTable"></table></div>
+        </div>
+        <div class="card" style="padding:10px 12px">
+          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span id="kplVaneStockTitle">个股列表</span>
+            <input class="lg-filter" id="kplVaneSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender('kplvane')"></h3>
+          <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="kplVaneStockTable"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-kplsoon" style="display:none">
     <div class="ph-line" style="margin-bottom:14px"></div>
     <div class="card">
@@ -4154,11 +4177,11 @@ const NAV = [
   {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️'], ['dieban', '跌停复盘', '📉']]},
   // KPL 行情子目录（2026-10-27 用户需求）：精选板块 = 开盘啦板块强度排行实时/历史；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
-  {group: 'KPL 行情', items: [['kpl', '精选板块', '📋'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀']]},
+  {group: 'KPL 行情', items: [['kpl', '精选板块', '📋'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
-                    kpl: ['精选板块'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'],
+                    kpl: ['精选板块'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 
 function renderSidebar(){
@@ -4206,11 +4229,11 @@ function setView(key){
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
   if (main === 'relay' && STATE.relayView === 'nodes') pulseFetch();   // V2c：进入节点页签即取（60s 后端缓存兜）
   const kpiEl = $('kplMarketKpi');
-  const kplGroup = ['kpl', 'kplbid', 'kplsoon'];   // 大盘 KPI 条=kpl 组子页公用
+  const kplGroup = ['kpl', 'kplbid', 'kplsoon', 'kplvane'];   // 大盘 KPI 条=kpl 组子页公用
   if (kpiEl) kpiEl.style.display = kplGroup.includes(main) ? '' : 'none';
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
   else kplViewLeave();
-  if (main === 'kplbid' || main === 'kplsoon') kplDabanEnter(main);   // 竞价/即将涨停：进页即取快照+开轮询
+  if (main === 'kplbid' || main === 'kplsoon' || main === 'kplvane') kplDabanEnter(main);   // 打板页签：进页即取快照+开轮询
 }
 async function kplFetchPlateTree(){
   if (KPL.plateTree && Date.now() - KPL.plateTreeAt < 300000) return;   // 5min 缓存
@@ -5214,6 +5237,20 @@ const DABAN_PAGES = {
     ],
     sumCols: ['main_net', 'amount'],
   },
+  kplvane: {
+    pid: 6, title: '风向标', p: 'kplVane',
+    // App 风向标页签列序（4,5,11,12,13,14,15；2026-10-27 截图同屏核对）
+    cols: [
+      {key: 'pct', label: '涨幅', fmt: 'pct'},
+      {key: 'speed', label: '涨速', fmt: 'pct'},
+      {key: 'plate', label: '板块', fmt: 'plate'},
+      {key: 'main_net', label: '主力净额', fmt: 'amt'},
+      {key: 'amount', label: '成交额', fmt: 'amt'},
+      {key: 'real_turnover', label: '实际换手', fmt: 'pct'},
+      {key: 'real_float', label: '实际流通', fmt: 'amt'},
+    ],
+    sumCols: ['main_net', 'amount'],
+  },
 };
 let kplDabanPoll = null;
 
@@ -5246,7 +5283,7 @@ async function kplDabanEnter(view){
   kplDabanFetch(view);
   if (!kplDabanPoll){
     kplDabanPoll = setInterval(() => {
-      if (!['kplbid', 'kplsoon'].includes(STATE.view)){ clearInterval(kplDabanPoll); kplDabanPoll = null; return; }
+      if (!['kplbid', 'kplsoon', 'kplvane'].includes(STATE.view)){ clearInterval(kplDabanPoll); kplDabanPoll = null; return; }
       kplDabanFetch(STATE.view);
     }, 4000);
   }

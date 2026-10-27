@@ -197,7 +197,7 @@ class KplCollectorService:
         human_delay: bool = True,
         daban_subs: bool = True,
         daban_market_type: int = 1,
-        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0),
+        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6),
         daban_list_page_size: int = 30,
         daban_list_pages: int = 7,
     ):

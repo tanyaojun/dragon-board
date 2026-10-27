@@ -45,10 +45,11 @@ CMD_DABAN_STOCK_LIST = 2103  # Hq.DaBanStockListResp（打板个股列表：竞�
 
 # 2103 pidType → 页签（APK 资源数组 PatternTabs × PatternTabsServerPidType，2026-10-27
 # androguard 解包 base_new.apk：['竞价','即将涨停','风向标','涨停','炸板','跌停',…]
-# × ['8','0','6','1','2','3',…]）。当前只接用户所需两页签，其余留待增量。
+# × ['8','0','6','1','2','3',…]）。已接：竞价/即将涨停/风向标；其余增量。
 DABAN_LIST_PIDS: Dict[int, str] = {
     8: "bidding",       # 集合竞价
     0: "about_to_zt",   # 即将涨停
+    6: "wind_vane",     # 风向标
 }
 
 DABAN_SUB_CMDS: tuple = (

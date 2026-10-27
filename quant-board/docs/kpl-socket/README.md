@@ -109,8 +109,8 @@ QuantBoard 主后端 :8000
   已独立源核实（§四），强度（[56]）/涨停家数（`zt_stocks` 事件按 plate 顿号归属聚合，
   口径=当前封住，与 App「涨停」列含触板口径不同）/封单额/涨停时间后续逐项接。成分股
   分页一批 100 只（`sector-stocks?page=`，服务端 st=1000 单发全量+30s 缓存切片）。
-- **打板两页签消费端已上线（2026-10-27 二期）**：工作台侧栏「KPL 行情 › 集合竞价 /
-  即将涨停」——socket 2103 订阅快照读口（§十一），布局沿用精选板块「左板块右个股」，
+- **打板页签消费端已上线（2026-10-27 二期+三期）**：工作台侧栏「KPL 行情 › 集合竞价 /
+  即将涨停 / 风向标」——socket 2103 订阅快照读口（§十一），布局沿用精选板块「左板块右个股」，
   左侧=按板块字段聚合（家数+合计），右侧=App 竞价页字段全搬。
 
 ## 五、部署与运维 runbook
@@ -280,8 +280,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 ### 11.1 页签与参数（逆向三方对齐）
 
 - 页签↔pidType：APK 资源数组 `PatternTabs × PatternTabsServerPidType`
-  （androguard 解包 base_new.apk）：竞价=**8**、即将涨停=**0**、风向标=6、涨停=1、
-  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。当前只接 8/0 两页签，其余增量接。
+  （androguard 解包 base_new.apk）：竞价=**8**、即将涨停=**0**、风向标=**6**、涨停=1、
+  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。已接 8/0/6 三页签，其余增量接。
+  风向标页签列序（4,5,11,12,13,14,15=涨幅/涨速/板块/主力净额/成交额/实际换手/实际流通）
+  与 App 同屏逐项核对一致（2026-10-27 盘后真帧：冰山冷热/襄阳轴承/九阳股份/百洋股份等 25 只）。
 - 请求 `DaBanStockListReq{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count}`，
   基线=BiddingZTlQuotaPresenter 默认值：orderType=**18**、sortType=**1**（2120 的教训：
   orderType 必须用 App 在用基线，不自行填 0）；filter flags（stType/cxType/…）默认关=0 不编码。
