@@ -24,14 +24,19 @@
 ## 二、架构与数据流
 
 ```text
-模拟器(emulator-5554, 开盘啦 App 正常运行)
+双轨签名层（KPL_CODEC 切换，默认 pc）：
+【pc 轨，默认】unicorn 本机模拟 libauthSign_x86.so（backend/services/kpl_pcemu/）
+  工件 data/kpl_pcemu/{libauthSign_x86.so, assets/middle_new.bin, signer_cert.der}
+  （scripts/extract_kpl_pcemu.py 从设备提取；不依赖 adb/模拟器）
+【adb 轨，兑底】模拟器(emulator-5554, 开盘啦 App 正常运行)
   └─ signsvc (app_process32 常驻 /data/local/tmp/signsvc.dex)
        白盒加密 WBE / 帧加密 ENC / 帧解密 DEC（stdin/stdout 协议，经 adb shell）
             ↑ su -c（需 root 模拟器；LD_LIBRARY_PATH 指向 App x86_sig 目录）
 PC Python 采集服务（独立进程 :8002）
   backend/services/kpl_socket_protocol.py   ← 协议纯逻辑：帧构造/解析/pb
   backend/services/kpl_collector_service.py ← 采集编排：codec 自愈 + 会话状态机 + 事件广播
-  backend/serve_kpl_socket.py               ← FastAPI 入口 + 浏览器面板
+  backend/services/kpl_pcemu/               ← 【pc 轨】ELF 加载 + JNIEnv mock + PCEmulatorCodec
+  backend/serve_kpl_socket.py               ← FastAPI 入口 + 浏览器面板（KPL_CODEC 开关）
             ↑ TLS 1.2 mTLS（client_cert.pem）直连 KPL 行情服务器
 QuantBoard 主后端 :8000
   backend/api/kpl_proxy_routes.py           ← REST 透传 + WS 双向中继（fail-visible 502）
@@ -107,19 +112,32 @@ QuantBoard 主后端 :8000
 
 ## 五、部署与运维 runbook
 
-### 5.1 依赖
+### 5.1 依赖（按 KPL_CODEC 双轨拆解）
 
+**pc 轨（默认，`KPL_CODEC=pc`）——摆脱 adb/模拟器运行时依赖：**
+- 工件三件套在 `quant-board/data/kpl_pcemu/`（gitignored 本地状态）：
+  `libauthSign_x86.so`（白盒签名变体，非 APK 内 lib/x86/ 普通变体）、
+  `assets/middle_new.bin`（白盒表）、`signer_cert.der`（签名证书 DER）。
+  提取：`.venv/Scripts/python.exe scripts/extract_kpl_pcemu.py`（设备模式，需 root 模拟器在线一次）
+  或 `--from-dir/--so/--cert` 归档模式（离线组装既有工件）。
+- 缺工件时启动/首调 fail-visible 报错并给出修复指引（不静默回退）。
+- Python 依赖：unicorn（.venv 已含）。首次初始化 ~7s（ELF 加载 + initBaxPwd + 指令翻译缓存），
+  之后单次 wbe ~0.06s / enc ~0.09s。
+
+**adb 轨（兑底对照，`KPL_CODEC=adb`）：**
 - root 模拟器在线（adb 设备号可变：`127.0.0.1:5555`→`emulator-5554`，env `KPL_ADB_DEVICE` 调整；adb 路径 env `KPL_ADB_PATH`）
 - signsvc.dex 已部署 `/data/local/tmp/signsvc.dex`（`app_process32` 常驻，segfault 由 codec EOF 自愈重建）
+
+**两轨共用：**
 - mTLS 客户端证书（env `KPL_CLIENT_CERT`/`KPL_CLIENT_KEY`，默认 `.tmp_review/client_cert.pem`）
 - 认证身份（env `KPL_USER_ID`/`KPL_TOKEN`，**代码无凭据默认值**（2026-10-27 提交前脱敏，AGENTS.md 红线 3）；默认游客 userId=0 可收行情但会话较短；正式账户值放 `.env.local`/环境变量注入，本地参考值存 `.tmp_review/kpl_credentials.env`（gitignored））
 
 ### 5.2 启动 / 停止
 
 ```powershell
-# 启动采集服务（:8002）
+# 启动采集服务（:8002）；KPL_CODEC=adb 切 signsvc 兑底轨（默认 pc）
 cd quant-board
-.\.venv\Scripts\python.exe -m uvicorn backend.serve_kpl_socket:app --host 127.0.0.1 --port 8002
+set KPL_CODEC=adb && .\.venv\Scripts\python.exe -m uvicorn backend.serve_kpl_socket:app --host 127.0.0.1 --port 8002
 # 面板 http://127.0.0.1:8002/kpl → 点"启动采集"
 # :8000 主后端正常启动即含 KPL 代理路由（无需额外开关）
 
@@ -136,8 +154,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 ## 六、测试合同
 
-- `backend/services/__tests__/test_kpl_socket_protocol.py`（16 用例，含负数 varint 回归）+ `test_kpl_collector_service.py`（8 用例，含 signsvc EOF 哨兵回归）+ `tests/api/test_kpl_proxy_routes.py`（4 用例，mock 上游 502 fail-visible + WS 双向中继），`28 passed`。
-- **红线：pytest 一律全 mock（FakeCodec/FakeSocket），零真实 KPL 连接、零真实 WBE 调用**。真实连接只走预登记的开火路径（人工运维诊断）。
+- `backend/services/__tests__/test_kpl_socket_protocol.py`（16 用例，含负数 varint 回归）+ `test_kpl_collector_service.py`（8 用例，含 signsvc EOF 哨兵回归）+ `test_kpl_daban_protocol.py`（14 用例）+ `tests/api/test_kpl_proxy_routes.py`（4 用例，mock 上游 502 fail-visible + WS 双向中继）+ `test_kpl_pc_codec.py`（8 用例，全 mock PC codec 合同），`50 passed`。
+- **红线：pytest 一律全 mock（FakeCodec/FakeSocket/FakeCore），零真实 KPL 连接、零真实 WBE 调用、零真实 ELF 加载**。真实连接与 PC 模拟核差分只走预登记的开火路径（人工运维诊断 / 开发期差分脚本）。
 - 会话状态机测试覆盖：全帧序（260/610/602/2301/2303/2304/3001/3006）、fail-visible 断言（解码失败必须广播 error 事件，不静默丢弃）。
 
 ## 七、证据工件（本地 .tmp_review/，不入仓）
@@ -149,6 +167,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 | `sslcap*.bin`、`libredir3.c/.so`、`wbrd.c/.so`、`memscan.c` | 逆向期 SSL 明文钩子 / 内存读取工具与捕获（过程工具，见 handoff §3.10） |
 | `client_cert.pem` | mTLS 客户端证书（重建产物） |
 | `kpl_live8.py`、`kpl_collector.py` | 认证 / 采集原型脚本（服务化前身，仅参考） |
+| `wbx_groundtruth.json` | 设备 WBE ground truth 4 组（不同 challenge/curTime，91B/组，字节级差分基准） |
+| `wbx_encdec_groundtruth.json` | 设备 ENC/DEC ground truth 4 组（DEC roundtrip 实测 OK） |
+| `wbx_emu.py`/`wbx_step3.py`/`wbx_step6.py`/`wbx_step8_encdec_diff.py` | PC 模拟核原型与差分脚本（正式实现已移植入 `backend/services/kpl_pcemu/`） |
+| `svc8002_pc*.log` | :8002 PC 轨实测日志 |
 
 ## 八、遗留风险与后续工作
 
@@ -209,3 +231,42 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 | `kpl_daban_frames.txt` | KPL_DEBUG 帧转储（4.9MB） |
 | `daban_recon_notes.md` | 协议逆向侦察笔记（cmd 分发表 / proto 合同 / 请求构造） |
 | `kpl_daban_panel.png` | 面板 headless Chrome 渲染截图（与 App UI 数值一致） |
+
+## 十、白盒签名 PC 化（2026-10-28 增补，全部实测）
+
+> 目标 `mvq61fzc-dg4lme` 交付：签名层摆脱 adb/模拟器运行时依赖，`KPL_CODEC=pc|adb` 双轨。
+
+### 10.1 能力与实测
+
+| 项 | 结果 |
+|----|------|
+| PC 白盒 WBE 差分 | 4/4 组不同输入与设备 signsvc ground truth **逐字节一致**（91B/组，含 challenge ASCII 回显 + 二进制签名） |
+| PC ENC/DEC 差分 | 设备 ENC → PC DEC 逐字节还原 4/4；PC roundtrip 5/5（密文含随机 IV，逐字节比对走 DEC 还原等价） |
+| :8002 PC 轨实测 | `codec=pc` 完成 610 认证 → streaming：板块 quotes + 个股 stock_quotes + 打板/情绪 7 类事件全到流；会话 TTL 断连后重连链正常 |
+| 长跑稳定性 | 420 次连续 enc/dec/wbe 调用输出零漂移（free-list + 临时数组回收修复后）；`/api/kpl/status` 的 `codec` 字段可观察当前轨 |
+
+### 10.2 实现要点（勿回退的硬事实）
+
+- **位置**：`backend/services/kpl_pcemu/{elf,jni,codec}.py`——ELF32 加载/重定位、JNIEnv mock
+  （33 槽，canonical jni.h 索引）、libc/asset VFS、门位置位、PCEmulatorCodec。
+- **JNI 槽位以 JDK jni.h 为准**：`ReleaseByteArrayElements=192(0x300)`、
+  `GetByteArrayRegion=200(0x320)`、`SetByteArrayRegion=208(0x340)`。曾错标
+  190/197/205 是 WBE 输出全零的真根因（输出数组三次 SetByteArrayRegion 落进空 stub）。
+  ~~「白盒状态未预热」~~为当时误判：nativeGuard/nativeDecrypt 均不写 libauthSign 内存
+  （前者=libnsc 自身完整性 + APK 头 sha256 + fork/ptrace 反调试；后者=SSSE3 AES 解密 dex chunk）。
+- **门位**：`[BASE+0x38597C]`（WBE 签名校验早退）与 `[BASE+0x38597D]`（enc/dec 入口检查
+  0x34b210 快路径）显式置 1——设备上由启动链写入的 .data 状态字节，PC 端等价 libpatch 语义。
+- **EVP 层原生执行**：libauthSign 静态链接 OpenSSL（EVP_aes_256_gcm 等 val≠0 自重定位），
+  CPUID hook 强制非 AESNI 纯软路径，无需 mock。
+- **内存纪律（长跑命门）**：`imp_free` 必须真实回收（free-list 首次适配）+ enc/dec/wbe
+  临时 jbyteArray 调用后回收，否则 EVP ctx/operator new 每次泄漏 → 数百次 dec 后堆耗尽
+  `UC_ERR_WRITE_UNMAPPED`（codec 层有兜底：异常丢核重建，但根治靠回收）。
+- **unicorn 教训**：UC_HOOK_CODE 首次执行前注册；R_386_32 必须 S+A；x86-32 GS 基址方案
+  不生效（NULL 页映射替代 canary）；堆 64MB 与 0x56000000 arena 不得重叠。
+
+### 10.3 双轨切换与工件提取
+
+- 切换：`KPL_CODEC=pc`（默认）/ `adb`，重启进程生效；`/api/kpl/status` 返回 `codec` 字段。
+- 工件：`scripts/extract_kpl_pcemu.py`（设备模式需 root 模拟器在线一次；归档模式
+  `--from-dir/--so/--cert` 离线组装）。**so 必须用设备 `/data/app/.../lib/x86_sig/` 的
+  白盒签名变体**，APK 内 `lib/x86/` 普通变体不可用。

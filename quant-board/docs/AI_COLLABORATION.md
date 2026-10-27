@@ -242,5 +242,13 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   面板增补情绪仪表盘；盘中 30 分钟实测秒级事件全到流（封单变化 2137/状态翻转 6/情绪刷新 462），
   App UI 同屏对照 real_zt=44/real_dt=3 精确一致。协议合同详见 kpl-socket 文档 §九；
   2120/2121 请求 orderType 必须 4；模拟器依赖拆解（签名层单点绑定/架构已隔离 codec）同 §9.5。
+- **白盒签名 PC 化（2026-10-28）**：签名层摆脱 adb/模拟器运行时依赖——`backend/services/kpl_pcemu/`
+  用 unicorn x86-32 模拟 libauthSign_x86.so（WBE/ENC/DEC 全套），`KPL_CODEC=pc|adb` 双轨
+  （pc 默认，adb 为 signsvc 兑底对照）。实测：WBE 4/4 组、ENC/DEC 9/9 项与设备 ground truth
+  逐字节一致；:8002 PC 轨完成 610 认证全事件流到流。硬事实：JNI 槽位以 JDK jni.h 为准
+  （SetByteArrayRegion=208，曾错标 205 是输出全零真根因，「白盒未预热」为误判）；门位
+  0x38597C/0x38597D 显式置位；imp_free 必须真实回收（否则数百次调用后堆耗尽）；工件三件套
+  在 gitignored 的 `data/kpl_pcemu/`，`scripts/extract_kpl_pcemu.py` 提取。协议合同见
+  kpl-socket README §十；**pytest 禁止加载真实 ELF**（test_kpl_pc_codec.py 全 mock）。
 - **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
   `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。

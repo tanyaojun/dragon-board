@@ -8,7 +8,10 @@
 - POST /api/kpl/stop  → 停止采集线程
 
 启动：.\\.venv\\Scripts\\python.exe -m uvicorn backend.serve_kpl_socket:app --host 127.0.0.1 --port 8002
-依赖：模拟器在线 + signsvc（/data/local/tmp/signsvc.dex）——未就绪时页面显示结构化错误而非空白。
+依赖（双轨，KPL_CODEC 切换）：pc（默认）= unicorn 本机模拟 libauthSign（kpl_pcemu/，
+工件在 data/kpl_pcemu/，scripts/extract_kpl_pcemu.py 提取，不依赖 adb/模拟器）；
+adb = 模拟器在线 + signsvc（/data/local/tmp/signsvc.dex）兼容兑底轨。
+未就绪时页面显示结构化错误而非空白（fail-visible）。
 身份：KPL_USER_ID/KPL_TOKEN 只从环境变量读（凭据不入仓，AGENTS.md 红线 3）；
 默认游客 userId=0 可收行情但服务器会话更短；正式账户值放 .env.local / 环境变量注入。
 
@@ -27,6 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from backend.core import settings as _settings  # noqa: F401  # 导入即载入 .env.local（KPL_* 凭据正式唯一来源）
 from backend.services.kpl_collector_service import KplCollectorService, SignSvcAdbCodec
+from backend.services.kpl_pcemu import PCEmulatorCodec
 
 app = FastAPI(title="KPL Quotes Relay", docs_url=None, redoc_url=None)
 
@@ -46,10 +50,20 @@ _DEVICE_ID = os.environ.get("KPL_DEVICE_ID", "4a81acf4-b516-3e79-ae26-40a67af7b9
 _USER_ID = os.environ.get("KPL_USER_ID", "0")
 _TOKEN = os.environ.get("KPL_TOKEN", "")
 
-# 构造无副作用（signsvc 子进程懒启动在 _ensure_ready），饿汉单例避免懒初始化竞态
+# 双轨 codec：pc（默认，unicorn 本机模拟）| adb（signsvc 兼容兑底）。
+# 切换需重启进程；codec 构造无副作用（懒初始化在首次调用时）。
+_CODEC_MODE = os.environ.get("KPL_CODEC", "pc").strip().lower()
+if _CODEC_MODE == "adb":
+    _codec = SignSvcAdbCodec(_ADB_PATH, _ADB_DEVICE, _SIGNVC_SHELL)
+elif _CODEC_MODE == "pc":
+    _codec = PCEmulatorCodec(assets_dir=os.environ.get("KPL_PCEMU_ASSETS"))
+else:
+    raise RuntimeError(f"KPL_CODEC 非法值 {_CODEC_MODE!r}（仅支持 pc|adb）")
+
+# 构造无副作用，饿汉单例避免懒初始化竞态
 _service_lock = asyncio.Lock()
 _service = KplCollectorService(
-    SignSvcAdbCodec(_ADB_PATH, _ADB_DEVICE, _SIGNVC_SHELL),
+    _codec,
     device_id=_DEVICE_ID, user_id=_USER_ID, token=_TOKEN)
 
 
@@ -65,7 +79,7 @@ def page() -> FileResponse:
 @app.get("/api/kpl/status")
 def status() -> JSONResponse:
     svc = _get_service()
-    return JSONResponse(content={"ok": True, **svc.status()})
+    return JSONResponse(content={"ok": True, "codec": _CODEC_MODE, **svc.status()})
 
 
 @app.post("/api/kpl/start")
