@@ -301,40 +301,10 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
 
 # ── 后日（T+2）打板溢价回填（2026-10-26 用户口径裁定：打板=T+1 入场，当日封板无浮盈，
 # 博弈的是 T+2 溢价——溢价只算后日，回填时点=后日收盘后）──────────────────────────
-# 价格源=TDX 日线（backfill_total_amount 同款节点池探测；SetupCmd3 补丁根治官方主站软拒绝，
-# 见 python-bridge/main.py 同款 monkeypatch）。原始价未复权：T→T+2 两日内除权除息会失真，
-# 真实命中时以 outcomeMeta 审计为准（罕见，如实声明不伪装精确）。
-TDX_HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
-
-
-def fetch_daily_bars(code: str, offset: int = 15, max_probe: int = 15) -> dict[str, dict]:
-    """TDX 日线 → {"YYYY-MM-DD": {"open": f, "close": f}}；全池探测至出数，失败 raise。"""
-    def _setup_no3(self):
-        from tdxpy.parser.setup_commands import SetupCmd1, SetupCmd2
-        SetupCmd1(self.client).call_api()
-        SetupCmd2(self.client).call_api()
-
-    from tdxpy.hq import TdxHq_API
-    TdxHq_API.setup = _setup_no3
-    pool = json.loads(TDX_HOSTS_PATH.read_text(encoding="utf-8"))["candidates"]
-    market = 1 if str(code).startswith(("6", "9")) else 0
-    last_err: Exception | None = None
-    for h in pool[:max_probe]:
-        api = TdxHq_API()
-        try:
-            if not api.connect(h["ip"], int(h.get("port") or 7709), time_out=5):
-                continue
-            try:
-                bars = api.get_security_bars(9, market, str(code), 0, offset)
-            finally:
-                api.disconnect()
-            if bars:
-                return {f"{int(b['year']):04d}-{int(b['month']):02d}-{int(b['day']):02d}":
-                        {"open": float(b["open"]), "close": float(b["close"])} for b in bars}
-            last_err = RuntimeError(f"{h['ip']} 空 K 线")
-        except Exception as exc:   # 单节点失败换下一个
-            last_err = exc
-    raise RuntimeError(f"TDX 日线前 {max_probe} 个探测节点不可用: {last_err}")
+# 价格源=TDX 日线（backend.operations.tdx_daily_bars 公共模块：SetupCmd3 补丁 + 节点池
+# 探测 + 进程内缓存；空间龙一推导的 10 日涨幅同源）。原始价未复权：T→T+2 两日内除权
+# 除息会失真，真实命中时以 outcomeMeta 审计为准（罕见，如实声明不伪装精确）。
+from backend.operations.tdx_daily_bars import fetch_daily_bars  # noqa: E402
 
 
 def settle_day2(db, date: str, fetcher=None) -> dict:
@@ -378,7 +348,11 @@ def settle_day2(db, date: str, fetcher=None) -> dict:
         try:
             if code not in bars_cache:
                 bars_cache[code] = fetcher(code)
-            d1, d2 = bars_cache[code].get(nxt), bars_cache[code].get(day2)
+            bars = bars_cache[code]
+            if not bars:
+                errors.append(f"{code}{doc.get('name') or ''}: TDX 日线不可用")
+                continue
+            d1, d2 = bars.get(nxt), bars.get(day2)
             if not d1 or not d2 or not d1.get("close"):
                 errors.append(f"{code}{doc.get('name') or ''}: T+1/T+2 日线缺（{nxt}/{day2}）")
                 continue

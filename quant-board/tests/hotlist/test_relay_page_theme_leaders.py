@@ -465,3 +465,11 @@ def test_evidence_cell_shows_l2_resolution_badge_even_when_industry_mapped(html:
     l2_block = row[row.index("const l2Tag"): row.index("const evid")]
     assert "title=" in l2_block and "+板内解析" in l2_block, \
         "板内解析徽章必须带 title（完整驱动内容 tooltip）"
+
+
+def test_unsealed_leader_badge_in_streak_cell(html: str) -> None:
+    """空间龙一规则（2026-10-27）：断板反包候选行连板列显「未封板」徽章（title 带 10日涨幅
+    身位），不显示成哑谜「-」；封板行维持数字。"""
+    row = _fn(html, "tlRowHtml")
+    assert "leaderSealedToday === false" in row, "未封板判定必须消费路由新字段"
+    assert "未封板" in row and "gain10" in row, "徽章带 10日涨幅身位"

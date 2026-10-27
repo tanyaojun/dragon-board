@@ -189,9 +189,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v9"
-    assert doc["questionSetHash"] == "8a4454b879bd"   # v9 零区分度处置（v1-v8 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-26a"   # 空间锚每档基率化（预登记 §21.2）
+    assert doc["questionSetVersion"] == "v10"
+    assert doc["questionSetHash"] == "fef8635573f7"   # v10 空间龙一规则（v1-v9 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-10-27a"   # 空间龙一结构行分情形（预登记 §21.6）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -239,7 +239,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v9", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v10", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -362,6 +362,10 @@ def test_label_one_persists_expanded_structure_fields(env):
     doc2 = db[L.COLLECTION].docs["2026-10-19:603188"]
     assert doc2["structure"]["ladderShape"] is None
     assert doc2["structure"]["zhabanN"] is None
+    # 2026-10-27 空间龙一规则：gain10/leaderSealedToday 随 structure 落库
+    #（env 夹具的 ROWS 无新字段 → None 如实；space_mode 生产的真实值由
+    # test_day_leader_rows_space_mode_unsealed_leader 锁定）
+    assert "gain10" in st and "leaderSealedToday" in st
 
 
 def test_forward_date_axis_line_sources_and_fail_visible(monkeypatch):
@@ -740,3 +744,58 @@ def test_budget_guard_aggregates_over_leaders():
     total = sum(L.estimate_tokens(c)["budgetGuard"] for c in chars)
     assert total == sum(int(c * L.TOKENS_PER_CHAR_HIGH) + L.TOKENS_FIXED_HIGH for c in chars)
     assert total > sum(a for c, a in _REAL_COST_LEDGER if c in chars)
+
+
+def test_day_leader_rows_space_mode_unsealed_leader(monkeypatch):
+    """2026-10-27 空间龙一规则（用户裁决）：候选池=今∪近3日封板池，龙一=10日涨幅最高。
+
+    10-26 机器人实证复刻：大业断板（今日不在封板池）靠昨日池入候选，10日涨幅 77.7%
+    压过 3 板卡位正裕（40.9%）——真连板口径会顶替错龙一（正裕次日跌停实锤）；
+    leaderSealedToday=False，streak/time 如实 None，跟风不可算。默认 streak 口径不变
+    （基线/历史窗口样本人群不随规则换代漂移）；TDX 全候选不可算 → 板块 fail-visible
+    跳过 + meta 披露。
+    """
+    import backend.operations.theme_leader_baseline as B
+    import backend.operations.jev_label_jiuyan as J
+
+    def fake_sealed(db_, date, dataset_id=None):
+        if date == "2026-10-26":
+            return {"603089"}, {"603089": {}}, {"thsPoolFound": True}
+        return {"603278", "603089"}, {"603278": {}, "603089": {}}, {"thsPoolFound": True}
+
+    monkeypatch.setattr(B, "sealed_and_info", fake_sealed)
+    monkeypatch.setattr(J, "jiuyan_streak_map",
+                        lambda db_, date, dataset_id=None: {"603089": 3})
+    db = FakeDb()
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-26:final"},
+        {"_id": "2026-10-26:final", "fields": [
+            {"name": "机器人", "stocks": [{"code": "603089", "name": "正裕", "time": "09:25"}]}]})
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-23:final"},
+        {"_id": "2026-10-23:final", "fields": [
+            {"name": "机器人", "stocks": [{"code": "603278", "name": "大业", "time": "13:09"},
+                                          {"code": "603089", "name": "正裕", "time": "09:30"}]}]})
+
+    gains = {"603278": 77.7, "603089": 40.9}
+    rows, meta = B.day_leader_rows(db, "2026-10-26", space_mode=True,
+                                   pool_dates=["2026-10-23"],
+                                   gain_fetcher=lambda codes, end: gains)
+    row = rows[0]
+    assert row["code"] == "603278" and row["name"] == "大业", "空间龙一=10日涨幅最高"
+    assert row["leaderSealedToday"] is False and row["gain10"] == 77.7
+    assert row["streak"] is None and row["time"] is None
+    assert row["ladderFollowers"] is None and row["boardN"] == 1
+    assert row["secondStreak"] == 3 and row["peerCodes"] == ["603089"]
+    assert meta["leaderMode"] == "space"
+
+    rows_streak, meta_streak = B.day_leader_rows(db, "2026-10-26")
+    assert rows_streak[0]["code"] == "603089", "默认口径（基线/历史窗口）龙一=真连板最高"
+    assert rows_streak[0]["leaderSealedToday"] is True
+    assert "leaderMode" not in meta_streak
+
+    rows_none, meta_none = B.day_leader_rows(
+        db, "2026-10-26", space_mode=True, pool_dates=["2026-10-23"],
+        gain_fetcher=lambda codes, end: {c: None for c in codes})
+    assert rows_none == []
+    assert "机器人" in meta_none["spaceErrors"], "TDX 不可算 → fail-visible 跳过（用户裁决）"

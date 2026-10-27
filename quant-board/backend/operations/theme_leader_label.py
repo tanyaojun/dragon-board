@@ -171,9 +171,16 @@ def baseline_rows_for(db: Any, date: str,
 
 def leaders_for(db: Any, date: str,
                 dataset_id: str = DEFAULT_DATASET_ID) -> tuple[list[dict] | None, dict]:
-    """当日各板块龙头结构事实行；None = 当日 THS 池缺失（不可二分，fail-visible）。"""
-    prev_dates = trading_dates_before(db, date, 1, dataset_id)
-    return day_leader_rows(db, date, dataset_id, prev_dates[-1] if prev_dates else None)
+    """当日各板块龙头结构事实行；None = 当日 THS 池缺失（不可二分，fail-visible）。
+
+    2026-10-27 空间龙一规则（用户裁决，预登记 §21.6）：space_mode=True + 近 3 个交易日
+    封板池并入候选（断板反包入口，如 10-26 大业），排序=10日涨幅→连板高度→首封；
+    基线/历史窗口仍走默认 streak 口径（样本人群不随规则换代漂移）。
+    """
+    prev_dates = trading_dates_before(db, date, 3, dataset_id)
+    return day_leader_rows(db, date, dataset_id,
+                           prev_date=prev_dates[-1] if prev_dates else None,
+                           space_mode=True, pool_dates=prev_dates)
 
 
 def reconcile_superseded_leaders(db: Any, date: str, rows: list[dict] | None) -> dict:
@@ -233,7 +240,9 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
             followers_ge_ladder=row["ladderFollowers"], prev_board_n=row.get("prevBoardN"),
             prev_peers=row.get("prevPeers"), prev_total=row.get("prevTotal"),
             prev_still=row.get("prevStill"),
-            history=board_history.get(row["board"], []) if board_history is not None else None),
+            history=board_history.get(row["board"], []) if board_history is not None else None,
+            leader_sealed_today=row.get("leaderSealedToday"),
+            gain10=row.get("gain10")),
         ladder_line=board_ladder_line(row),
         zhaban_line=board_zhaban_line(row),
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
@@ -279,7 +288,9 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         "structure": {k: row.get(k) for k in (
             "streak", "time", "boardN", "othersN", "ladderFollowers", "prevPeers",
             "prevBoardN", "prevTotal", "prevStill", "zhabanN", "prevZhabanN", "ladderShape",
-            "secondStreak")},
+            "secondStreak",
+            # 2026-10-27 空间龙一规则：10日涨幅 + 未封板标记（断板反包候选）
+            "gain10", "leaderSealedToday")},
         "baselineBucket": json.dumps({k: row.get(k) for k in ("streak", "boardN", "time")},
                                      ensure_ascii=False, sort_keys=True),
         # 真实的同桶查键（"streak3|n5-7|early<=10:00"）：评估时直接用，不必再从结构重算；

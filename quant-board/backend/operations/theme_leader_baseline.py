@@ -16,7 +16,9 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
-from backend.analysis.hotlist.theme_leader_ammo import rank_board_stocks
+from backend.analysis.hotlist.theme_leader_ammo import (rank_board_stocks,
+                                                        rank_board_stocks_space)
+from backend.operations.tdx_daily_bars import fetch_gains10 as _fetch_gains10
 
 
 def sealed_and_info(db: Any, date: str,
@@ -32,7 +34,9 @@ def sealed_and_info(db: Any, date: str,
 
 
 def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
-                    prev_date: str | None = None) -> tuple[list[dict] | None, dict]:
+                    prev_date: str | None = None, *,
+                    space_mode: bool = False, pool_dates: list[str] | None = None,
+                    gain_fetcher=None) -> tuple[list[dict] | None, dict]:
     """当日各板块龙头的结构事实行（**不含次日结局**）。
 
     `prev_date` 给出时补 `prevPeers`/`prevBoardN`（昨日同板块其它封板股家数）——承接强度特征；
@@ -42,6 +46,15 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     2026-10-24d 起另补 `prevStill`（昨日同名板块封板股中今日仍封数，**同名成员口径**）——
     断板 = prevTotal − prevStill 用它算；prevBoardN 是今日成员交集（含昨日他板块迁入股），
     迁移场景下 prevTotal−prevBoardN 会出负数（2026-10-24 review 处置）。
+
+    **space_mode（2026-10-27 用户裁决：龙一=10日涨幅最高，非真连板）**：候选池=当日封板池
+    ∪ `pool_dates`（近 3 个交易日）封板池（同板块，覆盖断板反包——空间龙一断板日仍须在列），
+    排序=10日涨幅→真连板高度→首封最早；行另带 `gain10`（龙一 10 日涨幅）与
+    `leaderSealedToday`（False=断板反包候选，streak/time 如实 None，ladderFollowers 不可算）。
+    **仅当日标注链启用**（leaders_for）；基线/历史窗口（build_rows/board_count_history/
+    sector_nodes 等）维持 streak 口径——历史样本人群定义不随规则换代漂移，断板反包龙一
+    无同构历史锚属如实缺位（预登记 §21.6）。TDX 拉不到涨幅（全候选 None）→ 该板块跳过
+    + `meta["spaceErrors"]` 披露（用户裁决 fail-visible，不降级旧规则）。
     返回 `(rows, meta)`；`rows=None` 表示当日 THS 池缺失（不可二分，fail-visible，调用方自己决定跳过口径）。
     """
     from backend.operations.jev_label_jiuyan import jiuyan_streak_map
@@ -82,12 +95,50 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                      "streak": streaks.get(code)})
             elif (info.get(code) or {}).get("zhaban"):
                 zhaban_of[bname] += 1
+
+    # space_mode 候选池：近 `pool_dates` 各日封板池并入同板块候选（断板反包入口）；
+    # 昨日池候选 streak/time 如实 None（未封板），今日池候选以今日口径为准（去重今日优先）。
+    pool_prev: dict[str, list[dict]] = defaultdict(list)
+    if space_mode:
+        for pd in (pool_dates or []):
+            if not pd or pd == date:
+                continue
+            p_sealed, _pinfo, _pmeta = sealed_and_info(db, pd, dataset_id)
+            if not p_sealed:
+                continue
+            pdoc = db["jiuyan_action"].find_one({"_id": f"{pd}:final"}, {"fields": 1}) or {}
+            for field in pdoc.get("fields") or []:
+                bname = str(field.get("name") or "")
+                have = {c["code"] for c in pool_prev[bname]}
+                for st in field.get("stocks") or []:
+                    pcode = str(st.get("code") or "")[-6:]
+                    if pcode in p_sealed and pcode not in have:
+                        pool_prev[bname].append({"code": pcode, "name": st.get("name"),
+                                                 "time": None, "streak": None})
+                        have.add(pcode)
+
     rows: list[dict] = []
+    space_errors: dict[str, str] = {}
     for board, stocks in boards_of.items():
         if not stocks:
             continue
-        ranked = rank_board_stocks(stocks)
-        leader = ranked[0]
+        if space_mode:
+            today_codes = {s["code"] for s in stocks}
+            cands = list(stocks) + [c for c in pool_prev.get(board, [])
+                                    if c["code"] not in today_codes]
+            gains = (gain_fetcher or _fetch_gains10)([c["code"] for c in cands], date)
+            for c in cands:
+                c["gain10"] = gains.get(c["code"])
+            if not any(isinstance(c.get("gain10"), (int, float)) for c in cands):
+                space_errors[board] = "10日涨幅不可算（TDX 日线不可用），板块跳过（fail-visible 裁决）"
+                continue
+            leader = rank_board_stocks_space(cands)[0]
+            sealed_today = leader["code"] in sealed
+        else:
+            leader = rank_board_stocks(stocks)[0]
+            sealed_today = True
+        leader_streak = leader["streak"] if sealed_today else None
+        leader_time = leader["time"] if sealed_today else None
         others = [s for s in stocks if s["code"] != leader["code"]]
         prev_peers = (sum(1 for s in others if s["code"] in prev_sealed)
                       if prev_sealed is not None else None)
@@ -115,12 +166,12 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         rows.append({
             "date": date, "board": board,
             "code": leader["code"], "name": leader.get("name"),
-            "streak": leader["streak"], "time": leader["time"],
+            "streak": leader_streak, "time": leader_time,
             "boardN": len(stocks), "othersN": len(others),
-            # 板内跟风：>=(leader streak-1)
-            "ladderFollowers": sum(
+            # 板内跟风：>=(leader streak-1)；龙一未封板（断板反包候选）→ 梯队跟风不可算
+            "ladderFollowers": (None if not sealed_today else sum(
                 1 for s in others
-                if (s["streak"] or 0) >= max(1, (leader["streak"] or 1) - 1)),
+                if (s["streak"] or 0) >= max(1, (leader_streak or 1) - 1))),
             "prevPeers": prev_peers,
             "prevBoardN": (sum(1 for s in stocks if s["code"] in prev_sealed)
                            if prev_sealed is not None else None),
@@ -138,7 +189,14 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             "peerCodes": [s["code"] for s in others],
             # 板内封板名单（v3 板内解析用：让 L2 计数与 boardN 同口径，不把触板未封混进来）
             "boardCodes": [s["code"] for s in stocks],
+            # 2026-10-27 空间龙一规则：10 日涨幅（排序依据）+ 未封板标记（断板反包候选）
+            "gain10": (leader.get("gain10") if space_mode else None),
+            "leaderSealedToday": sealed_today,
         })
+    if space_mode:
+        meta["leaderMode"] = "space"
+        if space_errors:
+            meta["spaceErrors"] = space_errors
     return rows, meta
 
 

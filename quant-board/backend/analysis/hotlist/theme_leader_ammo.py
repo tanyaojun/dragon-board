@@ -34,7 +34,12 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # 须引用锚行具体数字+锚未覆盖新证据；②新增默认起判档规则③（按连板高度：1-3 板→peak、
 # 4+ 板→space_1，依据=分层杀伤证据非桶众数，随 v9 冻结）；③space_1/peak criteria 绑
 # 锚行「再走≥1板率」读数（三成上下/不足三成），非写死绝对阈值。
-QUESTION_SET_VERSION_THEME_LEADER = "v9"
+# **v10 = 2026-10-27 空间龙一规则配套**（用户裁决：龙一=10日涨幅最高，非真连板——
+# 10-26 正裕 3 板卡位次日跌停 vs 大业断板反包 +8% 实证）：①续板题加规则⑤——待判龙头
+# 当日未封板（断板反包候选）时判「重新上板概率」，封板类判据不适用、改按断板承接/
+# 梯队/题材证据，锚缺失如实对待；②推导侧配套见 theme_leader_baseline（候选池扩近 3 日
+# 封板池）与结构行未封板显式标注（AMMO 2026-10-27a）。
+QUESTION_SET_VERSION_THEME_LEADER = "v10"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -63,7 +68,12 @@ QUESTION_SET_VERSION_THEME_LEADER = "v9"
 # 只给「平均再走 X 板」（实测全 <1 板）与档位语义（space_1≈1 板/peak=顶部）粒度错配，
 # 10-23 八龙头全 peak 塌缩归因之一——改为每档「再走≥1板率/≥2板率/中位再走/均值/样本量」，
 # 率值口径与档位判定直接对齐；题面 v8 判据零改动，hash 不变。
-AMMO_VERSION_THEME_LEADER = "2026-10-26a"
+# 2026-10-27a（空间龙一规则配套，2026-10-27 用户裁决；预登记 §21.6）：①结构行
+# leader_sealed_today=False 分情形——「待判龙一 X（code）今日未封板（断板反包候选，
+# 10 日涨幅 +Y% 居候选池首位）」替代「连板高度不可算」哑谜，跟风段如实改不可算；
+# ②新增 rank_board_stocks_space（10日涨幅→连板高度→首封），历史窗口/基线仍用旧
+# rank_board_stocks（口径分代见 §21.6）。题面 v10（续板题规则⑤）同批换代。
+AMMO_VERSION_THEME_LEADER = "2026-10-27a"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -141,8 +151,25 @@ def rank_board_stocks(stocks: list[dict]) -> list[dict]:
     """板块内排序：真连板最高 → 封板时间最早（None 垫底）。龙一=首位。
 
     输入 `[{code, name?, time?, streak?}]`；纯排序不改输入。
+    2026-10-27 起仅作历史窗口/回退口径（baseline 构建等）；**当日标注龙一改用
+    `rank_board_stocks_space`**（用户裁决：真连板卡位股 ≠ 空间龙一，10-26 正裕 3 板
+    卡位次日跌停 vs 大业断板反包 +8% 实证）。
     """
     return sorted(stocks, key=lambda s: (-(s.get("streak") or 0), _time_key(s.get("time"))))
+
+
+def rank_board_stocks_space(candidates: list[dict]) -> list[dict]:
+    """空间龙一排序（2026-10-27 用户裁决）：10 日涨幅最高 → 真连板高度 → 首封最早。
+
+    候选池=当日封板池 ∪ 近 3 日封板池（同板块；覆盖断板反包——空间龙一断板日仍须在列，
+    10-26 大业即靠昨日池入候选）。`gain10` 缺失垫底（None 当 -inf）；调用方保证候选池
+    至少一只可算涨幅，否则整板块 fail-visible 跳过（用户裁决）。纯排序不改输入。
+    """
+    return sorted(candidates, key=lambda s: (
+        -(s["gain10"] if s.get("gain10") is not None else float("-inf")),
+        -(s.get("streak") or 0),
+        _time_key(s.get("time")),
+    ))
 
 
 def combo_key(row: dict) -> str:
@@ -255,7 +282,11 @@ QUESTIONS_THEME_LEADER = {
                         "④此规则由程序强制：当叙事「题材证据」标注证据缺失（产业树未映射且"
                         "题材事件与板内解析亦无可用证据）时，无论你给出何档，落库一律覆盖为 "
                         "insufficient（原答另存备查）——所以此时请直接选 insufficient，"
-                        "不要用结构特征凑档位。",
+                        "不要用结构特征凑档位；⑤若叙事标注待判龙头**今日未封板**（断板反包"
+                        "候选），本题=判断其次日**重新上板**的概率：封板质量/封板时间类结构"
+                        "判据不适用，改按断板后承接（板内炸板面、昨日仍封数）、板块梯队与"
+                        "题材证据判断；未封板龙一通常没有同构历史锚，此时以证据为主，锚缺失"
+                        "如实对待、不得编造基准。",
         "criteria": {
             "high_ge65": "高概率 ≥65%：结构位置强（连板高度领先 + 封板早 + 板块家数多）"
                          "且题材有当日/近两日新催化（含题材事件/题材新闻新增），"
@@ -508,7 +539,9 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
                    prev_board_n: int | None, prev_peers: int | None,
                    prev_total: int | None = None,
                    prev_still: int | None = None,
-                   history: list[tuple[str, int]] | None = None) -> str:
+                   history: list[tuple[str, int]] | None = None,
+                   leader_sealed_today: bool | None = None,
+                   gain10: float | None = None) -> str:
     """该板块当日结构事实行（不含预测）。
 
     `history`（S1，2026-10-24b）= 近 5 日 (date, boardN) 序列：深度/延续题判据
@@ -521,10 +554,22 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     prev_still 按它算（恒 ≥0）——2026-10-24 review 处置：prev_board_n 是今日成员交集，
     含昨日他板块迁入股，迁移场景减出负数甚至「昨日封 0 仍封 2」自相矛盾；prev_still
     缺席（手造/旧形状行）时退回 prev_board_n 口径，差值为负则不出断板数只说不可算。
+    `leader_sealed_today=False`（2026-10-27 空间龙一规则，v10 题面配套）= 待判龙一当日
+    未封板（断板反包候选）——显式标注替代「连板高度不可算/时间不可考」的哑谜，并给
+    10 日涨幅身位（排序依据）；模型按 v10 题面⑤分情形判「重新上板概率」。
     """
-    time_txt = str(leader.get("time") or "时间不可考")
-    streak = leader.get("streak")
-    streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
+    unsealed = leader_sealed_today is False
+    if unsealed:
+        leader_txt = f"待判龙一 {leader.get('name')}（{leader.get('code')}）今日未封板（断板反包候选"
+        if gain10 is not None:
+            leader_txt += f"，10 日涨幅 {gain10:+.1f}% 居候选池首位"
+        leader_txt += "）"
+    else:
+        streak = leader.get("streak")
+        streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
+        time_txt = str(leader.get("time") or "时间不可考")
+        leader_txt = (f"龙头 {leader.get('name')}（{leader.get('code')}）"
+                      f"{streak_txt}，首封 {time_txt}")
     still_txt = (f"今日仍封 {prev_still} 只" if isinstance(prev_still, int)
                  else (f"今日仍封 {prev_board_n} 只" if isinstance(prev_board_n, int)
                        else "今日仍封不可考"))
@@ -545,9 +590,12 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
         hist_txt = f"；近 {len(history)} 日该板块封板家数（旧→新，缺口日不列）：{seq}"
     elif history is not None and not history:
         hist_txt = "；近数日家数序列不可考（历史日该板块名无收录或 THS 池缺失）"
-    return (f"板块「{board}」今日封板 {board_n} 家；龙头 {leader.get('name')}（{leader.get('code')}）"
-            f"{streak_txt}，首封 {time_txt}；板块内真连板≥{max(1, (streak or 1) - 1)} 的跟风 "
-            f"{followers_ge_ladder} 家；{prev_txt}{hist_txt}")
+    follow_txt = (f"板块内真连板≥{max(1, ((leader.get('streak') or 1)) - 1)} 的跟风 "
+                  f"{followers_ge_ladder} 家"
+                  if isinstance(followers_ge_ladder, int)
+                  else "跟风梯队不可算（龙一未封板，梯队见板块梯队形态行）")
+    return (f"板块「{board}」今日封板 {board_n} 家；{leader_txt}；{follow_txt}；"
+            f"{prev_txt}{hist_txt}")
 
 
 def board_ladder_line(row: dict) -> str | None:

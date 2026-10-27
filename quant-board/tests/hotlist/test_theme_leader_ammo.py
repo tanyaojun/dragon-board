@@ -33,8 +33,12 @@ def test_question_set_frozen_hash_and_versions():
     （A 检验 0/7 判对但零信息量；用户批准 §21.3 三项，hash `8a4454b879bd`）：
     ①硬规则②单向改双向（偏离锚上调或下调都须引用锚行数字+锚未覆盖新证据）
     ②新增默认起判档规则③（1-3 板→peak、4+ 板→space_1，分层杀伤证据非桶众数）
-    ③space_1/peak criteria 绑锚行「再走≥1板率」读数（三成上下/不足三成）**——
-    跨代标签不得混评（评估按版本分组）。
+    ③space_1/peak criteria 绑锚行「再走≥1板率」读数（三成上下/不足三成）**；
+    **v10 = 2026-10-27 空间龙一规则配套（hash `fef8635573f7`）**：续板题加规则⑤——
+    待判龙头当日未封板（断板反包候选）时判「重新上板概率」，封板类判据不适用、
+    改按断板承接/梯队/题材证据，锚缺失如实对待（推导侧配套=候选池扩近 3 日封板池、
+    排序改 10日涨幅→连板高度→首封，见 baseline space_mode 与 rank_board_stocks_space；
+    预登记 §21.6）——跨代标签不得混评（评估按版本分组）。
     AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
@@ -42,11 +46,13 @@ def test_question_set_frozen_hash_and_versions():
     防御分支原始 None 泄漏修复；前向轴非 bridge 源结果不缓存）→
     **2026-10-26a 空间锚每档基率化**（预登记 §21.2：每档改「再走≥1板率/≥2板率/中位再走/
     均值/样本量」，率值口径与档位判定对齐，10-23 八龙头全 peak 塌缩归因之一；题面 v8
-    判据零改动，hash 不变；v9 题面换代与其同批落地）。
+    判据零改动，hash 不变；v9 题面换代与其同批落地）→
+    **2026-10-27a 空间龙一规则配套**（结构行 leader_sealed_today=False 分情形显式标注
+    「今日未封板（断板反包候选，10日涨幅 X% 居候选池首位）」+ rank_board_stocks_space）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v9"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-26a"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "8a4454b879bd"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v10"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-27a"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "fef8635573f7"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -445,3 +451,46 @@ def test_gate_reason_labels_cover_v3_and_legacy():
         {"evidenceMissing": True, "evidenceMissingReason": "industry_tree_unmapped"})
     assert gate["applied"] is True and gate["reason"] == "industry_tree_unmapped"
     assert "产业树未映射" in gate["label"]
+
+
+def test_rank_board_stocks_space_orders_by_gain_then_streak_then_time():
+    """空间龙一排序（2026-10-27 用户裁决）：10日涨幅 → 真连板高度 → 首封时间。
+
+    候选含断板股（streak/time None）——空间龙一断板日仍须可当选（10-26 大业实证：
+    真连板口径把它排挤出候选，3 板卡位股正裕顶替，次日跌停）。gain10 缺失垫底。
+    """
+    cands = [
+        {"code": "a", "name": "卡位3板", "streak": 3, "time": "09:25:00", "gain10": 40.9},
+        {"code": "b", "name": "空间龙一", "streak": None, "time": None, "gain10": 77.7},
+        {"code": "c", "name": "首板", "streak": 1, "time": "09:20:00", "gain10": 12.0},
+        {"code": "d", "name": "涨幅不可算", "streak": 5, "time": "09:10:00", "gain10": None},
+    ]
+    assert [s["code"] for s in A.rank_board_stocks_space(cands)] == ["b", "a", "c", "d"]
+    assert [s["code"] for s in cands] == ["a", "b", "c", "d"], "不得原地改输入"
+
+
+def test_structure_line_unsealed_leader_explicit():
+    """leader_sealed_today=False（2026-10-27a）：「今日未封板（断板反包候选，10日涨幅
+    X% 居候选池首位）」显式标注替代「连板高度不可算」哑谜；跟风段如实不可算。"""
+    line = A.structure_line(board="机器人", board_n=17,
+                            leader={"name": "大业股份", "code": "603278",
+                                    "streak": None, "time": None},
+                            followers_ge_ladder=None, prev_board_n=13, prev_peers=2,
+                            prev_total=13, prev_still=9,
+                            leader_sealed_today=False, gain10=77.7)
+    assert "今日未封板（断板反包候选，10 日涨幅 +77.7% 居候选池首位）" in line
+    assert "跟风梯队不可算（龙一未封板" in line and "跟风 None 家" not in line
+    assert "昨日该板块封板 13 只，今日仍封 9 只（断板 4）" in line
+    # 未传 gain10 → 身位段如实省略，不伪造
+    line2 = A.structure_line(board="机器人", board_n=17,
+                             leader={"name": "大业股份", "code": "603278",
+                                     "streak": None, "time": None},
+                             followers_ge_ladder=None, prev_board_n=13, prev_peers=None,
+                             leader_sealed_today=False)
+    assert "今日未封板（断板反包候选）" in line2 and "10 日涨幅" not in line2
+    # 既有封板路径不变（leader_sealed_today 缺省 None=旧形状行）
+    sealed = A.structure_line(board="机器人", board_n=5,
+                              leader={"name": "正裕工业", "code": "603089", "streak": 3,
+                                      "time": "09:25:00"},
+                              followers_ge_ladder=1, prev_board_n=3, prev_peers=2)
+    assert "龙头 正裕工业（603089）3 连板，首封 09:25:00" in sealed
