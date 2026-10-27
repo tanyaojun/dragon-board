@@ -167,7 +167,7 @@ internal sealed class LauncherForm : Form
         Controls.Add(titlePanel);
 
         int y = titlePanel.Bottom + 8;
-        var iconKeys = new[] { "DB", "RD", "PX", "BR", "SC", "RP", "QA", "FE", "QU", "VO" };
+        var iconKeys = new[] { "DB", "RD", "PX", "BR", "KP", "SC", "RP", "QA", "FE", "QU", "VO" };
         var keys = LauncherServices.OrderedKeys;
         for (int i = 0; i < keys.Length; i++)
         {

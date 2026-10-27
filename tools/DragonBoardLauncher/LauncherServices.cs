@@ -16,6 +16,7 @@ internal static class LauncherServices
         "redis",
         "proxy",
         "bridge",
+        "kpl-socket",
         "collector",
         "relay-page",
         "quant-api",
@@ -27,7 +28,7 @@ internal static class LauncherServices
     private static readonly string[][] DefaultStages =
     [
         ["mongo", "redis"],
-        ["proxy", "bridge"],
+        ["proxy", "bridge", "kpl-socket"],
         ["quant-api", "relay-page"],
         ["collector"]
     ];
@@ -334,6 +335,20 @@ internal static class LauncherServices
                 quantRoot,
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001",
+                "python"),
+            ["relay-page"] = new(
+                "JEV 叙事工作台",
+                8008,
+                quantRoot,
+                Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
+                "-m uvicorn backend.serve_relay_page:app --host 127.0.0.1 --port 8008",
+                "python"),
+            ["kpl-socket"] = new(
+                "KPL 实时行情",
+                8002,
+                quantRoot,
+                Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
+                "-m uvicorn backend.serve_kpl_socket:app --host 127.0.0.1 --port 8002",
                 "python"),
             ["quant-ui"] = new(
                 "量化面板前端",
