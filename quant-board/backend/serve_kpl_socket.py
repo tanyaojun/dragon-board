@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
+from backend.core import settings as _settings  # noqa: F401  # 导入即载入 .env.local（KPL_* 凭据正式唯一来源）
 from backend.services.kpl_collector_service import KplCollectorService, SignSvcAdbCodec
 
 app = FastAPI(title="KPL Quotes Relay", docs_url=None, redoc_url=None)
@@ -40,7 +41,8 @@ _SIGNVC_SHELL = os.environ.get(
     '/system/bin/app_process32 /system/bin com.yzj.kaipanh.newindex.data.SignSvc"',
 )
 _DEVICE_ID = os.environ.get("KPL_DEVICE_ID", "4a81acf4-b516-3e79-ae26-40a67af7b97c")
-# 身份凭据只从环境变量读（不入仓；游客 userId=0 可收行情，会话寿命较短）
+# 身份凭据只从环境变量读（不入仓；正式值在 quant-board/.env.local，游客 userId=0 可收
+# 行情但会话寿命较短；进程环境已设同名变量时以环境变量优先——settings 加载器不覆盖）
 _USER_ID = os.environ.get("KPL_USER_ID", "0")
 _TOKEN = os.environ.get("KPL_TOKEN", "")
 

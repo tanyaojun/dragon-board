@@ -146,7 +146,8 @@ class TestSessionStateMachine:
 
         assert len(svc._codec.wbe_calls) == 1
         assert svc._codec.wbe_calls[0][0] == "2db64e49ca378ac2a21331deca1a7425"
-        assert len(fake.sent) == 7
+        # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 6 打板/情绪帧（daban_subs 默认开）
+        assert len(fake.sent) == 13
         assert fake.sent[0][7:9] == (610).to_bytes(2, "big")
         assert fake.sent[1][7:9] == (602).to_bytes(2, "big")
         assert fake.sent[2][7:9] == (2301).to_bytes(2, "big")
@@ -154,6 +155,11 @@ class TestSessionStateMachine:
         assert fake.sent[4][7:9] == (2304).to_bytes(2, "big")
         assert fake.sent[5][7:9] == (3001).to_bytes(2, "big")
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
+        # 6c) 打板/情绪订阅帧：2114/2115/2116/2119/2120/2126（ext 路由头 02 <cmdBE>）
+        daban_cmds_sent = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
+        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126]
+        for f, c in zip(fake.sent[7:], daban_cmds_sent):
+            assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
     def test_events_broadcast_to_subscribers(self, svc, monkeypatch):
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
@@ -251,6 +257,28 @@ class TestSubscriberSemantics:
             q.get_nowait()
 
 
+class TestSetSubscriptions:
+    """动态订阅清单（2026-10-27 精选板块页需求）：下一 3001 构造即生效。"""
+
+    def test_valid_update_replaces_ids(self, svc):
+        r = svc.set_subscriptions(["801159", "803029", " 801044 "])
+        assert r["ok"] is True
+        assert r["count"] == 3
+        assert svc._stock_ids == ["801159", "803029", "801044"]  # 修剪空白
+
+    def test_empty_list_rejected_keeps_current(self, svc):
+        before = list(svc._stock_ids)
+        r = svc.set_subscriptions([])
+        assert r["ok"] is False
+        assert "reason" in r
+        assert svc._stock_ids == before  # fail-visible：空清单不得清空现有订阅
+
+    def test_none_like_entries_filtered(self, svc):
+        r = svc.set_subscriptions(["", "  ", "801001"])
+        assert r["ok"] is True
+        assert svc._stock_ids == ["801001"]
+
+
 class TestSignSvcCodecErrors:
     def test_signsvc_error_is_typed(self, monkeypatch):
         # 红线：测试零真实 adb/子进程调用——_ensure_ready 直接 mock 为抛错
@@ -286,3 +314,43 @@ class TestSignSvcCodecErrors:
         with pytest.raises(SignSvcError):
             codec._cmd("ENC aa")
         assert killed, "EOF 后必须触发 kill 重建路径"
+
+
+class TestDabanDispatch:
+    def _drain(self, q):
+        evs = []
+        while True:
+            try:
+                evs.append(q.get_nowait())
+            except queue.Empty:
+                return evs
+    def test_daban_push_emits_structured_event(self, svc, monkeypatch):
+        # 2119 推送帧 → zt_situation 事件（天梯字段解析进广播流）
+        from backend.services import kpl_daban_protocol as daban
+        body = (
+            proto.pb_varint_field(1, 40) + proto.pb_varint_field(2, 8)
+            + proto.pb_varint_field(3, 6) + proto.pb_varint_field(13, 1)
+        )
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_ZT_SITUATION_V2, b"daban/", body)))
+        evs = self._drain(q)
+        assert any(e["type"] == "zt_situation" and e["first_plate"] == 40 for e in evs)
+
+    def test_daban_push_decode_fail_visible(self, svc, monkeypatch):
+        # 解密失败（fail_dec=True 模拟 signsvc DEC 失败）→ daban_error + error 事件，不静默丢弃
+        from backend.services import kpl_daban_protocol as daban
+        from backend.services import kpl_collector_service as _svc_mod
+        q = svc.subscribe()
+        svc._codec.fail_dec = True
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_ZT_SITUATION_V2, b"daban/", b"\xff\xff")))
+        evs = self._drain(q)
+        types = [e["type"] for e in evs]
+        assert "daban_error" in types and "error" in types
+
+    def test_daban_push_garbage_parse_fail_visible(self, svc, monkeypatch):
+        # dec 成功但内容乱码 → 解析器宽容返回结构化空值（不抛不丢）
+        from backend.services import kpl_daban_protocol as daban
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_WIND_VANE, b"daban/", b"\xff\xff\xff\xff")))
+        evs = self._drain(q)
+        assert any(e["type"] == "wind_vane" for e in evs)

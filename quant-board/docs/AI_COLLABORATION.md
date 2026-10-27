@@ -236,5 +236,11 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
 - **凭据红线（2026-10-27 提交前脱敏）**：KPL_USER_ID/KPL_TOKEN 代码零默认值（默认游客 userId=0），
   正式账户值只走环境变量注入（本地参考值存 gitignored 的 `.tmp_review/kpl_credentials.env`）；
   任何 KPL 凭据/token/盐值不得入仓。
+- **打板/情绪事件流（2026-10-28 增补）**：同一链路扩展 0x40 通道 7 个 cmd（2114/2115/2116/
+  2118/2119/2120+2121/2126）的订阅、pb 解析（`kpl_daban_protocol.py`）与结构化事件
+  （zd_stat/market_overview/plate_strength/zt_situation/zt_stocks/dt_stocks/wind_vane），
+  面板增补情绪仪表盘；盘中 30 分钟实测秒级事件全到流（封单变化 2137/状态翻转 6/情绪刷新 462），
+  App UI 同屏对照 real_zt=44/real_dt=3 精确一致。协议合同详见 kpl-socket 文档 §九；
+  2120/2121 请求 orderType 必须 4；模拟器依赖拆解（签名层单点绑定/架构已隔离 codec）同 §9.5。
 - **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
   `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。

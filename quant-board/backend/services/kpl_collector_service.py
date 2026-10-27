@@ -28,6 +28,7 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.services import kpl_daban_protocol as daban
 from backend.services import kpl_socket_protocol as proto
 
 # 与 .tmp_review/kpl_collector.py 一致的连接参数（实测有效组合）
@@ -162,6 +163,18 @@ class KplEvent(dict):
     """结构化事件：type ∈ auth/sub/push/error/status；全部可 JSON 序列化。"""
 
 
+DABAN_EVENT_NAMES: Dict[int, str] = {
+    daban.CMD_ZD_STAT: "zd_stat",
+    daban.CMD_MARKET_OVERVIEW: "market_overview",
+    daban.CMD_PLATE_STRENGTH: "plate_strength",
+    daban.CMD_WEIGHT_PERF_V2: "weight_perf",
+    daban.CMD_ZT_SITUATION_V2: "zt_situation",
+    daban.CMD_ZT_STOCK_LIST: "zt_stocks",
+    daban.CMD_ZT_STOCK_LIST_PB: "dt_stocks",
+    daban.CMD_WIND_VANE: "wind_vane",
+}
+
+
 class KplCollectorService:
     """采集 + 广播服务。start() 后事件进入广播队列，WebSocket 消费者各持游标。"""
 
@@ -181,6 +194,8 @@ class KplCollectorService:
         stock_ids: Optional[List[str]] = None,
         history: int = 200,
         human_delay: bool = True,
+        daban_subs: bool = True,
+        daban_market_type: int = 1,
     ):
         self._codec = codec
         self._host = host
@@ -194,6 +209,9 @@ class KplCollectorService:
         self._api_version = api_version
         # 拟人延迟开关（服务器对 <1s 完成认证的连接 ~6s 即断连；pytest 置 False）
         self._human_delay = human_delay
+        # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
+        self._daban_subs = daban_subs
+        self._daban_market_type = daban_market_type
         # 板块(801044/885423) + 个股(000001 平安银行)：3001 同时承载板块与个股行情订阅
         self._stock_ids = stock_ids or ["801044", "885423", "000001"]
         self._stop = threading.Event()
@@ -432,7 +450,12 @@ class KplCollectorService:
                 if fr is None:
                     raise proto.FrameDecodeError("closed awaiting 610 ack")
                 if fr["fmt"] == "echo" and fr["cmd"] == proto.CMD_AUTH:
-                    dec = self._codec.dec(fr["payload"].hex())
+                    try:
+                        dec = self._codec.dec(fr["payload"].hex())
+                    except SignSvcError:
+                        # signsvc 在 ack 解密时崩溃：认证本身已成功（服务器已回 echo），
+                        # server_ip 只是可降级字段——不杀会话，降级上报后继续订阅链
+                        dec = None
                     if not dec:
                         # fail-visible：认证本身成功，但解密失败必须结构化上报，不得仍作完整成功
                         self._err("610 ack decode failed (DEC returned empty)")
@@ -528,6 +551,29 @@ class KplCollectorService:
                                          encrypted=bool(enc_hq), pkg=proto.PKG_ROUTE, ext=ext6)
             self._dbg("C", hq_frame)
             sock.sendall(hq_frame)
+            # 6c) 打板/情绪订阅（service_hq_daban.proto，2026-10-27 逆向）：
+            #     2114/2115/2118/2119 发 QxMarketEnergyReq{type}；2116/2126 空 Req；
+            #     2120/2121 发 QxZtSituationStockReq{bsType}。逐 cmd 一帧，同 0x40 通道与 ext 路由头。
+            if self._daban_subs:
+                for sub_cmd in daban.DABAN_SUB_CMDS:
+                    if sub_cmd in (daban.CMD_ZD_STAT, daban.CMD_MARKET_OVERVIEW,
+                                   daban.CMD_WEIGHT_PERF_V2, daban.CMD_ZT_SITUATION_V2):
+                        req_pb = daban.build_market_energy_req_pb(self._daban_market_type)
+                    elif sub_cmd in (daban.CMD_ZT_STOCK_LIST, daban.CMD_ZT_STOCK_LIST_PB):
+                        # bsType: 1=涨停 2=跌停（app ZhangTingStockListFragment PidType）；
+                        # orderType 默认 4（a0() 的 this.q=4 基线），orderType=0 实测无响应
+                        bs = 1 if sub_cmd == daban.CMD_ZT_STOCK_LIST else 2
+                        req_pb = daban.build_zt_situation_stock_req_pb(bs_type=bs, order_type=4)
+                    else:  # 2116/2126 空 Req
+                        req_pb = daban.build_empty_req_pb()
+                    enc_db = self._codec.enc(req_pb)
+                    ext_db = bytes([0x02]) + struct.pack(">H", sub_cmd)
+                    db_frame = proto.build_frame(sub_cmd, next_seq(), enc_db or req_pb, d=0,
+                                                 encrypted=bool(enc_db), pkg=proto.PKG_ROUTE, ext=ext_db)
+                    if self._human_delay:
+                        time.sleep(0.3)
+                    self._dbg("C", db_frame)
+                    sock.sendall(db_frame)
             self._status = "streaming"
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
@@ -634,6 +680,26 @@ class KplCollectorService:
                 return
             info = proto.parse_version_resp(dec)
             self._emit(KplEvent(type="version", ts=time.time(), cmd=cmd, **info))
+            return
+        if cmd in daban.DABAN_RESP_PARSERS:
+            parser = daban.DABAN_RESP_PARSERS[cmd]
+            dec = self._codec.dec(payload.hex()) if payload else None
+            if not dec:
+                self._err(f"{cmd} daban push decode failed ({len(payload)}B)")
+                self._emit(KplEvent(type="daban_error", ts=time.time(), cmd=cmd,
+                                    reason="push decode failed", payload_len=len(payload)))
+                return
+            try:
+                data = parser(dec)
+            except Exception as exc:  # fail-visible：解析异常不静默丢弃
+                self._err(f"{cmd} daban parse error: {exc}")
+                self._emit(KplEvent(type="daban_error", ts=time.time(), cmd=cmd,
+                                    reason=f"parse error: {exc}", payload_len=len(payload)))
+                return
+            self._stats["pushes"] += 1
+            event_type = DABAN_EVENT_NAMES.get(cmd, "daban")
+            self._emit(KplEvent(type=event_type, ts=time.time(), cmd=cmd,
+                                source="push" if fr.get("fmt") == "push" else "resp", **data))
             return
         # 其他 cmd：fail-visible 记录原始帧（截断）
         self._emit(KplEvent(type="raw", ts=time.time(), cmd=cmd,

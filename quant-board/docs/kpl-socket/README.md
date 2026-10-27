@@ -89,11 +89,21 @@ QuantBoard 主后端 :8000
   - quotas[1]=最新价（板块行=板块指数点位）；quotas[2]=涨跌幅%；quotas[3]=成交额（元）
   - quotas[7]/[8]/[9]=主力流入/流出（流出为负）/净额（[7]+[8]=[9] 自洽）
   - quotas[10]/[11]/[12]=流入/流出/净额占成交额比%（除法自洽）
+  - quotas[56]=板块强度（2026-10-27 双源对账：80 板块 55 个与 apphwhq `RealRankingInfo`
+    Type=2 强度值相对误差 <0.1%，其余为两源取数时差；801159=18547.028 与 App 同屏值一致）
   - 核对样本：000001 平安银行 quotas[1]=11.3↔11.30、[2]=0.89↔0.89%、[3]=1485999504↔1485999504.06 精确匹配
   - 其余 60+ 列未逐一映射，接入新消费字段时按同样方法增量核对（独立源交叉 + 自洽验证）
 - ~~3006 负数 varint 缺陷~~（2026-10-27 提交前已修复）：`_signed64` 补码还原负 inc_price/inc_rate，含负数回归用例；不再出现 uint64 回绕值。
 - 3001 板块流与个股流会混合出现（stock_ids 可混合板块 ID 与股票代码）。
-- 订阅规模：实测 2 板块 + 1 股稳定；全市场 1571 板块未测。
+- 订阅规模：**240 板块全量实测稳定（2026-10-27，精选板块页引导订阅：~2s 轮询推 242 id、
+  一次 signsvc 管道抖动 codec 自愈重连）**；全市场 1571 板块仍未测。
+- **工作台消费端已上线（2026-10-27）**：JEV 叙事工作台（:8008）侧栏「KPL 行情 › 精选板块」
+  ——当日走本链 WS（经 :8000 中继，:8002 新增 `POST /api/kpl/subscriptions` 动态订
+  阅），历史走 HTTP 直连（`kpl_ranking_service.py` + `GET /api/kpl/sector-ranking|
+  sector-stocks`，凭据走 `mapping_refresh` 公共出口）；quotas[2]/[3]/[7]/[8]/[9] 列
+  已独立源核实（§四），强度（[56]）/涨停家数（`zt_stocks` 事件按 plate 顿号归属聚合，
+  口径=当前封住，与 App「涨停」列含触板口径不同）/封单额/涨停时间后续逐项接。成分股
+  分页一批 100 只（`sector-stocks?page=`，服务端 st=1000 单发全量+30s 缓存切片）。
 
 ## 五、部署与运维 runbook
 
@@ -150,3 +160,52 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 6. **认证 token 轮换未跟踪**（条件性）：当前值失效时需重新提取；失效表现为 610 拒绝（非 1002，认证会 fail-visible 报错）。
 7. ~~**低危收流细节**~~：已修复（2026-10-27 待办轮）——signsvc readline 改为守护读线程+队列+deadline 取行（adb 卡死不再永久阻塞采集线程，EOF 哨兵 fail-visible，含回归用例）；WS 中继路径已补 mock 测试覆盖（双向泵）；帧长度 8MB 上限已带。
 8. **全部 KPL 待办项已收口**（2026-10-27）；新增改动请同步更新本文档与 AI_COLLABORATION.md KPL 节。
+
+## 九、打板/情绪事件流协议合同（2026-10-27 增补，全部实测）
+
+### 9.1 能力概览
+
+- 复用既有 610 认证 / signsvc / 推送帧基建，新增**打板/情绪 7 个 cmd 的订阅、解析与结构化事件**：
+  `zd_stat`（涨跌停统计）、`market_overview`（综合强度/预测量能）、`plate_strength`（板块强度+LiveMarkets 秒级事件流）、`weight_perf`（权重+大幅回撤）、`zt_situation`（连板天梯/破板率/昨日表现）、`zt_stocks`/`dt_stocks`（涨停/跌停个股封单与状态机）、`wind_vane`（风向标）。
+- 浏览器面板 `kpl_page/index.html` 增补情绪仪表盘（6 卡 + 风向标标签 + 涨停个股表：封单/主力净额/状态徽章 + LiveMarkets 事件流区），缺失数据显式 missing 标注。
+- 盘中 30 分钟实测（2026-10-28 09:30–10:00）：39.9MB 样本、封单变化 2137 次、回封/炸板状态翻转 6 次、情绪数字刷新 462 次；App UI 同屏对照 real_zt=44/real_dt=3 两次精确一致，预测量能 15158↔15137 亿（分钟级漂移内一致）。
+
+### 9.2 通道与订阅帧
+
+- **全部走 0x40 通道**（帧型同 2301/3001/3006，`e((byte)4)`），ext=`[02][cmd BE]`，`u(cmd)` 默认 0；响应 msgId 在 field 500（varint）。
+- 请求体构造（`kpl_daban_protocol.py`）：
+  - 2114/2115/2118/2119 → `QxMarketEnergyReq{f1 type}`（type 区分同类多面板）
+  - 2116/2126 → 空 Req
+  - 2120/2121 → `QxZtSituationStockReq{f1 bsType(1=涨停/2=跌停), f2 orderType, f3 sortType}`；**orderType 必须 4**（App `a0()` 基线，实测 orderType=0 无响应）
+- cmd 号表（反编译 `qn0.java` 分发器）：2114=涨跌停统计、2115=综合强度、2116=板块强度+LiveMarkets、2118=权重+大幅回撤、2119=涨停表现V2、2120/2121=涨停/跌停个股、2126=风向标。
+
+### 9.3 pb 响应 schema（实测核对）
+
+- `QxNewZDStatResp{f1 date, f10 zdStat{f1 zt, f2 dt, f3 realZt, f4 realDt, f5 rise, f6 down, f20 zdList map}, f11 zdStatBx}`
+- `QxZtSituationRespV2{f1-f4 一/二/三板/高度, f8 todayZbRatio, f9-f11 昨日表现, f13 fourPlate}`
+- `QxZtSituationStockResp.Item` 21 字段：f5 price ×10000、f12 ztTur 封单、f11 ztState 字符串、f4 state（状态机）
+- 2116 LiveMarkets=`f20{f1 time, f2 msg, f3 isNew}`、Trend=f10/f11/f12/f21
+- 事件名映射 `DABAN_EVENT_NAMES`（collector 层），`parse_pb_f32` 支持 wire type 5/1。
+
+### 9.4 collector / 转发集成
+
+- `KplCollectorService(daban_subs=True, daban_market_type=1)` 启用订阅序列；dispatch 解密/解析 **fail-visible**（异常广播 `daban_error` 事件，不静默丢弃）。
+- 610 ack 的 DEC 崩溃降级不杀会话（SignSvcError try/except）：认证已成功，server_ip 为可降级字段。
+- :8000 WS（`/api/kpl/ws/kpl-quotes`）与 :8002 直连同构转发，6 类事件实测全到流。
+
+### 9.5 已知限制与依赖
+
+- **DEC SIGSEGV（signsvc 白盒库）为既有行为非回归**：首轮审计时 ~2s/会话，现 24–31s/会话是改善；稳定性合同=重连链，数据每会话完整到流（盘中 30 分钟 1801s 连续样本佐证）。
+- **LiveMarkets isNew 计数**：采样窗口内 `live_market_msgs=0`（isNew 标记逻辑待核），事件文本本身实时到流（「封涨大减 剩余封单」等）。
+- **模拟器依赖三层拆解**：①协议知识/展示/证据层——不依赖模拟器（来自 PC 本地 APK 反编译）；②认证签名层——**单点绑定**（signsvc=adb→模拟器 app_process32+已安装 app 的 x86_sig 白盒库），无模拟器则 610 认证断；③架构已隔离：`KplCollectorService(codec=...)` 只依赖 enc/dec/wbe 接口，换宿主=换 codec 实现（迁移路径：换 Android 宿主 ≈半天 → PC 模拟白盒 so → 纯算法还原，后者不必要）。
+- 协议源码参考（PC 本地反编译，`.tmp_review/main_src/`）：`qn0.java`（分发器）、`MoodPresenterImpl.java k()`（请求构造）、`SocketPresenter.java y()`（帧型）、`ServiceHqDaban.java`/`Hq.java`（proto 描述符）；侦察笔记 `daban_recon_notes.md`。
+
+### 9.6 证据工件（本地 .tmp_review/，不入仓）
+
+| 工件 | 内容 |
+|------|------|
+| `daban_intraday_sample.jsonl` + `sampler_result.json` | 盘中 30 分钟样本（39.9MB / 3568 行）+ 事件统计汇总 |
+| `daban_intraday_sampler.py` | 30 分钟采集+秒级事件统计器（60s 短测 + 1801s 盘中实测） |
+| `kpl_daban_frames.txt` | KPL_DEBUG 帧转储（4.9MB） |
+| `daban_recon_notes.md` | 协议逆向侦察笔记（cmd 分发表 / proto 合同 / 请求构造） |
+| `kpl_daban_panel.png` | 面板 headless Chrome 渲染截图（与 App UI 数值一致） |
