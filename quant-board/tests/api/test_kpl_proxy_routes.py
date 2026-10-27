@@ -294,12 +294,12 @@ def test_daban_head_passthrough(client, monkeypatch):
         def get_daban_head_info(date):
             if date == "2026-10-26":
                 raise KplRankingError("kpl_errcode", errorCode="1020", error="参数出错")
-            return {"ok": True, "date": date, "raw": {"yesterdayZT": 55, "yesterdayFB": 71, "yesterdayDT": 25}}
+            return {"ok": True, "date": date, "raw": {"nums": {"tZhangTing": 84, "lZhangTing": 33, "tFengBan": 87.234, "lFengBan": 58.9286, "tDieTing": 7, "lDieTing": 49}}}
 
     monkeypatch.setattr(kpl_proxy_routes.kpl_ranking_service, "get_daban_head_info", _Up.get_daban_head_info)
     r = client.get("/api/kpl/daban-head", params={"date": "2026-10-27"})
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True and body["raw"]["yesterdayZT"] == 55
+    assert body["ok"] is True and body["raw"]["nums"]["tZhangTing"] == 84
     r = client.get("/api/kpl/daban-head", params={"date": "2026-10-26"})
     assert r.status_code == 502 and r.json()["errorCode"] == "1020"

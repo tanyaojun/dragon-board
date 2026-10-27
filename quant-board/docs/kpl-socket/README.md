@@ -348,7 +348,12 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   EmptyReq 帧，事件名 daban_head）：**与 App 同屏精确一致**（41/55、59%/71%、21/25，
   yesterdayFB=70.51→71%）。封板率今日值=100−2119 破板率（59.42→59%）。
 - HTTP 兜底 `GET /api/kpl/daban-head?date=`（HisDaBanHeadInfo）保留：socket 未供数时前端
-  60s 节流拉取；当晚上游风控期响应结构未获真实样本核对。缺数显式 "--" 不伪装。
+  60s 节流拉取。**响应结构已按 2026-10-23 真实样本核对**：raw.nums.{tZhangTing/lZhangTing/
+  tDieTing/lDieTing(int)、tFengBan/lFengBan(float 封板率%)}，t=查询日、l=前一交易日；
+  上游限频（约分钟级 1 发，超频 1020），前端 headByDate 缓存 + 55s 节流自愈重试。
+- **KPI 跟随日期（2026-10-27 用户需求）**：kpl 视图=工具条日期（kplDateChange/回实时），
+  打板三页=各自日期；历史模式三卡走 daban-head（picked 日/前一日），涨跌家数/大盘指数/
+  预测量能无历史来源显 "--"（卡题标注）。实测 10-23：84/33、87%/59%、7/49。缺数显式 "--"。
 
 ### 11.6 测试与证据
 

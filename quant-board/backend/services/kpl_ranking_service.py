@@ -339,8 +339,9 @@ def get_daban_head_info(date: str) -> Dict[str, Any]:
     """按日取打板头统计（App 市场情绪页头的今/昨涨停·封板率·跌停绝对值来源）。
 
     合同（2026-10-27 逆向自 ox0：API_HISTORY + a=HisDaBanHeadInfo&c=HisHomeDingPan，
-    Day=date；预期字段 todayZT/yesterdayZT/todayFB/yesterdayFB/todayDT/yesterdayDT，
-    响应结构未经真实样本核对——当晚上游风控 1020 拿不到样本，接入前须同屏核对）。
+    Day=date）。响应结构已按 2026-10-23 真实样本核对：raw.nums.{tZhangTing,lZhangTing,
+    tDieTing,lDieTing(int)、tFengBan,lFengBan(float 封板率%)}，t=查询日、l=前一交易日。
+    上游限频（约分钟级 1 发，超频返 1020），30s TTL 缓存兜页面轮询。
     """
     key = f"hishead:{date}"
     cached = _cached(key)

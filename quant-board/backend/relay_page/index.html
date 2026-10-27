@@ -5166,6 +5166,7 @@ function kplDateChange(){
   if (v === KPL.today) { kplBackToLive(); return; }
   KPL.mode = 'history'; KPL.date = v;
   kplDisconnect(); kplSetWsPill('off');
+  kplRenderMarketKpi();   // KPI 跟随日期（历史三卡走 HisDaBanHeadInfo）
   kplLoadRanking();
 }
 async function kplLoadRanking(){
@@ -5191,6 +5192,7 @@ function kplBackToLive(){
   $('kplDate').value = '';
   KPL.hist.ranking = []; KPL.hist.stocks = null;
   kplConnect(); kplEnsureRunning();
+  kplRenderMarketKpi();   // KPI 回实时（socket 值）
   kplRenderSectors();
   if (KPL.selected) kplLoadStocks();
 }
@@ -5334,12 +5336,14 @@ function kplDabanDateChange(view){
   if (!v || v === KPL.today){ kplDabanBackToLive(view); return; }
   KPL.dabanMode[view] = 'history';
   KPL.dabanDate[view] = v;
+  kplRenderMarketKpi();   // KPI 跟随日期
   kplDabanFetch(view);
 }
 function kplDabanBackToLive(view){
   KPL.dabanMode[view] = 'live';
   KPL.dabanDate[view] = '';
   $(DABAN_PAGES[view].p + 'Date').value = '';
+  kplRenderMarketKpi();   // KPI 回实时
   kplDabanFetch(view);
 }
 function kplDabanBanner(view, msg){
@@ -5455,7 +5459,7 @@ function kplDabanRender(view){
 // ══════════ KPL 行情 · 大盘 KPI 条（七卡，kpl 组子页公用，2026-10-27）══════════
 // 数据源：market_overview/zd_stat socket 事件（预测量能/涨跌家数/强度/亏钱效应/空头气氛）
 // + /api/market/overview 指数（TDX bridge 链，与全站指数显示同源）。
-const KPI_MKT = {mo: null, zd: null, zb: null, head: null, headAt: 0, index: null, indexAt: 0};
+const KPI_MKT = {mo: null, zd: null, zb: null, head: null, headByDate: {}, headAt: 0, index: null, indexAt: 0};
 function kplRenderMarketKpi(){
   const el = $('kplMarketKpi');
   if (!el) return;
@@ -5475,25 +5479,68 @@ function kplRenderMarketKpi(){
   const zdV = zd ? `${rd(zd.zd_stat.rise, 'kpl-up')} / ${rd(zd.zd_stat.down, 'kpl-down')}` : '--';
   const zdSub = zd ? `涨跌停 ${rd(zd.zd_stat.zt, 'kpl-up')}:${rd(zd.zd_stat.dt, 'kpl-down')}（实际 ${rd(zd.zd_stat.real_zt, 'kpl-up')}:${rd(zd.zd_stat.real_dt, 'kpl-down')}）` : '';
   // 涨停板/封板率/跌停股（今/昨）三卡（2026-10-27 用户需求，App 市场情绪头同款，涨红绿跌）：
-  // 今日值=zd_stat(2114)+破板率(2119 封板率=100−破板率，与 App 59% 同屏核对)；
-  // 昨日值=HisDaBanHeadInfo HTTP（昨日绝对值唯一上游来源；风控/缺数显式 "--" 不伪装）。
-  const head = KPI_MKT.head;
-  const ztToday = zd ? zd.zd_stat.real_zt : null;
-  const dtToday = zd ? zd.zd_stat.real_dt : null;
-  const sealToday = (KPI_MKT.zb != null) ? Math.max(0, 100 - KPI_MKT.zb) : null;
+  // 实时模式=zd_stat(2114)+破板率(2119)+打板头(2100)；历史模式=HisDaBanHeadInfo(date)
+  // （todayZT=picked 日、yesterdayZT=其前一交易日；上游风控期显 "--"，恢复即亮）。
+  // KPI 跟随当前视图日期（2026-10-27 用户需求）：kpl=工具条日期，打板三页=各自日期。
+  const kpiDate = kplKpiDate();
+  const hist = kpiDate && kpiDate !== KPL.today;
+  const head = hist ? (KPI_MKT.headByDate[kpiDate] || null) : KPI_MKT.head;
+  if (hist && !head) kplFetchHead(kpiDate);   // 缺缓存即拉（60s 节流在 fetch 内）
+  const ztToday = hist ? (head && head.today_zt != null ? head.today_zt : null)
+                       : (zd ? zd.zd_stat.real_zt : null);
+  const dtToday = hist ? (head && head.today_dt != null ? head.today_dt : null)
+                       : (zd ? zd.zd_stat.real_dt : null);
+  const sealToday = hist ? (head && head.today_fb != null ? head.today_fb : null)
+                         : ((KPI_MKT.zb != null) ? Math.max(0, 100 - KPI_MKT.zb) : null);
   const fPct = v => (v == null || !Number.isFinite(v)) ? '--' : Math.round(v) + '%';
-  el.innerHTML = card('大盘指数（沪/深/创）', idxV)
-    + card('沪深京预测量能', fmoney, fz)
-    + card('涨跌家数', zdV, zdSub)
+  const pairSub = hist ? `${kpiDate.slice(5)} / 前一交易日` : '今日 / 昨日';
+  const histNote = hist ? ' · 历史模式' : '';
+  el.innerHTML = card('大盘指数（沪/深/创）' + (hist ? '（无历史来源，显示 "--"）' : ''), hist ? '--' : idxV)
+    + card('沪深京预测量能' + (hist ? '（盘前实时专用）' : ''), hist ? '--' : fmoney, hist ? '' : fz)
+    + card('涨跌家数' + (hist ? '（无历史来源，显示 "--"）' : ''), hist ? '--' : zdV, hist ? '' : zdSub)
     + card('涨停板（今/昨）',
            `<span class="kpl-up">${ztToday == null ? '--' : ztToday}</span> / <span class="kpl-up">${head && head.yesterday_zt != null ? head.yesterday_zt : '--'}</span>`,
-           '封住家数 · 今日 / 昨日')
+           '封住家数 · ' + pairSub + histNote)
     + card('封板率（今/昨）',
            `<span class="kpl-up">${fPct(sealToday)}</span> / <span class="kpl-up">${head && head.yesterday_fb != null ? fPct(head.yesterday_fb) : '--'}</span>`,
-           '封住/曾涨停 · 今日 / 昨日')
+           '封住/曾涨停 · ' + pairSub + histNote)
     + card('跌停股（今/昨）',
            `<span class="kpl-down">${dtToday == null ? '--' : dtToday}</span> / <span class="kpl-down">${head && head.yesterday_dt != null ? head.yesterday_dt : '--'}</span>`,
-           '封住家数 · 今日 / 昨日');
+           '封住家数 · ' + pairSub + histNote);
+}
+// KPI 条跟随当前视图日期：kpl=工具条 KPL.date（历史模式才非 today），打板三页=各自 dabanDate
+function kplKpiDate(){
+  if (STATE.view === 'kpl') return KPL.mode === 'history' ? KPL.date : KPL.today;
+  if (['kplbid', 'kplsoon', 'kplvane'].includes(STATE.view)){
+    return KPL.dabanMode[STATE.view] === 'history' ? (KPL.dabanDate[STATE.view] || KPL.today) : KPL.today;
+  }
+  return KPL.today;
+}
+// 按日期拉打板头（HisDaBanHeadInfo）：历史模式三卡数据源；headByDate 缓存 + 60s 节流
+let kplHeadFetchAt = {};
+async function kplFetchHead(date){
+  if (KPI_MKT.headByDate[date]) { kplRenderMarketKpi(); return; }
+  const now = Date.now();
+  if (kplHeadFetchAt[date] && now - kplHeadFetchAt[date] < 55000) return;
+  kplHeadFetchAt[date] = now;
+  try {
+    const resp = await fetch(KPL_API + '/daban-head?date=' + date);
+    const h = await resp.json().catch(() => ({ok: false}));
+    if (h.ok){
+      const n = (h.raw && h.raw.nums) || {};
+      // 真实结构（2026-10-23 样本核对）：nums.tZhangTing/lZhangTing/tDieTing/lDieTing(int)、
+      // nums.tFengBan/lFengBan(float 封板率%)；t=查询日、l=前一交易日
+      KPI_MKT.headByDate[date] = {
+        today_zt: n.tZhangTing != null ? Number(n.tZhangTing) : null,
+        today_fb: n.tFengBan != null ? Number(n.tFengBan) : null,
+        today_dt: n.tDieTing != null ? Number(n.tDieTing) : null,
+        yesterday_zt: n.lZhangTing != null ? Number(n.lZhangTing) : null,
+        yesterday_fb: n.lFengBan != null ? Number(n.lFengBan) : null,
+        yesterday_dt: n.lDieTing != null ? Number(n.lDieTing) : null,
+      };
+      kplRenderMarketKpi();
+    }
+  } catch (e){ /* 读口异常：历史三卡保持 '--'，不阻断 */ }
 }
 async function kplFetchIndex(){
   if (Date.now() - KPI_MKT.indexAt < 55000) return;   // 60s 节流（多子页共用一份）
@@ -5502,23 +5549,8 @@ async function kplFetchIndex(){
     const r = await jget('http://127.0.0.1:8000/api/market/overview');
     KPI_MKT.index = r; kplRenderMarketKpi();
   } catch (e){ /* 指数读口异常：卡片保持 '--'，不阻断 */ }
-  if (KPI_MKT.head && KPI_MKT.head.source === 'socket') return;   // socket 2100 已供数，HTTP 兜底不跑
-  if (Date.now() - KPI_MKT.headAt < 55000) return;    // 打板头（昨日值）同 60s 节流
-  KPI_MKT.headAt = Date.now();
-  try {
-    const h = await jget(KPL_API + '/daban-head?date=' + KPL.today);
-    if (h.ok){
-      const raw = h.raw || {};
-      // 字段名系反编译预期（todayZT/yesterdayZT/todayFB/yesterdayFB/todayDT/yesterdayDT），
-      // 上游 1020 期间未拿到真实样本——容错提取，缺字段显式 undefined→"--"
-      KPI_MKT.head = {
-        yesterday_zt: raw.yesterdayZT != null ? Number(raw.yesterdayZT) : null,
-        yesterday_fb: raw.yesterdayFB != null ? Number(raw.yesterdayFB) : null,
-        yesterday_dt: raw.yesterdayDT != null ? Number(raw.yesterdayDT) : null,
-      };
-      kplRenderMarketKpi();
-    }
-  } catch (e){ /* 读口异常：昨日侧保持 '--'，不阻断 */ }
+  const kd = kplKpiDate();
+  if (kd && kd !== KPL.today) kplFetchHead(kd);   // 历史模式：按 picked 日拉 head
 }
 
 setView('overview');
