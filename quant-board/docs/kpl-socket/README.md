@@ -320,7 +320,25 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   server error 1106（单请求 id 超 ~241 上限，工作台横幅可见）。已改为与 3001 同款 200 分块
   （`_chunks`），实测横幅消失、行情照常到流；含 3 帧全量无丢失回归用例。
 
-### 11.4 测试与证据
+### 11.4 历史回看读口（HisDaBanList，2026-10-27 三期，上游当晚异常待复测）
+
+- 合同（逆向自 BiddingZTlQuotaPresenter.a0 → ox0.L2 → j00.P1 → qg.q1）：POST apphis
+  ``a=HisDaBanList&c=HisHomeDingPan``，``Day=YYYY-MM-DD``、``PidType``（8/0/6 同 socket）、
+  ``Type=18``（orderType 基线）、``Order=1``、``Is_st/Filter/FilterMotherboard/FilterGem/
+  FilterTIB=0``、``Index/st`` 分页；**历史行格式与 socket quotas 不同**——row[0]=代码、
+  row[1]=名称、row[2]=labelType(int)、row[3]=板块标签，row[i]（i≥4）直接按统一数组位
+  取值（与 PatternTitleVisibleArrayPosition 列序同源，解析器 `_parse_daban_history_row`，
+  列语义未经真实样本核对——上游异常期拿不到样本，接入消费前须与 App 历史页同屏核对）。
+- 读口：`GET /api/kpl/daban-list-history?date=&pid_type=`（:8000 直连 HTTP，与
+  sector-ranking 同层）；前端三页（集合竞价/即将涨停/风向标）已加精选板块同款
+  日期切换 + 回实时工具条，历史模式单发不轮询。
+- **2026-10-27 晚上游异常实录（阴性记录，引用前须当日复测）**：HisDaBanList 与
+  ZhiShuStockList_W8（成分股，:8000 既有功能）先后返回 1020 参数出错 / errcode 0+空列表，
+  两种形态抖动；游客/现役凭据/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、
+  apphis/apphwhq/applhb 三域名全试一致；同通道 RealRankingInfo/DaBanList/plate-tree 正常。
+  时段内本机探针 ~50 发（远超 App 正常频率），疑触发上游频控——当晚已停止探测待冷却复测。
+
+### 11.5 测试与证据
 
 - `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码
   fail-visible）/注册表；`test_kpl_collector_service.py`：会话帧序含 14 帧 2103 分页订阅、

@@ -23,6 +23,7 @@ pytest 全 mock HTTP，不发真实请求。
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 import urllib.error
@@ -227,5 +228,108 @@ def get_sector_stocks(plate_id: str, date: str, page: int = 0, page_size: int = 
                "page": page, "page_size": page_size,
                "has_more": len(items) >= page_size,
                "items": items}
+    _store(key, payload)
+    return payload
+
+
+# 历史行统一列位 → 语义名（2026-10-27 逆向自 qg.q1 历史行解析器 × assets/PatternDynamicQuota
+# 列目录：历史 HTTP 行与 socket 2103 的 protobuf quotas 排布不同——row[0]=代码、row[1]=名称、
+# row[2]=labelType(int)、row[3]=板块标签，row[i]（i≥4）直接按统一数组位（arrayPosition）取值，
+# 与 App 渲染层 PatternTitleVisibleArrayPosition 列序同源。列位 10 无目录名不映射（fail-visible）。
+_DABAN_HIST_POS_NAMES: Dict[int, str] = {
+    4: "pct",               # 涨幅（App 竞价页签改叫实时涨幅）
+    5: "speed",             # 涨速
+    6: "zt_time",           # 涨停时间
+    7: "open_time",         # 开板时间
+    8: "zt_tur",            # 封单
+    9: "state",             # 状态（连板状态：4连板/昨日首板…）
+    11: "plate",            # 板块
+    12: "main_net",         # 主力净额
+    13: "amount",           # 成交额
+    14: "real_turnover",    # 实际换手
+    15: "real_float",       # 实际流通
+    16: "zt_reason",        # 涨停原因
+    17: "price",            # 价格
+    18: "zt_buy_amount",    # 涨停委买额
+    19: "bidding_pct",      # 竞价涨幅
+    20: "bidding_net",      # 竞价净额
+    21: "bidding_turnover", # 竞价换手
+    22: "bidding_amount",   # 竞价成交额
+    23: "max_zt_tur",       # 最大封单
+    25: "last_zt_time",     # 最后涨停时间
+    28: "amplitude",        # 振幅
+    29: "turnover_rate",    # 换手率
+    30: "volume_ratio",     # 量比
+    31: "total_mv",         # 总市值
+    32: "float_mv",         # 流通市值
+}
+
+
+def _maybe_num(v: Any) -> Any:
+    """可转数字则转（排序/聚合用），否则原样（App 侧常带「亿/万」单位）。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return v
+    return f if math.isfinite(f) else v
+
+
+def _parse_daban_history_row(row: List[Any]) -> Dict[str, Any]:
+    """历史收盘帧行 → 命名字段（列语义按 _DABAN_HIST_POS_NAMES，未对齐位原样保留 raw）。
+
+    注意：行内列语义来自反编译推断（qg.q1 × PatternDynamicQuota），上游 1020 期间
+    拿不到真实样本逐列核对——接入消费前须与 App 历史页同屏核对（kpl-socket README 纪律）。
+    """
+    item: Dict[str, Any] = {
+        "stock_id": str(row[0]) if len(row) > 0 else "",
+        "name": str(row[1]) if len(row) > 1 else "",
+        "label_type": row[2] if len(row) > 2 else None,
+        "stock_tag": str(row[3]) if len(row) > 3 else "",
+    }
+    for i, v in enumerate(row):
+        name = _DABAN_HIST_POS_NAMES.get(i)
+        if name is not None:
+            item[name] = _maybe_num(v) if isinstance(v, str) else v
+    item["raw"] = row
+    return item
+
+
+def get_daban_list_history(date: str, pid_type: int, page: int = 0,
+                           page_size: int = 100) -> Dict[str, Any]:
+    """按日取打板个股列表历史收盘帧（App 市场情绪·股票列表的日期回看读口）。
+
+    合同（2026-10-27 逆向自 BiddingZTlQuotaPresenter.a0 → ox0.L2 → j00.P1 → qg.q1）：
+    POST apphis ``a=HisDaBanList&c=HisHomeDingPan``，``Day=date``、``PidType``（8=竞价
+    0=即将涨停 6=风向标）、``Type=18``（orderType App 基线，与 socket 2103 一致）、
+    ``Order=1``、``Is_st/Filter/FilterMotherboard/FilterGem/FilterTIB=0``、``Index/st`` 分页；
+    凭据走 mapping_refresh 公共出口。2026-10-27 晚实测上游返回 errcode 1020 参数出错
+    （游客/现役/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、三域名全试均 1020；
+    同通道 RealRankingInfo/DaBanList errcode=0）——上游口径变更待查，此处如实透出。
+    """
+    page = max(page, 0)
+    page_size = max(1, min(page_size, _STOCKS_MAX_PAGE_SIZE))
+    key = f"hisban:{pid_type}:{date}:{page}:{page_size}"
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    creds = {k: KPL_APP_BASE_PARAMS[k] for k in ("UserID", "DeviceID", "Token")}
+    data = _post_form(
+        _HOST_HISTORY,
+        {"a": "HisDaBanList", "c": "HisHomeDingPan", "Day": date,
+         "PidType": pid_type, "Type": 18, "Order": 1, "Is_st": 0,
+         "Index": page * page_size, "st": page_size,
+         "Filter": 0, "FilterMotherboard": 0, "FilterGem": 0, "FilterTIB": 0,
+         "apiv": "w48", "VerSion": "6.3.20.2", "PhoneOSNew": 1, "Red": 0, **creds},
+        _UA_STOCKS)
+    _check_errcode(data)
+    rows = data.get("list") or []
+    if not rows and page == 0:
+        # 首页即空不伪装（与 sector-stocks 同款：逐日回退日期由前端驱动）
+        raise KplRankingError("empty_list_check_credentials", pid_type=pid_type, date=date)
+    items = [_parse_daban_history_row(r) for r in rows if isinstance(r, list) and r]
+    payload = {"ok": True, "date": date, "pid_type": pid_type,
+               "page": page, "page_size": page_size,
+               "has_more": len(items) >= page_size, "items": items,
+               "day": data.get("day", date)}
     _store(key, payload)
     return payload

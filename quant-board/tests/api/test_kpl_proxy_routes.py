@@ -230,3 +230,39 @@ def test_daban_list_upstream_unavailable_structured_502(client):
     assert r.status_code == 502
     body = r.json()
     assert body["ok"] is False and "kpl_upstream_unavailable" in body["reason"]
+
+
+def test_daban_list_history_date_validation(client):
+    r = client.get("/api/kpl/daban-list-history")
+    assert r.status_code == 400
+    assert r.json()["reason"].startswith("invalid_or_missing_date")
+    r = client.get("/api/kpl/daban-list-history", params={"date": "2026-10-24", "pid_type": 99})
+    assert r.status_code == 400
+    assert r.json()["reason"] == "invalid_pid_type"
+
+
+def test_daban_list_history_passthrough(client, monkeypatch):
+    class _FakeUpstream:
+        @staticmethod
+        def get_daban_list_history(date, pid_type, page=0):
+            return {"ok": True, "date": date, "pid_type": pid_type, "items": [{"stock_id": "603028"}]}
+
+    monkeypatch.setattr(kpl_proxy_routes.kpl_ranking_service, "get_daban_list_history",
+                        _FakeUpstream.get_daban_list_history)
+    r = client.get("/api/kpl/daban-list-history", params={"date": "2026-10-24", "pid_type": 8})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["items"][0]["stock_id"] == "603028"
+
+
+def test_daban_list_history_service_error_structured_502(client, monkeypatch):
+    from backend.services.kpl_ranking_service import KplRankingError
+
+    def _boom(date, pid_type, page=0):
+        raise KplRankingError("kpl_errcode", errorCode="1020", error="参数出错")
+
+    monkeypatch.setattr(kpl_proxy_routes.kpl_ranking_service, "get_daban_list_history", _boom)
+    r = client.get("/api/kpl/daban-list-history", params={"date": "2026-10-24", "pid_type": 8})
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and body["errorCode"] == "1020"

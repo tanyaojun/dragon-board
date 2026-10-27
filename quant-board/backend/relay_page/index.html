@@ -574,7 +574,9 @@
       <div class="flex" style="margin-bottom:10px">
         <span class="kpl-sub kpl-uni" id="kplBidStats"></span>
         <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·竞价页签（socket 2103 pidType=8 订阅快照，实时推送）</span>
+        <span class="kpl-sub">数据源：KPL App 打板·竞价页签（8）实时=socket 2103 订阅快照；历史=HisDaBanList HTTP</span>
+        <input type="date" id="kplBidDate" onchange="kplDabanDateChange('kplbid')">
+        <button onclick="kplDabanBackToLive('kplbid')">回实时</button>
       </div>
       <div id="kplBidBanner" class="kpl-note" style="display:none"></div>
       <div class="kpl-layout">
@@ -597,7 +599,9 @@
       <div class="flex" style="margin-bottom:10px">
         <span class="kpl-sub kpl-uni" id="kplVaneStats"></span>
         <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·风向标页签（socket 2103 pidType=6 订阅快照，实时推送）</span>
+        <span class="kpl-sub">数据源：KPL App 打板·风向标页签（6）实时=socket 2103 订阅快照；历史=HisDaBanList HTTP</span>
+        <input type="date" id="kplVaneDate" onchange="kplDabanDateChange('kplvane')">
+        <button onclick="kplDabanBackToLive('kplvane')">回实时</button>
       </div>
       <div id="kplVaneBanner" class="kpl-note" style="display:none"></div>
       <div class="kpl-layout">
@@ -620,7 +624,9 @@
       <div class="flex" style="margin-bottom:10px">
         <span class="kpl-sub kpl-uni" id="kplSoonStats"></span>
         <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·即将涨停页签（socket 2103 pidType=0 订阅快照，实时推送）</span>
+        <span class="kpl-sub">数据源：KPL App 打板·即将涨停页签（0）实时=socket 2103 订阅快照；历史=HisDaBanList HTTP</span>
+        <input type="date" id="kplSoonDate" onchange="kplDabanDateChange('kplsoon')">
+        <button onclick="kplDabanBackToLive('kplsoon')">回实时</button>
       </div>
       <div id="kplSoonBanner" class="kpl-note" style="display:none"></div>
       <div class="kpl-layout">
@@ -4709,6 +4715,8 @@ const KPL = {
   dabanView: null,      // 当前打板子页（'kplbid' | 'kplsoon'）
   dabanSort: {},        // view → {key, dir}（key=null 保持服务端推送序）
   dabanPlate: {},       // view → 左侧点选的板块过滤（空=全部）
+  dabanMode: {},        // view → 'live' | 'history'（精选板块同款：日期切换+回实时）
+  dabanDate: {},        // view → 历史模式日期
 };
 // quotas 语义索引：[2]涨幅% [3]成交额 [7]/[8]/[9]主力买/卖/净（东财独立源核实）；
 // [56]=板块强度（2026-10-27 双源对账：80 板块 55 个与 HTTP 排行强度误差<0.1%，其余为取数时差）
@@ -4844,7 +4852,8 @@ function kplHandleEvent(ev){
         }
       kplRenderSectors(); break;
     case 'daban_stocks':   // 2103 推送（单页 30 行）：即时触发一次合并快照拉取（节流 1.5s）
-      if (!stale && KPL.dabanView && STATE.view === KPL.dabanView
+      if (!stale && KPL.dabanMode[KPL.dabanView] !== 'history' && KPL.dabanView
+          && STATE.view === KPL.dabanView
           && ev.pid_type === DABAN_PAGES[KPL.dabanView].pid){
         const now = Date.now();
         if (!KPL.dabanFetchAt || now - KPL.dabanFetchAt > 1500){
@@ -5280,25 +5289,48 @@ function kplDabanSelect(view, plate){
 }
 async function kplDabanEnter(view){
   KPL.dabanView = view;
+  if (!KPL.dabanMode[view]) KPL.dabanMode[view] = 'live';
   kplDabanFetch(view);
   if (!kplDabanPoll){
     kplDabanPoll = setInterval(() => {
       if (!['kplbid', 'kplsoon', 'kplvane'].includes(STATE.view)){ clearInterval(kplDabanPoll); kplDabanPoll = null; return; }
+      if (KPL.dabanMode[STATE.view] !== 'live') return;   // 历史模式静态快照，不轮询
       kplDabanFetch(STATE.view);
     }, 4000);
   }
 }
 async function kplDabanFetch(view){
   const conf = DABAN_PAGES[view];
+  const hist = KPL.dabanMode[view] === 'history';
+  const url = hist
+    ? KPL_API + '/daban-list-history?date=' + KPL.dabanDate[view] + '&pid_type=' + conf.pid
+    : KPL_API + '/daban-list?pid_type=' + conf.pid;
   try {
-    const r = await jget(KPL_API + '/daban-list?pid_type=' + conf.pid);
-    KPL.daban[conf.pid] = r.ok ? r : KPL.daban[conf.pid];   // 失败保留旧快照，横幅报因
+    // 502/400 也带结构化 JSON（fail-visible 原因透出），不能走 jget 的裸 HTTP 错误
+    const resp = await fetch(url);
+    const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+    if (r.ok) KPL.daban[conf.pid] = r;                      // 历史/实时同构渲染；失败保留旧快照
     if (STATE.view === view) kplDabanRender(view);
-    kplDabanBanner(view, r.ok ? '' : (r.reason || '读取失败') + (r.note ? '：' + r.note : ''));
+    kplDabanBanner(view, r.ok ? '' : (r.reason || '读取失败') + (r.error ? '：' + r.error : '') + (r.note ? '：' + r.note : ''));
   } catch (e){
     if (STATE.view === view) kplDabanRender(view);
-    kplDabanBanner(view, '快照请求失败：' + (e.message || e));
+    kplDabanBanner(view, (hist ? '历史' : '快照') + '请求失败：' + (e.message || e));
   }
+}
+// 精选板块同款：日期切换进历史模式（回退逐日找有效日由后端/前端提示），回实时恢复 WS 快照
+function kplDabanDateChange(view){
+  const conf = DABAN_PAGES[view];
+  const v = $(conf.p + 'Date').value;
+  if (!v || v === KPL.today){ kplDabanBackToLive(view); return; }
+  KPL.dabanMode[view] = 'history';
+  KPL.dabanDate[view] = v;
+  kplDabanFetch(view);
+}
+function kplDabanBackToLive(view){
+  KPL.dabanMode[view] = 'live';
+  KPL.dabanDate[view] = '';
+  $(DABAN_PAGES[view].p + 'Date').value = '';
+  kplDabanFetch(view);
 }
 function kplDabanBanner(view, msg){
   const el = $(DABAN_PAGES[view].p + 'Banner');
@@ -5403,8 +5435,9 @@ function kplDabanRender(view){
   const ts = snap && snap.ts ? new Date(snap.ts * 1000).toLocaleTimeString('zh-CN', {hour12: false}) : '--';
   const gap = (snap && snap.pages_missing && snap.pages_missing.length)
     ? ` · 页缺口 ${snap.pages_missing.join(',')}` : '';
+  const mode = KPL.dabanMode[view] === 'history' ? `历史 ${KPL.dabanDate[view] || ''}` : '实时';
   $(conf.p + 'Stats').textContent =
-    `${conf.title} · 快照 ${ts} · 本页 ${rows.length} 只 · 上游 maxSize ${maxN}`
+    `${conf.title}（${mode}）· 快照 ${ts} · 本页 ${rows.length} 只 · 上游 maxSize ${maxN}`
     + (snap && snap.pages ? ` · 已收 ${snap.pages}/${snap.pages_expected} 页` : '') + gap
     + (snap && snap.date ? ` · ${snap.date}` : '');
 }

@@ -87,11 +87,28 @@ async def plate_tree() -> JSONResponse:
 
 @router.get("/daban-list")
 async def daban_list(pid_type: int = 8) -> JSONResponse:
-    """2103 打板个股列表快照（KPL App 打板页签）：pid_type 8=集合竞价 / 0=即将涨停。
+    """2103 打板个股列表快照（KPL App 打板页签）：pid_type 8=集合竞价 / 0=即将涨停 / 6=风向标。
 
-    数据源=socket 2103 订阅推送的最近快照（collector 缓存），非历史回看——历史无此链。
+    数据源=socket 2103 订阅推送的最近快照（collector 缓存），非历史回看——历史走 /daban-list-history。
     """
     return await _proxy_get(f"/api/kpl/daban-list?pid_type={pid_type}")
+
+
+@router.get("/daban-list-history")
+async def daban_list_history(date: str = "", pid_type: int = 8, page: int = 0) -> JSONResponse:
+    """按日打板个股列表历史收盘帧（HisDaBanList HTTP，App 市场情绪·日期回看同款读口）。"""
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    if pid_type not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "invalid_pid_type"},
+            status_code=400)
+    try:
+        return JSONResponse(
+            content=kpl_ranking_service.get_daban_list_history(date, pid_type, page=page))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
 
 
 @router.get("/sector-ranking")

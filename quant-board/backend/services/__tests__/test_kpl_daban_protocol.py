@@ -315,3 +315,44 @@ class TestDabanStockList2103:
     def test_registry_has_2103(self):
         assert dp.DABAN_RESP_PARSERS[dp.CMD_DABAN_STOCK_LIST] is dp.parse_daban_stock_list
         assert dp.DABAN_LIST_PIDS == {8: "bidding", 0: "about_to_zt", 6: "wind_vane"}
+
+
+# ── 历史行解析（HisDaBanList HTTP，qg.q1 × PatternDynamicQuota 列位语义）────────
+
+class TestDabanHistoryRow:
+    def test_parse_history_row_positions(self):
+        from backend.services.kpl_ranking_service import _parse_daban_history_row
+        row = ["603028", "赛福天", 0, "游资",
+               "", "", "", "", "", "", "",  # 4-10：pct..state 前的占位
+               "10.01",  # 注：占位只到 10，4=pct 应在此前——见下方按位重排样本
+               ]
+        # 构造按位的样本：row[i] 对应 arrayPosition i（4=涨幅 …）
+        row = ["603028", "赛福天", 0, "游资"] + [""] * 13 + ["10.01"] + [""] * 4 \
+            + ["机器人概念"] + [""] * 6 + ["528.0万"] + ["966.7万"] + [""] * 9
+        # 上式手工摆位易错，改用显式赋值：
+        row = ["603028", "赛福天", 0, "游资"] + [""] * 40
+        row[4] = "10.01"       # pos4 涨幅
+        row[9] = "4连板"        # pos9 状态
+        row[11] = "机器人概念"   # pos11 板块
+        row[18] = "13.02亿"     # pos18 涨停委买额
+        row[19] = "10.01"       # pos19 竞价涨幅
+        row[22] = "966.7万"     # pos22 竞价成交额
+        it = _parse_daban_history_row(row)
+        assert it["stock_id"] == "603028" and it["name"] == "赛福天"
+        assert it["label_type"] == 0 and it["stock_tag"] == "游资"
+        assert it["pct"] == 10.01            # 可转数字的列位转 float
+        assert it["state"] == "4连板"
+        assert it["plate"] == "机器人概念"
+        assert it["zt_buy_amount"] == "13.02亿"
+        assert it["bidding_pct"] == 10.01
+        assert it["bidding_amount"] == "966.7万"
+        # 空串列位映射为空值（不伪装缺失）；全行原样保留 raw
+        assert it["max_zt_tur"] == "" and it["raw"][17] == "" and it["raw"][4] == "10.01"
+
+    def test_parse_history_row_numeric_passthrough(self):
+        from backend.services.kpl_ranking_service import _parse_daban_history_row
+        row = ["000759", "中百集团", 1, ""] + [""] * 40
+        row[4] = -5.14
+        row[12] = -31720000
+        it = _parse_daban_history_row(row)
+        assert it["pct"] == -5.14 and it["main_net"] == -31720000
