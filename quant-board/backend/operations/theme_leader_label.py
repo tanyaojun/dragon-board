@@ -43,6 +43,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     board_zhaban_line,
     build_leader_narrative,
     combo_key,
+    driver_cross_line,
     headroom_anchor_line,
     structure_line,
 )
@@ -52,7 +53,23 @@ from backend.services.jev.jev_client import parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
 COLLECTION = "hotlist_jev_theme_leader_labels"
+DRIVER_LABEL_COLLECTION = "hotlist_jev_driver_labels"
 ORIGIN = "theme_leader_label_v1"
+
+
+def fetch_driver_label(db: Any, date: str, code: str) -> dict | None:
+    """打标交叉源（AMMO 2026-10-27b）：当日该股打标行，final 优先、同槽取最新 computedAt。
+    phase_band_daily（日级哨兵，无个股 code）按 code 过滤天然排除。查不到返回 None
+    （叙事出 fail-visible 缺席行）。查询保持平坦等值（find 全取后 Python 侧过滤排序），
+    兼容测试假库，也对真 Mongo 正确。"""
+    docs = [d for d in (db[DRIVER_LABEL_COLLECTION].find(
+              {"tradingDate": date, "code": str(code)}) or [])
+            if d.get("labelSlot") in ("final", "midday")
+            and d.get("origin") != "phase_band_daily"]
+    if not docs:
+        return None
+    final = [d for d in docs if d.get("labelSlot") == "final"]
+    return max(final or docs, key=lambda d: str(d.get("computedAt") or ""))
 # 代际来源：`live` = 当日 16:20 挂链（前瞻样本）；`backfill` = 事后补跑历史日。
 # **评估必须分开统计**：事后补跑的日子可能看到「当时还不存在」的语料（如题材料只在 10-20 采集），
 # 混进前瞻样本会把泄漏当成模型能力（预登记 §11 H1 回填方案）。
@@ -231,6 +248,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
     block = digest.build_theme_evidence_block(db, board_name=row["board"], date=date,
                                               leader_code=str(row.get("code") or ""),
                                               sealed_codes=sealed or None)
+    # 打标交叉（AMMO 2026-10-27b）：零调用 join 打标链当日该股行（final>midday）
+    driver_doc = fetch_driver_label(db, date, str(row.get("code") or ""))
     narrative = build_leader_narrative(
         date=date,
         market_line=market_line,
@@ -247,11 +266,15 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         zhaban_line=board_zhaban_line(row),
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
+        driver_cross=driver_cross_line(driver_doc),
         evidence_block=block["text"],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
     )
     return {"narrative": narrative, "evidence": block,
+            "driverCross": {"found": bool(driver_doc),
+                            "labelSlot": (driver_doc or {}).get("labelSlot"),
+                            "questionSetVersion": (driver_doc or {}).get("questionSetVersion")},
             "chars": len(narrative),
             "estimatedTokens": estimate_tokens(len(narrative))}
 
@@ -297,6 +320,8 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         # `baselineBucket` 只是原始结构审计字段，两者别混（混用会静默退化成只按连板高度对照）。
         "baselineKey": combo_key(row),
         "baselineMeta": baseline_meta,
+        # 打标交叉源审计（AMMO 2026-10-27b）：found/槽位/打标链题集版本；叙事行本身在 narrative
+        "driverCross": built.get("driverCross"),
         "evidenceState": built["evidence"]["state"],
         "evidenceIndustry": (built["evidence"].get("industry") or {}).get("name"),
         "evidenceEventTitles": [e.get("title") for e in built["evidence"].get("events") or []],

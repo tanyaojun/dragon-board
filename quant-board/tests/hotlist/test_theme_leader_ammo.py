@@ -38,7 +38,12 @@ def test_question_set_frozen_hash_and_versions():
     待判龙头当日未封板（断板反包候选）时判「重新上板概率」，封板类判据不适用、
     改按断板承接/梯队/题材证据，锚缺失如实对待（推导侧配套=候选池扩近 3 日封板池、
     排序改 10日涨幅→连板高度→首封，见 baseline space_mode 与 rank_board_stocks_space；
-    预登记 §21.6）——跨代标签不得混评（评估按版本分组）。
+    预登记 §21.6）——跨代标签不得混评（评估按版本分组）**；
+    **v11 = 2026-10-27 判据遵从收紧（hash `9235d39da553`，预登记 §22）**：①续板题规则①
+    对称化——最细同桶基线为概率中枢，偏离一档以上（上调或下调）都须点名基线行数字+
+    锚外新证据，同桶样本不足未出率时以「按连板高度」桶为中枢；②延续性题加引用义务——
+    ending 须点名 ≥2 个判据信号对应事实、strong_extend 须点名排队事件或近 2 日新增标题
+    （打标交叉行可作引用源），未封板龙一场景无锚须保守并降低置信。
     AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
@@ -48,11 +53,13 @@ def test_question_set_frozen_hash_and_versions():
     均值/样本量」，率值口径与档位判定对齐，10-23 八龙头全 peak 塌缩归因之一；题面 v8
     判据零改动，hash 不变；v9 题面换代与其同批落地）→
     **2026-10-27a 空间龙一规则配套**（结构行 leader_sealed_today=False 分情形显式标注
-    「今日未封板（断板反包候选，10日涨幅 X% 居候选池首位）」+ rank_board_stocks_space）。
+    「今日未封板（断板反包候选，10日涨幅 X% 居候选池首位）」+ rank_board_stocks_space）→
+    **2026-10-27b 打标交叉原料行**（join hotlist_jev_driver_labels final>midday，四轴
+    枚举译名+概率并列，行内自描述口径；缺席 fail-visible；不并 boardDragons）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v10"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-27a"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "fef8635573f7"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v11"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-27b"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "9235d39da553"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -72,6 +79,15 @@ def test_question_set_frozen_hash_and_versions():
     assert "再走≥1板率三成上下" in crit["space_1"], "space_1 绑锚行读数（非写死绝对阈值）"
     assert "再走≥1板率不足三成" in crit["peak"], "peak 绑锚行读数"
     assert "锚行读数参照" not in crit["space_2plus"], "space_2plus 零命中先观察，不加校准（§21.3 范围）"
+    # v11 两项（预登记 §22，2026-10-27 用户批准）：续板规则①对称化 + 延续性引用义务
+    cont = A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["instructions"]
+    assert "必须先对齐的概率中枢" in cont, "规则①对称化：中枢语义"
+    assert "上调或下调" in cont and "按连板高度」桶为中枢" in cont, "双向偏离义务+同桶未出率回退"
+    assert "个股打标交叉行" in cont, "打标交叉行列入可引证据"
+    tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
+    assert "引用义务（v11）" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"
+    assert "打标交叉」行的新鲜度/买盘逻辑判定可作引用源" in tcont, "strong_extend 可引打标交叉"
+    assert "未封板身位本身不构成强延续证据" in tcont, "断板反包场景保守条款"
 
 
 def test_bucket_functions_stable_keys():
@@ -378,6 +394,63 @@ def test_narrative_places_headroom_anchor_between_baseline_and_evidence():
     lines = text.splitlines()
     assert lines[3].startswith("结构基线") and lines[4] == anchor
     assert lines[5].startswith("【题材证据"), "锚行紧贴证据块之前，None 时证据块直接跟基线"
+
+
+def test_narrative_places_driver_cross_between_headroom_and_evidence():
+    """打标交叉行（2026-10-27b）：排在空间锚后、证据块前；缺席走 fail-visible 行非 None。"""
+    ev = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n取数日 2026-10-27"
+    anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同桶[x] 再走≥1板率 54.5%"
+    cross = A.driver_cross_line({"labelSlot": "midday", "questionSetVersion": "v4.0",
+                                 "label": "capital_flow", "catalystDepth": "core_main_business",
+                                 "freshness": "fresh_catalyst", "buySideLogic": "high_board_relay"})
+    text = A.build_leader_narrative(
+        date="2026-10-27", market_line="涨停 53 家", structure="板块「大消费」今日封板 7 家",
+        baseline="结构基线：总体 33.3%", evidence_block=ev,
+        leader_name="上海九百", leader_code="600838", headroom=anchor, driver_cross=cross)
+    lines = text.splitlines()
+    assert lines[4] == anchor and lines[5] == cross
+    assert lines[6].startswith("【题材证据")
+    # 无交叉参数（旧调用形状）→ 不出行，行序向后兼容
+    old = A.build_leader_narrative(
+        date="2026-10-27", market_line="涨停 53 家", structure="板块「大消费」今日封板 7 家",
+        baseline="结构基线：总体 33.3%", evidence_block=ev,
+        leader_name="上海九百", leader_code="600838").splitlines()
+    assert old[4].startswith("【题材证据")
+
+
+def test_driver_cross_line_variants():
+    """打标交叉行渲染：枚举译名/近并列披露/逃生桶不进排名/缺席 fail-visible 不伪装。"""
+    doc = {"labelSlot": "midday", "questionSetVersion": "v4.0", "label": "capital_flow",
+           "labelProbabilities": {"policy": 0.42, "capital_flow": 0.43,
+                                  "insufficient_evidence": 0.03},
+           "catalystDepth": "core_main_business", "freshness": "fresh_catalyst",
+           "buySideLogic": "high_board_relay",
+           "buySideProbabilities": {"high_board_relay": 0.97, "independent_catalyst": 0.02}}
+    line = A.driver_cross_line(doc)
+    assert line.startswith("个股打标交叉（另一条打标链对该公司当日涨停的机器判定，供交叉参考；")
+    assert "打标链题集 v4.0·午盘槽" in line
+    assert "驱动类别=资金接力43%/政策42%（近并列）" in line, "近并列必须显式披露（判定不稳=信息）"
+    assert "信息不足" not in line, "逃生桶不进 top-2 排名"
+    assert "催化深度=核心主业" in line and "新鲜度=新催化（≤2 交易日）" in line
+    assert "买盘逻辑=高位卡位/情绪接力97%" in line
+    # 概率真身=driverProbabilities（labelProbabilities 为 API 层旧别名，仅兜底旧档）
+    assert "驱动类别=政策50%/资金接力30%" in A.driver_cross_line(
+        {**doc, "driverProbabilities": {"policy": 0.5, "capital_flow": 0.3}}), \
+        "两字段并存时 driverProbabilities 优先"
+    # 承接判定必须显式披露（防模型把昨日判断当当日新鲜证据）
+    carried = A.driver_cross_line({**doc, "carriedFrom": "2026-10-26",
+                                   "carriedQuestionKeys": ["driver_type", "catalyst_depth",
+                                                           "catalyst_freshness"]})
+    assert "驱动类别/催化深度/新鲜度=承接 2026-10-26 判定（非当日重问）" in carried
+    assert "买盘逻辑" not in carried.split("·")[-1], "未承接的轴不进承接披露"
+    # 缺席 = fail-visible 固定行，不带任何方向性语义
+    assert A.driver_cross_line(None) == A.DRIVER_CROSS_NONE_LINE
+    assert "不构成任何方向证据" in A.DRIVER_CROSS_NONE_LINE
+    # 概率全缺 → 回落已选枚举值中文；全缺+槽位缺失 → 不可考如实
+    bare = A.driver_cross_line({"label": "policy", "labelSlot": "final",
+                                "questionSetVersion": "v3.1", "freshness": "continuing",
+                                "buySideLogic": "sector_follow"})
+    assert "驱动类别=政策" in bare and "催化深度=不可考" in bare and "收盘槽" in bare
 
 
 def test_evidence_gate_forces_insufficient_and_keeps_model_answer():

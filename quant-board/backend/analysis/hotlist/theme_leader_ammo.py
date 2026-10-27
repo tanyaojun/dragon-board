@@ -39,7 +39,15 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # 当日未封板（断板反包候选）时判「重新上板概率」，封板类判据不适用、改按断板承接/
 # 梯队/题材证据，锚缺失如实对待；②推导侧配套见 theme_leader_baseline（候选池扩近 3 日
 # 封板池）与结构行未封板显式标注（AMMO 2026-10-27a）。
-QUESTION_SET_VERSION_THEME_LEADER = "v10"
+# **v11 = 2026-10-27 判据遵从收紧**（10-26 双案例：上海九百按判据应判 weak_extend 却判
+# ending（三信号只中新闻断流一条）、大业无新鲜催化判 strong_extend 0.89 次日未续；
+# 已结算 8 行对账=低档 5/5 全对、中档 1/3 无区分度，归因=锚定不对称+延续性题零引用义务，
+# 预登记 §22，2026-10-27 用户批准）：①续板题规则①对称化——最细同桶基线为概率中枢，
+# 偏离一档以上（上调或下调）都须点名基线行数字+锚外新证据，同桶样本不足未出率时以
+# 「按连板高度」桶为中枢；②延续性题加引用义务——ending 须点名 ≥2 个判据信号对应
+# 事实、strong_extend 须点名排队事件或近 2 日新增标题（打标交叉行可作引用源），
+# 未封板龙一场景无锚须保守并降低置信。
+QUESTION_SET_VERSION_THEME_LEADER = "v11"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -73,7 +81,14 @@ QUESTION_SET_VERSION_THEME_LEADER = "v10"
 # 10 日涨幅 +Y% 居候选池首位）」替代「连板高度不可算」哑谜，跟风段如实改不可算；
 # ②新增 rank_board_stocks_space（10日涨幅→连板高度→首封），历史窗口/基线仍用旧
 # rank_board_stocks（口径分代见 §21.6）。题面 v10（续板题规则⑤）同批换代。
-AMMO_VERSION_THEME_LEADER = "2026-10-27a"
+# 2026-10-27b（打标交叉原料行，2026-10-27 用户批准并入 v11 批次；预登记 §22）：
+# 新增 driver_cross_line——join hotlist_jev_driver_labels（final 优先、midday 兜底、
+# 槽位显式标注、双缺 fail-visible 出「无当日个股打标记录」），四轴（驱动类别 top-2/
+# 催化深度/新鲜度/买盘逻辑）枚举译名+概率并列，行内自描述口径（个股级机器判定·供交叉
+# 参考）。动机=题材语料空窗时给延续性/续板题一个结构化引用锚（10-26 上海九百/大业
+# 双病案），并从个股侧补题材关键词匹配漏供给。只并待判龙头个股行，**不并 boardDragons**
+# （真连板口径推导，与 v10 空间龙一双口径，单一事实源红线）。题面 v11 同批换代。
+AMMO_VERSION_THEME_LEADER = "2026-10-27b"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -257,7 +272,15 @@ QUESTIONS_THEME_LEADER = {
                         "证据不足的判定边界（v6 收窄）：与程序门同口径——产业树未映射 + "
                         "事件/新闻无痕 + 板内解析不可用三层同时成立才判 insufficient。"
                         "无新增催化但板块仍活跃 = 存量惯性 → weak_extend；"
-                        "分化/退潮信号明确 → ending——零痕迹不是 insufficient 的理由。",
+                        "分化/退潮信号明确 → ending——零痕迹不是 insufficient 的理由。"
+                        "引用义务（v11）：判 ending 须在理由中点名至少 2 个判据信号"
+                        "（新闻断流/家数萎缩/龙头分歧）在叙事中的对应事实——只有单一信号"
+                        "时按存量惯性归 weak_extend，不得凭单一信号判结束；判 strong_extend "
+                        "须点名排队中的既定事件或近 2 日新增的题材事件/新闻标题"
+                        "（「个股打标交叉」行的新鲜度/买盘逻辑判定可作引用源），"
+                        "仅凭板块家数多/龙头身位强不足以为强延续；待判龙头今日未封板"
+                        "（断板反包候选）时缺少同构历史锚与当日封板质量证据，本题应保守"
+                        "判断并降低置信，未封板身位本身不构成强延续证据。",
         "criteria": {
             "strong_extend": "强延续：有未落地的既定事件排队或题材事件/新闻持续新增，"
                              "梯队完整，预计板块还能炒 ≥2 个交易日",
@@ -273,9 +296,13 @@ QUESTIONS_THEME_LEADER = {
         "instructions": "仅依据所给证据（板块结构、封板质量、题材证据与前瞻事件、同桶历史基准率），"
                         "判断该板块龙头在**次一交易日**继续封板（涨停）的概率落在哪一档？"
                         "只判概率档位，不预测价格、不给出买卖建议。四条硬规则："
-                        "①同桶历史基准率是必须先超的基准——若你的理由仅为「连板高/封板早/板块家数多」"
-                        "这类与基准率同源的结构特征，请选与基准率同一档，不得凭感觉上调；"
-                        "②题材证据（产业树催化、题材事件/题材新闻、前瞻日历、板内个股解析）"
+                        "①同桶历史基准率是必须先对齐的概率中枢——取叙事「结构基线」行中最细"
+                        "同桶（方括号条件最全且已出率，即样本≥8 的那行）；偏离中枢一档以上"
+                        "（上调或下调）都必须在理由中点名所依据的基线行具体数字，并给出锚未"
+                        "覆盖的新证据（当日新催化、承接突变、封板质量异常等），不得凭感觉移动"
+                        "档位；若最细同桶样本不足未出率，以「按连板高度」桶为中枢；"
+                        "②题材证据（产业树催化、题材事件/题材新闻、前瞻日历、板内个股解析、"
+                        "个股打标交叉行）"
                         "有明确日期与新鲜度时，其权重高于结构特征；"
                         "③关键证据缺失（语料未采集、板块在产业树/题材事件均无可用证据、"
                         "板块结构不可考）必须判 insufficient，不得用结构特征硬填空档；"
@@ -641,12 +668,111 @@ def board_zhaban_line(row: dict) -> str | None:
     return seg
 
 
+# ── 打标交叉行（AMMO 2026-10-27b，用户批准；预登记 §22） ──
+# 枚举短名（与 jev_driver_ammo 判据中文名对齐，压缩为一词便于行内并列）。
+DRIVER_LABEL_CN = {
+    "policy": "政策", "order_earnings": "订单业绩", "product_event": "产品事件",
+    "ma_restructure": "重组并购", "industry_cycle": "行业周期",
+    "capital_flow": "资金接力", "concept_stretch": "蹭概念",
+    "insufficient_evidence": "信息不足",
+}
+DRIVER_DEPTH_CN = {
+    "core_main_business": "核心主业", "new_business_scaling": "新业务放量",
+    "new_business_early": "新业务早期", "equity_or_affiliate": "股权关联",
+    "concept_assembly": "概念组装", "insufficient_evidence": "信息不足",
+}
+DRIVER_FRESHNESS_CN = {
+    "fresh_catalyst": "新催化（≤2 交易日）", "continuing": "老催化续命",
+    "none": "无明确催化", "unclear": "日期不可考",
+}
+DRIVER_BUYSIDE_CN = {
+    "independent_catalyst": "自身独立催化", "sector_follow": "板块联动跟随",
+    "high_board_relay": "高位卡位/情绪接力", "pure_sentiment": "纯情绪修复",
+    "insufficient": "信息不足",
+}
+DRIVER_CROSS_NONE_LINE = (
+    "个股打标交叉：无当日个股打标记录（该股不在打标名单或槽位未落，"
+    "仅指此行缺席，不构成任何方向证据）"
+)
+# 承接披露映射（打标链 carriedQuestionKeys 题键 → 交叉行轴名）：
+# 解析正文与前一日逐字相同时打标链不重问（carriedFrom=前一日），交叉行必须如实标注
+# 「承接判定」——新鲜度等轴是昨日判断，不是当日重问（防模型把承接值当当日新鲜证据）。
+DRIVER_CARRY_AXIS_CN = {
+    "driver_type": "驱动类别", "catalyst_depth": "催化深度",
+    "catalyst_freshness": "新鲜度", "buy_side_logic": "买盘逻辑",
+}
+
+
+def _top2(probabilities: Any, cn: dict[str, str]) -> str:
+    """top-2 枚举短名+整数百分比并列；逃生桶（insufficient 系）不进排名，为空返回空串
+    （调用方兜底用已选枚举值，全缺「不可考」，不编 0）。两档比值 ≥0.9 标「近并列」——
+    近并列本身是信息（判定不稳），必须披露。"""
+    if not isinstance(probabilities, dict):
+        return ""
+    items = [(cn.get(str(k), str(k)), float(v)) for k, v in probabilities.items()
+             if isinstance(v, (int, float)) and v > 0 and k not in ("insufficient_evidence", "insufficient")]
+    items.sort(key=lambda kv: -kv[1])
+    items = items[:2]
+    if not items:
+        return ""
+    tie = len(items) == 2 and items[0][1] > 0 and items[1][1] / items[0][1] >= 0.9
+    seg = "/".join(f"{name}{v:.0%}" for name, v in items)
+    return f"{seg}（近并列）" if tie else seg
+
+
+def _enum_cn(value: Any, cn: dict[str, str]) -> str:
+    if not value:
+        return "不可考"
+    return cn.get(str(value), str(value))
+
+
+def driver_cross_line(label_doc: dict | None) -> str:
+    """个股打标交叉行（AMMO 2026-10-27b）：join 打标链当日该股判定，零调用纯原料。
+
+    行内自描述口径（模型每次都是第一次见「打标交叉」这个词）：另一条打标链对该公司
+    当日涨停的机器判定，供交叉参考；四轴=驱动类别 top-2/催化深度/新鲜度/买盘逻辑，
+    枚举译名+概率并列。槽位显式（final=收盘槽、midday=午盘槽）；打标链题集版本一并
+    披露（v3.1/v4.0 校准代际不同）。label_doc=None → fail-visible 缺席行（不伪装成
+    「无催化」等任何方向性结论）。
+    """
+    if not label_doc:
+        return DRIVER_CROSS_NONE_LINE
+    slot = str(label_doc.get("labelSlot") or "")
+    slot_cn = {"final": "收盘槽", "midday": "午盘槽"}.get(slot, slot or "槽位不可考")
+    qs = str(label_doc.get("questionSetVersion") or "版本不可考")
+    head = (f"个股打标交叉（另一条打标链对该公司当日涨停的机器判定，供交叉参考；"
+            f"打标链题集 {qs}·{slot_cn}）：")
+    # 驱动类别概率真身=driverProbabilities（labelProbabilities 为 API 层旧别名，兜底旧档）
+    label_seg = _top2(label_doc.get("driverProbabilities")
+                      or label_doc.get("labelProbabilities"), DRIVER_LABEL_CN) \
+        or _enum_cn(label_doc.get("label"), DRIVER_LABEL_CN)
+    buyside_seg = _top2(label_doc.get("buySideProbabilities"), DRIVER_BUYSIDE_CN) \
+        or _enum_cn(label_doc.get("buySideLogic"), DRIVER_BUYSIDE_CN)
+    parts = [
+        f"驱动类别={label_seg}",
+        f"催化深度={_enum_cn(label_doc.get('catalystDepth'), DRIVER_DEPTH_CN)}",
+        f"新鲜度={_enum_cn(label_doc.get('freshness'), DRIVER_FRESHNESS_CN)}",
+        f"买盘逻辑={buyside_seg}",
+    ]
+    tail = ""
+    carried_set = {DRIVER_CARRY_AXIS_CN[k] for k in
+                   (label_doc.get("carriedQuestionKeys")
+                    or label_doc.get("carriedAnswers") or {})
+                   if k in DRIVER_CARRY_AXIS_CN}
+    carried = [a for a in ("驱动类别", "催化深度", "新鲜度", "买盘逻辑") if a in carried_set]
+    if carried:
+        frm = label_doc.get("carriedFrom")
+        tail = f" · {'/'.join(carried)}=承接 {frm or '上一交易日'} 判定（非当日重问）"
+    return head + " · ".join(parts) + tail
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
                            forward_axis: str | None = None,
                            ladder_line: str | None = None,
-                           zhaban_line: str | None = None) -> str:
+                           zhaban_line: str | None = None,
+                           driver_cross: str | None = None) -> str:
     """投喂给 jev 的完整叙事（顺序固定，便于逐字复现与回归比对）。
 
     evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本），
@@ -656,6 +782,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     证据块前；None（无历史样本/无可用周期）不出行。
     2026-10-24c 三行：`forward_axis`（前向交易日轴，紧跟盘面行后）、`ladder_line`
     （板内梯队形态）、`zhaban_line`（板内炸板面），均 None 不出行（旧调用形状不变）。
+    `driver_cross`（AMMO 2026-10-27b）= 个股打标交叉行，排在空间锚后、证据块前；
+    None 不出行（打标缺席由 driver_cross_line 出 fail-visible 缺席行，不走本参数）。
     """
     lines = [
         f"{date} 交易日 · {market_line}",
@@ -671,5 +799,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     lines.append(baseline)
     if headroom:
         lines.append(headroom)
+    if driver_cross:
+        lines.append(driver_cross)
     lines.append(evidence_block)
     return "\n".join(lines)

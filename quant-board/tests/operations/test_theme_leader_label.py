@@ -189,9 +189,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v10"
-    assert doc["questionSetHash"] == "fef8635573f7"   # v10 空间龙一规则（v1-v9 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-27a"   # 空间龙一结构行分情形（预登记 §21.6）
+    assert doc["questionSetVersion"] == "v11"
+    assert doc["questionSetHash"] == "9235d39da553"   # v11 判据遵从收紧（v1-v10 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-10-27b"   # 打标交叉原料行（预登记 §22）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -239,7 +239,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v10", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v11", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -348,6 +348,43 @@ def test_build_one_wires_history_and_headroom_anchor():
     assert "家数序列不可考" in built2["narrative"]
 
 
+def test_build_one_driver_cross_join_and_fail_visible():
+    """打标交叉行（2026-10-27b）：final 优先 midday 兜底、哨兵行排除、无记录出
+    fail-visible 缺席行；driverCross 源审计随 built 返回（落库由 run 路径断言）。"""
+    db = FakeDb()
+    dcol = db[L.DRIVER_LABEL_COLLECTION]
+    dcol.docs["x1"] = {"tradingDate": "2026-10-19", "code": "603278",
+                       "labelSlot": "midday", "questionSetVersion": "v4.0",
+                       "label": "capital_flow", "catalystDepth": "core_main_business",
+                       "freshness": "fresh_catalyst", "buySideLogic": "high_board_relay",
+                       "computedAt": "2026-10-27T12:35:14"}
+    built = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
+    assert ("个股打标交叉（另一条打标链对该公司当日涨停的机器判定，供交叉参考；"
+            "打标链题集 v4.0·午盘槽）") in built["narrative"]
+    assert built["driverCross"] == {"found": True, "labelSlot": "midday",
+                                    "questionSetVersion": "v4.0"}
+    # final 优先于 midday（同日两槽并存取 final）
+    dcol.docs["x2"] = {"tradingDate": "2026-10-19", "code": "603278",
+                       "labelSlot": "final", "questionSetVersion": "v3.1",
+                       "label": "policy", "computedAt": "2026-10-27T16:19:04"}
+    built2 = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
+    assert "收盘槽" in built2["narrative"] and built2["driverCross"]["labelSlot"] == "final"
+    # phase_band_daily 日级哨兵不充当个股交叉源
+    dcol.docs["x3"] = {"tradingDate": "2026-10-19", "code": "603278",
+                       "labelSlot": "final", "origin": "phase_band_daily",
+                       "label": "policy", "computedAt": "2026-10-27T17:00:00"}
+    built2b = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
+    assert built2b["driverCross"]["labelSlot"] == "final" \
+        and "打标链题集 v3.1" in built2b["narrative"]
+    # 无任何打标行 → fail-visible 缺席行（不伪装方向性结论）
+    built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                         market_line="涨停 46 家")
+    assert "个股打标交叉：无当日个股打标记录（该股不在打标名单或槽位未落，" \
+        "仅指此行缺席，不构成任何方向证据）" in built3["narrative"]
+    assert built3["driverCross"] == {"found": False, "labelSlot": None,
+                                     "questionSetVersion": None}
+
+
 def test_label_one_persists_expanded_structure_fields(env):
     """2026-10-24c 板面扩容字段随 structure 落库（审计与前端可回读，不只在叙事里）。"""
     calls, db = env
@@ -366,6 +403,10 @@ def test_label_one_persists_expanded_structure_fields(env):
     #（env 夹具的 ROWS 无新字段 → None 如实；space_mode 生产的真实值由
     # test_day_leader_rows_space_mode_unsealed_leader 锁定）
     assert "gain10" in st and "leaderSealedToday" in st
+    # 打标交叉源审计（AMMO 2026-10-27b）：测试库无打标行 → found=False 如实落库
+    assert doc["driverCross"] == {"found": False, "labelSlot": None,
+                                  "questionSetVersion": None}
+    assert "个股打标交叉：无当日个股打标记录" in doc["narrative"]
 
 
 def test_forward_date_axis_line_sources_and_fail_visible(monkeypatch):

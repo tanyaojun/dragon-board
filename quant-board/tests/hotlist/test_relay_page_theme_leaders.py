@@ -171,7 +171,9 @@ def test_outcome_three_states_never_fake_broken(html: str) -> None:
     fn = _fn(html, "tlOutcomeKey")
     assert "outcomeSealedNextDay === null" in fn
     row = _fn(html, "tlRowHtml")
-    assert "未封" in row and "续板" in row and "未续" in row
+    assert "待结算" in row and "续板" in row and "未续" in row, \
+        "pending 徽章=「待结算」（2026-10-27 用户确认：原「未封」与确认负「未续」、" \
+        "连板列「未封板」共用词根易误读）"
 
 
 def test_backfill_warning_display_removed(html: str) -> None:
