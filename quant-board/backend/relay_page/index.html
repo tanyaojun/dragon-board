@@ -4743,7 +4743,7 @@ function kplHandleEvent(ev){
       KPL.status.lastError = ev.msg || '';
       // 重连链是设计内稳定性模型（README §三）：会话轮换/codec 自愈属例行噪声，
       // 降级到统计行；认证拒绝/反作弊/解码失败等异常才上横幅
-      if (/closed by server|signsvc pipe broken|subscriber queue overflow/.test(KPL.status.lastError)){
+      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out/.test(KPL.status.lastError)){
         kplUpdateStats();
       } else {
         kplBanner(KPL.status.lastError);
@@ -4790,7 +4790,8 @@ async function kplBootstrap(){
   if (KPL.bootstrapping || KPL.mode !== 'live') return;
   KPL.bootstrapping = true; KPL.bootstrapped = true;
   try {
-    let ids = await kplFetchSectorUniverse();
+    const rankIds = await kplFetchSectorUniverse();
+    let ids = rankIds.slice();
     if (!ids.length) throw new Error('近 7 日排行均无数据');
     // 二级目录：排行宇宙只有顶级板块，把树中它们的子板块并入订阅（否则子板块无流）
     await kplFetchPlateTree();
@@ -4800,7 +4801,8 @@ async function kplBootstrap(){
         .map(([pid]) => pid);
       ids = ids.concat(childIds.filter(id => !ids.includes(id)));
     }
-    const r = await jpost(KPL_API + '/subscriptions', {stock_ids: ids});
+    const r = await jpost(KPL_API + '/subscriptions',
+                          {stock_ids: ids, priority_ids: rankIds});
     if (!r.ok) throw new Error((r.subscriptions && r.subscriptions.reason) || '订阅更新被拒');
     KPL.universeIds = ids;                // 成分股并入订阅时必须带上板块宇宙
     if (!r.running) kplEnsureRunning();   // 采集器停着时订阅照收，需拉起才有流
@@ -4873,7 +4875,12 @@ function kplRenderSectors(){
     const kids = {}, tops = [];
     rows.forEach(r => {
       const p = (tree[r.plate_id] || {}).parent;
-      if (p && p !== '0' && byId[p]) (kids[p] = kids[p] || []).push(r);
+      if (p && p !== '0' && byId[p]){
+        // 用户裁决：子板块显示条件=父板块强度 >1000 且子板块强度 >0（无数据视为不满足）
+        const ps = (byId[p].strength == null) ? -1 : byId[p].strength;
+        const cs = (r.strength == null) ? -1 : r.strength;
+        if (ps > 1000 && cs > 0) (kids[p] = kids[p] || []).push(r);
+      }
       else tops.push(r);
     });
     rows = tops.map(r => (kids[r.plate_id] ? [r].concat(kids[r.plate_id]) : [r])).flat();
@@ -5003,7 +5010,7 @@ function kplSyncStockSubscription(codes){
   const sig = full.join(',');
   if (sig === KPL.lastSubSig) return;
   KPL.lastSubSig = sig;   // 签名=实际下发的完整清单（板块宇宙+个股页）
-  jpost(KPL_API + '/subscriptions', {stock_ids: full})
+  jpost(KPL_API + '/subscriptions', {stock_ids: full, priority_ids: KPL.universeIds})
     .catch(e => { KPL.lastSubSig = ''; kplBanner('成分股实时订阅失败：' + (e.message || e)); });
 }
 function kplRenderStocks(){

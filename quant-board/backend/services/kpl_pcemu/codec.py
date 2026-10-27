@@ -15,8 +15,11 @@ collector 的 610 ack 降级路径按 SignSvcError 捕获）。空输出按 Sign
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -96,6 +99,7 @@ class PCEmulatorCodec:
         return out if out else None
 
     def dec(self, cipher_hex: str) -> Optional[bytes]:
+        self._dump_dec(cipher_hex, None)   # env 门控：真实帧语料采集（离线重放定位毒帧）
         try:
             raw = bytes.fromhex(cipher_hex)
         except ValueError as e:
@@ -106,11 +110,29 @@ class PCEmulatorCodec:
             with self._lock:
                 out = core.decrypt(raw)
         except PCEmuError:
+            self._dump_dec(cipher_hex, "error:PCEmuError")
             raise
         except Exception as e:
+            self._dump_dec(cipher_hex, f"error: {e}")
             self._drop_core_locked()
             raise PCEmuError(f"PC dec 失败: {e}") from e
         return out if out else None
+
+    @staticmethod
+    def _dump_dec(cipher_hex: str, note) -> None:
+        """KPL_PCEMU_DUMP_DIR 设置时把每个 dec 输入落盘（诊断用，默认关闭）。"""
+        d = os.environ.get("KPL_PCEMU_DUMP_DIR")
+        if not d:
+            return
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "dec_corpus.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps({"ts": round(time.time(), 3),
+                                    "len": len(cipher_hex) // 2,
+                                    "cipher_hex": cipher_hex,
+                                    "note": note}) + "\n")
+        except Exception:
+            pass
 
     def wbe(self, challenge: str, device_id: str, conn_type: str, cur_time: str) -> Optional[str]:
         try:

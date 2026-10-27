@@ -321,16 +321,45 @@ def parse_group_quotas(payload: bytes) -> Dict[str, Any]:
 
 
 def parse_version_resp(payload: bytes) -> Dict[str, Any]:
-    """2301/2303/2304 版本应答（PlateSearchListResp 等）：f2 version/f4 dataUrl 等。"""
+    """2301/2303/2304 版本应答（PlateSearchListResp 等）：f2 version/f4 dataUrl 等。
+
+    2026-10-27 实测：板块清单快照 url 在 **f7**（如
+    https://appimgcdn.kaipanla.com/plate/146_<version>.data，f4 为历史误记/其他应答形态）。
+    """
     pb = parse_pb(payload)
     out: Dict[str, Any] = {
         "resp_type": pb_first(pb, 1, 0),
         "version": pb_first(pb, 2, 0),
     }
-    for f in (4,):
+    for f in (4, 7):
         v = pb_first(pb, f)
         if isinstance(v, bytes):
             out.setdefault("urls", []).append(v.decode("utf-8", "replace"))
+    return out
+
+
+def parse_plate_snapshot(data: bytes) -> Dict[str, Dict[str, str]]:
+    """2301 CDN 快照（plate/146_<version>.data）→ {板块id: {name/parent/flag/py}}。
+
+    结构（2026-10-27 实测）：外层 pb{f1: 类型, f2: version, f6: repeated 板块项}；
+    板块项 pb{f1: id, f2: 名称, f3: 拼音码, f4: 类别标志, f5: 短串(部分条目), f6: 父板块 id
+    （"0"=顶级，如 803040 数据采集→801159 机器人概念；全市场 1572 条，543 条有父级）}。
+    """
+    pb = parse_pb(data)
+    out: Dict[str, Dict[str, str]] = {}
+    for entry in pb.get(6, []):
+        sub = parse_pb(entry)
+
+        def s(k: int) -> str:
+            v = sub.get(k)
+            if not v:
+                return ""
+            val = v[0]
+            return val.decode("utf-8", "replace") if isinstance(val, bytes) else str(val)
+
+        pid = s(1)
+        if pid:
+            out[pid] = {"name": s(2), "parent": s(6), "flag": s(4), "py": s(3)}
     return out
 
 

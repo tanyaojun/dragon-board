@@ -214,12 +214,20 @@ class KplCollectorService:
         self._daban_market_type = daban_market_type
         # 板块(801044/885423) + 个股(000001 平安银行)：3001 同时承载板块与个股行情订阅
         self._stock_ids = stock_ids or ["801044", "885423", "000001"]
+        self._sub_prio_all: List[str] = []   # 优先块成员（分块轮询见 _resplit）
+        self._sub_prio: List[List[str]] = []
+        self._sub_rest: List[List[str]] = []
+        self._resplit()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._subs_lock = threading.Lock()
         self._subs: List[queue.Queue] = []
         self._history = deque(maxlen=history)
         self._status = "idle"
+        self._plate_url = ""
+        self._plate_version = 0
+        self._plate_tree = None      # {板块id: {name/parent/flag/py}}，懒下载快照解析
+        self._rx = bytearray()       # 接收缓冲（帧对齐：跨 socket.timeout 保留残帧，新会话清零）
         self._last_error = ""
         self._session_no = 0
         self._stats = {"sessions": 0, "pushes": 0, "errors": 0, "started_at": 0.0}
@@ -237,16 +245,55 @@ class KplCollectorService:
     def stop(self) -> None:
         self._stop.set()
 
-    def set_subscriptions(self, stock_ids: List[str]) -> Dict[str, Any]:
+    def get_plate_tree(self) -> Dict[str, Any]:
+        """板块树读口（二级目录映射）：2301 快照懒下载+解析，version 变化才重新拉取。"""
+        if not self._plate_url:
+            return {"ok": False, "degraded": True,
+                    "reason": "plate_url 尚未捕获（等待下一个会话的 2301 应答）",
+                    "sessions": self._stats["sessions"]}
+        if self._plate_tree is not None and self._plate_version == self._plate_tree.get("version"):
+            return {"ok": True, "version": self._plate_version, "tree": self._plate_tree}
+        import urllib.request
+        req = urllib.request.Request(self._plate_url, headers={"User-Agent": "ad"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+        tree = proto.parse_plate_snapshot(data)
+        self._plate_tree = {"version": self._plate_version, "plates": tree}
+        return {"ok": True, "version": self._plate_version, "tree": self._plate_tree}
+
+    _CHUNK = 200  # 3001 单请求 id 上限（实测 241 可、784 → ErrResp 1106 连接错误）
+
+    @staticmethod
+    def _chunks(lst: List[str], size: Optional[int] = None):
+        size = size or KplCollectorService._CHUNK
+        for i in range(0, len(lst), size):
+            yield lst[i:i + size]
+
+    def _resplit(self) -> None:
+        """按优先块/普通块切分订阅清单（订阅帧与保活轮询都按块发）。"""
+        prio_set = set(self._sub_prio_all)
+        self._sub_prio = list(self._chunks([i for i in self._stock_ids if i in prio_set]))
+        self._sub_rest = list(self._chunks([i for i in self._stock_ids if i not in prio_set]))
+        if not self._sub_prio:   # 无优先块时全部视为优先（保持旧行为：一清单轮询）
+            self._sub_prio = list(self._chunks(list(self._stock_ids)))
+            self._sub_rest = []
+
+    def set_subscriptions(self, stock_ids: List[str], priority_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """动态更新订阅清单（下一个 3001 构造即生效，轮询间隔 ~2s）。
 
+        priority_ids：优先块（顶级板块等高频行情），轮询时与普通块交替发——
+        单请求 id 数超 ~241 会被服务器 1106 拒绝（2026-10-27 实测），故分块。
         fail-visible：空清单拒绝（保留现有订阅），变更结构化返回供调用方透出。
         """
         ids = [str(s).strip() for s in (stock_ids or []) if str(s).strip()]
         if not ids:
             return {"ok": False, "reason": "empty stock_ids rejected", "count": len(self._stock_ids)}
         self._stock_ids = ids
-        return {"ok": True, "count": len(ids), "running": self.is_running()}
+        self._sub_prio_all = [str(s).strip() for s in (priority_ids or []) if str(s).strip()]
+        self._resplit()
+        return {"ok": True, "count": len(ids),
+                "chunks": len(self._sub_prio) + len(self._sub_rest),
+                "running": self.is_running()}
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -338,28 +385,39 @@ class KplCollectorService:
         return ctx.wrap_socket(raw, server_hostname=TLS_SNI)
 
     def _read_frame(self, sock: ssl.SSLSocket) -> Optional[Dict[str, Any]]:
-        h = b""
-        while len(h) < 5:
-            c = sock.recv(5 - len(h))
+        """帧对齐读：超时可能发生在帧中途（头已读、体未齐）——无缓冲恢复会让流
+        错位（后续帧长解析成天文数字，"frame too large" 的根因），必须把残帧状态
+        存在 self._rx 里跨超时续读。对端关闭返回 None；帧长护栏异常照抛。"""
+        buf = self._rx
+        while True:
+            if len(buf) >= 5:
+                pkg = buf[0]
+                ln = int.from_bytes(buf[1:5], "big")
+                if ln > 8 * 1024 * 1024:
+                    raise proto.FrameDecodeError(f"frame too large: {ln}B")
+                if len(buf) >= 5 + ln:
+                    frame = bytes(buf[:5 + ln])
+                    del buf[:5 + ln]
+                    if os.environ.get("KPL_DEBUG"):
+                        with open(os.environ["KPL_DEBUG"], "a") as f:
+                            f.write(f"S {int(time.time())} {frame.hex()}" + '\n')
+                    return proto.parse_incoming(frame)
+            c = sock.recv(65536)
             if not c:
                 return None
-            h += c
-        pkg = h[0]
-        ln = int.from_bytes(h[1:5], "big")
-        if ln > 8 * 1024 * 1024:
-            raise proto.FrameDecodeError(f"frame too large: {ln}B")
-        body = b""
-        while len(body) < ln:
-            c = sock.recv(min(65536, ln - len(body)))
-            if not c:
-                return None
-            body += c
-        # 注意: parse_incoming 期望完整帧（pkg+len+body），h 已含 pkg+len，不能只拼 pkg
-        frame = h + body
-        if os.environ.get("KPL_DEBUG"):
-            with open(os.environ["KPL_DEBUG"], "a") as f:
-                f.write(f"S {int(time.time())} {frame.hex()}\n")
-        return proto.parse_incoming(frame)
+            buf.extend(c)
+
+    def _read_frame_tolerant(self, sock, deadline: float):
+        """读帧容忍 socket.timeout：握手期服务器静默数秒属正常，超时继续等至 deadline。
+
+        返回：帧 / None（对端关闭）/ "timeout"（deadline 到，由调用方走超时错误路径）。
+        """
+        while time.time() < deadline:
+            try:
+                return self._read_frame(sock)
+            except socket.timeout:
+                continue
+        return "timeout"
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
@@ -397,13 +455,16 @@ class KplCollectorService:
             return seq[0]
 
         sock = self._tls_connect()
+        self._rx = bytearray()   # 新会话新流：残帧缓冲必须清零
         try:
             sock.settimeout(2)
             # 1) 260 challenge
             deadline = time.time() + 15
             challenge = server_time = None
             while time.time() < deadline:
-                fr = self._read_frame(sock)
+                fr = self._read_frame_tolerant(sock, deadline)
+                if fr == "timeout":
+                    break   # deadline 到 → 下方 no-challenge 路径接管（会话存活不硬死）
                 if fr is None:
                     raise proto.FrameDecodeError("closed before 260")
                 if fr["cmd"] == proto.CMD_CHALLENGE:
@@ -446,7 +507,9 @@ class KplCollectorService:
             deadline = time.time() + 15
             auth_ok = False
             while time.time() < deadline:
-                fr = self._read_frame(sock)
+                fr = self._read_frame_tolerant(sock, deadline)
+                if fr == "timeout":
+                    break   # deadline 到 → 下方 no-ack 路径接管
                 if fr is None:
                     raise proto.FrameDecodeError("closed awaiting 610 ack")
                 if fr["fmt"] == "echo" and fr["cmd"] == proto.CMD_AUTH:
@@ -502,10 +565,27 @@ class KplCollectorService:
             sock.sendall(vr_frame)
             deadline = time.time() + 10
             while time.time() < deadline:
-                fr = self._read_frame(sock)
+                fr = self._read_frame_tolerant(sock, deadline)
+                if fr == "timeout":
+                    break   # deadline 到 → 3001 链路继续（url 未捕获则 plate-tree 上报待捕获）
                 if fr is None:
                     raise proto.FrameDecodeError("closed awaiting 2301 ack")
                 if fr["fmt"] == "echo" and fr["cmd"] == proto.CMD_PLATE_LIST:
+                    # 2301 echo 载荷含板块清单快照 url（f7，appimgcdn/plate/146_<version>.data）
+                    # ——捕获供板块树下载（二级目录映射），解析失败不影响会话
+                    try:
+                        payload = fr.get("payload", b"")
+                        if payload:
+                            dec = (self._codec.dec(payload.hex())
+                                   if (fr.get("flags", 0) & 1) and payload
+                                   else payload)
+                            info = proto.parse_version_resp(dec)
+                            for u in info.get("urls", []):
+                                if u.startswith("http"):
+                                    self._plate_url = u
+                                    self._plate_version = info.get("version", 0)
+                    except Exception as exc:
+                        self._err(f"2301 快照 url 捕获失败（不影响会话）: {exc}")
                     break
             # 5b) 2303+2304 订阅（app 的 AttachAppTimerTask 三件套）
             for sub_cmd, ext_bytes in (
@@ -521,28 +601,24 @@ class KplCollectorService:
             deadline = time.time() + 10
             acks_needed = 2
             while acks_needed > 0 and time.time() < deadline:
-                fr = self._read_frame(sock)
+                fr = self._read_frame_tolerant(sock, deadline)
+                if fr == "timeout":
+                    continue   # 服务器静默：等满 deadline，ack 计数不变
                 if fr is None:
                     raise proto.FrameDecodeError("closed awaiting 2303/2304 ack")
                 if fr["fmt"] == "echo" and fr["cmd"] in (proto.CMD_STOCK_LIST, proto.CMD_HK_LIST):
                     acks_needed -= 1
-            # 6) 3001 板块+个股行情订阅
-            gq = proto.build_group_quotas_req_pb(self._stock_ids)
-            enc_gq = self._codec.enc(gq)
+            # 6) 3001 订阅：按块发（优先块→普通块；单请求 ≤200 id，超限 1106）
             ext3 = bytes([0x02]) + struct.pack(">H", proto.CMD_GROUP_QUOTAS)
-            gq_frame = proto.build_frame(proto.CMD_GROUP_QUOTAS, next_seq(), enc_gq or gq, d=0,
-                                         encrypted=bool(enc_gq), pkg=proto.PKG_ROUTE, ext=ext3)
-            if self._human_delay:
-                time.sleep(0.6)
-            self._dbg("C", gq_frame)
-            sock.sendall(gq_frame)
-            deadline = time.time() + 10
-            while time.time() < deadline:
-                fr = self._read_frame(sock)
-                if fr is None:
-                    raise proto.FrameDecodeError("closed awaiting 3001 ack")
-                if fr["fmt"] == "echo" and fr["cmd"] == proto.CMD_GROUP_QUOTAS:
-                    break
+            for chunk in (self._sub_prio + self._sub_rest) or [self._stock_ids]:
+                gq = proto.build_group_quotas_req_pb(chunk)
+                enc_gq = self._codec.enc(gq)
+                gq_frame = proto.build_frame(proto.CMD_GROUP_QUOTAS, next_seq(), enc_gq or gq, d=0,
+                                             encrypted=bool(enc_gq), pkg=proto.PKG_ROUTE, ext=ext3)
+                if self._human_delay:
+                    time.sleep(0.3)
+                self._dbg("C", gq_frame)
+                sock.sendall(gq_frame)
             # 6b) 3006 个股行情订阅：HQStockIdListReq{f1 repeated stockIds}（个股实时价）
             hq = b"".join(proto.pb_bytes(1, sid.encode()) for sid in self._stock_ids)
             enc_hq = self._codec.enc(hq)
@@ -577,7 +653,14 @@ class KplCollectorService:
             self._status = "streaming"
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
-            # 7) 收流 + 保活（3001 轮询 5s；服务器 TTL 由重连机制兜底）
+            # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
+            #    服务器 TTL 由重连机制兜底；610 重发每 8 tick 保留
+            rot_chunks = []
+            for i in range(max(len(self._sub_prio), len(self._sub_rest), 1)):
+                rot_chunks.append(self._sub_prio[i % len(self._sub_prio)])
+                if i < len(self._sub_rest):
+                    rot_chunks.append(self._sub_rest[i])
+            rot_idx = [0]
             last_keepalive = time.time()
             auth_frame_cache = [None]
             hb_flip = [0]
@@ -588,10 +671,10 @@ class KplCollectorService:
                     fr = "timeout"  # 哨兵：本轮无数据，不是断连；保活块仍然执行
                 now = time.time()
                 if now - last_keepalive > 1:
-                    # 保活交替: 610 AuthReq 原样重发（签名绑定初始 challenge/curTime，
-                    # 重建帧会签名/时间不匹配 → 服务器断连）/ 3001 轮询
+                    # 保活交替: 每 8 tick 一次 610 AuthReq 原样重发（签名绑定初始
+                    # challenge/curTime）/ 其余 tick 3001 分块轮询（下一块）
                     hb_flip[0] += 1
-                    if hb_flip[0] % 2 == 1:
+                    if hb_flip[0] % 8 == 1:
                         if hb_flip[0] == 1:
                             auth2 = proto.build_auth_req_pb(
                                 device_id=self._device_id,
@@ -616,7 +699,11 @@ class KplCollectorService:
                             self._dbg("C", frame_bytes)
                             sock.sendall(frame_bytes)
                     else:
-                        gq2 = proto.build_group_quotas_req_pb(self._stock_ids)
+                        if not rot_chunks:
+                            rot_chunks.append(self._stock_ids)
+                        chunk = rot_chunks[rot_idx[0] % len(rot_chunks)]
+                        rot_idx[0] += 1
+                        gq2 = proto.build_group_quotas_req_pb(chunk)
                         enc2 = self._codec.enc(gq2)
                         if enc2:
                             ka_frame = proto.build_frame(proto.CMD_GROUP_QUOTAS, next_seq(), enc2, d=0,

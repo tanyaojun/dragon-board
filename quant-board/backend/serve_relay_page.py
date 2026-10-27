@@ -20,6 +20,18 @@ app = FastAPI(title="JEV Relay Workbench", docs_url=None, redoc_url=None)
 _PAGE = Path(__file__).parent / "relay_page" / "index.html"
 _UPSTREAM = "http://127.0.0.1:8000"
 
+# 共享 AsyncClient（2026-10-27 根因修复）：每请求新建会在事件循环里同步加载 Windows
+# 证书库 ≈2s/发——多页签 60s 轮询的连发把事件循环拖瘫（静态页都要 10s 的元凶）。
+# trust_env=False：忽略系统代理（Clash 全局模式会劫持 127.0.0.1 目标导致 502）。
+_SHARED_CLIENT = None
+
+
+def _get_client():
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is None or _SHARED_CLIENT.is_closed:
+        _SHARED_CLIENT = httpx.AsyncClient(trust_env=False)
+    return _SHARED_CLIENT
+
 
 @app.get("/")
 def index() -> FileResponse:
@@ -33,10 +45,47 @@ async def proxy(rest: str, request: Request):
     if request.url.query:
         url += "?" + request.url.query
     try:
-        # trust_env=False：忽略系统代理（Clash 全局模式会劫持 127.0.0.1 目标导致 502）
-        async with httpx.AsyncClient(timeout=20, trust_env=False) as client:
-            upstream = await client.get(url)
+        upstream = await _get_client().get(url, timeout=20)
         return JSONResponse(content=upstream.json(), status_code=upstream.status_code)
+    except Exception as exc:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": f"upstream_unavailable: {exc}"},
+            status_code=502)
+
+
+@app.get("/api/kpl/{rest:path}")
+async def proxy_kpl(rest: str, request: Request):
+    """透传 KPL 读口到 8000（精选板块历史回看等；实时行情走 WS 不经此）。"""
+    url = f"{_UPSTREAM}/api/kpl/{rest}"
+    if request.url.query:
+        url += "?" + request.url.query
+    try:
+        upstream = await _get_client().get(url, timeout=30)
+        return JSONResponse(content=upstream.json(), status_code=upstream.status_code)
+    except Exception as exc:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": f"upstream_unavailable: {exc}"},
+            status_code=502)
+
+
+@app.post("/api/kpl/{rest:path}")
+async def proxy_kpl_post(rest: str, request: Request):
+    """写操作透传到 :8000（采集启停 start/stop、订阅清单 subscriptions）。"""
+    url = f"{_UPSTREAM}/api/kpl/{rest}"
+    if request.url.query:
+        url += "?" + request.url.query
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    try:
+        upstream = await _get_client().post(url, json=body, timeout=30)
+        try:
+            content = upstream.json()
+        except Exception:
+            content = {"ok": False, "degraded": True,
+                       "reason": f"upstream_non_json: {upstream.text[:200]}"}
+        return JSONResponse(content=content, status_code=upstream.status_code)
     except Exception as exc:
         return JSONResponse(
             content={"ok": False, "degraded": True, "reason": f"upstream_unavailable: {exc}"},
@@ -64,8 +113,7 @@ async def proxy_post(rest: str, request: Request):
     except Exception:
         body = None
     try:
-        async with httpx.AsyncClient(timeout=_POST_PROXY_TIMEOUT_SECONDS, trust_env=False) as client:
-            upstream = await client.post(url, json=body)
+        upstream = await _get_client().post(url, json=body, timeout=_POST_PROXY_TIMEOUT_SECONDS)
         try:
             content = upstream.json()
         except Exception:

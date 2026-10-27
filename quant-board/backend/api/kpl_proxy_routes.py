@@ -12,16 +12,31 @@ pytest 纪律：本路由的测试仅 mock 上游，不触发真实连接。
 from __future__ import annotations
 
 import asyncio
+from typing import Optional
 
 import httpx
 import websockets
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+
+from backend.services import kpl_ranking_service
+from backend.services.kpl_ranking_service import KplRankingError
 
 router = APIRouter(prefix="/api/kpl", tags=["kpl-socket"])
 
 _UPSTREAM_HTTP = "http://127.0.0.1:8002"
 _UPSTREAM_WS = "ws://127.0.0.1:8002/ws/kpl-quotes"
+
+# 共享 AsyncClient（2026-10-27）：每请求新建会在事件循环里同步加载 Windows 证书库
+# ≈2s/发——:8000 KPL 路由每发中招，:8008 更被多页签轮询拖成事件循环瘫痪
+_SHARED_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is None or _SHARED_CLIENT.is_closed:
+        _SHARED_CLIENT = httpx.AsyncClient(trust_env=False)
+    return _SHARED_CLIENT
 
 
 @router.get("/status")
@@ -39,11 +54,78 @@ async def stop() -> JSONResponse:
     return await _proxy_post("/api/kpl/stop")
 
 
+@router.post("/subscriptions")
+async def subscriptions(request: Request) -> JSONResponse:
+    """更新 :8002 订阅清单（body: {"stock_ids": [...]}），透传采集服务。"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    r = await _get_client().post(_UPSTREAM_HTTP + "/api/kpl/subscriptions", json=body or {},
+                                 timeout=10)
+    return JSONResponse(content=r.json(), status_code=r.status_code)
+
+
+_DATE_LEN = 10
+
+
+def _validate_date(date: str) -> Optional[JSONResponse]:
+    """历史读口必须显式给日期（实时走 WS 不经此口），格式 YYYY-MM-DD。"""
+    if not date or len(date) != _DATE_LEN or date[4] != "-" or date[7] != "-":
+        return JSONResponse(
+            content={"ok": False, "degraded": True,
+                     "reason": "invalid_or_missing_date: 实时请走 WS，历史需 date=YYYY-MM-DD"},
+            status_code=400)
+    return None
+
+
+@router.get("/plate-tree")
+async def plate_tree() -> JSONResponse:
+    """板块树（二级目录映射）：透传 :8002 的 2301 快照懒下载读口。"""
+    return await _proxy_get("/api/kpl/plate-tree")
+
+
+@router.get("/sector-ranking")
+async def sector_ranking(date: str = "") -> JSONResponse:
+    """按日板块强度排行（KPL 层1 RealRankingInfo Type=1+Date，历史回看读口）。"""
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    try:
+        return JSONResponse(content=kpl_ranking_service.get_sector_ranking(date))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
+@router.get("/sector-stocks")
+async def sector_stocks(plate: str = "", date: str = "", page: int = 0) -> JSONResponse:
+    """按日板块成分股（KPL 层3 ZhiShuStockList_W8，历史回看读口；page=每页100 只的分页序号）。
+
+    分页契约（2026-10-27 用户裁决）：真·按页取数——一页 = 一次上游请求
+    （st=page_size&Index=page*page_size），切板块/翻页各只发一枪，30s TTL 按
+    (plate,date,page) 缓存；total 不可知，前端用 has_more 翻页。
+    """
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    if not plate:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "missing_plate"},
+            status_code=400)
+    if page < 0:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "invalid_page"},
+            status_code=400)
+    try:
+        return JSONResponse(content=kpl_ranking_service.get_sector_stocks(plate, date, page=page))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
 async def _proxy_get(path: str) -> JSONResponse:
     try:
         # trust_env=False：忽略系统代理，防止 Clash 全局模式劫持 127.0.0.1（同 relay_page 教训）
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-            r = await client.get(_UPSTREAM_HTTP + path)
+        r = await _get_client().get(_UPSTREAM_HTTP + path, timeout=10)
         return JSONResponse(content=r.json(), status_code=r.status_code)
     except Exception as exc:
         return JSONResponse(
@@ -54,8 +136,7 @@ async def _proxy_get(path: str) -> JSONResponse:
 
 async def _proxy_post(path: str) -> JSONResponse:
     try:
-        async with httpx.AsyncClient(timeout=10, trust_env=False) as client:
-            r = await client.post(_UPSTREAM_HTTP + path)
+        r = await _get_client().post(_UPSTREAM_HTTP + path, timeout=10)
         return JSONResponse(content=r.json(), status_code=r.status_code)
     except Exception as exc:
         return JSONResponse(

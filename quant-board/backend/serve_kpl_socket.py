@@ -99,9 +99,17 @@ async def stop() -> JSONResponse:
     return JSONResponse(content={"ok": True, **svc.status()})
 
 
+@app.get("/api/kpl/plate-tree")
+def plate_tree() -> JSONResponse:
+    """板块树读口（二级目录映射）：2301 快照懒下载解析，version 变化才重新拉取。"""
+    return JSONResponse(content=_get_service().get_plate_tree())
+
+
 @app.post("/api/kpl/subscriptions")
 async def subscriptions(request: Request) -> JSONResponse:
-    """更新 3001/3006 订阅清单（body: {"stock_ids": ["801159", ...]}）。
+    """更新 3001/3006 订阅清单（body: {"stock_ids": [...], "priority_ids": [...]}，
+    priority_ids=优先块成员（轮询更频）；单请求 id 超 ~241 会被服务器 1106 拒绝，
+    采集器内部自动分块轮询。
 
     下一个 3001 轮询即生效（~2s）；空清单拒绝并结构化返回（fail-visible）。
     """
@@ -110,7 +118,8 @@ async def subscriptions(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         body = {}
-    result = svc.set_subscriptions((body or {}).get("stock_ids") or [])
+    result = svc.set_subscriptions((body or {}).get("stock_ids") or [],
+                                   (body or {}).get("priority_ids") or [])
     status_code = 200 if result.get("ok") else 400
     return JSONResponse(content={"ok": result.pop("ok", False), "subscriptions": result,
                                  **svc.status()}, status_code=status_code)
