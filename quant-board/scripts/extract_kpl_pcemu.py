@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -30,10 +31,11 @@ import zipfile
 from pathlib import Path
 
 OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "kpl_pcemu"
-ADB = r"D:/Android/Sdk/platform-tools/adb.exe"
-DEVICE = "emulator-5554"
+ADB = os.environ.get("KPL_ADB_PATH", r"D:/Android/Sdk/platform-tools/adb.exe")
+DEVICE = os.environ.get("KPL_ADB_DEVICE", "emulator-5554")  # 与 serve_kpl_socket 同约定
 PKG = "com.aiyu.kaipanla"
 EXPECTED_SO_SIZE_MIN = 3_000_000  # libauthSign_x86.so 实测 3.68MB
+EXPECTED_ASSET_SIZE_MIN = 100_000  # middle_new.bin 实测 283920B
 
 
 def device_mode(out_dir: Path) -> None:
@@ -102,6 +104,12 @@ def _pkcs7_to_cert_der(pkcs7_der: bytes) -> bytes:
     return certs[0].public_bytes(Encoding.DER)
 
 
+def _load_x509_der(der: bytes):
+    from cryptography import x509
+
+    return x509.load_der_x509_certificate(der)
+
+
 def verify(out_dir: Path) -> None:
     so = out_dir / "libauthSign_x86.so"
     asset = out_dir / "assets" / "middle_new.bin"
@@ -113,6 +121,12 @@ def verify(out_dir: Path) -> None:
         raise SystemExit(f"[verify] so 尺寸异常: {so.stat().st_size}")
     if so.read_bytes()[:4] != b"\x7fELF":
         raise SystemExit("[verify] so 非 ELF")
+    if asset.stat().st_size < EXPECTED_ASSET_SIZE_MIN:
+        raise SystemExit(f"[verify] middle_new.bin 尺寸异常: {asset.stat().st_size}")
+    try:
+        _load_x509_der(cert.read_bytes())
+    except Exception as e:
+        raise SystemExit(f"[verify] signer_cert.der 非 DER X.509（PEM 不可用）: {e}")
     print(f"[verify] OK  so={so.stat().st_size}B asset={asset.stat().st_size}B "
           f"cert={cert.stat().st_size}B → {out_dir}")
 
@@ -124,6 +138,8 @@ def main() -> int:
     ap.add_argument("--so", type=Path, default=None)
     ap.add_argument("--cert", type=Path, default=None)
     args = ap.parse_args()
+    if (args.so or args.cert) and not args.from_dir:
+        raise SystemExit("[extract] --so/--cert 只能与 --from-dir 搭配（缺 --from-dir 会静默落入设备模式）")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     if args.from_dir:
         if not (args.so and args.cert):

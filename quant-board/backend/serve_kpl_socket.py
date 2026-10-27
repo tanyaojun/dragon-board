@@ -44,7 +44,7 @@ _SIGNVC_SHELL = os.environ.get(
     'export CLASSPATH=/data/local/tmp/signsvc.dex; '
     '/system/bin/app_process32 /system/bin com.yzj.kaipanh.newindex.data.SignSvc"',
 )
-_DEVICE_ID = os.environ.get("KPL_DEVICE_ID", "4a81acf4-b516-3e79-ae26-40a67af7b97c")
+_DEVICE_ID = os.environ.get("KPL_DEVICE_ID", "4a81acf4-b516-3e79-ae26-40a67af7b97c")  # 设备指纹（参与 WBE 签名，非 token 级机密；env 可覆盖）
 # 身份凭据只从环境变量读（不入仓；正式值在 quant-board/.env.local，游客 userId=0 可收
 # 行情但会话寿命较短；进程环境已设同名变量时以环境变量优先——settings 加载器不覆盖）
 _USER_ID = os.environ.get("KPL_USER_ID", "0")

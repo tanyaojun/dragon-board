@@ -7,6 +7,7 @@ signsvc ground truth 逐字节一致，见 .tmp_review/wbx_step6.py / wbx_step8_
 关键修正（勿回退）：canonical JNI 槽位以 JDK jni.h 为准——
 ReleaseByteArrayElements=192(0x300)、GetByteArrayRegion=200(0x320)、
 SetByteArrayRegion=208(0x340)。曾错标 190/197/205 导致输出全零。
+__memmove_chk 等 *_chk 导入必须保留真实实现（缺失即静默不拷贝，fail-visible 违规）。
 """
 from __future__ import annotations
 
@@ -87,7 +88,8 @@ class WbEmu(Emu):
         self._next_jref = 0x20000
         self.tls_slots = {}
         self.alloc_sizes = {}
-        self._free_list: list[tuple[int, int]] = []
+        self._block_caps: dict[int, int] = {}   # addr -> rounded 容量（复用不降级）
+        self._free_set: set[int] = set()        # 已释放可复用地址集
         self.brk = HEAP + 0x1000
         self.CONTEXT_REF = 0x500
         self.FAKE_AM = 0x39000
@@ -102,6 +104,8 @@ class WbEmu(Emu):
         self.static_vals[("com/yzj/kaipanh/volley/ApiConfig", "apiVersion")] = "w48"
         # 真实签名证书 DER（APK META-INF/*.RSA 提取）
         self.byte_arrays[self.SIGNATURE_REF] = bytearray(open(cert_path, "rb").read())
+        # GC 豁免：常驻字节数组（SIGNATURE_REF + 运行期 toByteArray 创建的 DER，见下）
+        self._persistent_arrays = {self.SIGNATURE_REF}
 
         # bionic 栈保护：NULL 页映射（gs 基址 0 → canary 槽 0x14 原生可读写）
         self.uc.mem_map(0, 0x1000)
@@ -341,6 +345,8 @@ class WbEmu(Emu):
             der = open(self._cert_path, "rb").read()
             self._next_jref += 4
             self.byte_arrays[self._next_jref] = bytearray(der)
+            # 白盒可能把 DER 指针缓存进静态区跨调用使用 → 常驻豁免，防 GC 后备复用腐坏
+            self._persistent_arrays.add(self._next_jref)
             return self._next_jref
         if name == "getPackageManager":
             return self.PM_REF
@@ -394,22 +400,25 @@ class WbEmu(Emu):
 
     # ---------- libc ----------
     def _mem_alloc(self, n, align=16):
-        # free-list 复用（首次适配）：imp_free 必须真实回收，否则 EVP ctx/operator new
-        # 每次调用泄漏，长跑几百次 dec 后堆耗尽 → UC_ERR_WRITE_UNMAPPED
-        for i, (p, size) in enumerate(self._free_list):
-            if size >= n:
-                del self._free_list[i]
+        # free-list 首次适配：imp_free 必须真实回收，否则 EVP ctx/operator new
+        # 每次调用泄漏，长跑几百次 dec 后堆耗尽 → UC_ERR_WRITE_UNMAPPED。
+        # 对齐：仅当块地址满足请求对齐才复用（posix_memalign 语义）；
+        # 容量：按 rounded 容量记录（_block_caps），复用不降级，剩余空间不永久丢失。
+        for p, cap in self._block_caps.items():
+            if p in self._free_set and cap >= n and p % align == 0:
+                self._free_set.discard(p)
                 self.alloc_sizes[p] = n
                 return p
         a = (self.brk + align - 1) & ~(align - 1)
         self.brk = a + ((n + 15) & ~15)
         self.alloc_sizes[a] = n
+        self._block_caps[a] = self.brk - a  # rounded 实际占用容量
         return a
 
     def _free_block(self, p):
-        size = self.alloc_sizes.pop(p, None)
-        if size:
-            self._free_list.append((p, size))
+        if p in self.alloc_sizes:
+            del self.alloc_sizes[p]
+            self._free_set.add(p)  # 容量记录保留在 _block_caps（可能大于后续请求）
 
     def imp_malloc(self, uc):
         return self._mem_alloc(self._args(uc, 1)[0])
@@ -433,6 +442,12 @@ class WbEmu(Emu):
         self._free_block(self._args(uc, 1)[0])
         return 0
 
+    def imp_feof(self, uc):
+        return 0
+
+    imp_ferror = imp_feof
+    imp_fflush = imp_feof
+
     def imp_posix_memalign(self, uc):
         out, align, n = self._args(uc, 3)
         self.uc.mem_write(out, struct.pack("<I", self._mem_alloc(n, max(align, 16))))
@@ -446,6 +461,7 @@ class WbEmu(Emu):
 
     imp_memmove = imp_memcpy
     imp___memcpy_chk = imp_memcpy
+    imp___memmove_chk = imp_memcpy  # libauthSign 真实未定义导入；缺失时静默不拷贝（fail-visible 违规）
 
     def imp_memset(self, uc):
         d, c, n = self._args(uc, 3)
@@ -779,9 +795,12 @@ class WbEmu(Emu):
         """回收本次调用新建的 jbyteArray（JNI local 引用随调用消亡）。
 
         before = 调用前 byte_arrays 快照：集合差即本次新建（含输入与输出），
-        全部回收后备缓冲；初始化期创建的常驻数组（白盒可能持有指针）不动。
+        全部回收后备缓冲；常驻数组（_persistent_arrays：SIGNATURE_REF、
+        非调用期创建的 toByteArray DER）不动——白盒可能在静态区缓存其指针。
         """
         for k in set(self.byte_arrays) - before:
+            if k in self._persistent_arrays:
+                continue
             addr = self.byte_array_backing.pop(k, None)
             if addr is not None:
                 self._free_block(addr)

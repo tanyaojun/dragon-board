@@ -77,6 +77,11 @@ class PCEmulatorCodec:
             return self._core
 
     # ---------- codec 接口 ----------
+    def _drop_core_locked(self) -> None:
+        """native 异常后丢核重建；与 _ensure 建核同锁，避免写-写竞态丢新鲜核。"""
+        with self._lock:
+            self._core = None
+
     def enc(self, plain: bytes) -> Optional[bytes]:
         try:
             core = self._ensure()
@@ -86,19 +91,24 @@ class PCEmulatorCodec:
             raise
         except Exception as e:
             # native abort / unicorn fault → 核状态不可信，丢弃实例（下次调用重建）
-            self._core = None
+            self._drop_core_locked()
             raise PCEmuError(f"PC enc 失败: {e}") from e
         return out if out else None
 
     def dec(self, cipher_hex: str) -> Optional[bytes]:
         try:
+            raw = bytes.fromhex(cipher_hex)
+        except ValueError as e:
+            # 非法 hex 是调用侧契约错误，不是 native 故障：不丢弃健康模拟核
+            raise PCEmuError(f"PC dec 非法 hex 输入: {e}") from e
+        try:
             core = self._ensure()
             with self._lock:
-                out = core.decrypt(bytes.fromhex(cipher_hex))
+                out = core.decrypt(raw)
         except PCEmuError:
             raise
         except Exception as e:
-            self._core = None
+            self._drop_core_locked()
             raise PCEmuError(f"PC dec 失败: {e}") from e
         return out if out else None
 
@@ -110,7 +120,7 @@ class PCEmulatorCodec:
         except PCEmuError:
             raise
         except Exception as e:
-            self._core = None
+            self._drop_core_locked()
             raise PCEmuError(f"PC wbe 失败: {e}") from e
         return out.hex() if out else None
 
