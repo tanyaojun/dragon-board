@@ -146,8 +146,8 @@ class TestSessionStateMachine:
 
         assert len(svc._codec.wbe_calls) == 1
         assert svc._codec.wbe_calls[0][0] == "2db64e49ca378ac2a21331deca1a7425"
-        # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 6 打板/情绪帧（daban_subs 默认开）
-        assert len(fake.sent) == 13
+        # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 6 打板/情绪帧 + 14 帧 2103（2 页签×7 页）
+        assert len(fake.sent) == 27
         assert fake.sent[0][7:9] == (610).to_bytes(2, "big")
         assert fake.sent[1][7:9] == (602).to_bytes(2, "big")
         assert fake.sent[2][7:9] == (2301).to_bytes(2, "big")
@@ -157,8 +157,16 @@ class TestSessionStateMachine:
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
         # 6c) 打板/情绪订阅帧：2114/2115/2116/2119/2120/2126（ext 路由头 02 <cmdBE>）
         daban_cmds_sent = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
-        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126]
-        for f, c in zip(fake.sent[7:], daban_cmds_sent):
+        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126] + [2103] * 14
+        # 2103 分页订阅：2 页签×7 页，body=0xAA+req → pidType=f1、index=f4、count=f5=30
+        from backend.services import kpl_daban_protocol as daban
+        pages = []
+        for f in fake.sent[13:]:
+            req = daban.parse_pb_f32(f[16:])   # 去掉 0xAA 前缀
+            pages.append((daban.pb_first(req, 1, -1), daban.pb_first(req, 4, -1),
+                          daban.pb_first(req, 5, -1)))
+        assert pages == [(8, i * 30, 30) for i in range(7)] + [(0, i * 30, 30) for i in range(7)]
+        for f, c in zip(fake.sent[7:13], daban_cmds_sent[:6]):
             assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
     def test_events_broadcast_to_subscribers(self, svc, monkeypatch):
@@ -237,6 +245,35 @@ class TestSessionStateMachine:
 
 
 class TestSubscriberSemantics:
+    def test_3006_hq_subscription_chunked(self, monkeypatch):
+        # 3006 单帧 id 超 ~241 被服务器 1106 拒绝（2026-10-27 精选板块引导实测）→ 必须分块
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        svc = KplCollectorService(
+            FakeCodec(), device_id="test-dev", user_id="0", token="",
+            stock_ids=[f"{i:06d}" for i in range(450)], host="127.0.0.1", port=1, human_delay=False,
+        )
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+            _echo(6, 3001, 0x01, _quotes_payload()),
+        ]
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        hq_cmds = [f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3006]
+        assert len(hq_cmds) == 3   # ceil(450/200)
+        covered = []
+        from backend.services import kpl_daban_protocol as daban
+        for f in hq_cmds:
+            req = daban.parse_pb_f32(f[16:])   # 去 0xAA 前缀
+            covered += [s.decode() for s in req.get(1, [])]
+        assert covered == [f"{i:06d}" for i in range(450)]   # 无丢失无重复
+
     def test_late_subscriber_gets_history(self, svc):
         svc._emit({"type": "quotes", "items": []})
         svc._emit({"type": "status", "status": "streaming"})
@@ -354,3 +391,30 @@ class TestDabanDispatch:
         svc._dispatch(proto.parse_incoming(_push(daban.CMD_WIND_VANE, b"daban/", b"\xff\xff\xff\xff")))
         evs = self._drain(q)
         assert any(e["type"] == "wind_vane" for e in evs)
+
+    def test_daban_stock_list_push_caches_snapshot(self, svc, monkeypatch):
+        # 2103 推送 → daban_stocks 事件 + 按 (pidType, index) 页缓存（读口跨页合并全量）
+        from backend.services import kpl_daban_protocol as daban
+        def _page(idx: int, rows: list) -> bytes:
+            body = proto.pb_varint_field(1, 8) + proto.pb_varint_field(4, idx)
+            for sid, name, q0 in rows:
+                body += proto.pb_bytes(20, proto.pb_bytes(1, sid.encode())
+                                       + proto.pb_bytes(2, name.encode())
+                                       + proto.pb_bytes(100, q0.encode()))
+            return body + proto.pb_varint_field(22, 183)
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(0, [("603028", "赛福天", "13.02亿")]))))
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(30, [("300604", "长川科技", "2.1亿")]))))
+        evs = self._drain(q)
+        ev = next(e for e in evs if e["type"] == "daban_stocks" and e["pid_type"] == 8 and e["index"] == 30)
+        assert ev["items"][0]["zt_buy_amount"] == "2.1亿"
+        snap = svc.get_daban_list(8)
+        assert snap["ok"] is True and snap["max_size"] == 183
+        assert [it["stock_id"] for it in snap["items"]] == ["603028", "300604"]   # 按 index 拼接
+        assert snap["pages"] == 2 and snap["pages_expected"] == 7 and snap["pages_missing"] == [2, 3, 4, 5, 6]
+        assert "ts" in snap
+        # 另一页签无快照 → fail-visible 结构化降级，不伪装空列表
+        miss = svc.get_daban_list(0)
+        assert miss["ok"] is False and miss["degraded"] is True and miss["reason"] == "no_daban_list_snapshot"

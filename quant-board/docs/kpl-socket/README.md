@@ -109,6 +109,9 @@ QuantBoard 主后端 :8000
   已独立源核实（§四），强度（[56]）/涨停家数（`zt_stocks` 事件按 plate 顿号归属聚合，
   口径=当前封住，与 App「涨停」列含触板口径不同）/封单额/涨停时间后续逐项接。成分股
   分页一批 100 只（`sector-stocks?page=`，服务端 st=1000 单发全量+30s 缓存切片）。
+- **打板两页签消费端已上线（2026-10-27 二期）**：工作台侧栏「KPL 行情 › 集合竞价 /
+  即将涨停」——socket 2103 订阅快照读口（§十一），布局沿用精选板块「左板块右个股」，
+  左侧=按板块字段聚合（家数+合计），右侧=App 竞价页字段全搬。
 
 ## 五、部署与运维 runbook
 
@@ -271,3 +274,56 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - 工件：`scripts/extract_kpl_pcemu.py`（设备模式需 root 模拟器在线一次；归档模式
   `--from-dir/--so/--cert` 离线组装）。**so 必须用设备 `/data/app/.../lib/x86_sig/` 的
   白盒签名变体**，APK 内 `lib/x86/` 普通变体不可用。
+
+## 十一、打板个股列表（2103：集合竞价 / 即将涨停，2026-10-27 增补，全部实测）
+
+### 11.1 页签与参数（逆向三方对齐）
+
+- 页签↔pidType：APK 资源数组 `PatternTabs × PatternTabsServerPidType`
+  （androguard 解包 base_new.apk）：竞价=**8**、即将涨停=**0**、风向标=6、涨停=1、
+  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。当前只接 8/0 两页签，其余增量接。
+- 请求 `DaBanStockListReq{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count}`，
+  基线=BiddingZTlQuotaPresenter 默认值：orderType=**18**、sortType=**1**（2120 的教训：
+  orderType 必须用 App 在用基线，不自行填 0）；filter flags（stType/cxType/…）默认关=0 不编码。
+- 构造/解析：`kpl_daban_protocol.build_daban_stock_list_req_pb / parse_daban_stock_list`；
+  订阅在 collector 6d 段（`KplCollectorService`，daban_list_pids/daban_list_page_size/daban_list_pages）。
+
+### 11.2 推送页语义（实测硬事实）
+
+- **推送页固定 30 行**：请求 count=200 服务器接受（KPL_DEBUG 帧经 pcemu 离线 DEC 解密核对
+  `28 c8 01`）但 Resp.count 恒 30、每帧 30 行——分页只能 index 偏移多页订阅（App 翻页同款）。
+  collector 每页签订 7 页（0/30/…/180），按 (pidType, index) 页缓存，读口按 index 合并。
+- Resp：`{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count, f20 items,
+  f21 indexes, f22 maxSize, f23 date}`；Item：`{f1 stockId, f2 name, f3 stockTag,
+  f4 financingTag, f5 backZT, f6 warnTag, f100 quotas(repeated string)}`。
+- **quotas 列语义 = `nn0.U()`（quotas 下标→统一数组位置）× APK tinker 资产
+  `assets/PatternDynamicQuota`（位置→列名）× `PatternTitleVisibleArrayPosition`
+  （页签默认列序：竞价=18,19,11,4,20,22,21,15；即将涨停=17,4,5,11,12,13,14,15）** 三方对齐，
+  代码常量 `DABAN_QUOTA_NAMES`。App 竞价页「实时涨幅」列下方的连板状态子标签
+  （4连板/昨日首板/昨3连板…）= **quotas[10] state 列**（2026-10-27 与 App 同屏逐项核对）。
+- 数值/单位：涨停委买额/竞价净额/竞价成交额/实际流通等为**数值元**（1302937361.0=13.02 亿，
+  与 App 同屏一致）；解析层可转 float 的转 float，不可转的原样字符串保留（fail-visible，
+  不猜换算）；quotas[20]/[21] 无目录名，只进 raw quotas。
+- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0`（:8000 同路径代理透传）→
+  `{ok, items[合并全量], max_size, pages, pages_expected, pages_missing, date, ts}`；
+  页缺口显式透出（如即将涨停页盘后 maxSize=30 但推送 items 空，属上游语义非链路故障）。
+- 无快照（采集未运行/未订阅）返回结构化降级 `{ok:false, degraded:true,
+  reason:"no_daban_list_snapshot"}`，不伪装空列表。
+- 前端：WS `daban_stocks` 事件（单页 30 行）只做节流触发（1.5s），渲染唯一源=REST 合并快照，
+  页合并逻辑单源在后端（避免双写漂移）。
+
+### 11.3 顺带根治（同轮）：3006 订阅分块
+
+- 精选板块引导后订阅 id≈713，`3006 HQStockIdListReq` 原为**单帧全发** → 每会话触发
+  server error 1106（单请求 id 超 ~241 上限，工作台横幅可见）。已改为与 3001 同款 200 分块
+  （`_chunks`），实测横幅消失、行情照常到流；含 3 帧全量无丢失回归用例。
+
+### 11.4 测试与证据
+
+- `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码
+  fail-visible）/注册表；`test_kpl_collector_service.py`：会话帧序含 14 帧 2103 分页订阅、
+  页合并快照读口、3006 分块；`tests/api/test_kpl_proxy_routes.py`：daban-list 透传+502。
+  KPL 专项合计 50 passed（全 mock，零真实连接）。
+- 证据工件（本地 .tmp_review/）：`kpl_daban_frames_20261027.txt`（KPL_DEBUG 帧转储，
+  含 count=200 请求密文）；真实快照对照：竞价页 183/183 全量零缺口，赛福天行与 App 竞价页
+  同屏逐项一致（13.02 亿/10.01%/机器人概念、海洋经济/4连板/528.0 万/966.7 万）。

@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import math
 import struct
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +41,15 @@ CMD_ZT_SITUATION_V2 = 2119   # ServiceHqDaban.QxZtSituationRespV2（涨停表现
 CMD_ZT_STOCK_LIST = 2120     # ServiceHqDaban.QxZtSituationStockResp（涨停个股：封单/回封）
 CMD_ZT_STOCK_LIST_PB = 2121  # 同上（跌停方向，BsType 区分）
 CMD_WIND_VANE = 2126         # ServiceHqDaban.QxWindVaneResp（风向标）
+CMD_DABAN_STOCK_LIST = 2103  # Hq.DaBanStockListResp（打板个股列表：竞价/即将涨停等页签）
+
+# 2103 pidType → 页签（APK 资源数组 PatternTabs × PatternTabsServerPidType，2026-10-27
+# androguard 解包 base_new.apk：['竞价','即将涨停','风向标','涨停','炸板','跌停',…]
+# × ['8','0','6','1','2','3',…]）。当前只接用户所需两页签，其余留待增量。
+DABAN_LIST_PIDS: Dict[int, str] = {
+    8: "bidding",       # 集合竞价
+    0: "about_to_zt",   # 即将涨停
+}
 
 DABAN_SUB_CMDS: tuple = (
     CMD_ZD_STAT,
@@ -68,6 +78,22 @@ def build_zt_situation_stock_req_pb(bs_type: int = 1, order_type: int = 0, sort_
 def build_empty_req_pb() -> bytes:
     """pb.Empty：2116/2126/2100 等空请求（0 字节 body）。"""
     return b""
+
+
+def build_daban_stock_list_req_pb(
+    pid_type: int, order_type: int = 18, sort_type: int = 1,
+    index: int = 0, count: int = 30,
+) -> bytes:
+    """2103 DaBanStockListReq{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count}。
+
+    参数基线 = BiddingZTlQuotaPresenter 字段默认值（k=18 orderType / l=1 sortType /
+    k0() 的 a0(0, 30)：index=0 count=30）；filter flags（stType/cxType/…）App 默认关=0，
+    proto3 默认值不编码，省略。orderType 语义参照 2120 教训：必须用 App 在用基线值，
+    不得自行填 0。
+    """
+    return (pb_varint_field(1, pid_type) + pb_varint_field(2, order_type)
+            + pb_varint_field(3, sort_type) + pb_varint_field(4, index)
+            + pb_varint_field(5, count))
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +376,92 @@ def parse_wind_vane(payload: bytes) -> Dict[str, Any]:
     }
 
 
+# 2103 quotas 字符串列 → 语义名（2026-10-27 逆向三方对齐，缺一不可）：
+# ① nn0.U()：DaBanStockListResp.Item.quotas 下标 → 统一数组位置（arrayPosition）
+# ② APK tinker 资产 assets/PatternDynamicQuota：arrayPosition → 列名
+# ③ APK 资源 PatternTabs/PatternTitleVisibleArrayPosition：页签默认列序
+# （竞价=18,19,11,4,20,22,21,15；即将涨停=17,4,5,11,12,13,14,15）
+# 未列入的 quotas 下标（20/21 号列无目录名）只进 raw quotas，不猜语义（fail-visible）。
+DABAN_QUOTA_NAMES: Dict[int, str] = {
+    0: "zt_buy_amount",     # 涨停委买额（pos18）
+    1: "bidding_pct",       # 竞价涨幅（pos19）
+    2: "bidding_net",       # 竞价净额（pos20）
+    3: "bidding_turnover",  # 竞价换手（pos21）
+    4: "bidding_amount",    # 竞价成交额（pos22）
+    5: "price",             # 价格（pos17）
+    6: "pct",               # 涨幅（pos4；App 竞价页签改叫「实时涨幅」）
+    7: "amount",            # 成交额（pos13）
+    8: "zt_time",           # 涨停时间（pos6）
+    9: "open_time",         # 开板时间（pos7）
+    10: "state",            # 状态（pos9）
+    11: "speed",            # 涨速（pos5）
+    12: "zt_reason",        # 涨停原因（pos16）
+    13: "plate",            # 板块（pos11）
+    14: "zt_tur",           # 封单（pos8）
+    15: "main_net",         # 主力净额（pos12）
+    16: "real_turnover",    # 实际换手（pos14）
+    17: "real_float",       # 实际流通（pos15）
+    18: "max_zt_tur",       # 最大封单（pos23）
+    19: "last_zt_time",     # 最后涨停时间（pos25）
+    22: "amplitude",        # 振幅（pos28）
+    23: "turnover_rate",    # 换手率（pos29）
+    24: "volume_ratio",     # 量比（pos30）
+    25: "total_mv",         # 总市值（pos31）
+    26: "float_mv",         # 流通市值（pos32）
+}
+
+
+def _maybe_num(v: str) -> Any:
+    """quota 字符串可转数字则转（排序/聚合用），否则原样保留（App 侧常带「亿/万」单位）。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return v
+    return f if math.isfinite(f) else v
+
+
+def parse_daban_stock_list(payload: bytes) -> Dict[str, Any]:
+    """2103 DaBanStockListResp：打板个股列表（竞价 pidType=8 / 即将涨停 pidType=0）。
+
+    Resp{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count, f20 items,
+    f21 indexes, f22 maxSize, f23 date}；
+    Item{f1 stockId, f2 name, f3 stockTag, f4 financingTag, f5 backZT, f6 warnTag,
+    f100 quotas(repeated string)}。
+    """
+    pb = parse_pb_f32(payload)
+    items: List[Dict[str, Any]] = []
+    for raw in pb.get(20, []):
+        sub = parse_pb_f32(raw)
+        quotas = [_s(q) for q in sub.get(100, [])]
+        named: Dict[str, Any] = {}
+        for i, q in enumerate(quotas):
+            name = DABAN_QUOTA_NAMES.get(i)
+            if name is not None:
+                named[name] = _maybe_num(q)
+        items.append({
+            "stock_id": _s(pb_first(sub, 1, b"")),
+            "name": _s(pb_first(sub, 2, b"")),
+            "stock_tag": _s(pb_first(sub, 3, b"")),
+            "financing_tag": pb_first(sub, 4, 0),
+            "back_zt": pb_first(sub, 5, 0),
+            "warn_tag": _s(pb_first(sub, 6, b"")),
+            **named,
+            "quotas": quotas,   # fail-visible：未对齐列（含 20/21）原样保留
+        })
+    return {
+        "pid_type": pb_first(pb, 1, 0),
+        "order_type": pb_first(pb, 2, 0),
+        "sort_type": pb_first(pb, 3, 0),
+        "index": pb_first(pb, 4, 0),
+        "count": pb_first(pb, 5, 0),
+        "items": items,
+        "indexes": list(pb.get(21, [])),
+        "max_size": pb_first(pb, 22, 0),
+        "date": _s(pb_first(pb, 23, b"")),
+        "raw_len": len(payload),
+    }
+
+
 DABAN_RESP_PARSERS: Dict[int, Any] = {
     CMD_ZD_STAT: parse_zd_stat,
     CMD_MARKET_OVERVIEW: parse_market_overview,
@@ -359,4 +471,5 @@ DABAN_RESP_PARSERS: Dict[int, Any] = {
     CMD_ZT_STOCK_LIST: parse_zt_stock_list,
     CMD_ZT_STOCK_LIST_PB: parse_zt_stock_list,
     CMD_WIND_VANE: parse_wind_vane,
+    CMD_DABAN_STOCK_LIST: parse_daban_stock_list,
 }

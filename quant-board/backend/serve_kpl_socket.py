@@ -105,6 +105,15 @@ def plate_tree() -> JSONResponse:
     return JSONResponse(content=_get_service().get_plate_tree())
 
 
+@app.get("/api/kpl/daban-list")
+def daban_list(pid_type: int = 8) -> JSONResponse:
+    """2103 打板个股列表快照（最近一次订阅推送缓存）：pid_type 8=集合竞价 / 0=即将涨停。
+
+    无快照（采集未运行/未订阅/非交易时段首拉）返回结构化降级载荷（fail-visible）。
+    """
+    return JSONResponse(content=_get_service().get_daban_list(pid_type))
+
+
 @app.post("/api/kpl/subscriptions")
 async def subscriptions(request: Request) -> JSONResponse:
     """更新 3001/3006 订阅清单（body: {"stock_ids": [...], "priority_ids": [...]}，

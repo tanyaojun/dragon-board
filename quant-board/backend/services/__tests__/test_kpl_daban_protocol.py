@@ -243,3 +243,75 @@ class TestParserRegistry:
         for parser in dp.DABAN_RESP_PARSERS.values():
             out = parser(b"\xff\xff\xff\xff\xff")
             assert isinstance(out, dict) and "raw_len" in out
+
+
+# ── 2103 DaBanStockListReq/Resp（打板个股列表：竞价 8 / 即将涨停 0）────────────
+# 2026-10-27 逆向：Req/Resp 字段号出自 Hq.java 描述符；quotas 列语义 =
+# nn0.U() × assets/PatternDynamicQuota × PatternTitleVisibleArrayPosition 三方对齐。
+
+def _daban_item(stock_id: str, name: str, quotas: list) -> bytes:
+    body = pb_bytes(1, stock_id.encode()) + pb_bytes(2, name.encode())
+    body += pb_varint_field(4, 1) + pb_varint_field(5, 0)   # financingTag=1, backZT=0
+    body += pb_bytes(6, "风险".encode())
+    for q in quotas:
+        body += pb_bytes(100, q.encode())
+    return body
+
+
+class TestDabanStockList2103:
+    def test_req_builder_app_baseline(self):
+        # BiddingZTlQuotaPresenter 基线：pidType=8, orderType=18, sortType=1, index=0, count=30
+        out = dp.build_daban_stock_list_req_pb(8)
+        assert out == (b"\x08\x08" + b"\x10\x12" + b"\x18\x01" + b"\x20\x00" + b"\x28\x1e")
+        assert dp.build_daban_stock_list_req_pb(0, count=100).endswith(b"\x28\x64")
+
+    def test_parse_bidding_list(self):
+        quotas = ["13.02亿", "10.01", "528.0万", "0.9", "966.7万",
+                  "7.14", "10.01", "2.37亿", "09:25:00", "", "1",
+                  "0.5", "机器人概念", "机器人概念\n海洋经济", "5280000",
+                  "1234万", "3.2", "15.8亿"]
+        payload = (
+            pb_varint_field(1, 8) + pb_varint_field(2, 18) + pb_varint_field(3, 1)
+            + pb_varint_field(4, 0) + pb_varint_field(5, 30)
+            + pb_bytes(20, _daban_item("603028", "赛福天", quotas))
+            + pb_varint_field(22, 181)
+            + pb_bytes(23, b"2026-10-27")
+        )
+        out = dp.parse_daban_stock_list(payload)
+        assert out["pid_type"] == 8
+        assert out["max_size"] == 181
+        assert out["date"] == "2026-10-27"
+        it = out["items"][0]
+        assert it["stock_id"] == "603028" and it["name"] == "赛福天"
+        assert it["financing_tag"] == 1 and it["warn_tag"] == "风险"
+        # 目录列语义（数值列转 float，非数值原样字符串）
+        assert it["zt_buy_amount"] == "13.02亿"      # 带单位原样（不猜换算）
+        assert it["bidding_pct"] == pytest.approx(10.01)
+        assert it["bidding_net"] == "528.0万"
+        assert it["bidding_amount"] == "966.7万"
+        assert it["pct"] == pytest.approx(10.01)
+        assert it["plate"] == "机器人概念\n海洋经济"
+        assert it["price"] == pytest.approx(7.14)
+        # fail-visible：全部原始列保留
+        assert len(it["quotas"]) == 18
+
+    def test_parse_about_to_zt_columns(self):
+        quotas = ["", "", "", "", "", "9.87", "5.2", "", "", "", "", "1.2",
+                  "", "低空经济", "", "3000万", "", ""]
+        payload = pb_varint_field(1, 0) + pb_bytes(20, _daban_item("002078", "某股", quotas))
+        it = dp.parse_daban_stock_list(payload)["items"][0]
+        assert it["price"] == pytest.approx(9.87)
+        assert it["pct"] == pytest.approx(5.2)
+        assert it["speed"] == pytest.approx(1.2)
+        assert it["plate"] == "低空经济"
+        assert it["main_net"] == "3000万"
+        # 未映射下标只进 raw quotas，不产生伪语义键
+        assert "unknown" not in it and it["quotas"][0] == ""
+
+    def test_parse_garbage_fail_visible(self):
+        out = dp.parse_daban_stock_list(b"\xff\xff\xff\xff\xff")
+        assert out["items"] == [] and "raw_len" in out
+
+    def test_registry_has_2103(self):
+        assert dp.DABAN_RESP_PARSERS[dp.CMD_DABAN_STOCK_LIST] is dp.parse_daban_stock_list
+        assert dp.DABAN_LIST_PIDS == {8: "bidding", 0: "about_to_zt"}

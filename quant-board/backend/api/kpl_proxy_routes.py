@@ -85,6 +85,15 @@ async def plate_tree() -> JSONResponse:
     return await _proxy_get("/api/kpl/plate-tree")
 
 
+@router.get("/daban-list")
+async def daban_list(pid_type: int = 8) -> JSONResponse:
+    """2103 打板个股列表快照（KPL App 打板页签）：pid_type 8=集合竞价 / 0=即将涨停。
+
+    数据源=socket 2103 订阅推送的最近快照（collector 缓存），非历史回看——历史无此链。
+    """
+    return await _proxy_get(f"/api/kpl/daban-list?pid_type={pid_type}")
+
+
 @router.get("/sector-ranking")
 async def sector_ranking(date: str = "") -> JSONResponse:
     """按日板块强度排行（KPL 层1 RealRankingInfo Type=1+Date，历史回看读口）。"""

@@ -172,6 +172,7 @@ DABAN_EVENT_NAMES: Dict[int, str] = {
     daban.CMD_ZT_STOCK_LIST: "zt_stocks",
     daban.CMD_ZT_STOCK_LIST_PB: "dt_stocks",
     daban.CMD_WIND_VANE: "wind_vane",
+    daban.CMD_DABAN_STOCK_LIST: "daban_stocks",
 }
 
 
@@ -196,6 +197,9 @@ class KplCollectorService:
         human_delay: bool = True,
         daban_subs: bool = True,
         daban_market_type: int = 1,
+        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0),
+        daban_list_page_size: int = 30,
+        daban_list_pages: int = 7,
     ):
         self._codec = codec
         self._host = host
@@ -212,6 +216,14 @@ class KplCollectorService:
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
         self._daban_market_type = daban_market_type
+        # 2103 打板个股列表页签（8=集合竞价 0=即将涨停，kpl_daban_protocol.DABAN_LIST_PIDS）。
+        # 2026-10-27 实测（KPL_DEBUG 帧解密核对）：请求 count=200 服务器接受但推送页固定
+        # 30 行（Resp.count 恒 30，竞价页 maxSize≈183）——分页只能 index 偏移多页订阅（App
+        # 翻页同款），每页一帧订阅、按 Resp.index 合并成全量快照。
+        self._daban_list_pids = tuple(daban_list_pids or ())
+        self._daban_list_page_size = daban_list_page_size
+        self._daban_list_pages = daban_list_pages
+        self._daban_lists: Dict[int, Dict[int, Dict[str, Any]]] = {}   # pidType → {index: 页快照}
         # 板块(801044/885423) + 个股(000001 平安银行)：3001 同时承载板块与个股行情订阅
         self._stock_ids = stock_ids or ["801044", "885423", "000001"]
         self._sub_prio_all: List[str] = []   # 优先块成员（分块轮询见 _resplit）
@@ -260,6 +272,39 @@ class KplCollectorService:
         tree = proto.parse_plate_snapshot(data)
         self._plate_tree = {"version": self._plate_version, "plates": tree}
         return {"ok": True, "version": self._plate_version, "tree": self._plate_tree}
+
+    def get_daban_list(self, pid_type: int) -> Dict[str, Any]:
+        """2103 打板个股列表快照读口：按 index 合并已收到的推送页（跨页拼接成全量）。
+
+        fail-visible：尚无任何页（采集未运行/页签未订阅/非法 pid_type）返回结构化降级
+        载荷，不伪装成空列表。页缺口（如第 3 页未到流）在 pages_missing 里显式暴露。
+        """
+        try:
+            key = int(pid_type)
+        except (TypeError, ValueError):
+            key = -1
+        pages = self._daban_lists.get(key) or {}
+        if not pages:
+            return {"ok": False, "degraded": True,
+                    "reason": "no_daban_list_snapshot",
+                    "note": f"尚无 2103 快照（pid_type={pid_type}；订阅页签={list(self._daban_list_pids)}）",
+                    "pid_type": pid_type, "running": self.is_running()}
+        ordered = [pages[i] for i in sorted(pages)]
+        items: List[Dict[str, Any]] = []
+        for p in ordered:
+            items.extend(p.get("items") or [])
+        max_size = next((p.get("max_size") for p in ordered if p.get("max_size") is not None), 0)
+        page_size = max(self._daban_list_page_size, 1)
+        expected_pages = max(1, -(-int(max_size or 0) // page_size))
+        present = {i // page_size for i in pages if isinstance(i, int) and i >= 0}
+        latest = max(p.get("ts", 0.0) for p in ordered)
+        return {
+            "ok": True, "pid_type": key, "items": items,
+            "max_size": max_size, "date": ordered[-1].get("date", ""),
+            "pages": len(pages), "pages_expected": expected_pages,
+            "pages_missing": sorted(set(range(expected_pages)) - present),
+            "ts": latest, "raw_len": sum(p.get("raw_len", 0) for p in ordered),
+        }
 
     _CHUNK = 200  # 3001 单请求 id 上限（实测 241 可、784 → ErrResp 1106 连接错误）
 
@@ -619,14 +664,17 @@ class KplCollectorService:
                     time.sleep(0.3)
                 self._dbg("C", gq_frame)
                 sock.sendall(gq_frame)
-            # 6b) 3006 个股行情订阅：HQStockIdListReq{f1 repeated stockIds}（个股实时价）
-            hq = b"".join(proto.pb_bytes(1, sid.encode()) for sid in self._stock_ids)
-            enc_hq = self._codec.enc(hq)
+            # 6b) 3006 个股行情订阅：HQStockIdListReq{f1 repeated stockIds}（个股实时价）。
+            #     与 3001 同款分块（单请求 id 超 ~241 会被 1106 拒绝；2026-10-27 实测：
+            #     精选板块引导后 id≈500 单帧全发即触发 server error 1106）
             ext6 = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_ID_LIST)
-            hq_frame = proto.build_frame(proto.CMD_HQ_ID_LIST, next_seq(), enc_hq or hq, d=0,
-                                         encrypted=bool(enc_hq), pkg=proto.PKG_ROUTE, ext=ext6)
-            self._dbg("C", hq_frame)
-            sock.sendall(hq_frame)
+            for chunk in self._chunks(list(self._stock_ids)):
+                hq = b"".join(proto.pb_bytes(1, sid.encode()) for sid in chunk)
+                enc_hq = self._codec.enc(hq)
+                hq_frame = proto.build_frame(proto.CMD_HQ_ID_LIST, next_seq(), enc_hq or hq, d=0,
+                                             encrypted=bool(enc_hq), pkg=proto.PKG_ROUTE, ext=ext6)
+                self._dbg("C", hq_frame)
+                sock.sendall(hq_frame)
             # 6c) 打板/情绪订阅（service_hq_daban.proto，2026-10-27 逆向）：
             #     2114/2115/2118/2119 发 QxMarketEnergyReq{type}；2116/2126 空 Req；
             #     2120/2121 发 QxZtSituationStockReq{bsType}。逐 cmd 一帧，同 0x40 通道与 ext 路由头。
@@ -650,6 +698,22 @@ class KplCollectorService:
                         time.sleep(0.3)
                     self._dbg("C", db_frame)
                     sock.sendall(db_frame)
+                # 6d) 2103 打板个股列表订阅：每页签按 index 偏移逐页一帧（推送页固定 30 行，
+                #     count=200 实测无效——见 __init__ 注释）；Resp.pidType+index 回带区分页归属
+                for pid in self._daban_list_pids:
+                    for page in range(self._daban_list_pages):
+                        req_pb = daban.build_daban_stock_list_req_pb(
+                            pid, index=page * self._daban_list_page_size,
+                            count=self._daban_list_page_size)
+                        enc_db = self._codec.enc(req_pb)
+                        ext_db = bytes([0x02]) + struct.pack(">H", daban.CMD_DABAN_STOCK_LIST)
+                        db_frame = proto.build_frame(daban.CMD_DABAN_STOCK_LIST, next_seq(),
+                                                     enc_db or req_pb, d=0, encrypted=bool(enc_db),
+                                                     pkg=proto.PKG_ROUTE, ext=ext_db)
+                        if self._human_delay:
+                            time.sleep(0.3)
+                        self._dbg("C", db_frame)
+                        sock.sendall(db_frame)
             self._status = "streaming"
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
@@ -784,6 +848,14 @@ class KplCollectorService:
                                     reason=f"parse error: {exc}", payload_len=len(payload)))
                 return
             self._stats["pushes"] += 1
+            if cmd == daban.CMD_DABAN_STOCK_LIST:
+                # 2103 按页缓存（pidType→index→页快照）：推送页固定 30 行，读口按 index 合并
+                try:
+                    pid = int(data.get("pid_type", 0))
+                    idx = int(data.get("index", 0))
+                    self._daban_lists.setdefault(pid, {})[idx] = {**data, "ts": time.time()}
+                except (TypeError, ValueError):
+                    pass
             event_type = DABAN_EVENT_NAMES.get(cmd, "daban")
             self._emit(KplEvent(type=event_type, ts=time.time(), cmd=cmd,
                                 source="push" if fr.get("fmt") == "push" else "resp", **data))

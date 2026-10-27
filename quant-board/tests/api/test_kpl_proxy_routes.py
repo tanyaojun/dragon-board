@@ -211,3 +211,22 @@ class TestWsRelay:
             assert second["type"] == "stock_quotes"
             # 下行：浏览器 → 上游
             ws.send_text(jsonlib.dumps({"type": "ping", "n": 2}))
+
+
+def test_daban_list_passthrough(client):
+    """2103 打板个股列表快照：pid_type 透传上游，结构原样回浏览器。"""
+    _FakeAsyncClient.responses = [
+        _FakeResponse({"ok": True, "pid_type": 8, "max_size": 181, "items": []})
+    ]
+    r = client.get("/api/kpl/daban-list", params={"pid_type": 8})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["max_size"] == 181
+
+
+def test_daban_list_upstream_unavailable_structured_502(client):
+    _FakeAsyncClient.fail_with = OSError("connection refused")
+    r = client.get("/api/kpl/daban-list")
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and "kpl_upstream_unavailable" in body["reason"]
