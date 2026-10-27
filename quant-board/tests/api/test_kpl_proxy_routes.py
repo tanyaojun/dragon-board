@@ -266,3 +266,40 @@ def test_daban_list_history_service_error_structured_502(client, monkeypatch):
     assert r.status_code == 502
     body = r.json()
     assert body["ok"] is False and body["errorCode"] == "1020"
+
+
+def test_daban_head_validation(client):
+    r = client.get("/api/kpl/daban-head")
+    assert r.status_code == 400
+
+
+def test_daban_head_upstream_unreachable_502(client, monkeypatch):
+    from backend.services.kpl_ranking_service import KplRankingError
+
+    def _boom(date):
+        raise KplRankingError("upstream_unreachable: ConnectError", url="apphis")
+
+    monkeypatch.setattr(kpl_proxy_routes.kpl_ranking_service, "get_daban_head_info", _boom)
+    r = client.get("/api/kpl/daban-head", params={"date": "2026-10-27"})
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and "upstream_unreachable" in body["reason"]
+
+
+def test_daban_head_passthrough(client, monkeypatch):
+    from backend.services.kpl_ranking_service import KplRankingError
+
+    class _Up:
+        @staticmethod
+        def get_daban_head_info(date):
+            if date == "2026-10-26":
+                raise KplRankingError("kpl_errcode", errorCode="1020", error="参数出错")
+            return {"ok": True, "date": date, "raw": {"yesterdayZT": 55, "yesterdayFB": 71, "yesterdayDT": 25}}
+
+    monkeypatch.setattr(kpl_proxy_routes.kpl_ranking_service, "get_daban_head_info", _Up.get_daban_head_info)
+    r = client.get("/api/kpl/daban-head", params={"date": "2026-10-27"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["raw"]["yesterdayZT"] == 55
+    r = client.get("/api/kpl/daban-head", params={"date": "2026-10-26"})
+    assert r.status_code == 502 and r.json()["errorCode"] == "1020"

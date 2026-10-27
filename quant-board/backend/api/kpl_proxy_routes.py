@@ -111,6 +111,18 @@ async def daban_list_history(date: str = "", pid_type: int = 8, page: int = 0) -
         return JSONResponse(content=exc.to_payload(), status_code=502)
 
 
+@router.get("/daban-head")
+async def daban_head(date: str = "") -> JSONResponse:
+    """按日打板头统计（HisDaBanHeadInfo HTTP）：今/昨涨停·封板率·跌停绝对值，KPI 三卡昨日侧来源。"""
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    try:
+        return JSONResponse(content=kpl_ranking_service.get_daban_head_info(date))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
 @router.get("/sector-ranking")
 async def sector_ranking(date: str = "") -> JSONResponse:
     """按日板块强度排行（KPL 层1 RealRankingInfo Type=1+Date，历史回看读口）。"""

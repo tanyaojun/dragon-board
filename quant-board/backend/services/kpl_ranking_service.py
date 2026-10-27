@@ -333,3 +333,26 @@ def get_daban_list_history(date: str, pid_type: int, page: int = 0,
                "day": data.get("day", date)}
     _store(key, payload)
     return payload
+
+
+def get_daban_head_info(date: str) -> Dict[str, Any]:
+    """按日取打板头统计（App 市场情绪页头的今/昨涨停·封板率·跌停绝对值来源）。
+
+    合同（2026-10-27 逆向自 ox0：API_HISTORY + a=HisDaBanHeadInfo&c=HisHomeDingPan，
+    Day=date；预期字段 todayZT/yesterdayZT/todayFB/yesterdayFB/todayDT/yesterdayDT，
+    响应结构未经真实样本核对——当晚上游风控 1020 拿不到样本，接入前须同屏核对）。
+    """
+    key = f"hishead:{date}"
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    creds = {k: KPL_APP_BASE_PARAMS[k] for k in ("UserID", "DeviceID", "Token")}
+    data = _post_form(
+        _HOST_HISTORY,
+        {"a": "HisDaBanHeadInfo", "c": "HisHomeDingPan", "Day": date,
+         "apiv": "w48", "VerSion": "6.3.20.2", "PhoneOSNew": 1, "Red": 0, **creds},
+        _UA_STOCKS)
+    _check_errcode(data)
+    payload = {"ok": True, "date": date, "raw": data}
+    _store(key, payload)
+    return payload

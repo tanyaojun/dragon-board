@@ -2037,7 +2037,7 @@ function labRerun(key){
 //     区间与 rangedSeries 同一 `STATE.relayRange`，rangeRefresh 联动重拉）；
 //   · 页头 KPI = 共用 `#relayKpi`（点行 = relayRow(date) 选中该日，KPI 跟随）；
 //   · 左侧三角 = 展开 jev 调用日志卡（lg-card 范式，懒拉 narrative）；
-//   · 展示硬约束：落库口径为准（模型原答仅保留在展开的调用日志卡里供审计）/ 结局 null=未封 / 回填样本标橙。
+//   · 展示硬约束：落库口径为准（模型原答仅保留在展开的调用日志卡里供审计）/ 结局 null=待结算（2026-10-27 用户确认：原「未封」与确认负「未续」、连板列「未封板」共用词根易误读）/ 回填样本标橙。
 const TL_CHOICE_CN = { high_ge65: '高 ≥65%', mid_45_65: '中 45-65%', low_25_45: '低 25-45%',
                        verylow_lt25: '很低 <25%', insufficient: '证据不足' };
 const TL_GATE_CN = { board_unmapped: '板块未映射', industry_tree_unmapped: '产业树未映射',
@@ -2584,7 +2584,7 @@ function tlRenderBar(){
     + tlSel('事件', 'industry', uniq('evidenceIndustry').map(v => [v, v]))
     + tlSel('档位', 'choice', Object.entries(TL_CHOICE_CN))
     + tlSel('题材深度', 'stage', Object.entries(TL_DEPTH_CN))
-    + tlSel('结局', 'outcome', [['sealed', '续板'], ['broken', '未续'], ['pending', '未封（等次日）']])
+    + tlSel('结局', 'outcome', [['sealed', '续板'], ['broken', '未续'], ['pending', '待结算（等次日）']])
     + tlSel('来源', 'origin', uniq('sampleOrigin').map(v => [v, TL_ORIGIN_CN[v] || v]))
     + '<label class="lf-chk"><input type="checkbox"' + (STATE.tlUi.gateOnly ? ' checked' : '')
       + ' onchange="tlSet(\'gateOnly\', this.checked)"> 仅看被证据门覆盖</label>'
@@ -2665,7 +2665,7 @@ function tlRowHtml(r, f){
   // v5 起排除股不落库（用户 2026-10-23 裁决：不入库不入页面），
   // 名册只有 ok/degraded 行；旧代 catalystStage 回落展示保留（历史档标签只读）
   const outcome = (outKey === 'pending'
-    ? badge('未封', 'b-gray')
+    ? badge('待结算', 'b-gray')
     : (outKey === 'sealed' ? badge('续板', 'b-green') : badge('未续', 'b-red')));
   const choice = (badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
     r.choice === 'high_ge65' ? 'b-red' : r.choice === 'mid_45_65' ? 'b-amber'
@@ -2820,7 +2820,7 @@ function tlDetailHtml(r){
   const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
   const u = r.usage || {};
   const outKey = tlOutcomeKey(r);
-  const outTxt = outKey === 'pending' ? '未封（等次一交易日）'
+  const outTxt = outKey === 'pending' ? '待结算（等次一交易日）'
     : (outKey === 'sealed' ? '续板' : '未续');
   const outColor = outKey === 'pending' ? 'var(--muted)' : outKey === 'sealed' ? '#16a34a' : '#dc2626';
   const gated = r.gate && r.gate.applied;
@@ -4841,6 +4841,9 @@ function kplHandleEvent(ev){
     case 'zd_stat':   // 2114：涨跌家数/涨跌停（大盘 KPI 条）
       if (!stale){ KPI_MKT.zd = ev; if (STATE.view === 'kpl') kplRenderMarketKpi(); }
       break;
+    case 'zt_situation':   // 2119：破板率（封板率=100−破板率，App 封板率卡同口径）
+      if (!stale){ KPI_MKT.zb = ev.today_zb_ratio; if (['kpl','kplbid','kplsoon','kplvane'].includes(STATE.view)) kplRenderMarketKpi(); }
+      break;
     case 'zt_stocks':   // 涨停个股列表（2120）：按 plate 顿号归属聚合出各板块封板家数
       if (stale) break;
       KPL.ztCount = new Map();
@@ -5445,7 +5448,7 @@ function kplDabanRender(view){
 // ══════════ KPL 行情 · 大盘 KPI 条（七卡，kpl 组子页公用，2026-10-27）══════════
 // 数据源：market_overview/zd_stat socket 事件（预测量能/涨跌家数/强度/亏钱效应/空头气氛）
 // + /api/market/overview 指数（TDX bridge 链，与全站指数显示同源）。
-const KPI_MKT = {mo: null, zd: null, index: null, indexAt: 0};
+const KPI_MKT = {mo: null, zd: null, zb: null, head: null, headAt: 0, index: null, indexAt: 0};
 function kplRenderMarketKpi(){
   const el = $('kplMarketKpi');
   if (!el) return;
@@ -5462,14 +5465,26 @@ function kplRenderMarketKpi(){
   const fz = mo && mo.forecast_zf ? `<span class="${kcls(parseFloat(mo.forecast_zf))}">${mo.forecast_zf}</span>` : '';
   const zdV = zd ? `${zd.zd_stat.rise} / ${zd.zd_stat.down}` : '--';
   const zdSub = zd ? `涨跌停 ${zd.zd_stat.zt}:${zd.zd_stat.dt}（实际 ${zd.zd_stat.real_zt}:${zd.zd_stat.real_dt}）` : '';
+  // 涨停板/封板率/跌停股（今/昨）三卡（2026-10-27 用户需求，App 市场情绪头同款，涨红绿跌）：
+  // 今日值=zd_stat(2114)+破板率(2119 封板率=100−破板率，与 App 59% 同屏核对)；
+  // 昨日值=HisDaBanHeadInfo HTTP（昨日绝对值唯一上游来源；风控/缺数显式 "--" 不伪装）。
+  const head = KPI_MKT.head;
+  const ztToday = zd ? zd.zd_stat.real_zt : null;
+  const dtToday = zd ? zd.zd_stat.real_dt : null;
+  const sealToday = (KPI_MKT.zb != null) ? Math.max(0, 100 - KPI_MKT.zb) : null;
+  const fPct = v => (v == null || !Number.isFinite(v)) ? '--' : Math.round(v) + '%';
   el.innerHTML = card('大盘指数（沪/深/创）', idxV)
     + card('沪深京预测量能', fmoney, fz)
     + card('涨跌家数', zdV, zdSub)
-    + card('综合强度', mo ? kfmtNum(mo.strong, 0) : '--')
-    + card('板块强度（今/昨）', mo ? `${kfmtNum(mo.plate_strong_td, 0)} / ${kfmtNum(mo.plate_strong_yd, 0)}` : '--')
-    + card('亏钱效应（今/昨）', mo ? `${kfmtNum(mo.loss_effect_td, 0)} / ${kfmtNum(mo.loss_effect_yd, 0)}` : '--')
-    + card('空头气氛', mo ? `${mo.qx_status || '--'}` : '--',
-           mo ? `大幅回撤 ${mo.drawback_num == null ? '--' : mo.drawback_num} · 气氛值 ${kfmtNum(mo.short_qx_td)}` : '');
+    + card('涨停板（今/昨）',
+           `<span class="kpl-up">${ztToday == null ? '--' : ztToday}</span> / <span class="kpl-up">${head && head.yesterday_zt != null ? head.yesterday_zt : '--'}</span>`,
+           '封住家数 · 今日 / 昨日')
+    + card('封板率（今/昨）',
+           `<span class="kpl-up">${fPct(sealToday)}</span> / <span class="kpl-up">${head && head.yesterday_fb != null ? fPct(head.yesterday_fb) : '--'}</span>`,
+           '封住/曾涨停 · 今日 / 昨日')
+    + card('跌停股（今/昨）',
+           `<span class="kpl-down">${dtToday == null ? '--' : dtToday}</span> / <span class="kpl-down">${head && head.yesterday_dt != null ? head.yesterday_dt : '--'}</span>`,
+           '封住家数 · 今日 / 昨日');
 }
 async function kplFetchIndex(){
   if (Date.now() - KPI_MKT.indexAt < 55000) return;   // 60s 节流（多子页共用一份）
@@ -5478,6 +5493,22 @@ async function kplFetchIndex(){
     const r = await jget('http://127.0.0.1:8000/api/market/overview');
     KPI_MKT.index = r; kplRenderMarketKpi();
   } catch (e){ /* 指数读口异常：卡片保持 '--'，不阻断 */ }
+  if (Date.now() - KPI_MKT.headAt < 55000) return;    // 打板头（昨日值）同 60s 节流
+  KPI_MKT.headAt = Date.now();
+  try {
+    const h = await jget(KPL_API + '/daban-head?date=' + KPL.today);
+    if (h.ok){
+      const raw = h.raw || {};
+      // 字段名系反编译预期（todayZT/yesterdayZT/todayFB/yesterdayFB/todayDT/yesterdayDT），
+      // 上游 1020 期间未拿到真实样本——容错提取，缺字段显式 undefined→"--"
+      KPI_MKT.head = {
+        yesterday_zt: raw.yesterdayZT != null ? Number(raw.yesterdayZT) : null,
+        yesterday_fb: raw.yesterdayFB != null ? Number(raw.yesterdayFB) : null,
+        yesterday_dt: raw.yesterdayDT != null ? Number(raw.yesterdayDT) : null,
+      };
+      kplRenderMarketKpi();
+    }
+  } catch (e){ /* 读口异常：昨日侧保持 '--'，不阻断 */ }
 }
 
 setView('overview');

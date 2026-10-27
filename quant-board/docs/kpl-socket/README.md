@@ -338,7 +338,16 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   apphis/apphwhq/applhb 三域名全试一致；同通道 RealRankingInfo/DaBanList/plate-tree 正常。
   时段内本机探针 ~50 发（远超 App 正常频率），疑触发上游频控——当晚已停止探测待冷却复测。
 
-### 11.5 测试与证据
+### 11.5 打板头统计读口（HisDaBanHeadInfo，KPI 三卡昨日侧来源，2026-10-27）
+
+- 工作台 kpl 组 KPI 条重排（用户需求，App 市场情绪头同款）：删综合强度/板块强度/亏钱效应/
+  空头气氛四卡，增**涨停板（今/昨）/封板率（今/昨）/跌停股（今/昨）**三卡（涨红绿跌）。
+- 今日值：zd_stat（2114）real_zt/real_dt + 封板率=100−破板率（2119 todayZbRatio，
+  与 App 59% 同屏核对：41/59%/21 精确一致）。昨日值：`GET /api/kpl/daban-head?date=`
+  （HisDaBanHeadInfo HTTP，预期字段 yesterdayZT/yesterdayFB/yesterdayDT——响应结构未获
+  真实样本核对，同 §11.4 风控期限制）；缺数显式 "--" 不伪装。
+
+### 11.6 测试与证据
 
 - `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码
   fail-visible）/注册表；`test_kpl_collector_service.py`：会话帧序含 14 帧 2103 分页订阅、
