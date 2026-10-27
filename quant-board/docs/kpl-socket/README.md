@@ -338,14 +338,17 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   apphis/apphwhq/applhb 三域名全试一致；同通道 RealRankingInfo/DaBanList/plate-tree 正常。
   时段内本机探针 ~50 发（远超 App 正常频率），疑触发上游频控——当晚已停止探测待冷却复测。
 
-### 11.5 打板头统计读口（HisDaBanHeadInfo，KPI 三卡昨日侧来源，2026-10-27）
+### 11.5 打板头订阅（2100 DaBanHeadResp，KPI 三卡昨日侧来源，2026-10-27）
 
 - 工作台 kpl 组 KPI 条重排（用户需求，App 市场情绪头同款）：删综合强度/板块强度/亏钱效应/
-  空头气氛四卡，增**涨停板（今/昨）/封板率（今/昨）/跌停股（今/昨）**三卡（涨红绿跌）。
-- 今日值：zd_stat（2114）real_zt/real_dt + 封板率=100−破板率（2119 todayZbRatio，
-  与 App 59% 同屏核对：41/59%/21 精确一致）。昨日值：`GET /api/kpl/daban-head?date=`
-  （HisDaBanHeadInfo HTTP，预期字段 yesterdayZT/yesterdayFB/yesterdayDT——响应结构未获
-  真实样本核对，同 §11.4 风控期限制）；缺数显式 "--" 不伪装。
+  空头气氛四卡，增**涨停板（今/昨）/封板率（今/昨）/跌停股（今/昨）**三卡（涨红绿跌，
+  涨跌家数卡同步上色）。
+- **数据源=socket 2100 打板头**（Hq.DaBanHeadResp：f1 todayZT/f2 yesterdayZT/f3 todayFB/
+  f4 yesterdayFB/f5 todayDT/f6 yesterdayDT，f3/f4 为 float 封板率%；collector 订阅链追加
+  EmptyReq 帧，事件名 daban_head）：**与 App 同屏精确一致**（41/55、59%/71%、21/25，
+  yesterdayFB=70.51→71%）。封板率今日值=100−2119 破板率（59.42→59%）。
+- HTTP 兜底 `GET /api/kpl/daban-head?date=`（HisDaBanHeadInfo）保留：socket 未供数时前端
+  60s 节流拉取；当晚上游风控期响应结构未获真实样本核对。缺数显式 "--" 不伪装。
 
 ### 11.6 测试与证据
 

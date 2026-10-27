@@ -356,3 +356,27 @@ class TestDabanHistoryRow:
         row[12] = -31720000
         it = _parse_daban_history_row(row)
         assert it["pct"] == -5.14 and it["main_net"] == -31720000
+
+
+class TestDabanHead2100:
+    def test_parse_head(self):
+        # Hq.DaBanHeadResp：f1 todayZT(int64) f2 yesterdayZT f3 todayFB(float) f4 yesterdayFB
+        # f5 todayDT f6 yesterdayDT f500 msgId
+        payload = (pb_varint_field(1, 41) + pb_varint_field(2, 55)
+                   + f32_field(3, 59.42) + f32_field(4, 71.0)
+                   + pb_varint_field(5, 21) + pb_varint_field(6, 25)
+                   + pb_varint_field(500, 7))
+        out = dp.parse_daban_head(payload)
+        assert out["today_zt"] == 41 and out["yesterday_zt"] == 55
+        assert out["today_fb"] == pytest.approx(59.42, abs=1e-4)
+        assert out["yesterday_fb"] == pytest.approx(71.0, abs=1e-4)
+        assert out["today_dt"] == 21 and out["yesterday_dt"] == 25
+        assert out["msg_id"] == 7
+
+    def test_parse_head_garbage_fail_visible(self):
+        out = dp.parse_daban_head(b"\xff\xff\xff\xff\xff")
+        assert out["today_zt"] == 0 and "raw_len" in out
+
+    def test_registry_and_sub_cmds_have_2100(self):
+        assert dp.DABAN_RESP_PARSERS[dp.CMD_DABAN_HEAD] is dp.parse_daban_head
+        assert dp.CMD_DABAN_HEAD in dp.DABAN_SUB_CMDS

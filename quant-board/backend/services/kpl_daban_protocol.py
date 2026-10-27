@@ -59,6 +59,7 @@ DABAN_SUB_CMDS: tuple = (
     CMD_ZT_SITUATION_V2,
     CMD_ZT_STOCK_LIST,
     CMD_WIND_VANE,
+    CMD_DABAN_HEAD,   # 2100 打板头：今/昨涨停·封板率·跌停绝对值（KPI 三卡昨日侧唯一 socket 来源）
 )
 
 
@@ -463,6 +464,26 @@ def parse_daban_stock_list(payload: bytes) -> Dict[str, Any]:
     }
 
 
+def parse_daban_head(payload: bytes) -> Dict[str, Any]:
+    """2100 Hq.DaBanHeadResp：打板头（今/昨涨停·封板率·跌停绝对值）。
+
+    字段（Hq.java 描述符，2026-10-27 提取）：f1 todayZT(int64), f2 yesterdayZT(int64),
+    f3 todayFB(float 封板率%), f4 yesterdayFB(float), f5 todayDT(int64), f6 yesterdayDT(int64),
+    f500 msgId(uint64)。封板率口径=封住/曾涨停（与 App 卡片同源）。
+    """
+    pb = parse_pb_f32(payload)
+    return {
+        "today_zt": _signed64(pb_first(pb, 1, 0)),
+        "yesterday_zt": _signed64(pb_first(pb, 2, 0)),
+        "today_fb": pb_first(pb, 3),
+        "yesterday_fb": pb_first(pb, 4),
+        "today_dt": _signed64(pb_first(pb, 5, 0)),
+        "yesterday_dt": _signed64(pb_first(pb, 6, 0)),
+        "msg_id": pb_first(pb, 500),
+        "raw_len": len(payload),
+    }
+
+
 DABAN_RESP_PARSERS: Dict[int, Any] = {
     CMD_ZD_STAT: parse_zd_stat,
     CMD_MARKET_OVERVIEW: parse_market_overview,
@@ -473,4 +494,5 @@ DABAN_RESP_PARSERS: Dict[int, Any] = {
     CMD_ZT_STOCK_LIST_PB: parse_zt_stock_list,
     CMD_WIND_VANE: parse_wind_vane,
     CMD_DABAN_STOCK_LIST: parse_daban_stock_list,
+    CMD_DABAN_HEAD: parse_daban_head,
 }

@@ -173,6 +173,7 @@ DABAN_EVENT_NAMES: Dict[int, str] = {
     daban.CMD_ZT_STOCK_LIST_PB: "dt_stocks",
     daban.CMD_WIND_VANE: "wind_vane",
     daban.CMD_DABAN_STOCK_LIST: "daban_stocks",
+    daban.CMD_DABAN_HEAD: "daban_head",
 }
 
 

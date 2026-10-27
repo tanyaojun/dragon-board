@@ -4841,6 +4841,13 @@ function kplHandleEvent(ev){
     case 'zd_stat':   // 2114：涨跌家数/涨跌停（大盘 KPI 条）
       if (!stale){ KPI_MKT.zd = ev; if (STATE.view === 'kpl') kplRenderMarketKpi(); }
       break;
+    case 'daban_head':   // 2100 打板头：昨日涨停/封板率/跌停绝对值（KPI 三卡昨日侧 socket 源）
+      if (!stale){
+        KPI_MKT.head = { yesterday_zt: ev.yesterday_zt, yesterday_fb: ev.yesterday_fb,
+                         yesterday_dt: ev.yesterday_dt, source: 'socket' };
+        if (['kpl','kplbid','kplsoon','kplvane'].includes(STATE.view)) kplRenderMarketKpi();
+      }
+      break;
     case 'zt_situation':   // 2119：破板率（封板率=100−破板率，App 封板率卡同口径）
       if (!stale){ KPI_MKT.zb = ev.today_zb_ratio; if (['kpl','kplbid','kplsoon','kplvane'].includes(STATE.view)) kplRenderMarketKpi(); }
       break;
@@ -5463,8 +5470,10 @@ function kplRenderMarketKpi(){
   }
   const fmoney = mo ? (mo.forecast_money || '--') : '--';
   const fz = mo && mo.forecast_zf ? `<span class="${kcls(parseFloat(mo.forecast_zf))}">${mo.forecast_zf}</span>` : '';
-  const zdV = zd ? `${zd.zd_stat.rise} / ${zd.zd_stat.down}` : '--';
-  const zdSub = zd ? `涨跌停 ${zd.zd_stat.zt}:${zd.zd_stat.dt}（实际 ${zd.zd_stat.real_zt}:${zd.zd_stat.real_dt}）` : '';
+  // 涨红绿跌（2026-10-27 用户需求）：涨家/涨停红、跌家/跌停绿
+  const rd = (v, cls) => `<span class="${cls}">${v == null ? '--' : v}</span>`;
+  const zdV = zd ? `${rd(zd.zd_stat.rise, 'kpl-up')} / ${rd(zd.zd_stat.down, 'kpl-down')}` : '--';
+  const zdSub = zd ? `涨跌停 ${rd(zd.zd_stat.zt, 'kpl-up')}:${rd(zd.zd_stat.dt, 'kpl-down')}（实际 ${rd(zd.zd_stat.real_zt, 'kpl-up')}:${rd(zd.zd_stat.real_dt, 'kpl-down')}）` : '';
   // 涨停板/封板率/跌停股（今/昨）三卡（2026-10-27 用户需求，App 市场情绪头同款，涨红绿跌）：
   // 今日值=zd_stat(2114)+破板率(2119 封板率=100−破板率，与 App 59% 同屏核对)；
   // 昨日值=HisDaBanHeadInfo HTTP（昨日绝对值唯一上游来源；风控/缺数显式 "--" 不伪装）。
@@ -5493,6 +5502,7 @@ async function kplFetchIndex(){
     const r = await jget('http://127.0.0.1:8000/api/market/overview');
     KPI_MKT.index = r; kplRenderMarketKpi();
   } catch (e){ /* 指数读口异常：卡片保持 '--'，不阻断 */ }
+  if (KPI_MKT.head && KPI_MKT.head.source === 'socket') return;   // socket 2100 已供数，HTTP 兜底不跑
   if (Date.now() - KPI_MKT.headAt < 55000) return;    // 打板头（昨日值）同 60s 节流
   KPI_MKT.headAt = Date.now();
   try {
