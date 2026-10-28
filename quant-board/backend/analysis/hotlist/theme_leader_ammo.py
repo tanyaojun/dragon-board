@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any, Callable
 
@@ -46,8 +47,25 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # 偏离一档以上（上调或下调）都须点名基线行数字+锚外新证据，同桶样本不足未出率时以
 # 「按连板高度」桶为中枢；②延续性题加引用义务——ending 须点名 ≥2 个判据信号对应
 # 事实、strong_extend 须点名排队事件或近 2 日新增标题（打标交叉行可作引用源），
-# 未封板龙一场景无锚须保守并降低置信。
-QUESTION_SET_VERSION_THEME_LEADER = "v11"
+# 未封板龙一场景无锚须保守并降低置信。v12（2026-10-28）在 ①② 基础上修延续/深度
+# 盲区（贫料≠断流、结构再点火扩源、跨题一致性）并分轨，见题集上方 v12 注。
+# **v12 = 2026-10-28 双龙一分轨 + 延续/深度判据修复**（用户四点裁决，预登记
+# theme-leader-v12-dual-leader-preregistration-20261028.md）：①龙一分轨——主板
+# （60/000-003）与双创（30x/68x）各按**复合排序**独立取龙一（同日三轮裁决定稿）：
+# 空间板=10日涨幅最高的高位股，三种情况（真连板/断板反包/断板不反包未跌停）均参与
+# ——高度≥2 者组成空间板组整体优先、组内 gain10 最高（涨停时间晚于龙二依然龙一）；
+# 全首板（主板/双创涨跌幅限制不同，首板间 gain10 不可比）按当日首封最早；
+# 断板不反包且今日跌停剔除（「未跌停」条件）；AI硬件实证：gain10 主键会选出回撤股长缆
+# -1.6% 而漏掉早封自身催化的菲林格尔；v10 的 rank_board_stocks_space 随之淘汰删除），
+# 每板块 ≤2 行
+# （`segment_of`/`space_leaders_by_segment`/`structure_line_dual`；§18.2 唯一性键升级为
+# (date, board, segment)）；②深度题「贫料 ≠ 断流」——零痕迹+家数扩张判 igniting 优先，
+# 家数萎缩/龙头断板才可 ebbing；③延续题 strong_extend 引用义务扩源（结构再点火信号
+# 二选一可点名）+ ending 方向约束（家数扩张不得 ending）；④跨题一致性硬规则
+# （igniting/fermenting 时空间不得 peak、延续不得 ending，除非点名锚/基线数字+新证据）；
+# ⑤A2 拆题——板块级两题（深度/延续）每板块 1 次（双龙一并列结构行，
+# `build_sector_narrative`），个股级两题（续板/空间）每轨龙一各 1 次。
+QUESTION_SET_VERSION_THEME_LEADER = "v12"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -88,7 +106,18 @@ QUESTION_SET_VERSION_THEME_LEADER = "v11"
 # 参考）。动机=题材语料空窗时给延续性/续板题一个结构化引用锚（10-26 上海九百/大业
 # 双病案），并从个股侧补题材关键词匹配漏供给。只并待判龙头个股行，**不并 boardDragons**
 # （真连板口径推导，与 v10 空间龙一双口径，单一事实源红线）。题面 v11 同批换代。
-AMMO_VERSION_THEME_LEADER = "2026-10-27b"
+# 2026-10-28a（v12 批次，2026-10-28 用户批准；预登记 theme-leader-v12 §4）：
+# ①涨停原因行 limitup_reason_line——join 韭研 expound（单一事实源
+# `jev_label_jiuyan.expound_reason()`，与打标链读口同源；已落库零外呼），仅待判龙一
+# 自身（2026-10-28 用户裁决收窄：板块成员原因不列，板内同伴由既有板内解析行承载）；
+# ②板块强度行 plate_strength_line——KPL 层1
+# RealRankingInfo（`kpl_ranking_service.get_sector_ranking`，按日查史已通接口）名称桥
+# 匹配，未匹配/取数失败 fail-visible；③题材事件行收窄（theme_event_digest 同批，
+# 用户裁决）：仅标题+热度+日期、正文不出、仅正文级关联标「弱匹配」降级；
+# ④（2026-10-28b，code review P1-4）：个股级叙事头部注入轨别身位〔主板龙一/双创龙一〕
+# ——题面规则⑥/空间题⑤的前提「若叙事标注分轨」此前不成立，双轨身位对模型不可见；
+# AMMO_VERSION_THEME_LEADER 同批换代。
+AMMO_VERSION_THEME_LEADER = "2026-10-28b"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -166,25 +195,80 @@ def rank_board_stocks(stocks: list[dict]) -> list[dict]:
     """板块内排序：真连板最高 → 封板时间最早（None 垫底）。龙一=首位。
 
     输入 `[{code, name?, time?, streak?}]`；纯排序不改输入。
-    2026-10-27 起仅作历史窗口/回退口径（baseline 构建等）；**当日标注龙一改用
-    `rank_board_stocks_space`**（用户裁决：真连板卡位股 ≠ 空间龙一，10-26 正裕 3 板
-    卡位次日跌停 vs 大业断板反包 +8% 实证）。
+    2026-10-27 起仅作历史窗口/回退口径（baseline 构建等）；当日标注龙一现用
+    `rank_board_stocks_seal`（v12 复合排序，历史沿革见 AMMO 注记）。
     """
     return sorted(stocks, key=lambda s: (-(s.get("streak") or 0), _time_key(s.get("time"))))
 
 
-def rank_board_stocks_space(candidates: list[dict]) -> list[dict]:
-    """空间龙一排序（2026-10-27 用户裁决）：10 日涨幅最高 → 真连板高度 → 首封最早。
+def rank_board_stocks_seal(candidates: list[dict]) -> list[dict]:
+    """龙一复合排序（v12 定稿，2026-10-28 用户三轮裁决合成）：空间板优先、首封时间次之。
 
-    候选池=当日封板池 ∪ 近 3 日封板池（同板块；覆盖断板反包——空间龙一断板日仍须在列，
-    10-26 大业即靠昨日池入候选）。`gain10` 缺失垫底（None 当 -inf）；调用方保证候选池
-    至少一只可算涨幅，否则整板块 fail-visible 跳过（用户裁决）。纯排序不改输入。
+    用户定义（定稿）：空间板 = **10日涨幅最高的高位股**，分三种情况——真连板 /
+    断板反包 / 断板不反包未跌停；同板块内 10日涨幅一致（主要是首板，主板与双创涨跌幅
+    限制不同不可同类对比）→ 涨停时间优先。
+
+    可操作键（单一事实源；「空间」用连板高度判定身份，组内以 10日涨幅定最高——
+    首板间 gain10 差异是回撤节奏不是空间，不可裸比，AI硬件 10-28 实证 gain10 主键会
+    选出回撤股长缆 -1.6% 而漏掉早封自身催化的菲林格尔）：
+    ① **空间板组整体优先**：候选高度 ≥2（`height`：当日封板股=当日真连板 streak 与
+       近 3 日历史高度取大；断板反包/断板不反包股=近 3 日内最近封板日高度，由调用方
+       填）——三种情况（真连板/断板反包/断板不反包未跌停）均参与；
+    ② 空间板组内按 **10日涨幅最高**（用户规则 1）→ 并列时当日首封最早 → 高度降序
+       （「涨停时间晚于龙二依然龙一」）；
+    ③ 全首板（高度 ≤1 或不可算，gain10 不可比）：按当日首封最早 → 10日涨幅并列
+       → 高度降序；
+    ④ 断板不反包且**今日跌停**的候选由调用方剔除（「未跌停」条件，大面股不是龙一）；
+       真连板不可算按首板参与时间排序（fail-visible，不猜）。
+    v10 的 gain10 主键口径函数（rank_board_stocks_space）随 v12 淘汰删除（红线：改录用
+    删除，历史见 AMMO 注记）。纯排序不改输入。
     """
-    return sorted(candidates, key=lambda s: (
-        -(s["gain10"] if s.get("gain10") is not None else float("-inf")),
-        -(s.get("streak") or 0),
-        _time_key(s.get("time")),
-    ))
+    def _gain(s: dict) -> float:
+        return s["gain10"] if s.get("gain10") is not None else float("-inf")
+
+    def _h(s: dict) -> int:
+        h = s.get("height")
+        return h if isinstance(h, int) else 0
+
+    # 两组排序键不同（空间板组内 gain10 最高优先，首板组内时间优先），分组各自排序拼接
+    highs = [s for s in candidates if _h(s) >= 2]
+    rest = [s for s in candidates if _h(s) < 2]
+    highs.sort(key=lambda s: (-_gain(s), _time_key(s.get("time")), -_h(s)))
+    rest.sort(key=lambda s: (_time_key(s.get("time")), -_gain(s), -_h(s)))
+    return highs + rest
+
+
+def segment_of(code: Any) -> str | None:
+    """龙一轨别（v12 分轨，2026-10-28 用户裁决）：主板 main=60x/000-003；
+    双创 growth=300/301/302（创业板）+ 688/689（科创板）。北交所已由上游口径剔除；
+    未知前缀返回 None（fail-visible，不猜轨）。输入可带交易所前缀（sh600715），取后 6 位。
+    """
+    c = str(code or "")[-6:]
+    if c[:2] == "60" or c[:3] in ("000", "001", "002", "003"):
+        return "main"
+    if c[:2] in ("30", "68"):
+        return "growth"
+    return None
+
+
+SEGMENT_CN = {"main": "主板", "growth": "双创"}
+
+
+def space_leaders_by_segment(candidates: list[dict]) -> list[tuple[str, dict]]:
+    """分轨龙一（v12）：同一排序键（首封最早→真连板→10日涨幅，rank_board_stocks_seal）
+    下主板/双创各取首位。
+
+    复用单次排序（单一事实源：排序键只此一份），轨内取首位=全序过滤，与「每轨单独
+    排序」同构。返回 [(segment, leader), ...]，顺序固定 main→growth（确定性，回归可比）；
+    某轨无候选则不出该轨。候选 gain10 全缺的整板块跳过由调用方负责（沿用 2026-10-27
+    fail-visible 裁决，本函数不重复判）。
+    """
+    picked: dict[str, dict] = {}
+    for s in rank_board_stocks_seal(candidates):
+        seg = segment_of(s.get("code"))
+        if seg and seg not in picked:
+            picked[seg] = s
+    return [(seg, picked[seg]) for seg in ("main", "growth") if seg in picked]
 
 
 def combo_key(row: dict) -> str:
@@ -245,10 +329,14 @@ QUESTIONS_THEME_LEADER = {
                         "（首板潮/中军成形/高标分化）、龙头高度与板块家数变化。"
                         "证据不足的判定边界（v6 收紧）：仅当语料未采集，或产业树未映射 + "
                         "题材事件/新闻近 5 日均无痕迹 + 板内解析亦不可用**三层同时成立**"
-                        "才判 insufficient。特别地：事件/新闻零痕迹而板块当日仍有涨停，"
-                        "= 「无新增催化的纯资金/情绪驱动」信号，**不是证据缺失**——"
-                        "高标孤军高度领先判 climax，板块家数同步萎缩判 ebbing，"
-                        "不得借 insufficient 逃避归类。",
+                        "才判 insufficient。特别地（v12 修订「贫料 ≠ 断流」）："
+                        "事件/新闻零痕迹而板块当日仍有涨停 = 「无新增催化的纯资金/情绪驱动」"
+                        "信号，**不是证据缺失**，也不得直接等同退潮——产业树正文陈旧、"
+                        "新闻供给稀疏属**贫料环境**，此时必须按板块结构定向：板块家数扩张"
+                        "或首板潮在场 → **igniting 优先**；板块家数萎缩或龙头断板 → 才可判 "
+                        "ebbing；高标孤军高度领先而家数不扩 → climax。不得借 insufficient "
+                        "逃避归类。本题判**板块整体**；叙事若为双龙一并列（主板/双创分轨），"
+                        "两列均为该板块结构事实。",
         "criteria": {
             "igniting": "启动期：题材由近 1-2 日新事件/新催化点燃，板块以首板为主、"
                         "家数扩张中，尚无连板梯队",
@@ -273,20 +361,30 @@ QUESTIONS_THEME_LEADER = {
                         "事件/新闻无痕 + 板内解析不可用三层同时成立才判 insufficient。"
                         "无新增催化但板块仍活跃 = 存量惯性 → weak_extend；"
                         "分化/退潮信号明确 → ending——零痕迹不是 insufficient 的理由。"
-                        "引用义务（v11）：判 ending 须在理由中点名至少 2 个判据信号"
-                        "（新闻断流/家数萎缩/龙头分歧）在叙事中的对应事实——只有单一信号"
-                        "时按存量惯性归 weak_extend，不得凭单一信号判结束；判 strong_extend "
-                        "须点名排队中的既定事件或近 2 日新增的题材事件/新闻标题"
-                        "（「个股打标交叉」行的新鲜度/买盘逻辑判定可作引用源），"
-                        "仅凭板块家数多/龙头身位强不足以为强延续；待判龙头今日未封板"
-                        "（断板反包候选）时缺少同构历史锚与当日封板质量证据，本题应保守"
-                        "判断并降低置信，未封板身位本身不构成强延续证据。",
+                        "本题判**板块整体**；叙事若为双龙一并列（主板/双创分轨），"
+                        "两列均为该板块结构事实。"
+                        "引用义务（v12 修订）：判 ending 须在理由中点名至少 2 个判据信号"
+                        "（新闻断流/家数萎缩/龙头分歧）在叙事中的对应事实，且**板块家数"
+                        "扩张或家数序列不可考时不得判 ending**——只有单一信号时按存量"
+                        "惯性归 weak_extend 并降低置信，不得凭单一信号判结束；"
+                        "判 strong_extend 的引用源**二选一**：①排队中的既定事件或近 2 日"
+                        "新增的题材事件/新闻标题（「个股打标交叉」行的新鲜度/买盘逻辑"
+                        "判定可作引用源）；②**结构再点火信号**——当日首板潮（板块梯队形态行）、"
+                        "板块家数环比扩张、断板龙一重新上板并带动板内 ≥2 家上板（结构行/"
+                        "涨停原因行可作引用源）——贫料环境（语料陈旧/稀疏）不是否定结构"
+                        "再点火的理由；叙事中龙一今日未封板（断板反包候选）时，个股层面"
+                        "缺同构历史锚应保守，但板块层面结构再点火信号仍可按②引用。"
+                        "跨题一致性（v12）：同一叙事的「题材炒作深度」若判 igniting/"
+                        "fermenting，本题不得判 ending，除非点名基线/锚行具体数字并给出"
+                        "锚外新证据。",
         "criteria": {
-            "strong_extend": "强延续：有未落地的既定事件排队或题材事件/新闻持续新增，"
+            "strong_extend": "强延续：有未落地的既定事件排队、题材事件/新闻持续新增，"
+                             "或出现结构再点火（首板潮/家数扩张/断板反包带动板内上板），"
                              "梯队完整，预计板块还能炒 ≥2 个交易日",
-            "weak_extend": "弱延续：仅存量情绪惯性，无明显新增催化，预计板块炒作 ≤1 个交易日",
-            "ending": "临近结束：高潮分化/退潮信号明确（新闻断流+家数萎缩+龙头分歧），"
-                      "题材层面随时收束",
+            "weak_extend": "弱延续：仅存量情绪惯性，无明显新增催化且无结构再点火信号，"
+                          "预计板块炒作 ≤1 个交易日",
+            "ending": "临近结束：高潮分化/退潮信号明确（新闻断流+家数萎缩+龙头分歧；"
+                      "家数扩张或序列不可考时不得判本档），题材层面随时收束",
             "insufficient": "证据不足：仅当语料未采集或三层证据（产业树/事件·新闻/板内解析）"
                             "同时无痕迹；无催化零痕迹时按存量惯性与分化信号归类",
         },
@@ -313,7 +411,9 @@ QUESTIONS_THEME_LEADER = {
                         "候选），本题=判断其次日**重新上板**的概率：封板质量/封板时间类结构"
                         "判据不适用，改按断板后承接（板内炸板面、昨日仍封数）、板块梯队与"
                         "题材证据判断；未封板龙一通常没有同构历史锚，此时以证据为主，锚缺失"
-                        "如实对待、不得编造基准。",
+                        "如实对待、不得编造基准；⑥若叙事标注分轨（主板/双创），待判龙头为"
+                        "其轨内按 10 日涨幅取出的龙一，身位表述以轨内为准，另一轨龙一仅作"
+                        "板块结构事实。",
         "criteria": {
             "high_ge65": "高概率 ≥65%：结构位置强（连板高度领先 + 封板早 + 板块家数多）"
                          "且题材有当日/近两日新催化（含题材事件/题材新闻新增），"
@@ -343,7 +443,12 @@ QUESTIONS_THEME_LEADER = {
                         "space_1 起判——依据=历史同高度再走≥1板率（1-3 板桶仅一到三成、4+ 桶"
                         "约三成七）与主线核心退潮日照续的分层杀伤证据，非桶众数；连板高度不可算"
                         "时无默认档，按 ② 对锚判断；默认档只是起点，偏离仍须按 ② 引用锚行"
-                        "数字并给新证据。",
+                        "数字并给新证据；④跨题一致性（v12）：同一叙事的「题材炒作深度」若判 "
+                        "igniting/fermenting，本题默认不得选 peak，除非点名锚行数字并给锚外"
+                        "新证据；与延续题 strong_extend 明显矛盾时同样须引用锚行数字说明；"
+                        "⑤若叙事标注分轨（主板/双创），待判龙头为其轨内龙一，空间判断以轨内"
+                        "身位为准（双创 20cm 生态与主板 10cm 不同，另一轨龙一仅作板块结构"
+                        "事实）。",
         "criteria": {
             "space_2plus": "仍有 ≥2 板空间：题材强延续（发酵期）且该龙头是身位无可替代的"
                            "龙一/总龙头，梯队与催化双支撑",
@@ -385,13 +490,16 @@ GATE_REASON_LABELS = {
 }
 
 
-def apply_evidence_gate(answers: Any, evidence: Any) -> tuple[Any, dict]:
+def apply_evidence_gate(answers: Any, evidence: Any,
+                        keys: tuple[str, ...] | None = None) -> tuple[Any, dict]:
     """证据缺失 → **全部判定题**强制 insufficient（原答原样存 gate 元数据）。
 
     v1 单日 pilot 实测缺口：未映射板块的催化题判了 insufficient，但同一份证据下
     概率题仍给 0.34/0.34/0.26/0.18——规则③只写在题面，靠模型自觉。v2 改为代码强制
     （仅概率题）；v5 起题集扩为四题（深度/延续性/概率/空间），**无证据时四题全部门**——
     无题材证据却判「发酵期/强延续/空间≥2板」与「无证据却给 0.34」是同一类失效。
+    v12 A2 拆题（预登记 §2.3）：`keys` 给出时只门该子集（板块级 doc 只有深度/延续两题，
+    个股级 doc 只有续板/空间两题），缺省仍全题（旧行为不变）。
     """
     ev = evidence if isinstance(evidence, dict) else {}
     gate: dict[str, Any] = {"applied": False, "reason": None}
@@ -406,7 +514,7 @@ def apply_evidence_gate(answers: Any, evidence: Any) -> tuple[Any, dict]:
                  "modelProbabilities": prev_prob.get("probabilities"),
                  "forcedKeys": []})
     out = dict(answers)
-    for key in QUESTIONS_THEME_LEADER:
+    for key in (keys or tuple(QUESTIONS_THEME_LEADER)):
         prev = out.get(key) if isinstance(out.get(key), dict) else {}
         if prev.get("choice") == "insufficient":
             continue                      # 模型已自判不足，无须覆盖
@@ -562,6 +670,166 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
             + "；".join(parts) + f"；总体 {_stat(kept)}{cen}")
 
 
+def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
+                      prev_still: Any, history: list[tuple[str, int]] | None) -> tuple[str, str]:
+    """昨日承接与家数序列两段文本（structure_line / structure_line_dual 共用，禁第二套）。"""
+    still_txt = (f"今日仍封 {prev_still} 只" if isinstance(prev_still, int)
+                 else (f"今日仍封 {prev_board_n} 只" if isinstance(prev_board_n, int)
+                       else "今日仍封不可考"))
+    if prev_peers is None:
+        prev_txt = "昨日同板块不可考"
+    elif isinstance(prev_still, int) and prev_total is not None:
+        prev_txt = (f"昨日该板块封板 {prev_total} 只，{still_txt}"
+                    f"（断板 {prev_total - prev_still}）")
+    elif prev_total is None:
+        prev_txt = f"昨日该板块封板总数不可考（{still_txt}）"
+    else:
+        duan = prev_total - prev_board_n if isinstance(prev_board_n, int) else None
+        duan_txt = (f"断板 {duan}" if duan is not None and duan >= 0 else "断板不可算")
+        prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}（{duan_txt}）"
+    hist_txt = ""
+    if history:
+        seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
+        hist_txt = f"；近 {len(history)} 日该板块封板家数（旧→新，缺口日不列）：{seq}"
+    elif history is not None and not history:
+        hist_txt = "；近数日家数序列不可考（历史日该板块名无收录或 THS 池缺失）"
+    return prev_txt, hist_txt
+
+
+def _leader_brief(leader: dict, seg: str | None = None) -> str:
+    """单个龙一简报（v12 双龙一结构行用）：轨别前缀 + 封板/未封板分情形 + 10日涨幅身位。"""
+    seg_cn = (SEGMENT_CN.get(seg, seg or "") + "龙一") if seg else "龙一"
+    gain = leader.get("gain10")
+    gain_txt = (f"，10 日涨幅 {gain:+.1f}%" if isinstance(gain, (int, float))
+                else "，10 日涨幅不可考")
+    if leader.get("leaderSealedToday") is False:
+        return (f"{seg_cn} {leader.get('name')}（{leader.get('code')}）今日未封板"
+                f"（断板反包候选{gain_txt}，轨内未封候选按 10 日涨幅取首位）")
+    streak = leader.get("streak")
+    streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
+    time_txt = str(leader.get("time") or "时间不可考")
+    return f"{seg_cn} {leader.get('name')}（{leader.get('code')}）{streak_txt}，首封 {time_txt}{gain_txt}"
+
+
+def structure_line_dual(*, board: str, board_n: int, leader_rows: list[dict],
+                        prev_board_n: Any = None, prev_peers: Any = None,
+                        prev_total: Any = None, prev_still: Any = None,
+                        history: list[tuple[str, int]] | None = None) -> str:
+    """板块级双龙一并列结构行（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3/§4.2）。
+
+    `leader_rows` = 该板块当日 ≤2 条分轨龙一事实行（`day_leader_rows` space_mode 产出，
+    含 segment/gain10/leaderSealedToday），顺序 main→growth；行内轨别自描述。昨日承接/
+    家数序列与单龙一结构行同一实现（`_prev_history_txt`，单一事实源）。跟随梯队/炸板面
+    属板级事实，由梯队行/炸板面行承载，本行不重复。
+    """
+    if not leader_rows:
+        raise ValueError("structure_line_dual: leader_rows 不能为空（无龙一不应到这）")
+    briefs = "；".join(_leader_brief(r, r.get("segment")) for r in leader_rows)
+    prev_txt, hist_txt = _prev_history_txt(prev_peers, prev_board_n, prev_total,
+                                           prev_still, history)
+    return (f"板块「{board}」今日封板 {board_n} 家；{briefs}；"
+            f"{prev_txt}{hist_txt}")
+
+
+# ── KPL 直播播报行（AMMO 2026-10-28a G1，预登记 §4.3） ──
+
+def _lz_brief(lz_info: str, max_items: int = 4) -> str:
+    """KPL LZInfo 梯队串 → 「大业股份(6连板)、正强股份(首板)」简报（G4 交叉披露）。"""
+    parts = []
+    for seg in str(lz_info or "").split(";"):
+        f = [x.strip() for x in seg.split(",")]
+        if len(f) >= 3 and f[1] and f[2]:
+            parts.append(f"{f[1]}({f[2]})")
+        if len(parts) >= max_items:
+            break
+    return "、".join(parts)
+
+
+def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, *,
+                      plate_name: str, label_date: str, window_days: int = 5,
+                      zt_fetch_error: str | None = None) -> str | None:
+    """板块序列行（P1-1，G2/G3）：KPL 801xxx 稳定 ID 锚，双段口径各自如实标注。
+
+    - **层 1 连续段**：近 N 个交易日（韭研日轴）排名/强度/主力净额（raw[8]，**推断口径
+      待 App 同屏核对**，行内显式标注）——连续无缺口；
+    - **层 2 涨停家段**：ZTNum 仅记录有涨停家/爆发日（实测算力 28 天空窗），记录间缺口
+      **不能解读为零涨停**（可能是上游缺记），只列记录日并显式标注该限制——堵死
+      「无行=零涨停」的伪趋势误读（§4.0 禁伪装缺口）；
+    - 尾附当日 LZInfo 梯队串（G4：KPL 预计算，交叉披露**不替换自算口径**）。
+    rank_rows 与 zt_rows 均空 → None（调用方不出行；匹配状态由板块强度行披露）。
+    """
+    rank_rows = [r for r in (rank_rows or [])
+                 if str(r.get("date") or "") <= str(label_date)][-window_days:]
+    zt_rows = [r for r in (zt_rows or [])
+               if str(r.get("date") or "") <= str(label_date)][-window_days:]
+    if not rank_rows and not zt_rows and not zt_fetch_error:
+        return None
+    if not rank_rows and not zt_rows:
+        # P2-11（review）：层2 拉取失败不得静默缺席（§4.0）——失败行显式披露
+        return (f"板块序列（KPL「{plate_name}」·801xxx 稳定 ID 锚）："
+                f"层1/层2 均无记录；层2 涨停梯队历史拉取失败：{zt_fetch_error}（fail-visible）")
+    head = f"板块序列（KPL「{plate_name}」·801xxx 稳定 ID 锚）："
+    parts: list[str] = []
+    if rank_rows:
+        segs = []
+        for r in rank_rows:
+            qd = r.get("strength")
+            mn = r.get("main_net")
+            seg = f"{str(r['date'])[5:]} 强度{qd if isinstance(qd, (int, float)) else '?'}"
+            if isinstance(mn, (int, float)):
+                seg += f" 净额{mn / 1e8:+.1f}亿"
+            else:
+                seg += " 净额?"
+            segs.append(seg)
+        parts.append(f"近{len(segs)}交易日强度/净额（层1·净额推断口径待核）：" + "；".join(segs))
+    if zt_rows:
+        segs = [f"{str(r['date'])[5:]} 家{r['zt_num'] if r.get('zt_num') is not None else '?'}"
+                for r in zt_rows]
+        parts.append(f"板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）："
+                     + "；".join(segs))
+    if zt_rows:
+        last = zt_rows[-1]
+        lz = _lz_brief(last.get("lz_info") or "")
+        if lz:
+            # P1-3（review）：层2 仅记录有涨停家日，最新记录日≠标注日常见——
+            # 不得把昨日/更早的梯队串标成「当日」
+            day_txt = ("当日" if str(last.get("date")) == str(label_date)
+                       else f"{str(last.get('date'))[5:]}（最近记录日，非当日）")
+            parts.append(f"{day_txt}梯队串（KPL 预计算·交叉披露不替换自算口径）：{lz}")
+    return head + "；".join(parts)
+
+
+def kpl_live_line(entries: list[dict] | None, *, board: str, total: int = 0,
+                  window: str = "", unavailable: str | None = None,
+                  clip_chars: int = 120, max_items: int = 3) -> str:
+    """KPL 直播播报行（G1，用户裁决接入）：直播解说流按板块过滤后的原料行。
+
+    `entries` = [{time, comment}]（时间升序，由调用方过滤拼装）；`total` = 直播窗口内
+    总条数；`window` = 窗口文本（如「14:21~15:00」）；`unavailable` 给出时整行降级
+    （fail-visible：实时流不可回放/接口异常），不伪装成「无播报」。
+    大模型自动生成尾注由调用方剥离；本行只渲染，不做匹配（匹配在 operations 层，
+    复用 digest 关键词口径）。
+    """
+    head = f"KPL直播播报（实时流·仅标注时点可得"
+    if window:
+        head += f"，窗口 {window}"
+    head += f"，全窗 {total} 条）"
+    if unavailable:
+        return f"{head}：不可用（{unavailable}，fail-visible，不冒充）"
+    if not entries:
+        return (f"{head}：当日无「{board}」相关播报"
+                f"（fail-visible，无数据 ≠ 无催化）")
+    parts = []
+    for e in entries[:max_items]:
+        c = re.sub(r"\s+", " ", str(e.get("comment") or "")).strip()
+        if len(c) > clip_chars:
+            c = c[:clip_chars] + f"…[截断，原文 {len(c)} 字]"
+        parts.append(f"{e.get('time') or '时间不可考'} {c}")
+    more = len(entries) - max_items
+    tail = f"（另 {more} 条略，fail-visible 披露）" if more > 0 else ""
+    return head + "：" + "；".join(parts) + tail
+
+
 def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladder: int,
                    prev_board_n: int | None, prev_peers: int | None,
                    prev_total: int | None = None,
@@ -589,7 +857,7 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     if unsealed:
         leader_txt = f"待判龙一 {leader.get('name')}（{leader.get('code')}）今日未封板（断板反包候选"
         if gain10 is not None:
-            leader_txt += f"，10 日涨幅 {gain10:+.1f}% 居候选池首位"
+            leader_txt += f"，10 日涨幅 {gain10:+.1f}%（轨内未封候选首位）"
         leader_txt += "）"
     else:
         streak = leader.get("streak")
@@ -597,26 +865,8 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
         time_txt = str(leader.get("time") or "时间不可考")
         leader_txt = (f"龙头 {leader.get('name')}（{leader.get('code')}）"
                       f"{streak_txt}，首封 {time_txt}")
-    still_txt = (f"今日仍封 {prev_still} 只" if isinstance(prev_still, int)
-                 else (f"今日仍封 {prev_board_n} 只" if isinstance(prev_board_n, int)
-                       else "今日仍封不可考"))
-    if prev_peers is None:
-        prev_txt = "昨日同板块不可考"
-    elif isinstance(prev_still, int) and prev_total is not None:
-        prev_txt = (f"昨日该板块封板 {prev_total} 只，{still_txt}"
-                    f"（断板 {prev_total - prev_still}）")
-    elif prev_total is None:
-        prev_txt = f"昨日该板块封板总数不可考（{still_txt}）"
-    else:
-        duan = prev_total - prev_board_n if isinstance(prev_board_n, int) else None
-        duan_txt = (f"断板 {duan}" if duan is not None and duan >= 0 else "断板不可算")
-        prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}（{duan_txt}）"
-    hist_txt = ""
-    if history:
-        seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
-        hist_txt = f"；近 {len(history)} 日该板块封板家数（旧→新，缺口日不列）：{seq}"
-    elif history is not None and not history:
-        hist_txt = "；近数日家数序列不可考（历史日该板块名无收录或 THS 池缺失）"
+    prev_txt, hist_txt = _prev_history_txt(prev_peers, prev_board_n, prev_total,
+                                           prev_still, history)
     follow_txt = (f"板块内真连板≥{max(1, ((leader.get('streak') or 1)) - 1)} 的跟风 "
                   f"{followers_ge_ladder} 家"
                   if isinstance(followers_ge_ladder, int)
@@ -766,13 +1016,66 @@ def driver_cross_line(label_doc: dict | None) -> str:
     return head + " · ".join(parts) + tail
 
 
+# ── 涨停原因行 / 板块强度行（AMMO 2026-10-28a，v12 批次；预登记 §4.1/§4.3） ──
+
+def limitup_reason_line(entries: list[tuple[str, str | None]]) -> str | None:
+    """涨停原因行（v12，裁决③）：join 韭研板内解析 expound（已落库零外呼），仅待判龙一自身。
+
+    `entries` = [(标签, reason|None), ...]，标签如「主板龙一 菲林格尔」；板块成员原因
+    **不列**（2026-10-28 用户裁决：只需龙头自己的；板内同伴由既有板内解析行承载）。
+    单一事实源 = `jev_label_jiuyan.expound_reason()`（与打标链读口同源，禁第二套解析）。
+    entries 空 → None（调用方不出行）；缺失 → fail-visible「不可考」，不伪装成无催化。
+    """
+    if not entries:
+        return None
+    parts = [f"{label}={reason}" if str(reason or '').strip()
+             else f"{label}=不可考" for label, reason in entries]
+    missing = sum(1 for _, r in entries if not str(r or '').strip())
+    tail = f"（{missing}/{len(entries)} 不可考，fail-visible）" if missing == len(entries) \
+        else (f"（不可考 {missing}，fail-visible）" if missing else "")
+    return "涨停原因（韭研板内解析 expound，与打标链读口同源）：" + "；".join(parts) + tail
+
+
+def plate_strength_line(match: dict) -> str:
+    """板块强度行（v12 G2）：KPL 层1 RealRankingInfo（`get_sector_ranking`，按日查史口径）。
+
+    `match` 由调用方组装（取数/匹配一次，全板块共用）：
+    - {ok: True, rank, total, name, strength, pct} → 当日排名/强度/涨幅；
+    - {ok: False, reason: "unmatched"} → 名称桥未匹配（fail-visible，不猜近似）；
+    - {ok: False, reason: "fetch_failed: ..."} → 接口异常；
+    - 缺字段行如实「不可考」，不掩盖。v1 为当日单点（序列扩展另行立项，预登记 §9）。
+    """
+    if not isinstance(match, dict) or not match.get("ok"):
+        reason = (match or {}).get("reason") or "unknown"
+        return f"板块强度（KPL 801xxx 指数·按日查史口径）：不可用（{reason}，fail-visible，不冒充）"
+    rank, total = match.get("rank"), match.get("total")
+    rank_txt = (f"#{rank}/{total}" if isinstance(rank, int) and isinstance(total, int)
+                else "排名不可考")
+    strength = match.get("strength")
+    strength_txt = (f"强度 {strength}" if isinstance(strength, (int, float))
+                    else "强度不可考")
+    pct = match.get("pct")
+    pct_txt = f"板块涨幅 {pct}%" if isinstance(pct, (int, float)) else "涨幅不可考"
+    name = str(match.get("name") or "")
+    alias_txt = "，别名表" if match.get("aliasUsed") else ""
+    name_txt = (f"（匹配 KPL 板块「{name}」{alias_txt}）" if name
+                else "（名称桥匹配信息缺失，fail-visible）")
+    return (f"板块强度（KPL 801xxx 指数·按日查史口径{'' if name else '·未匹配'}）"
+            f"{name_txt}：当日排名 {rank_txt}，{strength_txt}，{pct_txt}")
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
                            forward_axis: str | None = None,
                            ladder_line: str | None = None,
                            zhaban_line: str | None = None,
-                           driver_cross: str | None = None) -> str:
+                           driver_cross: str | None = None,
+                           reason_line: str | None = None,
+                           plate_strength: str | None = None,
+                           series_line: str | None = None,
+                           live_line: str | None = None,
+                           segment: str | None = None) -> str:
     """投喂给 jev 的完整叙事（顺序固定，便于逐字复现与回归比对）。
 
     evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本），
@@ -784,22 +1087,75 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     （板内梯队形态）、`zhaban_line`（板内炸板面），均 None 不出行（旧调用形状不变）。
     `driver_cross`（AMMO 2026-10-27b）= 个股打标交叉行，排在空间锚后、证据块前；
     None 不出行（打标缺席由 driver_cross_line 出 fail-visible 缺席行，不走本参数）。
+    `plate_strength`（AMMO 2026-10-28a G2）= KPL 板块强度行，属板级盘面事实，排在炸板面行后、
+    基线前；None 不出行。`reason_line`（AMMO 2026-10-28a §4.1）= 涨停原因行（韭研 expound），
+    排在打标交叉行后、证据块前；None 不出行。
     """
     lines = [
         f"{date} 交易日 · {market_line}",
     ]
     if forward_axis:
         lines.append(forward_axis)
-    lines.append(f"待判龙头：{leader_name}（{leader_code}）")
+    # P1-4（review）：轨别身位必须在叙事头部显式标注（题面规则⑥/空间题⑤的前提
+    # 「若叙事标注分轨」，否则双轨龙一身位对模型不可见）
+    seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(segment)
+    seg_txt = f"〔{seg_cn}〕" if seg_cn else ""
+    lines.append(f"待判龙头：{leader_name}（{leader_code}）{seg_txt}")
     lines.append(structure)
     if ladder_line:
         lines.append(ladder_line)
     if zhaban_line:
         lines.append(zhaban_line)
+    if plate_strength:
+        lines.append(plate_strength)
+    if series_line:
+        lines.append(series_line)
+    if live_line:
+        lines.append(live_line)
     lines.append(baseline)
     if headroom:
         lines.append(headroom)
     if driver_cross:
         lines.append(driver_cross)
+    if reason_line:
+        lines.append(reason_line)
+    lines.append(evidence_block)
+    return "\n".join(lines)
+
+
+def build_sector_narrative(*, date: str, market_line: str, structure: str, baseline: str,
+                           evidence_block: str, board: str,
+                           forward_axis: str | None = None,
+                           ladder_line: str | None = None,
+                           zhaban_line: str | None = None,
+                           plate_strength: str | None = None,
+                           series_line: str | None = None,
+                           live_line: str | None = None,
+                           reason_line: str | None = None) -> str:
+    """板块级叙事（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3）。
+
+    与个股级叙事差异：头部「待判板块」，结构行=双龙一并列（structure_line_dual）；
+    基线行以第一轨（main 优先）龙一为参照行（分轨锚缺位如实，历史窗人群不随规则换代）；
+    **不含**空间锚行（空间题不在板块级子集）与个股打标交叉行（个股轴归各自龙头叙事，
+    板块级以涨停原因行提供带动证据关键词）。顺序固定，便于逐字复现与回归比对。
+    """
+    lines = [f"{date} 交易日 · {market_line}"]
+    if forward_axis:
+        lines.append(forward_axis)
+    lines.append(f"待判板块：{board}（龙一分轨：主板/双创各按空间板优先、首封最早取龙一，并列见结构行）")
+    lines.append(structure)
+    if ladder_line:
+        lines.append(ladder_line)
+    if zhaban_line:
+        lines.append(zhaban_line)
+    if plate_strength:
+        lines.append(plate_strength)
+    if series_line:
+        lines.append(series_line)
+    if live_line:
+        lines.append(live_line)
+    lines.append(baseline)
+    if reason_line:
+        lines.append(reason_line)
     lines.append(evidence_block)
     return "\n".join(lines)

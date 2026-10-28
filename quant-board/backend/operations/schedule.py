@@ -430,12 +430,15 @@ def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict
         for day in days:
             pending = col.count_documents({"tradingDate": day,
                                            "status": "ok",
+                                           # v12 拆题：板块级 doc（code=None）无结局可回填，不进 pending
+                                           "code": {"$ne": None},
                                            "outcomeSealedNextDay": None})
             # 后日（T+2）打板溢价 pending（2026-10-26 用户口径裁定：打板=T+1 入场无浮盈，
             # 博弈 T+2 溢价）：T+1 已封但 outcomeDay2 未回填的日子——注意 T+2 晚场景
             # pending=0 而 pending_day2>0，两判都要过才算无事可做。
             pending_day2 = col.count_documents({
                 "tradingDate": day, "status": {"$in": ["ok", "degraded"]},
+                "code": {"$ne": None},
                 "outcomeSealedNextDay": True,
                 "outcomeDay2.date": {"$exists": False}})
             if not pending and not pending_day2:

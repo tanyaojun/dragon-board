@@ -204,13 +204,39 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
         truncated = bool(not query) and len(docs) >= 500
         if not docs:
             return {"ok": True, "date": date, "no_data": True, "leaders": [], "count": 0}
+        # v12 A2 拆题：板块级 doc（docKind=sector）不单独出行，按 (date, board) 合入
+        # 同板块龙头行的深度/延续字段（v12 龙头行这两题为 None；legacy 行保留自有值回退）
+        sector_docs = {(str(d.get("tradingDate")), str(d.get("board"))): d
+                       for d in docs if d.get("docKind") == "sector"}
+        sector_count = len(sector_docs)
         rows = []
         for d in docs:
+            if d.get("docKind") == "sector":
+                continue
             ans = (d.get("answers") or {}).get("leader_nextday_continue") or {}
             model_ans = (d.get("modelAnswers") or {}).get("leader_nextday_continue") or {}
             # 键存在但值为 None（skipped 文档 answers=None）时 `d.get("answers", {})` 会返回
             # None → `.get` 崩 → 读口 502（2026-10-23 实测）；统一 `or {}` 模式
             stage = (d.get("answers") or {}).get("catalyst_stage") or {}
+            # v12 A2：深度/延续优先取板块级 doc（龙头行 v12 起不再携带）；legacy 行回退自有值
+            sec = sector_docs.get((str(d.get("tradingDate")), str(d.get("board"))))
+            if sec is not None:
+                depth_src = ((sec.get("answers") or {}).get("theme_speculation_depth") or {})
+                contn_src = ((sec.get("answers") or {}).get("theme_continuation") or {})
+            else:
+                depth_src = ((d.get("answers") or {}).get("theme_speculation_depth") or {})
+                contn_src = ((d.get("answers") or {}).get("theme_continuation") or {})
+            # v12 分轨：main/growth；v12 及以后档缺 segment 显式标 legacy（fail-visible，
+            # 不伪装成轨内行）；v11 及以前旧行版本徽章已可辨，不重复标。
+            # P1-2（review）：版本号数值比较——字典序 "v9" >= "v12" 为 True 会把 v2-v9 误标 legacy
+            def _ver_num(v: Any) -> int:
+                try:
+                    return int(str(v or "")[1:])
+                except (ValueError, TypeError):
+                    return 0
+            segment = d.get("segment")
+            segment_label = segment or (
+                "legacy" if _ver_num(d.get("questionSetVersion")) >= 12 else None)
             row = {
                 "docId": d.get("_id"),
                 "tradingDate": d.get("tradingDate"),
@@ -230,24 +256,31 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 "modelChoice": model_ans.get("choice"),
                 "modelProbabilities": model_ans.get("probabilities"),
                 "catalystStage": stage.get("choice"),
-                # v5：题材层三层判断（旧代文档 catalystStage 保留回读）
-                "themeSpeculationDepth": ((d.get("answers") or {}).get(
-                    "theme_speculation_depth") or {}).get("choice"),
-                "themeContinuation": ((d.get("answers") or {}).get(
-                    "theme_continuation") or {}).get("choice"),
+                # v12 分轨：main/growth/legacy（见上）
+                "segment": segment,
+                "segmentLabel": segment_label,
+                # v12 A2：深度/延续合并自板块级 doc（legacy 行回退自有值）
+                "themeSpeculationDepth": depth_src.get("choice"),
+                "themeSpeculationDepthConfidence": depth_src.get("confidence"),
+                "themeContinuation": contn_src.get("choice"),
+                "themeContinuationConfidence": contn_src.get("confidence"),
+                "sectorDocId": (sec or {}).get("_id"),
+                "sectorQuestionSetVersion": (sec or {}).get("questionSetVersion"),
                 "leaderHeadroom": ((d.get("answers") or {}).get(
                     "leader_headroom") or {}).get("choice"),
                 # v5 四题逐题模型置信度（2026-10-24 用户需求「置信度必须可视化」；
-                # 旧代文档缺 confidence 时为 None，前端缺省不显示，fail-visible）
+                # 旧代文档缺 confidence 时为 None，前端缺省不显示，fail-visible）；
+                # v12 拆题：深度/延续置信度已在上方取板块级 doc（此处不再从龙头行重复取）
                 "choiceConfidence": ans.get("confidence"),
-                "themeSpeculationDepthConfidence": ((d.get("answers") or {}).get(
-                    "theme_speculation_depth") or {}).get("confidence"),
-                "themeContinuationConfidence": ((d.get("answers") or {}).get(
-                    "theme_continuation") or {}).get("confidence"),
                 "leaderHeadroomConfidence": ((d.get("answers") or {}).get(
                     "leader_headroom") or {}).get("confidence"),
+                # v12 复盘 audit 标记（2026-10-28 两案：read口透传，页面徽章展示）
+                "auditFlag": d.get("auditFlag"),
+                "auditNote": d.get("auditNote"),
                 "outcomeBoardNNextDay": d.get("outcomeBoardNNextDay"),
                 "gate": d.get("gate"),
+                # P2-2：结构化引用说明（模型产出才非空；引用义务的程序核验原料）
+                "answerReasons": d.get("answerReasons") or {},
                 "evidenceMissing": bool(d.get("evidenceMissing")),
                 "evidenceMissingReason": d.get("evidenceMissingReason"),
                 "evidenceIndustry": d.get("evidenceIndustry"),
@@ -285,6 +318,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 row["narrative"] = d.get("narrative")
                 row["questionsRaw"] = d.get("questionsRaw")
                 row["responseRaw"] = d.get("responseRaw")
+                if sec is not None:
+                    row["sectorNarrative"] = sec.get("narrative")   # 板块级叙事（双龙一并列）
             if d.get("leaderSuperseded"):
                 row["_superseded"] = True   # 内部标记：下行过滤掉，不出响应
             rows.append(row)
@@ -305,6 +340,7 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
             "range": None if date else {"start": start, "end": end},
             "dates": None if date else dates,
             "count": len(rows),
+            "sectorCount": sector_count,
             "supersededCount": superseded_count,
             "truncated": truncated,   # 无参全量触顶 500（响应注记，§4.0 不静默截断）
             "versions": versions, "mixedVersions": len(versions) > 1,
@@ -322,7 +358,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
 
 
 class ThemeLeaderRerunPayload(BaseModel):
-    """单只龙头-日重跑（页面【重跑】按钮；真实调用 jev ≈2.3K tokens/次）。"""
+    """单只龙头-日重跑（页面【重跑】按钮；真实调用 jev ≈5-6K tokens/次（v12 叙事变长）；
+    force 下同板块 sector doc 一并重烧再 +≈5K）。"""
     date: str
     code: str
     datasetId: str | None = None

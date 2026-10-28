@@ -315,7 +315,7 @@ def test_detail_card_has_rerun_button(html: str) -> None:
     assert 'button class="rerun"' in detail, "明细卡必须有重跑按钮"
     assert "tlRerun(" in detail and "stopPropagation" in detail
     assert "重跑中…" in detail, "busy 态文案"
-    assert "2.3K tokens" in detail, "confirm 警示必须写明成本"
+    assert "5-6K tokens" in detail, "confirm 警示必须写明成本（v12 实际）"
     fn = _fn(html, "tlRerun")
     assert "window.confirm" in fn, "重跑前必须 confirm"
     assert "STATE.rerunBusy" in fn, "必须复用全局 busy 防并发（同 relay）"
@@ -475,3 +475,19 @@ def test_unsealed_leader_badge_in_streak_cell(html: str) -> None:
     row = _fn(html, "tlRowHtml")
     assert "leaderSealedToday === false" in row, "未封板判定必须消费路由新字段"
     assert "未封板" in row and "gain10" in row, "徽章带 10日涨幅身位"
+
+
+def test_segment_audit_badges_and_seal_tooltip(html: str) -> None:
+    """P2-8（review）：v12 分轨/audit 徽章必须挂行；未封板 tooltip 描述与 v12
+    复合排序实现一致（空间板组整体优先·组内 gain10 最高，非「首封最早优先」）。"""
+    row = _fn(html, "tlRowHtml")
+    assert "tlSegBadge(r)" in row, "板块格必须挂分轨徽章（主板/双创/legacy）"
+    assert "tlAuditBadge(r)" in row, "日期格必须挂 audit 徽章（复盘标记）"
+    assert "高度≥2 空间板组整体优先" in row,         "未封板 tooltip 必须写 v12 复合排序真实规则（P2-7 矛盾修复）"
+    assert "仅当轨内无当日封板候选时成龙一" not in row, "旧 tooltip 矛盾描述不得残留"
+
+
+def test_seal_tooltip_mentions_limit_down_rule(html: str) -> None:
+    """tooltip 覆盖断板反包候选的未跌停条件（v12 规则的一部分，页面可读）。"""
+    row = _fn(html, "tlRowHtml")
+    assert "未跌停才可候选" in row

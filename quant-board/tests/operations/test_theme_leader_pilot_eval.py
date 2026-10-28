@@ -40,9 +40,26 @@ class FakeCol:
         return self.docs[0] if self.docs else None
 
     def find(self, query=None, projection=None):
+        # P2 修复（review 同源）：支持 $ne/$in/$nin/$exists 富匹配——evaluate 的
+        # v12 拆题查询（code $ne None）此前在此恒不匹配，整组测试走的是假路径
+        def _match(d, k, v):
+            val = d.get(k)
+            if isinstance(v, dict):
+                for op, arg in v.items():
+                    if op == "$ne" and val == arg:
+                        return False
+                    if op == "$in" and val not in arg:
+                        return False
+                    if op == "$nin" and val in arg:
+                        return False
+                    if op == "$exists" and bool(arg) != (val is not None):
+                        return False
+                return True
+            return val == v
+
         out = []
         for d in self.docs:
-            if all(d.get(k) == v for k, v in (query or {}).items()):
+            if all(_match(d, k, v) for k, v in (query or {}).items()):
                 out.append(dict(d))
         return out
 

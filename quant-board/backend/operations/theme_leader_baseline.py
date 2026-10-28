@@ -17,8 +17,38 @@ from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.analysis.hotlist.theme_leader_ammo import (rank_board_stocks,
-                                                        rank_board_stocks_space)
+                                                        segment_of,
+                                                        space_leaders_by_segment)
 from backend.operations.tdx_daily_bars import fetch_gains10 as _fetch_gains10
+
+
+def _default_day_change_fetcher(codes: list[str], date: str) -> dict[str, float | None]:
+    """当日涨跌幅%（close vs 前一交易日 close）：断板候选跌停剔除用（v12「未跌停」条件）。
+
+    拉不到日线/当日不在轴/前收缺失 → None（调用方不剔除，不猜，fail-visible）。
+    """
+    from backend.operations.tdx_daily_bars import fetch_daily_bars
+    out: dict[str, float | None] = {}
+    for c in codes:
+        try:
+            bars = fetch_daily_bars(c)
+        except Exception:  # noqa: BLE001 — TDX 异常不阻断（不猜，缺者保留）
+            out[c] = None
+            continue
+        dates = sorted(bars)
+        try:
+            i = dates.index(str(date))
+        except ValueError:
+            out[c] = None
+            continue
+        if i == 0:
+            out[c] = None
+            continue
+        prev_close = bars[dates[i - 1]].get("close")
+        cur_close = bars[date].get("close")
+        out[c] = (round((cur_close / prev_close - 1) * 100, 2)
+                  if prev_close and cur_close else None)
+    return out
 
 
 def sealed_and_info(db: Any, date: str,
@@ -36,7 +66,7 @@ def sealed_and_info(db: Any, date: str,
 def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                     prev_date: str | None = None, *,
                     space_mode: bool = False, pool_dates: list[str] | None = None,
-                    gain_fetcher=None) -> tuple[list[dict] | None, dict]:
+                    gain_fetcher=None, day_change_fetcher=None) -> tuple[list[dict] | None, dict]:
     """当日各板块龙头的结构事实行（**不含次日结局**）。
 
     `prev_date` 给出时补 `prevPeers`/`prevBoardN`（昨日同板块其它封板股家数）——承接强度特征；
@@ -49,12 +79,16 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
 
     **space_mode（2026-10-27 用户裁决：龙一=10日涨幅最高，非真连板）**：候选池=当日封板池
     ∪ `pool_dates`（近 3 个交易日）封板池（同板块，覆盖断板反包——空间龙一断板日仍须在列），
-    排序=10日涨幅→真连板高度→首封最早；行另带 `gain10`（龙一 10 日涨幅）与
+    排序=当日首封最早→真连板高度→10日涨幅（v12，2026-10-28 用户再裁决）；行另带
+    `gain10`（龙一 10 日涨幅，次级排序键/身位披露）与
     `leaderSealedToday`（False=断板反包候选，streak/time 如实 None，ladderFollowers 不可算）。
     **仅当日标注链启用**（leaders_for）；基线/历史窗口（build_rows/board_count_history/
     sector_nodes 等）维持 streak 口径——历史样本人群定义不随规则换代漂移，断板反包龙一
     无同构历史锚属如实缺位（预登记 §21.6）。TDX 拉不到涨幅（全候选 None）→ 该板块跳过
     + `meta["spaceErrors"]` 披露（用户裁决 fail-visible，不降级旧规则）。
+    **v12 分轨（2026-10-28 用户裁决，预登记 theme-leader-v12 §2.1）**：space_mode 下主板/
+    双创各按同一排序键独立取龙一（`space_leaders_by_segment`），每板块 ≤2 行，行带
+    `segment`（main/growth）；历史窗口径不加 segment（样本人群不随规则换代）。
     返回 `(rows, meta)`；`rows=None` 表示当日 THS 池缺失（不可二分，fail-visible，调用方自己决定跳过口径）。
     """
     from backend.operations.jev_label_jiuyan import jiuyan_streak_map
@@ -100,12 +134,17 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     # 昨日池候选 streak/time 如实 None（未封板），今日池候选以今日口径为准（去重今日优先）。
     pool_prev: dict[str, list[dict]] = defaultdict(list)
     if space_mode:
-        for pd in (pool_dates or []):
+        # P0 修复（code review 2026-10-28）：pool_dates 升序，原顺序遍历 + `not in have`
+        # 去重会保留**最旧**池日的 histStreak——多日连板断板股（d-3 首板、d-1 二板、今日断板）
+        # height 系统性塌成首板，丢失空间板组资格。改新→旧遍历：先见即最近封板日。
+        for pd in reversed(pool_dates or []):
             if not pd or pd == date:
                 continue
             p_sealed, _pinfo, _pmeta = sealed_and_info(db, pd, dataset_id)
             if not p_sealed:
                 continue
+            # v12 定稿：断板候选带最近封板日真连板高度（三种情况均参与空间板判定）
+            p_streaks = jiuyan_streak_map(db, pd, dataset_id)
             pdoc = db["jiuyan_action"].find_one({"_id": f"{pd}:final"}, {"fields": 1}) or {}
             for field in pdoc.get("fields") or []:
                 bname = str(field.get("name") or "")
@@ -114,7 +153,8 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                     pcode = str(st.get("code") or "")[-6:]
                     if pcode in p_sealed and pcode not in have:
                         pool_prev[bname].append({"code": pcode, "name": st.get("name"),
-                                                 "time": None, "streak": None})
+                                                 "time": None, "streak": None,
+                                                 "histStreak": p_streaks.get(pcode)})
                         have.add(pcode)
 
     rows: list[dict] = []
@@ -132,67 +172,108 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             if not any(isinstance(c.get("gain10"), (int, float)) for c in cands):
                 space_errors[board] = "10日涨幅不可算（TDX 日线不可用），板块跳过（fail-visible 裁决）"
                 continue
-            leader = rank_board_stocks_space(cands)[0]
-            sealed_today = leader["code"] in sealed
+            # P2-6（review）：整轨全缺 gain10 → 该轨龙一按首封时间降级选出，按轨披露
+            for _seg in ("main", "growth"):
+                _seg_c = [c for c in cands if segment_of(c["code"]) == _seg]
+                if _seg_c and not any(isinstance(c.get("gain10"), (int, float))
+                                      for c in _seg_c):
+                    meta.setdefault("spaceTrackGaps", {}).setdefault(board, []).append(
+                        f"{_seg}轨10日涨幅全缺，龙一按首封时间降级选出（fail-visible）")
+            # v12 定稿（用户 2026-10-28 三轮裁决）：height=当日 streak 与近 3 日历史高度取大
+            # （真连板/断板反包/断板不反包三种情况均参与空间板判定）；断板不反包且今日
+            # 跌停（主板 ≤-9.9%/双创 ≤-19.9%）剔除（「未跌停」条件，fail-visible 披露）
+            hist_by_code: dict[str, int] = {}
+            for c in pool_prev.get(board, []):
+                h = c.get("histStreak")
+                if isinstance(h, int):
+                    hist_by_code[c["code"]] = max(h, hist_by_code.get(c["code"], h))
+            unsealed = [c for c in cands if c["code"] not in today_codes]
+            limit_down_excluded: list[str] = []
+            if unsealed:
+                changes = (day_change_fetcher or _default_day_change_fetcher)(
+                    [c["code"] for c in unsealed], date)
+                kept_unsealed: set[str] = set()
+                for c in unsealed:
+                    chg = changes.get(c["code"])
+                    seg = segment_of(c["code"])
+                    thr = -19.9 if seg == "growth" else -9.9
+                    if isinstance(chg, (int, float)) and chg <= thr:
+                        limit_down_excluded.append(
+                            f"{c.get('name') or c['code']}({chg:+.1f}%)")
+                    else:
+                        kept_unsealed.add(c["code"])   # 涨跌幅不可考→保留（不猜）
+                if limit_down_excluded:
+                    meta.setdefault("limitDownExcluded", {})[board] = limit_down_excluded
+                cands = [c for c in cands if c["code"] in today_codes
+                         or c["code"] in kept_unsealed]
+            for c in cands:
+                hs = [h for h in (c.get("streak") if c["code"] in today_codes else None,
+                                  hist_by_code.get(c["code"])) if isinstance(h, int)]
+                c["height"] = max(hs) if hs else None
+            # v12 分轨：主板/双创各取龙一（同一排序键，space_leaders_by_segment 单一实现）
+            leaders_iter = [(seg, ld, ld["code"] in sealed)
+                            for seg, ld in space_leaders_by_segment(cands)]
         else:
-            leader = rank_board_stocks(stocks)[0]
-            sealed_today = True
-        leader_streak = leader["streak"] if sealed_today else None
-        leader_time = leader["time"] if sealed_today else None
-        others = [s for s in stocks if s["code"] != leader["code"]]
-        prev_peers = (sum(1 for s in others if s["code"] in prev_sealed)
-                      if prev_sealed is not None else None)
-        # 板内梯队形态（2026-10-24c）：首板/2板/3板+ 分布 + 次高连板——深度题 climax 判据
-        # 「首板潮/中军成形/高标分化」「龙头高度显著领先」此前只有总数与跟风数两点
-        shape = {"first": 0, "two": 0, "threePlus": 0, "unknown": 0}
-        for s in stocks:
-            sv = s["streak"]
-            if sv is None:
-                shape["unknown"] += 1
-            elif sv == 1:
-                shape["first"] += 1
-            elif sv == 2:
-                shape["two"] += 1
-            else:
-                shape["threePlus"] += 1
-        second_streak = max((s["streak"] for s in others
-                             if isinstance(s["streak"], int)), default=None)
-        prev_total = (len(prev_board_codes.get(board, set()))
-                      if prev_sealed is not None else None)
-        # 断板口径（2026-10-24d）：同名板块成员——昨日同名封板股中今日仍封数。
-        # 不用 prevBoardN（今日成员交集，含昨日他板块迁入股）：迁移场景减出负数。
-        prev_still = (len(prev_board_codes.get(board, set()) & sealed)
-                      if prev_sealed is not None else None)
-        rows.append({
-            "date": date, "board": board,
-            "code": leader["code"], "name": leader.get("name"),
-            "streak": leader_streak, "time": leader_time,
-            "boardN": len(stocks), "othersN": len(others),
-            # 板内跟风：>=(leader streak-1)；龙一未封板（断板反包候选）→ 梯队跟风不可算
-            "ladderFollowers": (None if not sealed_today else sum(
-                1 for s in others
-                if (s["streak"] or 0) >= max(1, (leader_streak or 1) - 1))),
-            "prevPeers": prev_peers,
-            "prevBoardN": (sum(1 for s in stocks if s["code"] in prev_sealed)
-                           if prev_sealed is not None else None),
-            # 2026-10-24c 板面扩容：昨日封板总数/断板、今日与昨日板内触板未封、
-            # 梯队形态与次高连板（prevBoardN 语义仍是「昨日封板且今日仍封」按今日成员，
-            # 叙事行不再把它误写为「昨日封板总数」）；2026-10-24d 增 prevStill（同名成员仍封，
-            # 断板=prevTotal−prevStill 恒 ≥0）
-            "prevTotal": prev_total,
-            "prevStill": prev_still,
-            "zhabanN": zhaban_of.get(board, 0),
-            "prevZhabanN": (prev_board_zhaban.get(board)
-                            if prev_sealed is not None else None),
-            "ladderShape": shape,
-            "secondStreak": second_streak,
-            "peerCodes": [s["code"] for s in others],
-            # 板内封板名单（v3 板内解析用：让 L2 计数与 boardN 同口径，不把触板未封混进来）
-            "boardCodes": [s["code"] for s in stocks],
-            # 2026-10-27 空间龙一规则：10 日涨幅（排序依据）+ 未封板标记（断板反包候选）
-            "gain10": (leader.get("gain10") if space_mode else None),
-            "leaderSealedToday": sealed_today,
-        })
+            leaders_iter = [(None, rank_board_stocks(stocks)[0], True)]
+        for seg, leader, sealed_today in leaders_iter:
+            leader_streak = leader["streak"] if sealed_today else None
+            leader_time = leader["time"] if sealed_today else None
+            others = [s for s in stocks if s["code"] != leader["code"]]
+            prev_peers = (sum(1 for s in others if s["code"] in prev_sealed)
+                          if prev_sealed is not None else None)
+            # 板内梯队形态（2026-10-24c）：首板/2板/3板+ 分布 + 次高连板——深度题 climax 判据
+            # 「首板潮/中军成形/高标分化」「龙头高度显著领先」此前只有总数与跟风数两点
+            shape = {"first": 0, "two": 0, "threePlus": 0, "unknown": 0}
+            for s in stocks:
+                sv = s["streak"]
+                if sv is None:
+                    shape["unknown"] += 1
+                elif sv == 1:
+                    shape["first"] += 1
+                elif sv == 2:
+                    shape["two"] += 1
+                else:
+                    shape["threePlus"] += 1
+            second_streak = max((s["streak"] for s in others
+                                 if isinstance(s["streak"], int)), default=None)
+            prev_total = (len(prev_board_codes.get(board, set()))
+                          if prev_sealed is not None else None)
+            # 断板口径（2026-10-24d）：同名板块成员——昨日同名封板股中今日仍封数。
+            # 不用 prevBoardN（今日成员交集，含昨日他板块迁入股）：迁移场景减出负数。
+            prev_still = (len(prev_board_codes.get(board, set()) & sealed)
+                          if prev_sealed is not None else None)
+            rows.append({
+                "date": date, "board": board,
+                # v12 分轨：segment 仅 space_mode 出（main/growth）；历史窗口径无此字段
+                "segment": seg,
+                "code": leader["code"], "name": leader.get("name"),
+                "streak": leader_streak, "time": leader_time,
+                "boardN": len(stocks), "othersN": len(others),
+                # 板内跟风：>=(leader streak-1)；龙一未封板（断板反包候选）→ 梯队跟风不可算
+                "ladderFollowers": (None if not sealed_today else sum(
+                    1 for s in others
+                    if (s["streak"] or 0) >= max(1, (leader_streak or 1) - 1))),
+                "prevPeers": prev_peers,
+                "prevBoardN": (sum(1 for s in stocks if s["code"] in prev_sealed)
+                               if prev_sealed is not None else None),
+                # 2026-10-24c 板面扩容：昨日封板总数/断板、今日与昨日板内触板未封、
+                # 梯队形态与次高连板（prevBoardN 语义仍是「昨日封板且今日仍封」按今日成员，
+                # 叙事行不再把它误写为「昨日封板总数」）；2026-10-24d 增 prevStill（同名成员仍封，
+                # 断板=prevTotal−prevStill 恒 ≥0）
+                "prevTotal": prev_total,
+                "prevStill": prev_still,
+                "zhabanN": zhaban_of.get(board, 0),
+                "prevZhabanN": (prev_board_zhaban.get(board)
+                                if prev_sealed is not None else None),
+                "ladderShape": shape,
+                "secondStreak": second_streak,
+                "peerCodes": [s["code"] for s in others],
+                # 板内封板名单（v3 板内解析用：让 L2 计数与 boardN 同口径，不把触板未封混进来）
+                "boardCodes": [s["code"] for s in stocks],
+                # 2026-10-27 空间龙一规则：10 日涨幅（排序依据）+ 未封板标记（断板反包候选）
+                "gain10": (leader.get("gain10") if space_mode else None),
+                "leaderSealedToday": sealed_today,
+            })
     if space_mode:
         meta["leaderMode"] = "space"
         if space_errors:

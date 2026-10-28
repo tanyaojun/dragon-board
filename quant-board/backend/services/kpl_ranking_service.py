@@ -543,6 +543,55 @@ def get_live_commentary(st: int = 30) -> Dict[str, Any]:
     return payload
 
 
+# ── 板块日度历史（层2，2026-10-28 接入：题材龙头链板块序列行原料，P1-1） ──
+# 实测（2026-10-28，801159 机器人概念 Count=303 全史）：行=Date/ZTNum(当日板块涨停数)/
+# QD(强度)/LZInfo(龙头梯队串「code,名,N连板;…」KPL 预计算)/LZInfo_ZF/IsBoom/Title(催化)。
+# 参数对版本敏感：VerSion 5.13.0.0 组合返空，5.23.0.4+apiv w44 实测有数——上游漂移频繁，
+# 失败抛 KplRankingError 由调用方 fail-visible。历史不变 → 12h TTL。
+_PLATE_HIST_TTL_SECONDS = 12 * 3600.0
+
+
+def get_plate_daily_history(plate_id: str, limit: int = 60) -> Dict[str, Any]:
+    """板块日度历史（层2 ZhiShuKLine/GetDayBaseFaceListZDEvnArt，单发全量窗口）。
+
+    返回 {"ok": True, "plate_id": ..., "items": [{date, zt_num, qd, lz_info, lz_info_zf,
+    is_boom, title}, ...]}（date 升序）；上游/业务错误抛 KplRankingError。LZInfo 原样
+    保留（KPL 预计算梯队串，消费方交叉披露不替换自算口径——单一事实源红线）。
+    """
+    limit = max(1, min(int(limit), 100))
+    key = f"plthist:{plate_id}:{limit}"
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    data = _post_form(
+        _HOST_HISTORY,
+        {"a": "GetDayBaseFaceListZDEvnArt", "c": "ZhiShuKLine", "StockID": str(plate_id),
+         "IsBoom": 0, "Index": 0, "st": limit,
+         "VerSion": "5.23.0.4", "PhoneOSNew": 1, "apiv": "w44",
+         **{k: KPL_APP_BASE_PARAMS[k] for k in ("UserID", "DeviceID", "Token")}},
+        _UA_STOCKS)
+    _check_errcode(data)
+    rows = data.get("List") or data.get("list") or []
+    items = []
+    for r in rows:
+        if not isinstance(r, dict) or not r.get("Date"):
+            continue
+        items.append({
+            "date": str(r["Date"]),
+            "zt_num": r.get("ZTNum") if isinstance(r.get("ZTNum"), (int, float)) else None,
+            "qd": r.get("QD") if isinstance(r.get("QD"), (int, float)) else None,
+            "lz_info": str(r.get("LZInfo") or ""),
+            "lz_info_zf": r.get("LZInfo_ZF"),
+            "is_boom": r.get("IsBoom"),
+            "title": str(r.get("Title") or "")[:120],
+        })
+    items.sort(key=lambda x: x["date"])
+    payload = {"ok": True, "plate_id": str(plate_id), "items": items, "count": len(items)}
+    if items:
+        _cache[key] = (time.time() + _PLATE_HIST_TTL_SECONDS, payload)
+    return payload
+
+
 # ── 竞昨比原料（2026-10-28）：昨日日K（昨收/昨量），腾讯 ifzq 逐股 ─────────────
 # 背景：2103 竞价 quotas（28 位实测）不含竞价成交量与昨日成交量；竞昨比
 # （竞价成交量/昨日成交量×100%）按如下口径派生：

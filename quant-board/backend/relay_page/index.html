@@ -2708,6 +2708,23 @@ function tlVerBadge(r){
   return '<span class="badge ' + (cur ? 'b-gray' : 'b-amber') + '" title="' + esc(tip)
     + '">' + esc(r.questionSetVersion) + '</span>';
 }
+// v12 分轨徽章：主板/双创（main/growth）；v12+ 档缺 segment 显式标 legacy（读口已算）
+function tlSegBadge(r){
+  const s = r.segmentLabel || r.segment;
+  if (!s) return '';
+  const cn = s === 'main' ? '主板' : s === 'growth' ? '双创' : '旧口径';
+  const tip = s === 'main' ? '主板轨龙一（60/000-003）'
+    : s === 'growth' ? '双创轨龙一（创业板/科创板）'
+    : 'v12 前旧口径行（未分轨，单龙一）';
+  return '<span class="badge ' + (s === 'main' ? 'b-blue' : s === 'growth' ? 'b-purple' : 'b-gray')
+    + '" title="' + esc(tip) + '">' + cn + '</span>';
+}
+// v12 复盘 audit 徽章（2026-10-28 两案：文投 10-27/10-28）
+function tlAuditBadge(r){
+  if (!r.auditFlag) return '';
+  return '<span class="badge b-amber" title="' + esc(r.auditNote || '复盘标记案例行')
+    + '">复盘</span>';
+}
 function tlRowHtml(r, f){
   const p = tlProb(r);
   const open = f.openKey === tlKey(r);
@@ -2781,12 +2798,12 @@ function tlRowHtml(r, f){
       + '" onclick="tlRow(\'' + dkey + '\')">'
     + '<td class="num"><span class="lg-caret" title="展开/收敛 JEV 调用日志"'
       + ' onclick="event.stopPropagation(); tlToggle(\'' + js(tlKey(r)) + '\')">▶</span>'
-      + esc((r.tradingDate || '').slice(5)) + tlVerBadge(r) + '</td>'
+      + esc((r.tradingDate || '').slice(5)) + tlVerBadge(r) + tlAuditBadge(r) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
-    + '<td>' + esc(r.board || '-') + '</td>'
+    + '<td>' + esc(r.board || '-') + tlSegBadge(r) + '</td>'
     + '<td class="num">' + (r.leaderSealedToday === false
-        ? '<span class="tl-ev" title="空间龙一规则（10-27 用户裁决）：10日涨幅最高定龙一；当日未封板=断板反包候选，10日涨幅 '
+        ? '<span class="tl-ev" title="龙一复合排序（v12 用户三轮裁决）：高度≥2 空间板组整体优先、组内 10 日涨幅最高；全首板按当日首封最早。当日未封板=断板反包候选（未跌停才可候选），仍按 10 日涨幅参与组内排序；10日涨幅 '
           + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '">未封板</span>'
         : (r.streak == null ? '-' : esc(String(r.streak)))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
@@ -2882,7 +2899,7 @@ function tlDetailHtml(r){
   const rerunBtnHtml = '<button class="rerun"'
     + (busy ? ' disabled'
         : anyBusy ? ' disabled title="另有重跑进行中，防并发烧 token"'
-        : ' title="真实调用 jev 模型重判该龙头-日（约 2.3K tokens），仅用于网络抖动导致 degraded/需更新时"')
+        : ' title="真实调用 jev 模型重判该龙头-日（约 5-6K tokens，v12 叙事变长；同板块 doc 幂等跳过、degraded 时一并自愈再 +≈5K），仅用于网络抖动导致 degraded/需更新时"')
     + ' onclick="event.stopPropagation(); tlRerun(\'' + js(tKey) + '\')">'
     + (busy ? '重跑中…' : '重跑') + '</button>';
   const rm = (STATE.rerunMsg && STATE.rerunMsg.key === tKey)
@@ -2985,7 +3002,7 @@ function tlToggle(key){
   const r = tlRows().find(x => tlKey(x) === key);
   if (r && !STATE.tlNarr[key]) void tlLoadNarrative(r);
 }
-// 单只龙头-日重跑（对齐 relayRerun 范式）：confirm（≈2.3K tokens）→ busy 全局防并发 →
+// 单只龙头-日重跑（对齐 relayRerun 范式）：confirm（≈5-6K tokens）→ busy 全局防并发 →
 // POST /theme-leaders/rerun（force 覆盖幂等）→ 清 narrative 缓存 → 静默 loadAll（不闪列表）。
 function tlRerun(key){
   if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
@@ -2993,7 +3010,8 @@ function tlRerun(key){
   const date = key.slice(0, idx), code = key.slice(idx + 1);
   const ok = window.confirm(`重跑 ${date} ${code} 龙头投喂？
 
-将真实调用 jev 模型（约 2.3K tokens）重新生成投喂语料并重判、覆盖存档（回填档保持回填标记；结局字段将清空，由次日自愈/评估回填）。
+将真实调用 jev 模型（约 5-6K tokens，v12 叙事变长）重新生成投喂语料并重判、覆盖存档（回填档保持回填标记；结局字段将清空，由次日自愈/评估回填）。
+同板块 doc 若已 status=ok 则幂等跳过；若 degraded 将一并重烧（再 +≈5K）。
 建议仅在网络抖动导致 degraded 时使用。`)
   if (!ok) return;
   STATE.rerunBusy = key;

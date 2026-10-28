@@ -410,6 +410,41 @@ def test_rerun_passes_default_dataset_id_and_preserves_sample_origin(monkeypatch
 
 
 # ── 回归（2026-10-23 实测 502）：skipped 文档 answers=None 不得崩读口 ──────
+def test_v12_sector_merge_segment_label_and_audit_fields(monkeypatch):
+    """P2-8（review）：v12 读口四件套——①sector doc 深度/延续合并；②segmentLabel
+    数值版判（v12 缺 segment=legacy；v2-v9 旧行不误标）；③answerReasons 透传；
+    ④auditFlag/auditNote 透传。"""
+    sector = {
+        "_id": "2026-10-16:board:机器人", "tradingDate": "2026-10-16",
+        "code": None, "docKind": "sector", "board": "机器人", "status": "ok",
+        "questionSetVersion": "v12",
+        "answers": {"theme_speculation_depth": {"choice": "igniting", "confidence": 0.6},
+                    "theme_continuation": {"choice": "strong_extend", "confidence": 0.7}},
+        "answerReasons": {"theme_continuation": "锚…基线…"},
+    }
+    v12_leader = _doc("603278", "机器人", questionSetVersion="v12", segment="main",
+                      auditFlag="v12-case-review", auditNote="文投复核",
+                      answerReasons={"leader_nextday_continue": "基线 34.3%（420）"})
+    v12_noseg = _doc("605488", "机器人", questionSetVersion="v12")   # segment 键缺失
+    v9_old = _doc("300001", "机器人", questionSetVersion="v9")
+    client = _client(monkeypatch, [sector, v12_leader, v12_noseg, v9_old])
+    r = client.get("/api/hotlist-jev/theme-leaders", params={"date": "2026-10-16"})
+    assert r.status_code == 200
+    rows = {x["code"]: x for x in r.json()["leaders"]}
+    lead = rows["603278"]
+    # ① sector 合并
+    assert lead["themeSpeculationDepth"] == "igniting"
+    assert lead["themeContinuation"] == "strong_extend"
+    assert lead["sectorDocId"] == "2026-10-16:board:机器人"
+    assert lead["segmentLabel"] == "main" and lead["segment"] == "main"
+    # ② 数值版判：v12 缺 segment → legacy；v9 不误标
+    assert rows["605488"]["segmentLabel"] == "legacy"
+    assert rows["300001"]["segmentLabel"] is None
+    # ③④ 透传
+    assert lead["answerReasons"] == {"leader_nextday_continue": "基线 34.3%（420）"}
+    assert lead["auditFlag"] == "v12-case-review" and lead["auditNote"] == "文投复核"
+
+
 def test_theme_leaders_read_survives_answers_none_skipped_docs(monkeypatch):
     """`d.get("answers", {})` 在键存在但值为 None 时返回 None → `.get` 崩 → 502。
 

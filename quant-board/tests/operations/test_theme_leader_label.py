@@ -63,6 +63,10 @@ class FakeCol:
                             ok = False
                         elif op == "$nin" and val in arg:
                             ok = False
+                        elif op == "$exists" and bool(arg) != (val is not None):
+                            # P2-3（review）：真 Mongo 语义对齐——缺失键与显式 None 在
+                            # 本夹具均表现为 get→None（生产已不写 None 键，P2-5）
+                            ok = False
                 elif val != cond:
                     ok = False
                 if not ok:
@@ -151,6 +155,11 @@ def env(monkeypatch):
         [dict(r) for r in BASELINE], {"start": "2026-07-16", "end": "2026-10-16", "rows": 6}))
     monkeypatch.setattr("backend.operations.jev_label_jiuyan.market_facts_line",
                         lambda db, date, dataset_id=None: "涨停 46 家（30 分位）")
+    # KPL 原料（强度/直播）零网络打桩：fail-visible 行文，不影响判定链断言
+    monkeypatch.setattr(L, "fetch_plate_strength",
+                        lambda date: {"ok": False, "reason": "test_disabled"})
+    monkeypatch.setattr(L, "fetch_live_commentary",
+                        lambda st=60: {"ok": False, "reason": "test_disabled"})
     return calls, db
 
 
@@ -177,21 +186,24 @@ def test_run_without_confirm_budget_is_blocked(env):
     calls, _db = env
     with pytest.raises(SystemExit) as e:
         L.run("2026-10-19")
-    assert "预算护栏" in str(e.value) and "2 次" in str(e.value)
+    assert "预算护栏" in str(e.value) and "4 次" in str(e.value), "v12 拆题：2 龙头 doc + 2 板块 doc"
     assert calls == [], "预算未确认时不得发生任何调用"
 
 
 def test_run_writes_docs_and_is_idempotent(env):
     calls, db = env
     out = L.run("2026-10-19", confirm_budget=True)
-    assert len(calls) == 2 and out["labeled"] == 2 and out["ok"] == 2
-    assert out["tokensUsed"] == 1234 * 2
+    # v12 A2 拆题：2 龙头 doc + 2 板块 doc = 4 次调用
+    assert len(calls) == 4 and out["labeled"] == 4 and out["ok"] == 4
+    assert out["sectorDocs"] == 2
+    assert out["tokensUsed"] == 1234 * 4
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v11"
-    assert doc["questionSetHash"] == "9235d39da553"   # v11 判据遵从收紧（v1-v10 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-27b"   # 打标交叉原料行（预登记 §22）
+    assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
+    assert doc["questionSetVersion"] == "v12"
+    assert doc["questionSetHash"] == "4255eb9f5a46"   # v12 双龙一分轨+判据修复（v1-v11 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-10-28b"   # 涨停原因行+板块强度行+轨别身位（预登记 §4）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -216,7 +228,7 @@ def test_force_relabels(env):
     L.run("2026-10-19", confirm_budget=True)
     calls.clear()
     out = L.run("2026-10-19", confirm_budget=True, force=True)
-    assert len(calls) == 2 and out["labeled"] == 2
+    assert len(calls) == 4 and out["labeled"] == 4
 
 
 def test_rerun_preserves_backfilled_outcome(env):
@@ -235,11 +247,11 @@ def test_rerun_preserves_backfilled_outcome(env):
     })
     calls.clear()
     out = L.run("2026-10-19", confirm_budget=True, force=True)
-    assert out["labeled"] == 2 and len(calls) == 2, "force 复跑照常重新调用模型"
+    assert out["labeled"] == 4 and len(calls) == 4, "force 复跑照常重新调用模型"
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v11", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v12", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -252,12 +264,19 @@ def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
 
 
 def test_degraded_call_is_recorded_not_swallowed(env, monkeypatch):
+    """degraded（模型返答缺题）逐条落库不吞噬；注意 v12 拆题下板块 doc 先于龙头 doc，
+    且 degraded 零 usage 连续两次触发通道中止——前 2 次成功、后 2 次 degraded，
+    龙头 doc 写完后中止（abort 不回滚已写档）。"""
+    import itertools
     calls, db = env
-    monkeypatch.setattr(L, "_dispatch_jev", lambda n, q: (
-        {"result": {"state": "Completed", "result": {"answers": {}}}}, 5))
+    seq = itertools.chain(itertools.repeat((ENVELOPE, 12), 2),
+                          itertools.repeat(({"result": {"state": "Completed",
+                                                    "result": {"answers": {}}}}, 5)))
+    monkeypatch.setattr(L, "_dispatch_jev", lambda n, q: next(seq))
     out = L.run("2026-10-19", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-10-19:603278"]
-    assert out["degraded"] == 2 and doc["status"] == "degraded"
+    assert out["ok"] == 2 and out["degraded"] == 2
+    assert doc["status"] == "degraded"
     assert doc["leaderNextdayContinue"] is None and doc["responseRaw"] is not None
 
 
@@ -282,25 +301,39 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     """有催化正文（哪怕陈旧）→ 不过门，模型档位原样落库（stale 是证据，不是缺失）。"""
     calls, db = env
     real_build = L.build_one
+    real_build_sector = L.build_sector_one
 
     def fake_build_one(db_, date, row, rows_baseline, dataset_id, market_line,
-                       board_history=None):
+                       board_history=None, **kwargs):
         built = real_build(db_, date, row, rows_baseline, dataset_id, market_line,
-                           board_history=board_history)
+                           board_history=board_history, **kwargs)
+        built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
+                             "evidenceMissingReason": None}
+        return built
+
+    def fake_build_sector_one(db_, date, board_rows, rows_baseline, dataset_id,
+                              market_line, board_history=None, **kwargs):
+        built = real_build_sector(db_, date, board_rows, rows_baseline, dataset_id,
+                                  market_line, board_history=board_history, **kwargs)
         built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
                              "evidenceMissingReason": None}
         return built
 
     monkeypatch.setattr(L, "build_one", fake_build_one)
+    monkeypatch.setattr(L, "build_sector_one", fake_build_sector_one)
     L.run("2026-10-19", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-10-19:603278"]
     assert doc["gate"]["applied"] is False
     assert doc["leaderNextdayContinue"] == "mid_45_65"
     assert doc["modelAnswers"] == doc["answers"], "不过门时两者应一致（不是两套数）"
-    # v5 四题落库：题材深度/延续性/龙头空间
-    assert doc["themeSpeculationDepth"] == "fermenting"
-    assert doc["themeContinuation"] == "strong_extend"
+    # v12 拆题：个股级 doc 只落续板/空间；深度/延续在板块级 doc
+    assert doc["themeSpeculationDepth"] is None and doc["themeContinuation"] is None
     assert doc["leaderHeadroom"] == "space_2plus"
+    sec = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
+    assert sec["docKind"] == "sector" and sec["gate"]["applied"] is False
+    assert sec["themeSpeculationDepth"] == "fermenting"
+    assert sec["themeContinuation"] == "strong_extend"
+    assert sec["leaderNextdayContinue"] is None
 
 
 def test_build_one_wires_history_and_headroom_anchor():
@@ -578,6 +611,43 @@ def _seed_ghost(db):
                      "status": "ok", "questionSetVersion": "v8"})
 
 
+def test_fakedb_exists_operator_p2_3():
+    """P2-3（review）：FakeDb 实现 $exists——legacy 对账分支（segment $exists:False）
+    此前恒真，与真 Mongo 语义分叉零测试保障。"""
+    col = FakeDb()["c"]
+    col.replace_one({"_id": "a"}, {"_id": "a", "segment": "main"})
+    col.replace_one({"_id": "b"}, {"_id": "b"})                    # 无 segment 键
+    r = col.update_many({"segment": {"$exists": False}}, {"$set": {"x": 1}})
+    assert r.modified_count == 1
+    assert "x" not in col.docs["a"] and col.docs["b"]["x"] == 1
+    r2 = col.update_many({"segment": {"$exists": True}}, {"$set": {"y": 1}})
+    assert r2.modified_count == 1 and col.docs["a"]["y"] == 1 and "y" not in col.docs["b"]
+
+
+def test_reconcile_legacy_boundary_not_autosuperseded():
+    """P2-8（review，预登记 §8.1）：legacy 行（无 segment 键，$exists:False 真匹配）
+    仅在板块已有分轨现任且 code 不在现任时退位；带 segment 的现任行永不被
+    $exists:False 分支误伤（$exists 语义已对齐真 Mongo，P2-3）。"""
+    db = FakeDb()
+    col = db[L.COLLECTION]
+    # 现任：v12 分轨 main 行（带 segment 键）
+    col.replace_one({"_id": "2026-10-19:603278"}, {
+        "_id": "2026-10-19:603278", "tradingDate": "2026-10-19", "code": "603278",
+        "name": "大业", "board": "机器人", "segment": "main", "status": "ok",
+        "questionSetVersion": "v12", "computedAt": "t1"})
+    # legacy：无 segment 键、code 不在现任（应退位）
+    col.replace_one({"_id": "2026-10-19:300006"}, {
+        "_id": "2026-10-19:300006", "tradingDate": "2026-10-19", "code": "300006",
+        "name": "legacy股", "board": "机器人", "status": "ok",
+        "questionSetVersion": "v11", "computedAt": "t0"})
+    rows = [{"date": "2026-10-19", "board": "机器人", "code": "603278", "name": "大业",
+             "streak": 3, "segment": "main"}]
+    rec = L.reconcile_superseded_leaders(db, "2026-10-19", rows)
+    assert rec["superseded"] == 1
+    assert col.docs["2026-10-19:300006"]["leaderSuperseded"] is True
+    assert "leaderSuperseded" not in col.docs["2026-10-19:603278"],         "带 segment 的现任行不得被 $exists:False 分支误伤"
+
+
 def test_reconcile_supersedes_ghost_rows_and_is_idempotent():
     """退位：同 board 下 code∉现任推导 的 ok/degraded 行打 leaderSuperseded（不删除）；
     幂等：重跑不重盖、计数归零。"""
@@ -650,21 +720,37 @@ def test_channel_unreachable_aborts_early_not_all_calls(env, monkeypatch):
     assert len(tried) == L._TRANSPORT_FAIL_ABORT, "应在连续失败阈值处停，不跑满全部龙头"
     assert out["ok"] == 0 and out["aborted"] == "channel_unreachable"
     assert out["error"]["code"] == "jev_channel_unreachable"
-    assert out["remaining"] == 0 and out["tokensUsed"] == 0
+    assert out["remaining"] == 2 and out["tokensUsed"] == 0, "v12 拆题：4 次中中止于第 2 次"
 
 
 def test_single_transient_failure_does_not_abort(env, monkeypatch):
     """单次抖动（夹在成功之间）不得触发中止。"""
     calls, _db = env
-    seq = iter([({"success": False, "errors": [{"message": "timeout"}]}, 5), (ENVELOPE, 12)])
+    import itertools
+    seq = itertools.chain([({"success": False, "errors": [{"message": "timeout"}]}, 5)],
+                          itertools.repeat((ENVELOPE, 12)))
 
     def fake_dispatch(n, q):
         calls.append((n, q))
         return next(seq)
     monkeypatch.setattr(L, "_dispatch_jev", fake_dispatch)
     out = L.run("2026-10-19", confirm_budget=True)
-    assert out.get("aborted") is None and out["ok"] == 1 and out["degraded"] == 1
-    assert len(calls) == 2
+    assert out.get("aborted") is None and out["ok"] == 3 and out["degraded"] == 1
+    assert len(calls) == 4, "v12 拆题：单次抖动不中止，其余 3 次照常成功"
+
+
+def test_is_not_a_theme_matches_raw_name_st_board():
+    """v12 开火日漏排 bug 回归钉：normalize_name("ST板块")→"ST" 曾绕过行政桶排除——
+    判定必须原始名+归一双口径（jev 白烧 2 调用 + 脏行入页面的教训）。"""
+    assert L.digest.is_not_a_theme("ST板块") is True
+    assert L.digest.is_not_a_theme("ST 板块") is True   # P2-1：空格变体（归一后="ST"）
+    assert L.digest.is_not_a_theme("ST") is True
+    assert L.digest.is_not_a_theme("公告") is True
+    assert L.digest.is_not_a_theme("其他") is True
+    assert L.digest.is_not_a_theme("新股") is True
+    assert L.digest.is_not_a_theme("机器人") is False
+    assert L.digest.is_not_a_theme("大消费") is False
+    assert L.digest.is_not_a_theme(None) is False
 
 
 def test_coarse_buckets_are_excluded_from_jev_scope(env, monkeypatch, capsys):
@@ -675,6 +761,9 @@ def test_coarse_buckets_are_excluded_from_jev_scope(env, monkeypatch, capsys):
     真实题材域、S3 补充映射上线后 evidenceMissing 全 False（预登记 §20）。"""
     calls, db = env
     rows_with_coarse = ROWS + [
+        {"date": "2026-10-19", "board": "ST板块", "code": "600001", "name": "某ST",
+         "streak": 1, "time": "09:25:00", "boardN": 1, "othersN": 0, "ladderFollowers": 0,
+         "prevPeers": 0, "prevBoardN": 0},
         {"date": "2026-10-19", "board": "公告", "code": "600293", "name": "三峡新材",
          "streak": 3, "time": "09:25:00", "boardN": 1, "othersN": 0, "ladderFollowers": 0,
          "prevPeers": 0, "prevBoardN": 0},
@@ -687,16 +776,20 @@ def test_coarse_buckets_are_excluded_from_jev_scope(env, monkeypatch, capsys):
                                                             {"thsPoolFound": True}))
     out = L.run("2026-10-19", confirm_budget=True)
     # 只对真题材桶调用（机器人/化工），行政桶零调用：叙事里不得出现被排除的龙头
-    assert len(calls) == 2 and out["labeled"] == 2 and out["ok"] == 2
-    assert out["excludedNotTheme"] == 2
+    assert len(calls) == 4 and out["labeled"] == 4 and out["ok"] == 4, "2 真题材板块 ×（1 板块 doc + 1 龙头 doc）"
+    assert out["excludedNotTheme"] == 3
     assert "公告" in out["excludedBoards"]
     assert "其他" in out["excludedBoards"]
+    assert "ST板块" in out["excludedBoards"], "v12 漏排 bug 回归：ST板块必须被排除"
     for narrative, _q in calls:
         assert "三峡新材" not in narrative and "闽发铝业" not in narrative
+        assert "某ST" not in narrative
     # v5：排除股不落库——库里只有真实判定的 ok/degraded 行，不得出现排除股文档
-    for code in ("600293", "000609"):
+    # （v12 拆题：板块级 doc 同样不得落库）
+    for code in ("600293", "000609", "600001"):
         assert "2026-10-19:" + code not in db[L.COLLECTION].docs, "排除股不得落库（v5 用户裁决）"
-    assert "排除非题材行政桶 2 只" in capsys.readouterr().out
+    assert "2026-10-19:board:ST板块" not in db[L.COLLECTION].docs, "行政桶板块 doc 不得落库"
+    assert "排除非题材行政桶 3 只" in capsys.readouterr().out
 
 
 def test_domain_buckets_are_included_after_2026_1026(env, monkeypatch):
@@ -714,7 +807,7 @@ def test_domain_buckets_are_included_after_2026_1026(env, monkeypatch):
                                                             {"thsPoolFound": True}))
     out = L.run("2026-10-19", confirm_budget=True)
     assert out["excludedNotTheme"] == 0 and out["excludedBoards"] == []
-    assert out["leaders"] == 3 and len(calls) == 3, "大消费龙头必须纳入投喂"
+    assert out["leaders"] == 3 and len(calls) == 6, "大消费龙头必须纳入投喂（3 板块 doc + 3 龙头 doc）"
     assert any("上海九百" in n for n, _q in calls)
 
 
@@ -788,13 +881,14 @@ def test_budget_guard_aggregates_over_leaders():
 
 
 def test_day_leader_rows_space_mode_unsealed_leader(monkeypatch):
-    """2026-10-27 空间龙一规则（用户裁决）：候选池=今∪近3日封板池，龙一=10日涨幅最高。
+    """v12 定稿龙一口径（用户 2026-10-28 三轮裁决）：候选池=今∪近3日封板池；
 
-    10-26 机器人实证复刻：大业断板（今日不在封板池）靠昨日池入候选，10日涨幅 77.7%
-    压过 3 板卡位正裕（40.9%）——真连板口径会顶替错龙一（正裕次日跌停实锤）；
+    空间板=高度 ≥2（含断板股最近封板日高度 histStreak——三种情况均参与），组内 10日
+    涨幅最高；全首板按当日首封最早。10-26 机器人实证复刻：大业断板（今日不在封板池）
+    靠昨日池入候选、histStreak=6，gain10 77.7% 压过 3 板卡位正裕（40.9%）——
     leaderSealedToday=False，streak/time 如实 None，跟风不可算。默认 streak 口径不变
     （基线/历史窗口样本人群不随规则换代漂移）；TDX 全候选不可算 → 板块 fail-visible
-    跳过 + meta 披露。
+    跳过 + meta 披露；断板跌停剔除（未跌停条件）。
     """
     import backend.operations.theme_leader_baseline as B
     import backend.operations.jev_label_jiuyan as J
@@ -806,7 +900,8 @@ def test_day_leader_rows_space_mode_unsealed_leader(monkeypatch):
 
     monkeypatch.setattr(B, "sealed_and_info", fake_sealed)
     monkeypatch.setattr(J, "jiuyan_streak_map",
-                        lambda db_, date, dataset_id=None: {"603089": 3})
+                        lambda db_, date, dataset_id=None:
+                        {"603089": 3, "603278": 6} if date == "2026-10-23" else {"603089": 3})
     db = FakeDb()
     db["jiuyan_action"].replace_one(
         {"_id": "2026-10-26:final"},
@@ -821,9 +916,11 @@ def test_day_leader_rows_space_mode_unsealed_leader(monkeypatch):
     gains = {"603278": 77.7, "603089": 40.9}
     rows, meta = B.day_leader_rows(db, "2026-10-26", space_mode=True,
                                    pool_dates=["2026-10-23"],
-                                   gain_fetcher=lambda codes, end: gains)
+                                   gain_fetcher=lambda codes, end: gains,
+                                   day_change_fetcher=lambda codes, date:
+                                       {c: -2.0 for c in codes})
     row = rows[0]
-    assert row["code"] == "603278" and row["name"] == "大业", "空间龙一=10日涨幅最高"
+    assert row["code"] == "603278" and row["name"] == "大业", "空间板组内 10日涨幅最高（断板未跌停仍可当选）"
     assert row["leaderSealedToday"] is False and row["gain10"] == 77.7
     assert row["streak"] is None and row["time"] is None
     assert row["ladderFollowers"] is None and row["boardN"] == 1
@@ -840,3 +937,202 @@ def test_day_leader_rows_space_mode_unsealed_leader(monkeypatch):
         gain_fetcher=lambda codes, end: {c: None for c in codes})
     assert rows_none == []
     assert "机器人" in meta_none["spaceErrors"], "TDX 不可算 → fail-visible 跳过（用户裁决）"
+
+
+def test_day_leader_rows_space_mode_multi_pool_day_keeps_recent_streak(monkeypatch):
+    """P0-1（review）：近 3 日池去重必须保留**最近**封板日高度——多日连板断板股
+    （d-3 首板、d-1 二板、今日断板）曾系统性塌成首板、丢失空间板组资格。"""
+    import backend.operations.theme_leader_baseline as B
+    import backend.operations.jev_label_jiuyan as J
+
+    def fake_sealed(db_, date, dataset_id=None):
+        sealed = {"603278"} if date in ("2026-10-23", "2026-10-27") else {"603089"}
+        return sealed, {}, {"thsPoolFound": True}
+
+    monkeypatch.setattr(B, "sealed_and_info", fake_sealed)
+    streaks = {"2026-10-23": {"603278": 1}, "2026-10-27": {"603278": 2},
+               "2026-10-26": {}}
+    monkeypatch.setattr(J, "jiuyan_streak_map",
+                        lambda db_, date, dataset_id=None: streaks.get(date, {}))
+    db = FakeDb()
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-28:final"},
+        {"_id": "2026-10-28:final", "fields": [
+            {"name": "机器人", "stocks": [{"code": "603089", "name": "正裕", "time": "09:25"}]}]})
+    for pd, t in (("2026-10-23", "09:25"), ("2026-10-27", "09:40")):
+        db["jiuyan_action"].replace_one(
+            {"_id": f"{pd}:final"},
+            {"_id": f"{pd}:final", "fields": [
+                {"name": "机器人", "stocks": [{"code": "603278", "name": "大业", "time": t}]}]})
+    gains = {"603278": 87.6, "603089": 5.0}
+    rows, _m = B.day_leader_rows(
+        db, "2026-10-28", space_mode=True, pool_dates=["2026-10-23", "2026-10-26", "2026-10-27"],
+        gain_fetcher=lambda codes, end: gains,
+        day_change_fetcher=lambda codes, date: {c: -2.0 for c in codes})
+    row = next(r for r in rows if r["code"] == "603278")
+    assert row["streak"] is None and row["leaderSealedToday"] is False, "今日断板如实"
+    assert row["gain10"] == 87.6 and row["boardN"] == 1
+
+
+def test_day_leader_rows_space_mode_limit_down_excluded(monkeypatch):
+    """v12「未跌停」条件：断板不反包且今日跌停（主板 ≤-9.9%）候选剔除，fail-visible 披露；
+
+    涨跌幅不可考 → 保留（不猜，fail-visible）。"""
+    import backend.operations.theme_leader_baseline as B
+    import backend.operations.jev_label_jiuyan as J
+
+    def fake_sealed(db_, date, dataset_id=None):
+        if date == "2026-10-26":
+            return {"603089"}, {"603089": {}}, {"thsPoolFound": True}
+        return {"603278", "603089"}, {"603278": {}, "603089": {}}, {"thsPoolFound": True}
+
+    monkeypatch.setattr(B, "sealed_and_info", fake_sealed)
+    monkeypatch.setattr(J, "jiuyan_streak_map",
+                        lambda db_, date, dataset_id=None:
+                        {"603089": 3, "603278": 6} if date == "2026-10-23" else {"603089": 3})
+    db = FakeDb()
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-26:final"},
+        {"_id": "2026-10-26:final", "fields": [
+            {"name": "机器人", "stocks": [{"code": "603089", "name": "正裕", "time": "09:25"}]}]})
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-23:final"},
+        {"_id": "2026-10-23:final", "fields": [
+            {"name": "机器人", "stocks": [{"code": "603278", "name": "大业", "time": "13:09"}]}]})
+
+    gains = {"603278": 77.7, "603089": 40.9}
+    rows, meta = B.day_leader_rows(
+        db, "2026-10-26", space_mode=True, pool_dates=["2026-10-23"],
+        gain_fetcher=lambda codes, end: gains,
+        day_change_fetcher=lambda codes, date: {c: -10.2 for c in codes})
+    assert rows[0]["code"] == "603089", "断板跌停股剔除后龙一=当日封板正裕"
+    assert meta["limitDownExcluded"]["机器人"] == ["大业(-10.2%)"]
+
+    # 涨跌幅不可考 → 保留（不猜）
+    rows2, meta2 = B.day_leader_rows(
+        db, "2026-10-26", space_mode=True, pool_dates=["2026-10-23"],
+        gain_fetcher=lambda codes, end: gains,
+        day_change_fetcher=lambda codes, date: {c: None for c in codes})
+    assert rows2[0]["code"] == "603278" and "limitDownExcluded" not in meta2
+
+
+# ── v12 G1/G2：KPL 直播播报 + 板块名匹配 v2（2026-10-28 用户裁决） ──
+
+def test_match_board_strength_v2_suffix_alias_anchor():
+    """匹配 v2（一级板块，用户裁决不匹配二级）：尾缀剥离/别名表/共享子串锚/未命中 fail-visible。"""
+    payload = {"ok": True, "items": [
+        {"plate_id": "801159", "name": "机器人概念", "strength": 31837, "pct": 3.24},
+        {"plate_id": "801807", "name": "算力", "strength": 6073, "pct": 3.17},
+        {"plate_id": "801660", "name": "通信", "strength": 6073, "pct": 3.17},
+        {"plate_id": "801001", "name": "芯片", "strength": 11695, "pct": 3.11},
+    ]}
+    # 尾缀剥离：韭研「机器人」↔ KPL「机器人概念」
+    r1 = L.match_board_strength(payload, "机器人")
+    assert r1["ok"] and r1["name"] == "机器人概念" and r1["rank"] == 1
+    assert not r1["aliasUsed"]
+    # 别名（单一事实源 digest.AL IASES：AI硬件→算力），行内需可披露
+    r2 = L.match_board_strength(payload, "AI硬件")
+    assert r2["ok"] and r2["name"] == "算力" and r2["aliasUsed"]
+    # 共享子串锚：算力租赁 ↔ 算力（≥2 字含汉字锚）
+    r3 = L.match_board_strength(payload, "算力租赁")
+    assert r3["ok"] and r3["name"] == "算力"
+    # 无文本锚（半导体 vs 芯片）→ unmatched，不猜语义
+    assert L.match_board_strength(payload, "半导体") == {"ok": False, "reason": "unmatched"}
+    # 取数失败透传
+    assert L.match_board_strength({"ok": False, "reason": "fetch_failed: x"},
+                                  "机器人")["reason"] == "fetch_failed: x"
+
+
+def test_live_entries_for_board_filter_and_historical_guard(monkeypatch):
+    """直播过滤：关键词/plate 命中、AI 生成尾注剥离、历史日不可回放结构化降级（防泄漏）。"""
+    import time as _time
+    day = "2026-10-28"
+    mk = lambda hh, mm: int(_time.mktime(_time.strptime(f"{day} {hh}:{mm:02d}", "%Y-%m-%d %H:%M")))
+    payload = {"ok": True, "items": [
+        {"ts": mk(14, 35), "time": "14:35", "plate_name": "", "comment":
+         "AI硬件（光通信）持续异动，权重中际旭创、新易盛震荡走强涨超7%（该内容由AI大模型根据行情自动生成）"},
+        {"ts": mk(9, 15), "time": "09:15", "plate_name": "机器人概念", "comment":
+         "竞价看龙头：机器人概念赛福天、多伦科技"},
+        {"ts": mk(14, 0), "time": "14:00", "plate_name": "", "comment":
+         "三大指数午后震荡回落，创业板指涨超2%"},
+    ]}
+    entries, meta = L.live_entries_for_board(payload, "AI硬件", day)
+    assert [e["time"] for e in entries] == ["14:35"], "AI硬件仅正文级播报命中；机器人概念的条目不串板"
+    assert "AI大模型根据行情自动生成" not in entries[0]["comment"], "AI 生成尾注剥离"
+    assert meta["total"] == 3 and meta["window"] == "09:15~14:35"
+    # plate 命中：机器人 → 机器人概念条目
+    entries_r, _m = L.live_entries_for_board(payload, "机器人", day)
+    assert [e["time"] for e in entries_r] == ["09:15"]
+    # 历史日：窗口内无标注日条目 → 结构化降级（不冒充语料，防 look-ahead）
+    entries2, meta2 = L.live_entries_for_board(payload, "AI硬件", "2026-10-27")
+    assert entries2 == [] and "不可回放" in meta2["unavailable"]
+    # 取数失败透传
+    entries3, meta3 = L.live_entries_for_board({"ok": False, "reason": "fetch_failed: x"},
+                                               "AI硬件", day)
+    assert entries3 == [] and meta3["unavailable"] == "fetch_failed: x"
+
+
+def test_kpl_live_line_rendering():
+    """直播行渲染（ammo 纯函数）：命中/无播报/不可用三分支 fail-visible。"""
+    line = L.kpl_live_line  # noqa — 实现在 ammo，经 label 引用确认同源
+    from backend.analysis.hotlist.theme_leader_ammo import kpl_live_line
+    hit = kpl_live_line([{"time": "14:35", "comment": "AI硬件（光通信）持续异动"}],
+                        board="AI硬件", total=60, window="09:15~15:00")
+    assert "KPL直播播报（实时流·仅标注时点可得，窗口 09:15~15:00，全窗 60 条）" in hit
+    assert "14:35 AI硬件（光通信）持续异动" in hit
+    none = kpl_live_line([], board="AI影视", total=60, window="09:15~15:00")
+    assert "当日无「AI影视」相关播报" in none and "无数据 ≠ 无催化" in none
+    un = kpl_live_line([], board="AI影视",
+                       unavailable="实时流不可回放（窗口内无标注日条目，历史日无直播归档）")
+    assert "不可用（实时流不可回放" in un and "不冒充" in un
+
+
+# ── P1-2 直播日归档 / P1-1 序列 / P2-2 reason 透传（2026-10-28 用户裁决） ──
+
+def test_get_live_for_label_archive_roundtrip(monkeypatch):
+    """P1-2：当日实时取后归档 → 二次读归档（零外呼）；历史日无归档 fail-visible（防泄漏）。"""
+    import time as _time
+    db = FakeDb()
+    today = _time.strftime("%Y-%m-%d")
+    sent: list = []
+
+    def fake_fetch(st=60):
+        sent.append(st)
+        ts = int(_time.mktime(_time.strptime(f"{today} 10:00", "%Y-%m-%d %H:%M")))
+        return {"ok": True, "items": [{"ts": ts, "time": "10:00", "comment": "x"}],
+                "notice": ""}
+
+    monkeypatch.setattr(L, "fetch_live_commentary", fake_fetch)
+    p1 = L.get_live_for_label(db, today)
+    assert p1["ok"] and not p1.get("fromArchive") and len(sent) == 1
+    assert db[L.LIVE_ARCHIVE_COLLECTION].docs[today]["itemCount"] == 1, "当日取后归档"
+    p2 = L.get_live_for_label(db, today)
+    assert p2.get("fromArchive") is True and len(sent) == 1, "二次读归档零外呼"
+    # 历史日：无归档 → 结构化降级（不外呼不冒充）
+    p3 = L.get_live_for_label(db, "2026-10-01")
+    assert p3["ok"] is False and "不可回放" in p3["reason"] and len(sent) == 1
+
+
+def test_fetch_plate_zt_history_filters_future(monkeypatch):
+    """P1-1：层2 全史 → 只留 ≤ 标注日（防 look-ahead），窗口截尾；失败 fail-visible。"""
+    import backend.services.kpl_ranking_service as K
+    hist = [{"date": "2026-10-20", "zt_num": 9}, {"date": "2026-10-27", "zt_num": 16},
+            {"date": "2026-10-29", "zt_num": 99}]   # 未来日必须被滤掉
+    monkeypatch.setattr(K, "get_plate_daily_history",
+                        lambda plate_id, limit=60: {"ok": True, "plate_id": plate_id,
+                                                    "items": hist, "count": len(hist)})
+    out = L.fetch_plate_zt_history("801159", "2026-10-28", window_days=5)
+    assert out["ok"] and [r["date"] for r in out["zt_rows"]] == ["2026-10-20", "2026-10-27"]
+    monkeypatch.setattr(K, "get_plate_daily_history",
+                        lambda plate_id, limit=60: (_ for _ in ()).throw(
+                            K.KplRankingError("kpl_errcode", errorCode="1020")))
+    out2 = L.fetch_plate_zt_history("801159", "2026-10-28")
+    assert out2["ok"] is False and "fetch_failed" in out2["reason"]
+
+
+def test_label_persists_answer_reasons_when_present(env):
+    """P2-2：模型若附 reason → 容错落库 answerReasons；不附时 {}（行为不变）。"""
+    calls, db = env
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
+    assert doc["answerReasons"] == {}, "夹具答案无 reason → 空 dict 如实落库"

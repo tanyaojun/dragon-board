@@ -28,7 +28,6 @@ from backend.operations import kpl_theme_store as KS
 
 BLOCK_HEADER = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】"
 CONTENT_CHARS = 260
-EVENT_CHARS = 200
 MAX_EVENTS = 3
 EVENT_WINDOW_PAST_DAYS = 3      # 事件/新闻回看窗口（发酵中）
 NEWS_WINDOW_PAST_DAYS = 2
@@ -61,7 +60,19 @@ ALIASES: dict[str, tuple[str, ...]] = {
 # 真实题材域（韭研只是没给产业树节点），S3 驱动标签补充映射（2026-10-24b）上线后
 # 七桶 evidenceMissing 实测全 False——v3 收紧「门控率 100%/49/49 自判 insufficient」
 # 的前提失效；10-26 大消费龙头上海九百 4 板（当日最高板）漏判实锤。预登记 §20。
-NOT_A_THEME = ("公告", "新股", "其他", "ST板块")
+NOT_A_THEME = ("公告", "新股", "其他", "ST板块",
+               "ST")   # P2-1（review）："ST 板块"等空格变体归一后恰为 "ST"，一并覆盖
+
+
+def is_not_a_theme(board_name: str | None) -> bool:
+    """行政桶判定（单一事实源，v12 漏排修复）：**原始名 + 归一名双口径**。
+
+    bug 实证（2026-10-28 开火日）：normalize_name("ST板块") 尾缀剥离成 "ST"，
+    与原名单 "ST板块" 不等 → ST板块 整板块漏排、jev 白烧两调用且脏行入页面。
+    归一口径仍保留（兼容历史行/大小写变体），但必须同时比对原始名。
+    """
+    name = str(board_name or "").strip()
+    return name in NOT_A_THEME or normalize_name(name) in NOT_A_THEME
 # 产业树里不是题材的兜底节点名（名字命中即跳过，避免「其他」→「外贸-其他」这种空催化）
 GENERIC_NODE_NAMES = ("其他", "杂项", "其它")
 
@@ -154,7 +165,8 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 # 10-23 实例：中办国办《意见》经「应用」被挂给 AI应用（该事件与 AI应用 的唯一关联
 # 就是这 2 字）。只封泛词；2 字专有锚（俄乌/冰雪 等）不受影响，G2 修复
 # （俄乌重建↔俄乌和平）依赖它们。
-GENERIC_ANCHORS = ("应用", "科技", "智能", "数据", "概念", "技术", "消费", "能源", "金融")
+GENERIC_ANCHORS = ("应用", "科技", "智能", "数据", "概念", "技术", "消费", "能源", "金融",
+                   "经济")   # P1-1（review 2026-10-28）：冰雪/低空/银发/数字等「X经济」并存，不互锚
 
 
 def _shared_anchor(a: str, b: str) -> str | None:
@@ -198,21 +210,6 @@ def _anchor_hit(base: str, keys: list[str], text: str,
 def _clip(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text if len(text) <= limit else text[:limit] + f"…[截断，原文 {len(text)} 字]"
-
-
-# 电头剥离（2026-10-24a）：通稿开头的「新华社北京10月21日消息，」「财联社10月21日讯，」
-# 与条目已带的日期/来源重复，纯 token 冗余。确定性正则（媒体词白名单 + N月N日 + 消息/讯/电
-# 后缀 + 尾随标点才剥），不命中原文一字不动；只剥开头一处，无任何语义改写。
-# 尾随标点必须存在（2026-10-24 review 处置）：真电头后必跟逗号——可选会截烂
-# 「10月21日电话会议」「9月30日消息面回暖」这类普通词开头（电/消息 后接话·报·面）。
-_DATELINE_RE = re.compile(
-    r"^(?:(?:新华社|财联社|央视新闻|界面新闻|证券时报|上海证券报|澎湃新闻|每日经济新闻"
-    r"|21世纪经济报道|红星新闻|参考消息|路透社|彭博社)[^，,。]{0,12}?)?"
-    r"\d{1,2}月\d{1,2}日(?:消息|讯|电)[，,、]\s*")
-
-
-def _strip_dateline(text: str) -> str:
-    return _DATELINE_RE.sub("", str(text or ""), count=1)
 
 
 def _days_between(a: str | None, b: str | None) -> int | None:
@@ -270,7 +267,11 @@ def corpus_state(db, *, date: str) -> dict:
 
 def match_kpl_events(events: list[dict], board_name: str | None,
                      *, limit: int = MAX_EVENTS) -> list[dict]:
-    """题材事件 → 板块：标题/正文命中关键词即算（确定性包含+共享子串锚，逐条带关联方式）。"""
+    """题材事件 → 板块：标题/正文命中关键词即算（确定性包含+共享子串锚，逐条带关联方式）。
+
+    v12（2026-10-28 用户裁决）：附 `titleHit` 标志（标题级命中=强；仅正文/子串级=弱，
+    渲染时降级标注）；事件正文不再进叙事（仅标题+热度+日期）。
+    """
     base = normalize_name(board_name)
     if not base:
         return []
@@ -278,11 +279,10 @@ def match_kpl_events(events: list[dict], board_name: str | None,
     out = []
     for ev in events or []:
         title = str(ev.get("title") or "")
-        hit = _anchor_hit(base, keys, title)
-        if not hit:
-            hit = _anchor_hit(base, keys, str(ev.get("content") or "")[:200])
+        title_hit = _anchor_hit(base, keys, title)
+        hit = title_hit or _anchor_hit(base, keys, str(ev.get("content") or "")[:200])
         if hit:
-            out.append({**ev, "matchHow": hit["how"]})
+            out.append({**ev, "matchHow": hit["how"], "titleHit": title_hit is not None})
         if len(out) >= limit:
             break
     return out
@@ -492,7 +492,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                 f"正文更新 {chg2}={gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
             break
 
-    # 当日题材事件（开盘啦 Topic：逐事件全文 + 来源 + 热度）
+    # 当日题材事件（开盘啦 Topic：仅标题+热度+日期；2026-10-28 用户裁决，正文不出、弱匹配降级）
     heat = (theme_heat_series(db, board_name, date=date, days=HEAT_WINDOW_DAYS)
             if (include_l2 and state.get("ok")) else None)
     if heat is not None:
@@ -506,14 +506,15 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         if not ev_hits:
             lines.append(f"当日题材事件：无匹配（「{board_name}」相关事件未命中，无数据 ≠ 无催化）")
         else:
-            lines.append("当日题材事件（开盘啦题材事件，关联方式逐条披露）：")
+            lines.append("当日题材事件（开盘啦题材事件，仅标题+热度+日期，2026-10-28 用户裁决）")
             for ev in ev_hits:
                 src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
                 hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
-                body = _strip_dateline(str(ev.get("content") or ""))
-                body_txt = f"：{_clip(body, EVENT_CHARS)}" if body else ""
+                # 降级标注（同批用户裁决）：标题未命中、仅正文/共享子串级关联的事件
+                # 显式标「弱匹配」，防模型把泛科技通稿当强板块催化
+                weak = "" if ev.get("titleHit") else "；弱匹配（标题未命中，仅正文级关联）"
                 lines.append(f"- {ev.get('day')} {ev.get('title')}"
-                             f"（{ev.get('matchHow')}{src}{hot}）{body_txt}")
+                             f"（{ev.get('matchHow')}{src}{hot}）{weak}")
 
     # 近两日题材新闻（开盘啦 ThemeNews）+ 前瞻日历（开盘啦 Type=3）。
     # 2026-10-24a：两节均无匹配时合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话，
@@ -573,16 +574,19 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         exp = str((lead or {}).get("expound") or "")
         tag_line = exp.splitlines()[0].strip() if exp else ""
         body = "\n".join(exp.splitlines()[1:]).strip()
+        # P2-2（review）：板块级 doc（leader_code 空）回退取韭研分组首只成员——
+        # 不得冒称「龙头」（与双龙一结构行可能互相矛盾），显式标注身位
+        lead_label = "龙头" if str(leader_code or "") else "板内成员（韭研分组序，非推导龙一）"
         if lead is not None and exp:
             board_resolved = True
             caliber = "" if snap.get("sealedFilter") else "（韭研异动口径，含触板未封）"
             lines.append(f"板内解析（韭研异动「{board_name}」{board_stocks_n} 只{caliber}）："
-                         f"龙头 {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
+                         f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
                          f"解析摘录：{_clip(body or exp, content_chars)}")
         elif lead is not None:
             caliber = "" if snap.get("sealedFilter") else "（韭研异动口径，含触板未封）"
             lines.append(f"板内解析（韭研异动「{board_name}」{board_stocks_n} 只{caliber}）："
-                         f"龙头 {lead.get('name')}（{lead.get('code')}）无异动解析（如实标注）")
+                         f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析（如实标注）")
         peer_tags = []
         for p in [s for s in stocks if s is not lead][:5]:
             pe = str(p.get("expound") or "")

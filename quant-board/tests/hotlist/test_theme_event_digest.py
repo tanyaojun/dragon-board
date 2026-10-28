@@ -168,7 +168,8 @@ def test_shared_anchor_requires_cjk_and_length():
 
 def test_not_a_theme_scope_after_2026_1026():
     """2026-10-26 用户裁决摘除四个「大X」域桶：名单只剩纯行政桶（预登记 §20）。"""
-    assert D.NOT_A_THEME == ("公告", "新股", "其他", "ST板块")
+    assert D.NOT_A_THEME == ("公告", "新股", "其他", "ST板块", "ST")
+    # P2-1（review）："ST" 入名单——"ST 板块"空格变体归一后恰为 "ST"
     assert "大消费" not in D.NOT_A_THEME and "医疗医药" not in D.NOT_A_THEME
 
 
@@ -178,10 +179,12 @@ def test_block_contains_industry_and_kpl_sections():
     text = out["text"]
     assert text.startswith(D.BLOCK_HEADER)
     assert "板块级催化原文（韭研产业树「国产机器人」，匹配方式 contains" in text
-    # 开盘啦题材事件：标题锚匹配（GTC 内容含机器人）
+    # 开盘啦题材事件：仅标题+热度+日期（2026-10-28 用户裁决，正文不出）；
+    # GTC 为正文级命中（标题未含机器人）→ 弱匹配降级标注
     assert "当日题材事件（开盘啦题材事件" in text
     assert "- 2026-10-21 英伟达GTC大会来了！黃仁勋重磅演讲" in text
-    assert "黄仁勋将在21日发表主题演讲" in text
+    assert "黄仁勋将在21日发表主题演讲" not in text, "事件正文不再进叙事（仅标题+热度+日期）"
+    assert "弱匹配（标题未命中，仅正文级关联）" in text
     # 前瞻日历（开盘啦）
     assert "未来 3 日既定事件（开盘啦题材日历）" in text
     assert "国产机器人产业大会" in text
@@ -365,31 +368,6 @@ def test_generic_anchor_blocks_false_event_association():
     assert len(out2["events"]) == 1 and "包含" in out2["events"][0]["matchHow"]
 
 
-def test_dateline_stripped_from_event_body():
-    """电头剥离：通稿开头的「媒体+日期+消息/讯」与条目已带的日期/来源重复，剥后截断。
-
-    确定性正则白名单——不命中（无日期模式/无消息·讯·电后缀）原文一字不动。
-    """
-    assert D._strip_dateline("新华社北京10月21日消息，对外发布。") == "对外发布。"
-    assert D._strip_dateline("财联社10月21日讯，黄仁勋发表演讲。") == "黄仁勋发表演讲。"
-    assert D._strip_dateline("10月21日电，正文。") == "正文。"
-    assert D._strip_dateline("正文里出现10月21日消息不算电头") == "正文里出现10月21日消息不算电头"
-    assert D._strip_dateline("3月15日正式发布产品") == "3月15日正式发布产品", "无消息/讯/电后缀不剥"
-    # 尾随标点必选（2026-10-24 review 处置）：电/消息 后接普通词不是电头，一字不动——
-    # 可选分隔符曾把「电话会议」「消息面」截烂成「话会议」「面回暖」
-    assert D._strip_dateline("10月21日电话会议上公司表示") == "10月21日电话会议上公司表示"
-    assert D._strip_dateline("9月30日消息面回暖，资金流入") == "9月30日消息面回暖，资金流入"
-    assert D._strip_dateline("10月21日电报业务复古走红") == "10月21日电报业务复古走红"
-    # 端到端：事件正文剥电头后进入叙事
-    events = [{"_id": "2026-10-22:x", "day": "2026-10-22", "title": "机器人大会",
-               "content": "央视新闻10月22日消息，国产机器人产业大会开幕。",
-               "hotVal": 1, "detailFetched": True, "lastFetchDate": "2026-10-22"}]
-    out = D.build_theme_evidence_block(_db(topic=events, news=[], calendar=[]),
-                                       board_name="机器人", date="2026-10-22")
-    assert "国产机器人产业大会开幕" in out["text"]
-    assert "央视新闻10月22日消息，" not in out["text"]
-
-
 def test_news_calendar_merge_only_when_both_empty():
     """双空合并（2026-10-24a）：单边有命中必须维持分列（语义分层不损失）。"""
     # 新闻有命中（俄乌重建 Kword）、日历空 → 新闻节出命中行，日历节出独立无匹配行
@@ -475,3 +453,9 @@ def test_tag_terms_split_is_deterministic():
         ["人形机器人", "金属腱绳", "商业航天"]
     assert D._tag_terms("应用+科技") == [], "泛词黑名单内的词不作候选"
     assert D._tag_terms("") == [] and D._tag_terms(None) == []
+
+
+def test_generic_anchor_econ_p1_1():
+    """P1-1（review）：「经济」入泛词黑名单——冰雪经济/低空经济/银发经济并存不互锚。"""
+    assert D._shared_anchor("冰雪经济", "低空经济") is None
+    assert D._shared_anchor("银发经济", "低空经济") is None

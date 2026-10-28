@@ -158,7 +158,9 @@ def _next_day_board_n(db, board: str | None, next_date: str | None) -> int | Non
 
 def evaluate(db, date: str, write_outcome: bool = False) -> dict:
     col = db[COLLECTION]
-    labels_all = list(col.find({"tradingDate": date}))
+    labels_all = list(col.find({"tradingDate": date,
+                                # v12 拆题：板块级 doc（code=None，深度/延续题）不进个股评估名册
+                                "code": {"$ne": None}}))
     # v3：status=skipped（非题材粗分桶，v3 起不纳入判定范围）不足 degraded 也不进名册——
     # 单独计数透出（它们本来就没有答案，混进 degradedShare 会把「按设计排除」读成「通道故障」）。
     labels = [d for d in labels_all if d.get("status") != "skipped"]
@@ -223,6 +225,40 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
     roster = [_sample_row(r["doc"], None if r["outcome"] is None else bool(r["outcome"]), lookup)
               for r in rows_eval]
 
+    # P2-10（review，预登记 §2.3）：延续/深度题样本单位=板块-日——sector doc
+    # （code=None）不进个股续板/空间名册，但单独成板块-日样本块（fail-visible：
+    # 不足/门控逐板块透出，不与个股指标混合）；早返回路径同样补齐（形状契约）
+    sector_docs = list(col.find({"tradingDate": date, "docKind": "sector"}))
+    sector_day = []
+    for d in sector_docs:
+        a = d.get("answers") or {}
+        depth = a.get("theme_speculation_depth") or {}
+        cont = a.get("theme_continuation") or {}
+        sector_day.append({
+            "board": d.get("board"),
+            "questionSetVersion": d.get("questionSetVersion"),
+            "status": d.get("status"),
+            "depthChoice": depth.get("choice"), "depthConf": depth.get("confidence"),
+            "contChoice": cont.get("choice"), "contConf": cont.get("confidence"),
+            "insufficient": (depth.get("choice") == "insufficient"
+                             or cont.get("choice") == "insufficient"),
+            "gated": bool((d.get("gate") or {}).get("applied")),
+            "outcomeBoardNNextDay": d.get("outcomeBoardNNextDay"),
+        })
+    sd_ok = [r for r in sector_day if r["status"] in (None, "ok")]
+    sector_day_summary = {
+        "count": len(sector_day),
+        "okCount": len(sd_ok),
+        "degradedCount": len(sector_day) - len(sd_ok),
+        "insufficientShare": (round(sum(1 for r in sd_ok if r["insufficient"]) / len(sd_ok), 3)
+                              if sd_ok else None),
+        "depthChoices": {c: sum(1 for r in sd_ok if r["depthChoice"] == c)
+                         for c in {r["depthChoice"] for r in sd_ok}},
+        "contChoices": {c: sum(1 for r in sd_ok if r["contChoice"] == c)
+                        for c in {r["contChoice"] for r in sd_ok}},
+        "rows": sector_day,
+    }
+
     n = len(samples)
     actual = sum(1 for s in samples if s["outcome"])
     out: dict = {
@@ -247,6 +283,7 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
         "origins": {}, "mixedOrigins": False,
         "degradedCount": 0, "degradedShare": None,
         "supersededCount": superseded_n,
+        "sectorDay": sector_day_summary,
     }
     out["acceptance"] = {
         "minTradingDays": ACCEPTANCE_MIN_TRADING_DAYS,
@@ -318,7 +355,7 @@ def settle_day2(db, date: str, fetcher=None) -> dict:
     - TDX 拉数失败/日线缺 → 该股 pending + fail-visible 上报，下轮自愈。
     """
     col = db[COLLECTION]
-    docs = [d for d in col.find({"tradingDate": date})
+    docs = [d for d in col.find({"tradingDate": date, "code": {"$ne": None}})
             if d.get("status") != "skipped" and not d.get("leaderSuperseded")]
     if not docs:
         return {"ok": True, "date": date, "settled": 0, "skipped": 0, "note": "no_docs"}
