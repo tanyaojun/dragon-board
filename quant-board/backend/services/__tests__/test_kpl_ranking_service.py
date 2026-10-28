@@ -250,3 +250,62 @@ class TestThrottleDiscipline:
         svc._last_request_at = time.time()  # 刚发过一发 → 必须等待
         svc._post_form("https://apphis.longhuvip.com/w1/api/index.php", {}, "ad")
         assert slept and slept[0] > 0
+
+
+class TestDabanListHistory:
+    """2103 历史回看读口（2026-10-28 白名单参数语义）：全 mock 上游。"""
+
+    HIST_ROW = ["002639", "雪人股份", 0, "", 5.24, 0, 0, 0, 0, "", 0,
+                "制雪产业", 620244653, 2231432699, 24.59, 8865169443,
+                "廖", 14.27]
+
+    def _fake_post(self, calls, errcode=0, rows=None):
+        def fake(url, params, ua):
+            calls.append(dict(params))
+            return {"errcode": errcode,
+                    "list": rows if rows is not None else [list(self.HIST_ROW)],
+                    "day": "2026-10-27"}
+        return fake
+
+    def test_whitelist_params_only(self, monkeypatch):
+        # 上游严格白名单（实测 2026-10-28）：Day 外多传任意键一律 1020——不得出现
+        # PidType/Type/Order/Is_st/Index/st/Filter 家族
+        calls = []
+        monkeypatch.setattr(svc, "_post_form", self._fake_post(calls))
+        svc.get_daban_list_history("2026-10-27", 8)
+        assert len(calls) == 1
+        keys = set(calls[0])
+        assert keys == {"a", "c", "Day", "apiv", "VerSion", "PhoneOSNew", "Red",
+                        "UserID", "DeviceID", "Token"}
+        assert calls[0]["Day"] == "2026-10-27"
+
+    def test_row_parsed_and_note_present(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(svc, "_post_form", self._fake_post(calls))
+        payload = svc.get_daban_list_history("2026-10-27", 8)
+        assert payload["ok"] is True and payload["pid_type"] == 8
+        assert payload["items"][0]["stock_id"] == "002639"
+        assert payload["items"][0]["pct"] == 5.24
+        assert "不认页签参数" in payload["note"]
+
+    def test_empty_list_fail_visible_and_not_cached(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(svc, "_post_form", self._fake_post(calls, rows=[]))
+        with pytest.raises(KplRankingError) as ei:
+            svc.get_daban_list_history("2026-10-27", 0)
+        assert ei.value.reason == "upstream_empty_list"
+        # 异常空态不进缓存：再拉仍打上游（30s TTL 只兜成功态）
+        with pytest.raises(KplRankingError):
+            svc.get_daban_list_history("2026-10-27", 0)
+        assert len(calls) == 2
+
+    def test_cache_shared_by_date_across_tabs(self, monkeypatch):
+        # 缓存 key 按日共享（上游对 pid_type 不敏感）：三页签同日 30s 内最多 1 发上游
+        calls = []
+        monkeypatch.setattr(svc, "_post_form", self._fake_post(calls))
+        p8 = svc.get_daban_list_history("2026-10-27", 8)
+        p0 = svc.get_daban_list_history("2026-10-27", 0)
+        p6 = svc.get_daban_list_history("2026-10-27", 6)
+        assert len(calls) == 1
+        assert [p["pid_type"] for p in (p8, p0, p6)] == [8, 0, 6]
+        assert p8["items"] == p0["items"] == p6["items"]

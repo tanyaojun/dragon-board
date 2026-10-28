@@ -4826,10 +4826,17 @@ function kplHandleEvent(ev){
       break;
     case 'error':
       if (stale) break;   // 回放的旧错误不展示（当下健康以新事件为准）
-      KPL.status.lastError = ev.msg || '';
+      // collector 对 CMD_ERROR 双发：带 msg 版 + server-only 版。结构化判断先行，
+      // 避免 server 版经 JSON.stringify（双引号）后匹配不上下方单引号形态白名单
+      if (ev.server && ev.server.code === 1106){ kplUpdateStats(); break; }
+      KPL.status.lastError = ev.msg || (ev.server ? 'server error: ' + JSON.stringify(ev.server) : '');
+      if (!KPL.status.lastError){ kplUpdateStats(); break; }   // server-only 事件无文本：只计统计
       // 重连链是设计内稳定性模型（README §三）：会话轮换/codec 自愈属例行噪声，
-      // 降级到统计行；认证拒绝/反作弊/解码失败等异常才上横幅
-      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out/.test(KPL.status.lastError)){
+      // 降级到统计行；认证拒绝/反作弊/解码失败等异常才上横幅。
+      // server error 1106（连接错误）＝会话 TTL 到期时服务器对末次 keepalive 的拒绝+断开
+      // 信号（2026-10-28 验收实测：cmd=110 raw 帧恒在 close 前一瞬，会话期间数据全量到流），
+      // 属例行噪声；订阅超限型 1106 会在订阅期出现且无数据，两者以数据流健康为准。
+      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out|server error: \{'code': 1106/.test(KPL.status.lastError)){
         kplUpdateStats();
       } else {
         kplBanner(KPL.status.lastError);
@@ -5323,7 +5330,7 @@ async function kplDabanFetch(view){
     const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
     if (r.ok) KPL.daban[conf.pid] = r;                      // 历史/实时同构渲染；失败保留旧快照
     if (STATE.view === view) kplDabanRender(view);
-    kplDabanBanner(view, r.ok ? '' : (r.reason || '读取失败') + (r.error ? '：' + r.error : '') + (r.note ? '：' + r.note : ''));
+    kplDabanBanner(view, r.ok ? (hist && r.note ? r.note : '') : (r.reason || '读取失败') + (r.error ? '：' + r.error : '') + (r.note ? '：' + r.note : ''));
   } catch (e){
     if (STATE.view === view) kplDabanRender(view);
     kplDabanBanner(view, (hist ? '历史' : '快照') + '请求失败：' + (e.message || e));
@@ -5459,31 +5466,57 @@ function kplDabanRender(view){
 // ══════════ KPL 行情 · 大盘 KPI 条（七卡，kpl 组子页公用，2026-10-27）══════════
 // 数据源：market_overview/zd_stat socket 事件（预测量能/涨跌家数/强度/亏钱效应/空头气氛）
 // + /api/market/overview 指数（TDX bridge 链，与全站指数显示同源）。
-const KPI_MKT = {mo: null, zd: null, zb: null, head: null, headByDate: {}, headAt: 0, index: null, indexAt: 0};
+const KPI_MKT = {mo: null, zd: null, zb: null, head: null, headByDate: {}, idxHistByDate: {}, breadthHistByDate: {}, index: null, indexAt: 0};
 function kplRenderMarketKpi(){
   const el = $('kplMarketKpi');
   if (!el) return;
   const mo = KPI_MKT.mo, zd = KPI_MKT.zd, ix = KPI_MKT.index;
   const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
-  // 卡1 大盘指数（沪/深/创）
+  // KPI 跟随当前视图日期（2026-10-27 用户需求）：kpl=工具条日期，打板三页=各自日期
+  const kpiDate = kplKpiDate();
+  const hist = kpiDate && kpiDate !== KPL.today;
+  const idxRow = it => it ? `<div class="kpl-uni" style="font-size:12px;line-height:1.5"><b>${esc(it.name)}</b> ${kfmtNum(it.price)} <span class="${kcls(it.changePct)}">${(it.changePct > 0 ? '+' : '')}${(it.changePct * 1).toFixed(2)}%</span></div>` : '';
+  // 卡1 大盘指数（沪/深/创）：实时=/api/market/overview；历史=index-history 腾讯日K（2026-10-28 修复）
   let idxV = '<span style="font-size:13px;color:var(--muted2)">--</span>';
-  if (ix && ix.items){
+  let idxSub = '';
+  if (hist){
+    const idxHist = KPI_MKT.idxHistByDate[kpiDate];
+    if (idxHist && idxHist.ok){
+      const m = {}; for (const it of (idxHist.items || [])) m[it.code] = {name: it.name, price: it.close, changePct: it.pct};
+      idxV = (idxRow(m['sh000001']) || '') + (idxRow(m['sz399001']) || '') + (idxRow(m['sz399006']) || '');
+      idxSub = '历史收盘 · ' + kpiDate;
+    } else if (!idxHist){
+      kplFetchIndexHist(kpiDate);
+    } else {
+      idxSub = '指数历史不可用：' + (idxHist.reason || '');
+    }
+  } else if (ix && ix.items){
     const m = {}; for (const it of ix.items) m[it.code] = it;
-    const row = it => it ? `<div class="kpl-uni" style="font-size:12px;line-height:1.5"><b>${esc(it.name)}</b> ${kfmtNum(it.price)} <span class="${kcls(it.changePct)}">${(it.changePct > 0 ? '+' : '')}${(it.changePct * 1).toFixed(2)}%</span></div>` : '';
-    idxV = (row(m['sh000001']) || '') + (row(m['sz399001']) || '') + (row(m['sz399006']) || '');
+    idxV = (idxRow(m['sh000001']) || '') + (idxRow(m['sz399001']) || '') + (idxRow(m['sz399006']) || '');
   }
   const fmoney = mo ? (mo.forecast_money || '--') : '--';
   const fz = mo && mo.forecast_zf ? `<span class="${kcls(parseFloat(mo.forecast_zf))}">${mo.forecast_zf}</span>` : '';
   // 涨红绿跌（2026-10-27 用户需求）：涨家/涨停红、跌家/跌停绿
   const rd = (v, cls) => `<span class="${cls}">${v == null ? '--' : v}</span>`;
-  const zdV = zd ? `${rd(zd.zd_stat.rise, 'kpl-up')} / ${rd(zd.zd_stat.down, 'kpl-down')}` : '--';
-  const zdSub = zd ? `涨跌停 ${rd(zd.zd_stat.zt, 'kpl-up')}:${rd(zd.zd_stat.dt, 'kpl-down')}（实际 ${rd(zd.zd_stat.real_zt, 'kpl-up')}:${rd(zd.zd_stat.real_dt, 'kpl-down')}）` : '';
+  // 卡3 涨跌家数：实时=zd_stat(2114)；历史=breadth-history（东财 push2ex 仅最近交易日，本地逐日累积，2026-10-28）
+  let zdV = zd ? `${rd(zd.zd_stat.rise, 'kpl-up')} / ${rd(zd.zd_stat.down, 'kpl-down')}` : '--';
+  let zdSub = zd ? `涨跌停 ${rd(zd.zd_stat.zt, 'kpl-up')}:${rd(zd.zd_stat.dt, 'kpl-down')}（实际 ${rd(zd.zd_stat.real_zt, 'kpl-up')}:${rd(zd.zd_stat.real_dt, 'kpl-down')}）` : '';
+  if (hist){
+    const br = KPI_MKT.breadthHistByDate[kpiDate];
+    if (br && br.ok){
+      zdV = `${rd(br.rise, 'kpl-up')} / ${rd(br.down, 'kpl-down')}`;
+      zdSub = '历史收盘 · ' + kpiDate;
+    } else if (!br){
+      zdV = '--'; zdSub = '';
+      kplFetchBreadthHist(kpiDate);
+    } else {
+      zdV = '--';
+      zdSub = '无当日历史来源（上游仅最近交易日；本地逐日累积中）';
+    }
+  }
   // 涨停板/封板率/跌停股（今/昨）三卡（2026-10-27 用户需求，App 市场情绪头同款，涨红绿跌）：
   // 实时模式=zd_stat(2114)+破板率(2119)+打板头(2100)；历史模式=HisDaBanHeadInfo(date)
   // （todayZT=picked 日、yesterdayZT=其前一交易日；上游风控期显 "--"，恢复即亮）。
-  // KPI 跟随当前视图日期（2026-10-27 用户需求）：kpl=工具条日期，打板三页=各自日期。
-  const kpiDate = kplKpiDate();
-  const hist = kpiDate && kpiDate !== KPL.today;
   const head = hist ? (KPI_MKT.headByDate[kpiDate] || null) : KPI_MKT.head;
   if (hist && !head) kplFetchHead(kpiDate);   // 缺缓存即拉（60s 节流在 fetch 内）
   const ztToday = hist ? (head && head.today_zt != null ? head.today_zt : null)
@@ -5495,9 +5528,9 @@ function kplRenderMarketKpi(){
   const fPct = v => (v == null || !Number.isFinite(v)) ? '--' : Math.round(v) + '%';
   const pairSub = hist ? `${kpiDate.slice(5)} / 前一交易日` : '今日 / 昨日';
   const histNote = hist ? ' · 历史模式' : '';
-  el.innerHTML = card('大盘指数（沪/深/创）' + (hist ? '（无历史来源，显示 "--"）' : ''), hist ? '--' : idxV)
+  el.innerHTML = card('大盘指数（沪/深/创）', idxV, idxSub)
     + card('沪深京预测量能' + (hist ? '（盘前实时专用）' : ''), hist ? '--' : fmoney, hist ? '' : fz)
-    + card('涨跌家数' + (hist ? '（无历史来源，显示 "--"）' : ''), hist ? '--' : zdV, hist ? '' : zdSub)
+    + card('涨跌家数', zdV, zdSub)
     + card('涨停板（今/昨）',
            `<span class="kpl-up">${ztToday == null ? '--' : ztToday}</span> / <span class="kpl-up">${head && head.yesterday_zt != null ? head.yesterday_zt : '--'}</span>`,
            '封住家数 · ' + pairSub + histNote)
@@ -5551,6 +5584,33 @@ async function kplFetchIndex(){
   } catch (e){ /* 指数读口异常：卡片保持 '--'，不阻断 */ }
   const kd = kplKpiDate();
   if (kd && kd !== KPL.today) kplFetchHead(kd);   // 历史模式：按 picked 日拉 head
+}
+// 历史模式 KPI 取数器（大盘指数/涨跌家数，2026-10-28）：per-date 缓存 + 60s 节流；
+// 结构化失败落 miss 哨兵（fail-visible 展示原因，不静默反复重试）
+let kplIdxHistAt = {}, kplBreadthHistAt = {};
+async function kplFetchIndexHist(date){
+  if (KPI_MKT.idxHistByDate[date]){ kplRenderMarketKpi(); return; }
+  const now = Date.now();
+  if (kplIdxHistAt[date] && now - kplIdxHistAt[date] < 60000) return;
+  kplIdxHistAt[date] = now;
+  try {
+    const resp = await fetch('http://127.0.0.1:8000/api/market/index-history?date=' + date);
+    const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+    KPI_MKT.idxHistByDate[date] = r.ok ? r : {miss: true, reason: r.reason || ('HTTP ' + resp.status)};
+  } catch (e){ KPI_MKT.idxHistByDate[date] = {miss: true, reason: e.message || 'fetch error'}; }
+  kplRenderMarketKpi();
+}
+async function kplFetchBreadthHist(date){
+  if (KPI_MKT.breadthHistByDate[date]){ kplRenderMarketKpi(); return; }
+  const now = Date.now();
+  if (kplBreadthHistAt[date] && now - kplBreadthHistAt[date] < 60000) return;
+  kplBreadthHistAt[date] = now;
+  try {
+    const resp = await fetch('http://127.0.0.1:8000/api/market/breadth-history?date=' + date);
+    const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+    KPI_MKT.breadthHistByDate[date] = r.ok ? r : {miss: true, reason: r.reason || ('HTTP ' + resp.status), note: r.note || ''};
+  } catch (e){ KPI_MKT.breadthHistByDate[date] = {miss: true, reason: e.message || 'fetch error'}; }
+  kplRenderMarketKpi();
 }
 
 setView('overview');

@@ -274,6 +274,10 @@ def _maybe_num(v: Any) -> Any:
     return f if math.isfinite(f) else v
 
 
+_HISBAN_NOTE = ("上游该端点为严格白名单参数（仅 Day+全局五件套+凭据），不认页签参数——"
+                   "返回默认集合，页签过滤待 MITM 抓包对照")
+
+
 def _parse_daban_history_row(row: List[Any]) -> Dict[str, Any]:
     """历史收盘帧行 → 命名字段（列语义按 _DABAN_HIST_POS_NAMES，未对齐位原样保留 raw）。
 
@@ -294,45 +298,46 @@ def _parse_daban_history_row(row: List[Any]) -> Dict[str, Any]:
     return item
 
 
-def get_daban_list_history(date: str, pid_type: int, page: int = 0,
-                           page_size: int = 100) -> Dict[str, Any]:
+def get_daban_list_history(date: str, pid_type: int = 8) -> Dict[str, Any]:
     """按日取打板个股列表历史收盘帧（App 市场情绪·股票列表的日期回看读口）。
 
-    合同（2026-10-27 逆向自 BiddingZTlQuotaPresenter.a0 → ox0.L2 → j00.P1 → qg.q1）：
-    POST apphis ``a=HisDaBanList&c=HisHomeDingPan``，``Day=date``、``PidType``（8=竞价
-    0=即将涨停 6=风向标）、``Type=18``（orderType App 基线，与 socket 2103 一致）、
-    ``Order=1``、``Is_st/Filter/FilterMotherboard/FilterGem/FilterTIB=0``、``Index/st`` 分页；
-    凭据走 mapping_refresh 公共出口。2026-10-27 晚实测上游返回 errcode 1020 参数出错
-    （游客/现役/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、三域名全试均 1020；
-    同通道 RealRankingInfo/DaBanList errcode=0）——上游口径变更待查，此处如实透出。
+    合同（2026-10-27 逆向自 BiddingZTlQuotaPresenter.a0 → ox0.L2 → j00.P1 → qg.q1；
+    2026-10-28 实测修订）：POST apphis ``a=HisDaBanList&c=HisHomeDingPan&Day=date`` +
+    全局五件套（DeviceID/apiv/PhoneOSNew/VerSion/Red）+ 凭据。**实测该端点为严格
+    白名单参数——Day 之外多传任何键（PidType/Type/Order/Is_st/Index/st/Filter 家族
+    全部）一律 1020 参数出错；裸参数实测返回真数据（行格式=统一数组位，见
+    _parse_daban_history_row）**。因此 pid_type 在此不透传上游（仅作路由/前端语义），
+    返回的是上游默认集合；页签过滤参数待 MITM 抓包对照真实 App 请求后补。
+    上游限频（约分钟级 1 发，超频 1020/空列表抖动），30s TTL 缓存按日共享（三页签
+    同日共用一份，30s 内最多 1 发上游）。无分页（Index/st 不被接受）。
+    空列表=上游限频窗口/数据未生成的瞬时态（errcode=0）：抛结构化错误让前端横幅透出
+    （fail-visible，不伪装成「无数据」）；历史模式为单发不轮询，重拉需切换日期/重进页签。
     """
-    page = max(page, 0)
-    page_size = max(1, min(page_size, _STOCKS_MAX_PAGE_SIZE))
-    key = f"hisban:{pid_type}:{date}:{page}:{page_size}"
+    key = f"hisban:{date}"
     cached = _cached(key)
     if cached is not None:
-        return cached
+        return {"ok": True, "date": date, "pid_type": pid_type,
+                "items": cached["items"], "day": cached["day"],
+                "note": _HISBAN_NOTE}
     creds = {k: KPL_APP_BASE_PARAMS[k] for k in ("UserID", "DeviceID", "Token")}
     data = _post_form(
         _HOST_HISTORY,
         {"a": "HisDaBanList", "c": "HisHomeDingPan", "Day": date,
-         "PidType": pid_type, "Type": 18, "Order": 1, "Is_st": 0,
-         "Index": page * page_size, "st": page_size,
-         "Filter": 0, "FilterMotherboard": 0, "FilterGem": 0, "FilterTIB": 0,
          "apiv": "w48", "VerSion": "6.3.20.2", "PhoneOSNew": 1, "Red": 0, **creds},
         _UA_STOCKS)
     _check_errcode(data)
     rows = data.get("list") or []
-    if not rows and page == 0:
-        # 首页即空不伪装（与 sector-stocks 同款：逐日回退日期由前端驱动）
-        raise KplRankingError("empty_list_check_credentials", pid_type=pid_type, date=date)
-    items = [_parse_daban_history_row(r) for r in rows if isinstance(r, list) and r]
-    payload = {"ok": True, "date": date, "pid_type": pid_type,
-               "page": page, "page_size": page_size,
-               "has_more": len(items) >= page_size, "items": items,
-               "day": data.get("day", date)}
-    _store(key, payload)
-    return payload
+    if not rows:
+        # 空列表不伪装（fail-visible）：异常空态不进缓存；历史模式单发不轮询，
+        # 重拉需切换日期/重进页签（无自动重试）
+        raise KplRankingError("upstream_empty_list", pid_type=pid_type, date=date,
+                              note="上游返回空列表（限频窗口内瞬时态），重拉需切换日期/重进页签")
+    entry = {"items": [_parse_daban_history_row(r) for r in rows if isinstance(r, list) and r],
+             "day": data.get("day", date)}
+    _store(key, entry)
+    return {"ok": True, "date": date, "pid_type": pid_type,
+            "items": entry["items"], "day": entry["day"],
+            "note": _HISBAN_NOTE}
 
 
 def get_daban_head_info(date: str) -> Dict[str, Any]:

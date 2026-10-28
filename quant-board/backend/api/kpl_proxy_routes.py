@@ -95,8 +95,11 @@ async def daban_list(pid_type: int = 8) -> JSONResponse:
 
 
 @router.get("/daban-list-history")
-async def daban_list_history(date: str = "", pid_type: int = 8, page: int = 0) -> JSONResponse:
-    """按日打板个股列表历史收盘帧（HisDaBanList HTTP，App 市场情绪·日期回看同款读口）。"""
+async def daban_list_history(date: str = "", pid_type: int = 8) -> JSONResponse:
+    """按日打板个股列表历史收盘帧（HisDaBanList HTTP，App 市场情绪·日期回看同款读口）。
+
+    上游白名单参数（2026-10-28 实测）：仅 Day+五件套+凭据，不认页签/分页参数，
+    返回默认集合；故无 page 透传（历史模式前端单发不轮询）。"""
     bad = _validate_date(date)
     if bad is not None:
         return bad
@@ -106,7 +109,7 @@ async def daban_list_history(date: str = "", pid_type: int = 8, page: int = 0) -
             status_code=400)
     try:
         return JSONResponse(
-            content=kpl_ranking_service.get_daban_list_history(date, pid_type, page=page))
+            content=kpl_ranking_service.get_daban_list_history(date, pid_type))
     except KplRankingError as exc:
         return JSONResponse(content=exc.to_payload(), status_code=502)
 

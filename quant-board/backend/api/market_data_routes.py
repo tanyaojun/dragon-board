@@ -19,6 +19,10 @@ from backend.market_proxy.sentiment import get_sentiment_service
 from backend.market_proxy.surge import get_surge_stock_service
 from backend.market_proxy.xuangubao import get_xuangubao_service
 from backend.services.market.volume_ratio_service import compute_volume_ratios
+from backend.services.market_history_service import (
+    MarketHistoryError,
+    get_service as get_market_history_service,
+)
 
 
 router = APIRouter(tags=["market-data"])
@@ -125,6 +129,30 @@ async def market_overview():
             },
         )
     return JSONResponse(content=snapshot)
+
+
+@router.get("/api/market/index-history", response_model=None)
+def market_index_history(date: str = ""):
+    """大盘指数（沪/深/创）历史收盘+涨跌幅（腾讯 ifzq 日 K，2026-10-28 KPI 历史修复）。"""
+    try:
+        return JSONResponse(content=get_market_history_service().index_history(date))
+    except MarketHistoryError as exc:
+        return JSONResponse(status_code=404, content=exc.to_payload())
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "reason": "index_history_upstream_error", "message": str(exc)[:200]})
+
+
+@router.get("/api/market/breadth-history", response_model=None)
+def market_breadth_history(date: str = ""):
+    """全市场涨跌家数历史（东财 push2ex 仅最近交易日可得，本地逐日持久化累积）。"""
+    try:
+        return JSONResponse(content=get_market_history_service().breadth_history(date))
+    except MarketHistoryError as exc:
+        return JSONResponse(status_code=404, content=exc.to_payload())
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "reason": "breadth_history_upstream_error", "message": str(exc)[:200]})
 
 
 @router.get("/api/{platform}/hot", response_model=None)

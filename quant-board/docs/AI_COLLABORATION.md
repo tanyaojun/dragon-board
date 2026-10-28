@@ -250,5 +250,19 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   0x38597C/0x38597D 显式置位；imp_free 必须真实回收（否则数百次调用后堆耗尽）；工件三件套
   在 gitignored 的 `data/kpl_pcemu/`，`scripts/extract_kpl_pcemu.py` 提取。协议合同见
   kpl-socket README §十；**pytest 禁止加载真实 ELF**（test_kpl_pc_codec.py 全 mock）。
+- **打板个股列表三页验收收口（2026-10-28）**：工作台【集合竞价/即将涨停/风向标】socket 2103 实时
+  （pidType 8/0/6，7 页订阅）+ HisDaBanList 历史回放两链实链验收通过——WS 270 事件/75s 全型到流、
+  pid8 竞价快照 183 项零缺口且与 App 同屏基线逐项一致、pid9 降级路径结构化；HisDaBanList 1020
+  异常解除（实为参数白名单：Day 外多传任意键即 1020，见 README §11.4 修订；缓存按日共享，
+  30s 内三页签最多 1 发上游；空列表/历史 note 均 fail-visible 透出）；历史行列语义
+  独立源核对收口（pos4/13/17 精确一致，pos14/15 实际流通口径自洽；pos29/pos18-32 默认集合内
+  无法核对待抓包）。前端修复：会话 TTL 关闭时 server error 1106（cmd=110 紧邻 close，会话期数据
+  全量到流）结构化白名单（ev.server.code===1106）+ msg 形态正则双保险，均只计统计不上横幅
+  （lastError 经 /api/kpl/status 可查）。
+- **KPI 两卡历史修复（2026-10-28）**：大盘指数（沪/深/创）/涨跌家数历史模式不再显 "--"——
+  新增 `/api/market/index-history`（腾讯 ifzq 日 K）与 `/api/market/breadth-history`
+  （东财 push2ex 涨跌分布仅最近交易日可得，本地 data/market_breadth_daily.json 逐日累积，
+  更早日期结构化缺数 fail-visible）；服务 `backend/services/market_history_service.py` +
+  `test_market_history_service.py`（全 mock）。详见 kpl-socket README §11.4/§11.5。
 - **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
   `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。

@@ -306,7 +306,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - 数值/单位：涨停委买额/竞价净额/竞价成交额/实际流通等为**数值元**（1302937361.0=13.02 亿，
   与 App 同屏一致）；解析层可转 float 的转 float，不可转的原样字符串保留（fail-visible，
   不猜换算）；quotas[20]/[21] 无目录名，只进 raw quotas。
-- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0`（:8000 同路径代理透传）→
+- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0|6`（:8000 同路径代理透传）→
   `{ok, items[合并全量], max_size, pages, pages_expected, pages_missing, date, ts}`；
   页缺口显式透出（如即将涨停页盘后 maxSize=30 但推送 items 空，属上游语义非链路故障）。
 - 无快照（采集未运行/未订阅）返回结构化降级 `{ok:false, degraded:true,
@@ -320,23 +320,39 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   server error 1106（单请求 id 超 ~241 上限，工作台横幅可见）。已改为与 3001 同款 200 分块
   （`_chunks`），实测横幅消失、行情照常到流；含 3 帧全量无丢失回归用例。
 
-### 11.4 历史回看读口（HisDaBanList，2026-10-27 三期，上游当晚异常待复测）
+### 11.4 历史回看读口（HisDaBanList，2026-10-27 三期；2026-10-28 验收收口）
 
-- 合同（逆向自 BiddingZTlQuotaPresenter.a0 → ox0.L2 → j00.P1 → qg.q1）：POST apphis
-  ``a=HisDaBanList&c=HisHomeDingPan``，``Day=YYYY-MM-DD``、``PidType``（8/0/6 同 socket）、
-  ``Type=18``（orderType 基线）、``Order=1``、``Is_st/Filter/FilterMotherboard/FilterGem/
-  FilterTIB=0``、``Index/st`` 分页；**历史行格式与 socket quotas 不同**——row[0]=代码、
-  row[1]=名称、row[2]=labelType(int)、row[3]=板块标签，row[i]（i≥4）直接按统一数组位
-  取值（与 PatternTitleVisibleArrayPosition 列序同源，解析器 `_parse_daban_history_row`，
-  列语义未经真实样本核对——上游异常期拿不到样本，接入消费前须与 App 历史页同屏核对）。
+- 合同（逆向自 BiddingZTlQuotaPresenter.a0 → ox0.L2 → j00.P1 → qg.q1；
+  **2026-10-28 实测修订：该端点为严格白名单参数**）：POST apphis
+  ``a=HisDaBanList&c=HisHomeDingPan&Day=YYYY-MM-DD`` + 全局五件套（DeviceID/apiv/
+  PhoneOSNew/VerSion/Red）+ 凭据；**Day 之外多传任何键（PidType/Type/Order/Is_st/
+  Index/st/Filter 家族全部）一律 errcode 1020**，裸参数返回真数据。因此 pid_type 在
+  服务端不透传上游（保留作路由/前端语义），无分页（Index/st 不被接受）；**三页签返回
+  同一默认集合**（实测 2026-10-27 仅 9 行 ≠ 竞价页当日快照 183 行），页签过滤待 MITM
+  抓包对照真实 App 请求后补——前端已有 note 横幅显式透出，不伪装成页签数据。
+- **历史行格式与 socket quotas 不同**——row[0]=代码、row[1]=名称、row[2]=labelType(int)、
+  row[3]=板块标签，row[i]（i≥4）直接按统一数组位取值（解析器 `_parse_daban_history_row`，
+  列名表 `_DABAN_HIST_POS_NAMES`）。
+- **列语义已独立源核对收口（2026-10-28，EM push2his + 腾讯/新浪不复权 K 线交叉 + 自洽验证）**：
+  pos4 涨幅（002639=5.24%、603366=5.26% 双源精确一致）、pos13 成交额（2231432699 与 EM
+  分毫不差）、pos17 价格（14.27/7.41）、pos14 实际换手×pos15 实际流通（24.59% = 东财成交量
+  ÷实际流通盘，实际流通口径确认）；pos12 主力净额沿用既有语义。**pos29 换手率与 pos18-27/
+  30-32 本轮默认集合内全 0/恒等，无法核对，待 App 历史页同屏或 MITM 抓包补**。坑：历史列
+  核对必须用不复权源（腾讯 qfq 曾致 603366 pct 表观 3.20% vs 真实 5.26%）。核对样本与结论：
+  `.tmp_review/hisdaban_column_check_20261028.json`（本地）。
 - 读口：`GET /api/kpl/daban-list-history?date=&pid_type=`（:8000 直连 HTTP，与
-  sector-ranking 同层）；前端三页（集合竞价/即将涨停/风向标）已加精选板块同款
-  日期切换 + 回实时工具条，历史模式单发不轮询。
-- **2026-10-27 晚上游异常实录（阴性记录，引用前须当日复测）**：HisDaBanList 与
-  ZhiShuStockList_W8（成分股，:8000 既有功能）先后返回 1020 参数出错 / errcode 0+空列表，
-  两种形态抖动；游客/现役凭据/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、
-  apphis/apphwhq/applhb 三域名全试一致；同通道 RealRankingInfo/DaBanList/plate-tree 正常。
-  时段内本机探针 ~50 发（远超 App 正常频率），疑触发上游频控——当晚已停止探测待冷却复测。
+  sector-ranking 同层）；30s TTL 缓存按日共享（三页签同日共用一份，兑限频）；空列表抛结构化
+  `upstream_empty_list`（fail-visible，不伪装空页；历史模式单发不轮询，重拉需切换日期/重进页签）；
+  历史 note（默认集合口径说明）在成功态同样经页内横幅透出；前端三页（集合竞价/即将涨停/风向标）已加
+  精选板块同款日期切换 + 回实时工具条，历史模式单发不轮询。
+- **2026-10-27 晚上游异常实录（阴性记录，已于 2026-10-28 复测解除）**：当晚 HisDaBanList
+  全参数形态 errcode 1020 / ZhiShuStockList_W8 errcode 0+空列表，两种形态抖动；
+  游客/现役凭据/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、apphis/apphwhq/applhb
+  三域名全试一致；同通道 RealRankingInfo/DaBanList/plate-tree 正常。时段内本机探针 ~50 发
+  （远超 App 正常频率），疑触发上游频控——当晚已停止探测。
+  **2026-10-28 验收复测：3 发（07:47-07:50，间隔≥65s）date=2026-10-27 pid_type 8/0/6
+  全 ok=true 返真数据，1020 解除；根因即参数白名单——旧行为多传 PidType 等键被拒**。
+  探测登记 `.tmp_review/hisdaban_retest_log_20261028.json`（本地）。
 
 ### 11.5 打板头订阅（2100 DaBanHeadResp，KPI 三卡昨日侧来源，2026-10-27）
 
@@ -354,6 +370,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - **KPI 跟随日期（2026-10-27 用户需求）**：kpl 视图=工具条日期（kplDateChange/回实时），
   打板三页=各自日期；历史模式三卡走 daban-head（picked 日/前一日），涨跌家数/大盘指数/
   预测量能无历史来源显 "--"（卡题标注）。实测 10-23：84/33、87%/59%、7/49。缺数显式 "--"。
+- **KPI 两卡历史修复（2026-10-28）**：大盘指数（沪/深/创）历史=新增 `GET /api/market/index-history`
+  （腾讯 ifzq 日 K，pct 自前收盘计算）；涨跌家数历史=新增 `GET /api/market/breadth-history`
+  （东财 push2ex 涨跌分布**仅最近完成交易日可得**，本地 `data/market_breadth_daily.json` 逐日持久化累积，
+  更早日期结构化缺数 fail-visible 不伪装；服务 `backend/services/market_history_service.py`，
+  测试 `test_market_history_service.py` 全 mock）。历史 note/缺数原因经 KPI 卡副行/页内横幅透出。
 
 ### 11.6 测试与证据
 
