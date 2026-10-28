@@ -420,3 +420,34 @@ class TestDabanDispatch:
         # 另一页签无快照 → fail-visible 结构化降级，不伪装空列表
         miss = svc.get_daban_list(0)
         assert miss["ok"] is False and miss["degraded"] is True and miss["reason"] == "no_daban_list_snapshot"
+
+    def test_daban_empty_frame_suppressed_over_nonempty(self, svc):
+        # 空帧抑制（2026-10-28 盘中实测）：风向标页上游列表重建窗口高频回空 Resp 帧
+        # （35s 内 14 帧 12 空/2 满），空帧不得覆盖非空页缓存，否则读口绝大多数时间为空
+        from backend.services import kpl_daban_protocol as daban
+        def _page(idx: int, rows: list) -> bytes:
+            body = proto.pb_varint_field(1, 6) + proto.pb_varint_field(4, idx)
+            for sid, name, q0 in rows:
+                body += proto.pb_bytes(20, proto.pb_bytes(1, sid.encode())
+                                       + proto.pb_bytes(2, name.encode())
+                                       + proto.pb_bytes(100, q0.encode()))
+            return body + proto.pb_varint_field(22, 25)
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(0, [("000559", "msmk", "1亿")]))))
+        snap1 = svc.get_daban_list(6)
+        assert [it["stock_id"] for it in snap1["items"]] == ["000559"]
+        # 空帧到达：不覆盖非空缓存，仅刷 ts + 记 last_empty_seen；空帧本身仍 fail-visible 广播
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/", _page(0, []))))
+        evs = self._drain(q)
+        assert any(e["type"] == "daban_stocks" and e["pid_type"] == 6 and not e["items"] for e in evs)
+        snap2 = svc.get_daban_list(6)
+        assert [it["stock_id"] for it in snap2["items"]] == ["000559"]
+        page = svc._daban_lists[6][0]
+        assert page.get("last_empty_seen") is not None and page["ts"] >= snap1["ts"]
+        # 随后的满帧正常覆盖（last_empty_seen 清除）
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(0, [("002708", "bb", "2亿")]))))
+        snap3 = svc.get_daban_list(6)
+        assert [it["stock_id"] for it in snap3["items"]] == ["002708"]
+        assert "last_empty_seen" not in svc._daban_lists[6][0]

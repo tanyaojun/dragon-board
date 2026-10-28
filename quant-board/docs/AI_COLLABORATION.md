@@ -270,5 +270,8 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   原料读口 `/api/kpl/daban-prev-day-basis`（腾讯 ifzq 日K，param 必须带 sh/sz/bj 前缀；
   按日缓存 12h、失败 10 分钟不重试、missing fail-visible）。口径自洽校验 8/8（竞价成交额/实际流通
   与 2103 竞价换手逐只吻合）。详见 kpl-socket README §11.2。
+- **风向标空帧抑制（2026-10-28 盘中修复）**：pid 6 上游全 Resp 形态且列表重建窗口高频回空帧
+  （14 帧 12 空/2 满），无条件覆盖页缓存致读口恒空——空帧不覆盖非空页缓存（fail-visible 广播保留，
+  含回归用例），盘中实测 25 项稳定到流。
 - **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
   `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。

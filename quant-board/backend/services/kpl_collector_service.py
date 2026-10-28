@@ -850,11 +850,23 @@ class KplCollectorService:
                 return
             self._stats["pushes"] += 1
             if cmd == daban.CMD_DABAN_STOCK_LIST:
-                # 2103 按页缓存（pidType→index→页快照）：推送页固定 30 行，读口按 index 合并
+                # 2103 按页缓存（pidType→index→页快照）：推送页固定 30 行，读口按 index 合并。
+                # 空帧抑制（2026-10-28 盘中实测）：风向标页上游在列表重建窗口高频回空帧
+                # （35s 内 14 帧 Resp，12 空/2 满 25 项），无条件覆盖会让读口绝大多数时间为空；
+                # 故空帧不覆盖非空页缓存（仅刷 ts + 记 last_empty_seen），真清空（盘后）随
+                # 日期切换/采集重启自然重置。
                 try:
                     pid = int(data.get("pid_type", 0))
                     idx = int(data.get("index", 0))
-                    self._daban_lists.setdefault(pid, {})[idx] = {**data, "ts": time.time()}
+                    new_items = data.get("items") or []
+                    prev = self._daban_lists.get(pid, {}).get(idx)
+                    if not new_items and prev and (prev.get("items") or []):
+                        kept = dict(prev)
+                        kept["ts"] = time.time()
+                        kept["last_empty_seen"] = time.time()
+                        self._daban_lists.setdefault(pid, {})[idx] = kept
+                    else:
+                        self._daban_lists.setdefault(pid, {})[idx] = {**data, "ts": time.time()}
                 except (TypeError, ValueError):
                     pass
             event_type = DABAN_EVENT_NAMES.get(cmd, "daban")
