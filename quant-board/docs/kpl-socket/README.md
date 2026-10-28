@@ -444,3 +444,35 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - 证据工件（本地 .tmp_review/）：`kpl_daban_frames_20261027.txt`（KPL_DEBUG 帧转储，
   含 count=200 请求密文）；真实快照对照：竞价页 183/183 全量零缺口，赛福天行与 App 竞价页
   同屏逐项一致（13.02 亿/10.01%/机器人概念、海洋经济/4连板/528.0 万/966.7 万）。
+
+## 十二、总览页大盘走势（2026-10-28 增补，复刻 APP 直播页分时图）
+
+### 12.1 读口与数据源
+
+- `GET /api/market/index-minute?code=sh000001`（:8000，同步 def 入线程池）→
+  `{ok, date, code, name, prevClose, points:[{t:"HHMM", price, vol, amount}], lastPrice,
+  totalVol, totalAmount, source:"tencent_ifzq_minute"}`。
+- 上游：腾讯 `web.ifzq.gtimg.cn/appstock/app/minute/query?code=<code>`（匿名、无凭据），
+  行格式 `HHMM 价 累计量(手) 累计额(元)` → 归一化为**逐分钟增量**；昨收取 `qt[4]`；
+  名称取本地 `INDEX_CODES` 映射（上游 name 为 GBK，不依赖其解码）。
+- 缓存：20s TTL（`idxminute:<code>`）；空分时/缺昨收 → `upstream_empty_minute` 结构化 502
+  （fail-visible，不伪装成平线）；非支持代码 → `invalid_code`。
+- `:8008` relay 页新增 `/api/market/*` 透传前缀（与 `/api/kpl/*` 同款，不经 :3000）。
+
+### 12.2 展示合同（总览页）
+
+- 卡片「📈 大盘走势 · 上证指数分时」取代原「近15日 · 连板指数 vs 热度温度」（后者连同
+  `drawChart()` 一并删除；相位分线图 `relayChart2` 不受影响）。
+- 图 = 对称价格轴（昨收为中轴，顶/底分别标价格与涨跌幅，涨红跌绿）+ 昨收虚线 +
+  蓝色分时线/渐变面积 + 逐分钟量柱（幂律压缩，开盘巨量不压平全天；分钟价升红/跌绿）+
+  轴标 09:30 / 11:30-13:00 / 15:00。
+- 看点气泡 = `/api/kpl/live?st=20` 最近 3 条解说按 `Time` 钉到对应分钟点，红底白字胶囊，
+  三档垂直分层 + 横向避让，上方空间不足时翻到点下方；悬停 `<title>` 出全文。
+  直播流不可用 → 只缺气泡，卡片 hint 显式标注「看点气泡不可用」，不影响分时底图。
+- 刷新：进入总览页即取，30s 轮询（仅总览页运行）；失败显式原因 + 自动重试。
+- 底部读数移出 SVG（避免压轴标签）：成交额/总量/末点时间价格涨跌幅/昨收/来源。
+
+### 12.3 测试
+
+- `tests/market/test_market_index_minute.py`（4 passed，全 mock httpx）：增量归一化、
+  空行 fail-visible、非法代码、路由 502。

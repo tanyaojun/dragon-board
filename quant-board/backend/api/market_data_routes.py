@@ -155,6 +155,21 @@ def market_breadth_history(date: str = ""):
             "ok": False, "reason": "breadth_history_upstream_error", "message": str(exc)[:200]})
 
 
+@router.get("/api/market/index-minute", response_model=None)
+def market_index_minute(code: str = "sh000001"):
+    """大盘指数当日分时（腾讯 ifzq minute/query，2026-10-28 总览页大盘走势图）。
+
+    同步 def（同步 httpx，入线程池不阻塞事件循环）；fail-visible 502。
+    """
+    try:
+        return JSONResponse(content=get_market_history_service().index_minute(code))
+    except MarketHistoryError as exc:
+        return JSONResponse(status_code=502, content=exc.to_payload())
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "reason": "index_minute_upstream_error", "message": str(exc)[:200]})
+
+
 @router.get("/api/{platform}/hot", response_model=None)
 async def platform_hot_get(platform: str):
     if platform not in GET_PLATFORMS:

@@ -386,7 +386,7 @@
     <main class="content" id="content">
   <section id="tab-overview">
     <div class="page-head"><div><h2>总览</h2>
-      <p>当日逐槽日内演化 · EOD 日级窗口 · 近 15 日连板指数与热度温度。数据实时透传 :8000，缺数与降级原因始终显式标注。</p></div></div>
+      <p>当日逐槽日内演化 · EOD 日级窗口 · 大盘分时走势叠加直播看点。数据实时透传 :8000，缺数与降级原因始终显式标注。</p></div></div>
     <div class="ph-line"></div>
     <div class="kpi-strip" id="kpiRow"></div>
     <div class="grid g3" style="margin-top:14px">
@@ -397,9 +397,10 @@
         <div class="card" style="margin-top:14px"><h3>🧮 今日连板情绪</h3><div id="relayMini" class="empty">加载中…</div></div>
       </div>
     </div>
-    <div class="card" style="margin-top:14px"><h3>📉 近15日 · 连板指数 vs 热度温度
-      <span class="hint"><span class="legend"><span><i style="background:#2563eb"></i>连板指数</span><span><i style="background:#f59e0b"></i>温度分</span></span></span></h3>
-      <div id="relayChart"></div></div>
+    <div class="card" style="margin-top:14px"><h3>📈 大盘走势 · 上证指数分时
+      <span class="hint"><span class="legend"><span><i style="background:#5b8ff9;height:3px"></i>分时</span><span><i style="background:#e74c3c"></i>上涨/看点</span><span><i style="background:#2ecc71"></i>下跌</span><span id="ovIndexHint"></span></span></span></h3>
+      <div id="ovIndexChart"></div>
+      <div id="ovIndexFoot" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>
   </section>
 
   <section id="tab-quotes" style="display:none">
@@ -4283,6 +4284,7 @@ function setView(key){
   }
   window.scrollTo({top: 0});
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
+  if (main === 'overview') ovIndexLoad();   // 总览：大盘分时+直播看点（30s 轮询兜底，见启动区）
   if (main === 'relay' && STATE.relayView === 'nodes') pulseFetch();   // V2c：进入节点页签即取（60s 后端缓存兜）
   const kpiEl = $('kplMarketKpi');
   const kplGroup = ['kpl', 'kpllive', 'kplbid', 'kplsoon', 'kplvane'];   // 大盘 KPI 条=kpl 组子页公用
@@ -4673,53 +4675,131 @@ function wireChartTip(id){
 }
 
 function renderCharts(){
-  const seq = _loadSeq;
-  // 总览卡固定近15日；相位分线图跟随全局统计窗口（2026-10-18：原 full/range 双 chip 已由窗口控件取代）
-  const pts15 = STATE.series.slice(-15).filter(r => r.relayIndex != null);
   const ptsR = rangedSeries().filter(r => r.relayIndex != null);
-  // 温度随点自带（relay-index 读口已 join EOD day_temperature，全窗可用；/range 仅 60 天上限）
+  if (ptsR.length < 2){ $('relayChart2').innerHTML = '<div class="empty">当前统计窗口内序列不足（放宽度或点「全部」）</div>'; return; }
   const tempsR = {}; for (const r of ptsR) if (r.dayTemperature != null) tempsR[r.tradingDate] = r.dayTemperature;
-  if (pts15.length < 2) $('relayChart').innerHTML = '<div class="empty">序列不足</div>';
-  if (ptsR.length < 2) $('relayChart2').innerHTML = '<div class="empty">当前统计窗口内序列不足（放宽度或点「全部」）</div>';
-  if (pts15.length < 2 && ptsR.length < 2) return;
-  // 单次 /range 双图共享温度轴；seq 守卫防过期响应回写覆盖新图（快速切日期竞态）
-  const need = Math.min(60, Math.max(20, pts15.length + ptsR.length + 10));
-  fetch('/api/hotlist-jev/range?days=' + need).then(r => r.json()).then(rng => {
-    if (seq !== _loadSeq) return;
-    const temps = {};
-    for (const day of (rng.days || [])) {
-      const t = day.eod && day.eod.scores ? day.eod.scores.day_temperature : null;
-      if (t != null) temps[day.tradingDate] = t;
-    }
-    if (pts15.length >= 2) drawChart('relayChart', pts15, temps);
-    if (ptsR.length >= 2) drawRelayChart('relayChart2', ptsR, tempsR);
-  }).catch(() => { if (seq === _loadSeq) {
-    if (pts15.length >= 2) drawChart('relayChart', pts15, {});
-    if (ptsR.length >= 2) drawRelayChart('relayChart2', ptsR, tempsR);
-  } });
+  drawRelayChart('relayChart2', ptsR, tempsR);
 }
 
-function drawChart(id, pts, temps){
-  const W = 1460, H = 220, PL = 46, PR = 16, PT = 14, PB = 26;
-  const n = pts.length, minV = 0, maxV = 100;
-  const x = i => PL + i * (W - PL - PR) / (n - 1);
-  const y = v => PT + (1 - (v - minV) / (maxV - minV)) * (H - PT - PB);
-  let grid = '', labels = '', pathR = '', pathT = '', dotsR = '';
-  for (let g = 0; g <= 4; g++) {
-    const v = g * 25, yy = y(v);
-    grid += `<line x1="${PL}" y1="${yy}" x2="${W-PR}" y2="${yy}" stroke="#eef2f7"/>`;
-    labels += `<text x="${PL-8}" y="${yy+4}" text-anchor="end" font-size="10" fill="#94a3b8">${v}</text>`;
+// ══════════════════════════════════════════════════════════════════════════════
+// 总览 · 大盘走势（2026-10-28 复刻 KPL 直播页分时图）：
+// 底图=/api/market/index-minute（腾讯 ifzq 上证分时，20s 缓存）；
+// 看点气泡=直播解说流（/api/kpl/live）按时间钉图，只取最近 3 条，气泡不进 onclick 上下文。
+// fail-visible：分时失败显式原因（盘前/上游异常 30s 自动重试），直播流失败仅降级为无气泡。
+// ══════════════════════════════════════════════════════════════════════════════
+const OVI = { seq: 0, minute: null, live: null };
+
+function ovIndexLoad(){
+  const seq = ++OVI.seq;
+  Promise.all([jget('/api/market/index-minute'), jget(KPL_API + '/live?st=20').catch(() => null)])
+    .then(([minute, live]) => {
+      if (seq !== OVI.seq) return;
+      OVI.minute = minute; OVI.live = live;
+      drawOvIndex();
+    })
+    .catch(e => {
+      if (seq !== OVI.seq) return;
+      $('ovIndexChart').innerHTML = `<div class="empty">大盘分时读取失败：${esc(e && e.message ? e.message : '?')}（30s 后自动重试）</div>`;
+    });
+}
+
+function ovMinuteSlot(t){                    // "HHMM" → 全日槽 0..241（0930=0，1300=121，1500=241）
+  const m = (+t.slice(0, 2)) * 60 + (+t.slice(2));
+  return m <= 690 ? Math.max(0, m - 570) : 121 + m - 780;
+}
+
+function drawOvIndex(){
+  const d = OVI.minute;
+  if (!d || !d.ok || !d.points || !d.points.length){
+    $('ovIndexChart').innerHTML = `<div class="empty">大盘分时不可用：${esc((d && d.reason) || '未知')}（盘前/非交易日为正常态，30s 后自动重试）</div>`;
+    $('ovIndexFoot').textContent = '';
+    return;
   }
-  pts.forEach((r, i) => {
-    labels += `<text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="10" fill="#94a3b8">${(r.tradingDate||'').slice(5)}</text>`;
-    pathR += `${i ? 'L' : 'M'}${x(i)},${y(r.relayIndex)}`;
-    dotsR += `<circle cx="${x(i)}" cy="${y(r.relayIndex)}" r="3.2" fill="#2563eb"><title>${esc(r.tradingDate)} 指数${r.relayIndex} ${esc(PHASE_CN[r.relayPhase]||'')}</title></circle>`;
-    const t = temps[r.tradingDate];
-    if (t != null) pathT += `${pathT ? 'L' : 'M'}${x(i)},${y(t)}`;
+  const hint = $('ovIndexHint'); if (hint) hint.textContent = OVI.live ? '' : '看点气泡不可用（直播流未返回）';
+  const pts = d.points, prev = d.prevClose;
+  const W = 1460, H = 360, PL = 64, PR = 76, PT = 24, PB = 26, VGAP = 12, VH = 52;
+  const PW = W - PL - PR, PH = H - VH - PB - PT - VGAP, VY1 = H - PB - VH, VY0 = H - PB;
+  let half = 0;                              // 对称尺度：昨收为中轴（对齐真实分时图）
+  for (const p of pts) half = Math.max(half, Math.abs(p.price - prev));
+  half = Math.max(half, prev * 0.0015);
+  const top = prev + half, bot = prev - half;
+  const x = s => PL + s * PW / 241;
+  const y = v => PT + (1 - (v - bot) / (top - bot)) * PH;
+  // 量柱用幂律压缩（开盘首分钟巨量不压平全天，真实分时图同款视觉）
+  const vmax = pts.reduce((m, p) => Math.max(m, p.vol), 0) || 1;
+  const vh = vol => Math.pow(vol / vmax, 0.42) * VH;
+  const fmtPct = v => (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+  const color = v => v >= 0 ? '#e74c3c' : '#2ecc71';
+  const slotByT = {}; for (const p of pts) slotByT[p.t] = p;
+  const bw = Math.max(1.4, PW / 241 * 0.62);
+  let line = '', bars = '', labels = '';
+  pts.forEach((p, i) => {
+    line += `${i ? 'L' : 'M'}${x(ovMinuteSlot(p.t))},${y(p.price)}`;
+    const ref = i ? pts[i - 1].price : prev;   // 分钟涨跌色：价升红/价跌绿
+    const hgt = vh(p.vol);
+    bars += `<rect x="${x(ovMinuteSlot(p.t)) - bw / 2}" y="${VY0 - hgt}" width="${bw}" height="${hgt}" fill="${color(p.price - ref)}" opacity="0.75"/>`;
   });
-  $(id).innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${grid}${labels}
-    ${pathT ? `<path d="${pathT}" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 4"/>` : ''}
-    <path d="${pathR}" fill="none" stroke="#2563eb" stroke-width="2.4"/>${dotsR}</svg>`;
+  const baseY = y(prev), lastX = x(ovMinuteSlot(pts[pts.length - 1].t));
+  const area = line + `L${lastX},${baseY}L${x(0)},${baseY}Z`;
+  // 左价格 / 右涨跌幅（顶红底绿，昨收虚线中轴）
+  [[top, 'top'], [bot, 'bot']].forEach(([v]) => {
+    const yy = y(v);
+    labels += `<text x="${PL - 8}" y="${yy + 4}" text-anchor="end" font-size="12" fill="#64748b">${v.toFixed(2)}</text>`
+      + `<text x="${W - PR + 10}" y="${yy + 4}" font-size="13" font-weight="600" fill="${color(v - prev)}">${fmtPct(v / prev - 1)}</text>`;
+  });
+  [['09:30', PL, 'start'], ['11:30/13:00', x(120.5), 'middle'], ['15:00', W - PR, 'end']].forEach(([t, xx, a]) => {
+    labels += `<text x="${xx}" y="${H - 8}" text-anchor="${a}" font-size="11" fill="#94a3b8">${t}</text>`;
+  });
+  // 直播看点气泡：最近 3 条解说按时间钉图（贪心分层防重叠，悬停出全文）
+  const items = ((OVI.live && OVI.live.items) || []).filter(it => it.time && it.comment).slice(-3).reverse();
+  const placed = [[], [], []];               // 三档占用区间（同刻多看点垂直错开）
+  let bubbles = '';
+  for (const it of items) {
+    const t = it.time.replace(':', '');
+    if (!/^\d{4}$/.test(t) || slotByT[t] == null) continue;
+    const p = slotByT[t], bx = x(ovMinuteSlot(t)), by = y(p.price);
+    const txt = it.comment.length > 10 ? it.comment.slice(0, 10) + '…' : it.comment;
+    const tw = txt.length * 11.5 + 18;
+    let px0 = Math.max(PL + 2, Math.min(W - PR - tw - 2, bx - tw / 2));
+    let level = -1;
+    for (let lv = 0; lv < 3; lv++){          // 先找横向不冲突的档位
+      if (!placed[lv].some(([a, b]) => px0 < b + 6 && px0 + tw > a - 6)){ level = lv; break; }
+    }
+    if (level < 0){                          // 三档都撞：同档横向右移避让（clamp 回界内）
+      level = 0;
+      for (const [a, b] of placed[0].slice().sort((p1, p2) => p1[0] - p2[0])){
+        if (px0 < b + 6 && px0 + tw > a - 6) px0 = b + 8;
+      }
+      px0 = Math.max(PL + 2, Math.min(W - PR - tw - 2, px0));
+    }
+    placed[level].push([px0, px0 + tw]);
+    // 上方空间够则挂点上方（APP 同款），不够则翻到点下方，避免全部 clamp 到顶边重叠
+    const above = by - 44 - level * 26 >= PT + 2;
+    const py = above ? by - 44 - level * 26 : Math.min(VY1 - 26, by + 16 + level * 26);
+    const cxLine = Math.max(px0 + 10, Math.min(px0 + tw - 10, bx));   // 引线取气泡靠点一侧，平移后不歪
+    bubbles += `<line x1="${cxLine}" y1="${above ? py + 19 : py - 1}" x2="${bx}" y2="${by}" stroke="#e74c3c" stroke-width="1" opacity="0.65"/>`
+      + `<circle cx="${bx}" cy="${by}" r="3" fill="#e74c3c"/>`
+      + `<rect x="${px0}" y="${py}" width="${tw}" height="20" rx="10" fill="#e74c3c" opacity="0.92"/>`
+      + `<text x="${px0 + tw / 2}" y="${py + 14}" text-anchor="middle" font-size="12" fill="#fff">${esc(txt)}<title>${esc(it.time + ' ' + it.comment)}</title></text>`;
+  }
+  const last = pts[pts.length - 1];
+  $('ovIndexChart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
+    <defs><linearGradient id="ovArea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5b8ff9" stop-opacity="0.32"/><stop offset="1" stop-color="#5b8ff9" stop-opacity="0.03"/>
+    </linearGradient></defs>
+    <line x1="${PL}" y1="${y(top)}" x2="${W - PR}" y2="${y(top)}" stroke="#f1f5f9"/>
+    <line x1="${PL}" y1="${y(bot)}" x2="${W - PR}" y2="${y(bot)}" stroke="#f1f5f9"/>
+    <line x1="${x(120.5)}" y1="${PT}" x2="${x(120.5)}" y2="${VY0}" stroke="#f1f5f9"/>
+    <line x1="${PL}" y1="${baseY}" x2="${W - PR}" y2="${baseY}" stroke="#cbd5e1" stroke-dasharray="4 4"/>
+    <path d="${area}" fill="url(#ovArea)"/>
+    <path d="${line}" fill="none" stroke="#5b8ff9" stroke-width="1.6"/>
+    ${bars}${bubbles}${labels}
+  </svg>`;
+  // 底部读数移出 SVG（避免压轴标签）：成交额/总量/末点/来源
+  $('ovIndexFoot').textContent = `成交额 ${(d.totalAmount / 1e8).toFixed(0)}亿 · 总量 ${(d.totalVol / 1e4).toFixed(0)}万手`
+    + ` · ${d.date ? d.date.slice(0, 4) + '-' + d.date.slice(4, 6) + '-' + d.date.slice(6) : ''}`
+    + ` ${last.t.slice(0, 2)}:${last.t.slice(2)} ${last.price.toFixed(2)} ${fmtPct(last.price / prev - 1)}`
+    + ` · 昨收 ${prev.toFixed(2)} · ${d.name}（${d.source === 'tencent_ifzq_minute' ? '腾讯分时' : d.source}）`;
 }
 
 renderSidebar();
@@ -6055,6 +6135,7 @@ async function kplFetchBreadthHist(date){
 setView('overview');
 loadAll();
 setInterval(loadAll, 60000); // 实时：60s 轮询
+setInterval(() => { if (STATE.view === 'overview') ovIndexLoad(); }, 30000);   // 大盘分时 30s 轮询（仅总览页运行）
 // 题目集 criteria 全文（SSOT：权威在后端 QUESTIONS_RELAY，前端不再手抄全文）。
 // 失败回落摘要 DESC 表（fail-visible，不阻断页面；一次性拉取，题目集变更需刷新）。
 jget('/api/hotlist-jev/relay-questions')

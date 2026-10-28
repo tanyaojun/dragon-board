@@ -210,5 +210,73 @@ class MarketHistoryService:
     def breadth_history(self, date_str: str) -> Dict[str, Any]:
         return get_breadth_history(date_str)
 
+    def index_minute(self, code: str = "sh000001") -> Dict[str, Any]:
+        return get_index_minute(code)
+
 
 _SERVICE = MarketHistoryService()
+
+
+# ── 大盘指数分时（腾讯 ifzq minute/query，2026-10-28 直播大盘走势复刻到总览页）───────
+
+_MINUTE_TTL_SECONDS = 20.0   # 分时分钟级，20s 兑前端轮询
+
+
+def _normalize_minute_rows(rows: List[str]) -> List[Dict[str, Any]]:
+    """腾讯分时行 "HHMM 价 累计量(手) 累计额(元)" → [{t, price, vol, amount}]；量/额为该分钟增量。"""
+    out: List[Dict[str, Any]] = []
+    prev_vol = prev_amt = 0.0
+    for raw in rows:
+        parts = str(raw).split()
+        if len(parts) < 3:
+            continue
+        try:
+            t = parts[0]
+            price = float(parts[1])
+            cum_vol = float(parts[2])
+            cum_amt = float(parts[3]) if len(parts) > 3 else 0.0
+        except ValueError:
+            continue
+        out.append({"t": t, "price": price,
+                    "vol": max(0.0, cum_vol - prev_vol),
+                    "amount": max(0.0, cum_amt - prev_amt)})
+        prev_vol, prev_amt = cum_vol, cum_amt
+    return out
+
+
+def get_index_minute(code: str = "sh000001") -> Dict[str, Any]:
+    """大盘指数当日分时（分钟线+逐分钟量额+昨收），复刻 KPL 直播页大盘走势底图。
+
+    名称取本地映射（上游 qt name 为 GBK 编码，不依赖其解码）；空分时行 fail-visible。
+    """
+    valid = dict(INDEX_CODES)
+    if code not in valid:
+        raise MarketHistoryError("invalid_code", code=code, supported=list(valid))
+    key = f"idxminute:{code}"
+    cached = _cached(key, _MINUTE_TTL_SECONDS)
+    if cached is not None:
+        return cached
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={code}"
+    resp = httpx.get(url, headers={"User-Agent": _UA, "Referer": "https://gu.qq.com/"},
+                     trust_env=False, timeout=15)
+    resp.raise_for_status()
+    node = ((resp.json() or {}).get("data") or {}).get(code) or {}
+    rows = ((node.get("data") or {}).get("data")) or []
+    qt = (node.get("qt") or {}).get(code) or []
+    prev_close = float(qt[4]) if len(qt) > 4 and str(qt[4]).replace(".", "", 1).isdigit() else None
+    points = _normalize_minute_rows(rows)
+    if not points or prev_close is None:
+        raise MarketHistoryError("upstream_empty_minute", code=code)
+    last = points[-1]
+    payload = {
+        "ok": True, "date": (node.get("data") or {}).get("date") or "",
+        "code": code, "name": valid[code],
+        "prevClose": prev_close,
+        "points": points,
+        "lastPrice": last["price"],
+        "totalVol": sum(p["vol"] for p in points),
+        "totalAmount": sum(p["amount"] for p in points),
+        "source": "tencent_ifzq_minute",
+    }
+    _store(key, payload)
+    return payload

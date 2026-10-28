@@ -53,6 +53,24 @@ async def proxy(rest: str, request: Request):
             status_code=502)
 
 
+@app.get("/api/market/{rest:path}")
+async def proxy_market(rest: str, request: Request):
+    """大盘读口透传（2026-10-28：总览页大盘分时走势，与 :8000 同合同）。"""
+    url = f"{_UPSTREAM}/api/market/{rest}"
+    if request.url.query:
+        url += "?" + request.url.query
+    try:
+        upstream = await _get_client().get(url, timeout=20)
+        return JSONResponse(content=upstream.json(), status_code=upstream.status_code)
+    except Exception as exc:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": f"upstream_unavailable: {exc}"},
+            status_code=502)
+
+
+@app.get("/api/kpl/{rest:path}")
+
+
 @app.get("/api/kpl/{rest:path}")
 async def proxy_kpl(rest: str, request: Request):
     """透传 KPL 读口到 8000（精选板块历史回看等；实时行情走 WS 不经此）。"""
