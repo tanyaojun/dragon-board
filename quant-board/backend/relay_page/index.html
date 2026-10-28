@@ -4798,7 +4798,7 @@ function drawOvIndex(){
     bubbles += `<line x1="${cxLine}" y1="${above ? py + 19 : py - 1}" x2="${bx}" y2="${by}" stroke="#e74c3c" stroke-width="1" opacity="0.65"/>`
       + `<circle cx="${bx}" cy="${by}" r="3" fill="#e74c3c"/>`
       + `<rect x="${px0}" y="${py}" width="${tw}" height="20" rx="10" fill="#e74c3c" opacity="0.92"/>`
-      + `<text x="${px0 + tw / 2}" y="${py + 14}" text-anchor="middle" font-size="12" fill="#fff">${esc(txt)}<title>${esc(it.time + ' ' + it.comment)}</title></text>`;
+      + `<text x="${px0 + tw / 2}" y="${py + 14}" text-anchor="middle" font-size="12" fill="#fff">${esc(txt)}<title>${esc(it.time + ' ' + String(it.comment || '').replace(/（该内容由AI大模型根据行情自动生成）/g, '').trim())}</title></text>`;
   }
   const last = pts[pts.length - 1];
   $('ovIndexChart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">
@@ -5505,7 +5505,7 @@ function kplLiveRender(){
       return `<div class="lv-item${LIVE.sel === it.id ? ' sel' : ''}${LIVE.freshIds.has(it.id) ? ' fresh' : ''}"`
         + ` data-id="${esc(it.id)}" data-code="${esc((it.stocks && it.stocks[0] && it.stocks[0].code) || '')}">`
         + `<div><span class="lv-time">${esc(it.time)}</span>${plate}</div>`
-        + `<div class="lv-comment">${esc(it.comment)}</div>`
+        + `<div class="lv-comment">${esc(String(it.comment || '').replace(/（该内容由AI大模型根据行情自动生成）/g, '').trim())}</div>`
         + (chips ? `<div class="lv-chips">${chips}</div>` : '') + `</div>`;
     }).join('')
       : '<div style="padding:14px" class="kpl-sub">' + (LIVE.zb.length ? '无匹配解说'
