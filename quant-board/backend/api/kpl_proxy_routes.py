@@ -26,6 +26,18 @@ router = APIRouter(prefix="/api/kpl", tags=["kpl-socket"])
 
 _UPSTREAM_HTTP = "http://127.0.0.1:8002"
 _UPSTREAM_WS = "ws://127.0.0.1:8002/ws/kpl-quotes"
+_VOICE_WORKER = "http://127.0.0.1:32145"   # tools/VoiceWorker（本地常驻语音进程）
+
+
+def _voice_offline(exc: Exception) -> JSONResponse:
+    """连接层失败（拒连/超时）：fail-visible 200 + offline（前端提示启动命令并自动重试）。"""
+    return JSONResponse(content={"ok": False, "offline": True,
+                                 "reason": f"voice_worker_offline: {type(exc).__name__}"})
+
+
+def _voice_bad_response(detail: str) -> JSONResponse:
+    """在线但响应异常（非 2xx/非 JSON）：不误标 offline（避免误导排障方向）。"""
+    return JSONResponse(content={"ok": False, "reason": f"voice_worker_bad_response: {detail}"})
 
 # 共享 AsyncClient（2026-10-27）：每请求新建会在事件循环里同步加载 Windows 证书库
 # ≈2s/发——:8000 KPL 路由每发中招，:8008 更被多页签轮询拖成事件循环瘫痪
@@ -144,6 +156,86 @@ async def daban_head(date: str = "") -> JSONResponse:
         return bad
     try:
         return JSONResponse(content=kpl_ranking_service.get_daban_head_info(date))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
+@router.get("/voice/status")
+async def voice_status() -> JSONResponse:
+    """VoiceWorker 状态探测（tools/VoiceWorker 本地 32145）。
+
+    连接失败 → 200+offline（不报 500，前端自动重试）；在线但非 2xx/非 JSON → bad_response。
+    """
+    try:
+        resp = await _get_client().get(f"{_VOICE_WORKER}/status", timeout=2.0)
+    except Exception as exc:
+        return _voice_offline(exc)
+    if resp.status_code >= 400:
+        return _voice_bad_response(f"http_{resp.status_code}")
+    try:
+        return JSONResponse(content=resp.json())
+    except Exception as exc:
+        return _voice_bad_response(f"json: {type(exc).__name__}")
+
+
+@router.post("/voice/speak")
+async def voice_speak(request: Request) -> JSONResponse:
+    """语音播报转发（VoiceWorker POST /speak；text 上限 200 字，这里先截一层）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"ok": False, "reason": "invalid_json"}, status_code=400)
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return JSONResponse(content={"ok": False, "reason": "empty_text"}, status_code=400)
+    payload = {"text": text[:200]}
+    for key in ("rate", "volume", "voice"):
+        if body.get(key) is not None:
+            payload[key] = body[key]
+    try:
+        resp = await _get_client().post(f"{_VOICE_WORKER}/speak", json=payload, timeout=5.0)
+    except Exception as exc:
+        return _voice_offline(exc)
+    if resp.status_code >= 400:
+        return _voice_bad_response(f"http_{resp.status_code}")
+    try:
+        return JSONResponse(content=resp.json())
+    except Exception as exc:
+        return _voice_bad_response(f"json: {type(exc).__name__}")
+
+
+@router.post("/voice/stop")
+async def voice_stop() -> JSONResponse:
+    """清空 VoiceWorker 播报队列。"""
+    try:
+        resp = await _get_client().post(f"{_VOICE_WORKER}/stop", timeout=3.0)
+    except Exception as exc:
+        return _voice_offline(exc)
+    try:
+        return JSONResponse(content=resp.json())
+    except Exception as exc:
+        return _voice_bad_response(f"json: {type(exc).__name__}")
+
+
+@router.get("/live")
+def live(st: int = 30) -> JSONResponse:
+    """直播解说流（KPL App 直播页同源 ZhiBoContent，需 App 凭据；15s TTL 缓存）。
+
+    同步 def：service 层是同步 urllib + 2s 节流 sleep，FastAPI 自动入线程池，
+    不阻塞事件循环（同 daban_prev_day_basis 既有裁决）。凭据仅进请求参数（公共出口），
+    不落日志不返回；fail-visible 结构化错误。
+    """
+    try:
+        return JSONResponse(content=kpl_ranking_service.get_live_commentary(st=st))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
+@router.get("/radar")
+def radar(st: int = 60) -> JSONResponse:
+    """市场雷达/直播流（KPL 层1 a=Radar c=HomeDingPan，仅实时；5s TTL 缓存）。同步 def 理由同 /live。"""
+    try:
+        return JSONResponse(content=kpl_ranking_service.get_market_radar(st=st))
     except KplRankingError as exc:
         return JSONResponse(content=exc.to_payload(), status_code=502)
 

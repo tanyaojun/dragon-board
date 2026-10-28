@@ -146,6 +146,48 @@ class TestGetSectorRanking:
         assert len(out["items"]) == 1                       # 垃圾行全滤掉
         assert out["items"][0]["plate_id"] == "801159"
 
+    def test_sons_parsed_and_paired(self, monkeypatch):
+        # 2026-10-28 实测合同：list_son=父板块 id 列表、list_soninfo=同 19 列子板块行，
+        # 等长按位配对（App 二级板块行的唯一来源，非客户端强度过滤）
+        def fake_post(url, params, ua):
+            return {"errcode": 0,
+                    "list": [["801159", "机器人概念", 24234, 2.38, 0, 1, 0, 0, 0, 0]],
+                    "list_son": [801159],
+                    "list_soninfo": [["801928", "智元机器人", 2835, 4.051, 0.239,
+                                      1, 0, 0, 0, 0]]}
+
+        monkeypatch.setattr(svc, "_post_form", fake_post)
+        out = get_sector_ranking("2026-10-28")
+        assert list(out["sons"].keys()) == ["801159"]
+        son = out["sons"]["801159"][0]
+        assert son["plate_id"] == "801928" and son["name"] == "智元机器人"
+        assert son["strength"] == 2835 and "raw" in son
+
+    def test_sons_unpaired_fail_visible(self, monkeypatch):
+        # list_son 与 list_soninfo 长度不等 → 不猜配对，结构化透出（不伪装成无子板块）
+        def fake_post(url, params, ua):
+            return {"errcode": 0,
+                    "list": [["801159", "机器人概念", 24234, 2.38, 0, 1, 0, 0, 0, 0]],
+                    "list_son": [801159, 801001],
+                    "list_soninfo": [["801928", "智元机器人", 2835, 4.051, 0.239,
+                                      1, 0, 0, 0, 0]]}
+
+        monkeypatch.setattr(svc, "_post_form", fake_post)
+        out = get_sector_ranking("2026-10-29")
+        assert out["sons"] == {}
+        assert out["sons_unpaired"]["parents"] == ["801159", "801001"]
+        assert out["sons_unpaired"]["row_count"] == 1
+
+    def test_sons_absent_keys_means_empty(self, monkeypatch):
+        # 上游确认无子板块（响应无 list_son 键）→ sons={} 且无 unpaired 标记
+        def fake_post(url, params, ua):
+            return {"errcode": 0,
+                    "list": [["801159", "机器人概念", 24234, 2.38, 0, 1, 0, 0, 0, 0]]}
+
+        monkeypatch.setattr(svc, "_post_form", fake_post)
+        out = get_sector_ranking("2026-10-30")
+        assert out["sons"] == {} and "sons_unpaired" not in out
+
 
 class TestGetSectorStocks:
     def test_requires_credentials_from_common_source(self, monkeypatch):
@@ -379,3 +421,139 @@ class TestDabanPrevDayBasis:
         with pytest.raises(KplRankingError) as ei:
             svc.get_daban_prev_day_basis("2026-10-28", [f"c{i}" for i in range(900)])
         assert ei.value.reason == "too_many_codes"
+
+
+# ── 市场雷达/直播流（2026-10-28）：parse_radar_row + get_market_radar ──────────
+
+def test_parse_radar_row_normalizes_and_dedups():
+    row = svc.parse_radar_row({"time": 1793158191, "status": "涨停回封",
+                               "stock_name": "科达利", "plate_type": 1,
+                               "status_color": 1, "zf": "", "stockid": "002850",
+                               "LBstatus": "首板", "content": "涨停打开后，再次封涨停，当前封单2.00亿元",
+                               "content2": "当前封单2.00亿"})
+    assert row is not None
+    assert row["id"] == "1793158191:002850:涨停回封"
+    assert row["code"] == "002850" and row["name"] == "科达利"
+    assert row["lb_status"] == "首板" and row["color"] == 1
+    assert row["zf"] is None and row["content2"].startswith("当前封单")
+    assert ":" in row["time"]   # HH:MM:SS
+    # 缺 stockid / 非法时间 → None（计入 skipped，不猜补）
+    assert svc.parse_radar_row({"time": 1, "status": "x", "stock_name": "n"}) is None
+    assert svc.parse_radar_row({"time": "abc", "stockid": "002850"}) is None
+
+
+def test_radar_sorted_skipped_and_cached(monkeypatch):
+    payload = {"list": [
+        {"time": 1793158191, "status": "涨停回封", "stock_name": "科达利",
+         "stockid": "002850", "LBstatus": "首板", "status_color": 1, "zf": "",
+         "content": "c1", "content2": "", "plate_type": 1},
+        {"time": "bad", "stockid": "1"},                      # 非法 → skipped
+        {"time": 1793158100, "status": "封死涨停", "stock_name": "正强股份",
+         "stockid": "301382", "LBstatus": "首板", "status_color": 1, "zf": "",
+         "content": "c2", "content2": "", "plate_type": 1},
+    ], "date": "2026-10-28", "errcode": 0}
+    calls = []
+    monkeypatch.setattr(svc, "_post_form", lambda *a, **k: (calls.append(a), payload)[1])
+    out = svc.get_market_radar(st=60)
+    assert out["ok"] and out["date"] == "2026-10-28"
+    assert [it["code"] for it in out["items"]] == ["002850", "301382"]   # ts 降序
+    assert out["skipped"] == 1
+    # 5s TTL 命中：不再发上游
+    out2 = svc.get_market_radar(st=60)
+    assert len(calls) == 1 and out2["items"] == out["items"]
+
+
+def test_radar_empty_not_cached_and_error_passthrough(monkeypatch):
+    calls = []
+    monkeypatch.setattr(svc, "_post_form", lambda *a, **k: (calls.append(1), {"list": [], "errcode": 0})[1])
+    out = svc.get_market_radar()
+    assert out["ok"] and out["items"] == []
+    monkeypatch.setattr(svc, "_post_form", lambda *a, **k: (calls.append(1), {"list": [], "errcode": 0})[1])
+    svc.get_market_radar()          # 空不缓存 → 再次请求真的发上游
+    assert len(calls) == 2
+    def boom(*a, **k):
+        raise KplRankingError("upstream_http_502", url="x")
+    monkeypatch.setattr(svc, "_post_form", boom)
+    with pytest.raises(KplRankingError):
+        svc.get_market_radar()
+
+
+# ── 直播解说流（2026-10-28）：parse_live_row + get_live_commentary ──────────────
+
+def test_parse_live_row_normalizes():
+    row = svc.parse_live_row({
+        "ID": "94474", "Time": 1793158020, "Type": "0",
+        "Comment": "机器人持续强势，各分支轮动走强（该内容由AI大模型根据行情自动生成）",
+        "PlateCode": "801159", "PlateName": "机器人概念", "PlateJE": "7354203034.000",
+        "PlateZDF": "3.87", "UserName": "xqm",
+        "Stock": [["688836", "宇树科技", 12.49], ["688585", "上纬新材", 20], ["bad"]],})
+    assert row["id"] == "zb:94474"
+    assert row["plate_code"] == "801159" and row["user"] == "xqm"
+    assert row["ts"] == 1793158020 and row["plate_name"] == "机器人概念"
+    assert row["plate_pct"] == 3.87
+    assert row["stocks"] == [{"code": "688836", "name": "宇树科技", "pct": 12.49},
+                             {"code": "688585", "name": "上纬新材", "pct": 20}]
+    # 缺 Time / Comment → None
+    assert svc.parse_live_row({"Time": 1, "Comment": ""}) is None
+    assert svc.parse_live_row({"Time": "x", "Comment": "c"}) is None
+
+
+def test_live_sorted_cached_and_error(monkeypatch):
+    payload = {"List": [
+        {"ID": "2", "Time": 1793158020, "Comment": "b", "Type": "0", "Stock": []},
+        {"ID": "1", "Time": 1793158200, "Comment": "a", "Type": "0",
+         "Stock": [["688836", "宇树科技", 12.49]]},
+    ], "date": "2026-10-28", "Notice": "直播即将开始！！！", "errcode": 0}
+    calls = []
+    monkeypatch.setattr(svc, "_post_form", lambda *a, **k: (calls.append(1), payload)[1])
+    out = svc.get_live_commentary(st=30)
+    assert out["ok"] and out["date"] == "2026-10-28"
+    assert out["notice"].startswith("直播")
+    assert [it["id"] for it in out["items"]] == ["zb:1", "zb:2"]        # ts 降序
+    assert out["items"][0]["stocks"][0]["name"] == "宇树科技"
+    out2 = svc.get_live_commentary(st=30)
+    assert len(calls) == 1 and out2 == out                              # 15s TTL 命中
+    def boom(*a, **k):
+        raise KplRankingError("upstream_http_502", url="x")
+    svc._cache.clear()                                                  # 否则 15s TTL 命中不发上游
+    monkeypatch.setattr(svc, "_post_form", boom)
+    with pytest.raises(KplRankingError):
+        svc.get_live_commentary()
+
+
+def test_live_empty_not_cached(monkeypatch):
+    calls = []
+    monkeypatch.setattr(svc, "_post_form", lambda *a, **k: (calls.append(1), {"List": [], "Notice": "", "errcode": 0})[1])
+    svc.get_live_commentary()
+    monkeypatch.setattr(svc, "_post_form", lambda *a, **k: (calls.append(1), {"List": [], "Notice": "", "errcode": 0})[1])
+    svc.get_live_commentary()
+    assert len(calls) == 2      # 空 items 不缓存
+
+
+def test_live_credentials_from_common_source_and_not_leaked(monkeypatch):
+    """凭据红线钉死：UserID/Token/DeviceID 只来自公共出口、只进请求参数，不入返回 payload。"""
+    from backend.services.theme.mapping_refresh import KPL_APP_BASE_PARAMS
+    captured = {}
+    payload = {"List": [{"ID": "1", "Time": 1793158020, "Comment": "c", "Type": "0", "Stock": []}],
+               "date": "2026-10-28", "Notice": "", "errcode": 0}
+    def fake_post(url, params, ua):
+        captured["url"], captured["params"] = url, params
+        return payload
+    monkeypatch.setattr(svc, "_post_form", fake_post)
+    out = svc.get_live_commentary()
+    # 凭据=公共出口原值，逐键钉死（防有人改成本地硬编码或遗漏）
+    for key in ("UserID", "Token", "DeviceID"):
+        assert captured["params"][key] == KPL_APP_BASE_PARAMS[key]
+    # 返回体（含 items 深处）不得携带任何凭据键
+    dumped = repr(out)
+    for key in ("UserID", "Token", "DeviceID"):
+        assert key not in dumped
+        assert KPL_APP_BASE_PARAMS[key] not in dumped
+    # 结构化异常 detail 只带 url，不带 params
+    def boom(url, params, ua):
+        raise KplRankingError("upstream_http_502", url=url)
+    svc._cache.clear()                                  # 否则 15s TTL 命中不发上游
+    monkeypatch.setattr(svc, "_post_form", boom)
+    with pytest.raises(KplRankingError) as ei:
+        svc.get_live_commentary()
+    assert "Token" not in str(ei.value.detail) and KPL_APP_BASE_PARAMS["Token"] not in str(ei.value.detail)

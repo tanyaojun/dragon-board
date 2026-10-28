@@ -163,15 +163,51 @@ def _check_errcode(data: dict) -> None:
 
 # ── 公共读口 ────────────────────────────────────────────────────────────────
 
-def get_sector_ranking(date: str) -> Dict[str, Any]:
-    """按日取板块强度排行全量（Type=1+Date 分页取齐）。
+def _parse_sons(pages: List[dict]) -> Dict[str, Any]:
+    """排行响应的 list_son/list_soninfo → 二级板块读数（2026-10-28 反汇编 APP 显示逻辑实测）。
 
-    返回 {"ok": True, "date": ..., "items": [...]}；上游/业务错误抛 KplRankingError。
+    App 精选板块的子板块行不是客户端按强度过滤，而是服务端直接下发：
+    ``list_son``=获得子板块行的父板块 id 列表、``list_soninfo``=子板块行（同 19 列格式），
+    实测两者等长按位配对（2026-10-28 10:35 样本：list_son=[801159]、list_soninfo=[智元机器人]，
+    与 App 同屏一致；同期排行宇宙内 40+ 一级板块有树子板块但仅此 1 个拿到 son）。
+    配对规则：等长 → 按位 zip 成 {parent_id: [子板块行]}；不等长 → 不猜配对，
+    结构化透出 sons_unpaired（fail-visible，不伪装成「无子板块」）。
     """
+    parents: List[str] = []
+    rows: List[List[Any]] = []
+    for data in pages:
+        for p in (data.get("list_son") or []):
+            sp = str(p)
+            # 不去重：合同=等长按位配对，去重会破坏与 list_soninfo 的对位（多父/重复场景待真实样本验证）
+            if sp:
+                parents.append(sp)
+        rows.extend(r for r in (data.get("list_soninfo") or [])
+                    # 同主列表同款垃圾行过滤（plate_id 非 6 位数字/名称空）
+                    if isinstance(r, list) and len(r) >= 2
+                    and len(str(r[0] or "")) == 6 and str(r[0] or "").isdigit()
+                    and str(r[1] or "").strip())
+    if not parents and not rows:
+        return {"sons": {}}
+    if len(parents) != len(rows):
+        return {"sons": {},
+                "sons_unpaired": {"parents": parents, "row_count": len(rows),
+                                  "note": "list_son 与 list_soninfo 长度不等，放弃按位配对"}}
+    sons: Dict[str, List[Dict[str, Any]]] = {}
+    for pid, row in zip(parents, rows):
+        sons.setdefault(pid, []).append(parse_ranking_row(row))
+    return {"sons": sons}
+
+
+def get_sector_ranking(date: str) -> Dict[str, Any]:
+    """按日取板块强度排行全量（Type=1+Date 分页取齐）+ 二级板块（list_son）。
+
+    返回 {"ok": True, "date": ..., "items": [...], "sons": {parent_id: [子板块行]}}；
+    上游/业务错误抛 KplRankingError。"""
     cached = _cached(f"ranking:{date}")
     if cached is not None:
         return cached
     items: List[Dict[str, Any]] = []
+    pages: List[dict] = []
     for page in range(_RANKING_MAX_PAGES):
         data = _post_form(
             # 2026-10-27 实测：排行（含 Type=1+Date 查史）走 apphwhq；apphis 同参数返空
@@ -183,6 +219,7 @@ def get_sector_ranking(date: str) -> Dict[str, Any]:
              "st": _RANKING_PAGE_SIZE, "Token": "0", "UserID": "0"},
             _UA_RANKING)
         _check_errcode(data)
+        pages.append(data)
         rows = data.get("list") or []
         # 盘前/未生成时上游会返回「全零行」（plate_id="0"、名称空）——过滤，
         # 否则引导把垃圾行当有效数据、真正有数的旧日期被跳过（2026-10-27 实测）
@@ -192,7 +229,7 @@ def get_sector_ranking(date: str) -> Dict[str, Any]:
         items.extend(parse_ranking_row(r) for r in rows)
         if len(rows) < _RANKING_PAGE_SIZE:
             break
-    payload = {"ok": True, "date": date, "items": items}
+    payload = {"ok": True, "date": date, "items": items, **_parse_sons(pages)}
     if items:
         _store(f"ranking:{date}", payload)  # 空 items 不缓存：异常空态不得被 TTL 钉住
     return payload
@@ -365,6 +402,144 @@ def get_daban_head_info(date: str) -> Dict[str, Any]:
     _check_errcode(data)
     payload = {"ok": True, "date": date, "raw": data}
     _store(key, payload)
+    return payload
+
+
+# ── 市场雷达/直播流（2026-10-28）：a=Radar&c=HomeDingPan（apiv=w38，仅实时） ──
+# 反汇编来源：apifox 社区接口文档（239636155）+ 2026-10-28 直连实测（apphwhq 域，
+# 无 Token/UserID 亦可）；响应 {list:[...], num, date, time, ttag, errcode}，
+# list 项字段：time(epoch 秒)/status/stock_name/stockid/plate_type/status_color/
+# zf/content/content2/LBstatus。上游每页上限约 15 条（st=60 仍返 15），Index 翻页。
+# 直播页顶部长篇官方解说未见于该接口，另源未定位（不猜数）；status_color 实测仅见 1。
+_RADAR_TTL_SECONDS = 5.0   # 直播流要求新鲜：5s 兜前端 8s 轮询，不共用 30s 缓存
+_RADAR_PAGE_MAX = 60
+
+
+def parse_radar_row(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """单条雷达事件归一化：无 stockid 或时间非法返回 None（由调用方计入 skipped）。"""
+    try:
+        ts = int(float(raw.get("time") or 0))
+    except (TypeError, ValueError):
+        return None
+    code = str(raw.get("stockid") or "").strip()
+    if not code or ts <= 0:
+        return None
+    status = str(raw.get("status") or "").strip()
+    lt = time.localtime(ts)
+    return {
+        "id": f"{ts}:{code}:{status}",          # 会话内去重键（同秒同股同状态=同事件）
+        "ts": ts,
+        "time": time.strftime("%H:%M:%S", lt),
+        "status": status,
+        "code": code,
+        "name": str(raw.get("stock_name") or "").strip(),
+        "lb_status": str(raw.get("LBstatus") or "").strip(),
+        # status_color：实测仅见 1（涨停系红）；其余值语义未知，透出原始值不猜色
+        "color": _maybe_num(raw.get("status_color")),
+        "zf": _maybe_num(raw.get("zf")) if str(raw.get("zf") or "").strip() else None,
+        "content": str(raw.get("content") or "").strip(),
+        "content2": str(raw.get("content2") or "").strip(),
+        "plate_type": _maybe_num(raw.get("plate_type")),
+    }
+
+
+def get_market_radar(st: int = 60) -> Dict[str, Any]:
+    """市场雷达/直播流（层1 Radar，仅实时；历史口径未验证不提供）。
+
+    返回 {"ok": True, "date": ..., "items": [...], "skipped": n}；items 按 ts 降序。
+    5s TTL 缓存；空 items 不缓存（异常空态不得被 TTL 钉住，fail-visible）。
+    上游/业务错误抛 KplRankingError。
+    """
+    st = max(1, min(int(st), _RADAR_PAGE_MAX))
+    key = f"radar:{st}"
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    data = _post_form(
+        _HOST_REALTIME,
+        {"a": "Radar", "c": "HomeDingPan", "apiv": "w38", "Index": 0,
+         "st": st, "PhoneOSNew": 1, "VerSion": "5.16.0.5",
+         "DeviceID": KPL_APP_BASE_PARAMS["DeviceID"]},
+        _UA_RANKING)
+    _check_errcode(data)
+    rows_raw = data.get("list") or []
+    items = [r for r in (parse_radar_row(x) for x in rows_raw if isinstance(x, dict)) if r]
+    items.sort(key=lambda r: r["ts"], reverse=True)
+    payload = {"ok": True, "date": str(data.get("date") or ""),
+               "items": items, "skipped": len(rows_raw) - len(items)}
+    if items:
+        _cache[key] = (time.time() + _RADAR_TTL_SECONDS, payload)
+    return payload
+
+
+# ── 直播解说流（2026-10-28）：a=ZhiBoContent&c=ConceptionPoint（apphwhq，需 App 凭据） ──
+# 反汇编路径：网页版 www.kaipanla.com/page/szlive.html + js/part/szlive.js（实时走
+# pchq 域需登录态 1016/1001）→ 实测 apphwhq.longhuvip.com 同参数 + KPL_APP_BASE_PARAMS
+# 凭据可用，返回与 App 直播页逐字一致（2026-10-28 样本 .tmp_review/zhibo_raw.json）。
+# 响应 {List:[...], Notice, Status, Time, date, ttag, errcode}；List 项：ID/UID/Time(epoch)/
+# Comment/Type/PlateCode/PlateName/PlateJE/PlateZDF/Stock=[[code,name,pct],...]/DisStock/
+# ThemeInfo/Interpretation/IsChart/Image/UserName。内容=AI 大模型根据行情自动生成（App 同款标注）。
+# 历史变体 c=HisConceptionPoint+Date（网页版走 pchis 域）未验证——v1 仅实时，不猜数。
+# 凭据仅进请求参数（mapping_refresh 公共出口），不入库不落日志（红线 §1.2.3）。
+_LIVE_TTL_SECONDS = 15.0   # 解说频率约分钟级，15s 兑前端轮询
+_LIVE_PAGE_MAX = 60
+
+
+def parse_live_row(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """单条直播解说归一化：无 Time/Comment 返回 None（调用方计入 skipped）。"""
+    try:
+        ts = int(float(raw.get("Time") or 0))
+    except (TypeError, ValueError):
+        return None
+    comment = str(raw.get("Comment") or "").strip()
+    if ts <= 0 or not comment:
+        return None
+    stocks = []
+    for s in (raw.get("Stock") or []):
+        if isinstance(s, (list, tuple)) and len(s) >= 2 and str(s[0] or "").strip():
+            stocks.append({"code": str(s[0]).strip(), "name": str(s[1]).strip(),
+                           "pct": _maybe_num(s[2]) if len(s) > 2 else None})
+    return {
+        "id": f"zb:{raw.get('ID') or ts}",
+        "ts": ts,
+        "time": time.strftime("%H:%M", time.localtime(ts)),
+        "comment": comment,
+        "type": _maybe_num(raw.get("Type")),
+        "plate_code": str(raw.get("PlateCode") or "").strip(),
+        "plate_name": str(raw.get("PlateName") or "").strip(),
+        "plate_pct": _maybe_num(raw.get("PlateZDF")) if str(raw.get("PlateZDF") or "").strip() else None,
+        "stocks": stocks,
+        "user": str(raw.get("UserName") or "").strip(),
+    }
+
+
+def get_live_commentary(st: int = 30) -> Dict[str, Any]:
+    """直播解说流（App 直播页同源；仅实时，历史变体未验证不提供）。
+
+    返回 {"ok": True, "date": ..., "notice": ..., "items": [...], "skipped": n}；
+    items 按 ts 降序。15s TTL 缓存；空 items 不缓存（fail-visible）。
+    上游/业务错误抛 KplRankingError；凭据仅走请求参数，不落库不落日志。
+    """
+    st = max(1, min(int(st), _LIVE_PAGE_MAX))
+    key = f"zhibo:{st}"
+    cached = _cached(key)
+    if cached is not None:
+        return cached
+    data = _post_form(
+        _HOST_REALTIME,
+        {"a": "ZhiBoContent", "c": "ConceptionPoint", "Index": 0, "st": st,
+         "VerSion": "5.23.0.4", "PhoneOSNew": 1, "apiv": "w44",
+         **{k: KPL_APP_BASE_PARAMS[k] for k in ("UserID", "Token", "DeviceID")}},
+        _UA_STOCKS)
+    _check_errcode(data)
+    rows_raw = data.get("List") or []
+    items = [r for r in (parse_live_row(x) for x in rows_raw if isinstance(x, dict)) if r]
+    items.sort(key=lambda r: r["ts"], reverse=True)
+    payload = {"ok": True, "date": str(data.get("date") or ""),
+               "notice": str(data.get("Notice") or ""),
+               "items": items, "skipped": len(rows_raw) - len(items)}
+    if items:
+        _cache[key] = (time.time() + _LIVE_TTL_SECONDS, payload)
     return payload
 
 

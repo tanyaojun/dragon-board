@@ -318,7 +318,28 @@
   /* 行选中（点行联动 KPI）：左侧蓝条标识，与展开态可共存 */
   #relayTable tr.lg-row.focus td{background:var(--blue-bg)}
   #relayTable tr.lg-row.focus td:first-child{box-shadow:inset 3px 0 0 var(--cf-blue)}
-  /* ---------- KPL 行情 · 精选板块（2026-10-27） ---------- */
+  /* ---------- KPL 行情 · 板块行情（2026-10-28 更名，原「精选板块」） ---------- */
+  .kpl-tabs{display:flex;gap:6px;margin-bottom:8px}
+  .kpl-tabs button{padding:4px 16px;cursor:pointer}
+  .kpl-tabs button.on{background:var(--cf-blue);border-color:var(--cf-blue);color:#fff}
+  /* 市场雷达（2026-10-28）：左栏文本流，非表格 */
+  .kpl-live-stream{max-height:calc(100vh - 320px);overflow-y:auto;border:1px solid var(--border);border-radius:8px}
+  .lv-item{padding:6px 10px;border-bottom:1px solid var(--border);cursor:pointer;line-height:1.55}
+  .lv-item:last-child{border-bottom:none}
+  .lv-item:hover{background:#f5f8ff}
+  .lv-item.sel{background:var(--blue-bg)}
+  .lv-item.fresh{animation:lvfresh 2.5s ease-out}
+  @keyframes lvfresh{0%{background:#fff7e0}100%{background:transparent}}
+  .lv-time{color:var(--muted2);font-size:12px;margin-right:8px;font-variant-numeric:tabular-nums}
+  .lv-status{font-weight:600;margin-right:8px;white-space:nowrap}
+  .lv-name{font-weight:600;margin-right:8px;white-space:nowrap}
+  .lv-lb{color:var(--muted2);font-size:12px;margin-right:8px;white-space:nowrap}
+  .lv-content{color:var(--muted)}
+  .lv-comment{margin-top:2px;color:#333}
+  .lv-plate{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:10px;background:#fdeeed;color:#d63301;font-size:12px;font-weight:600}
+  .lv-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .lv-chip{display:inline-flex;gap:6px;align-items:center;padding:2px 10px;border:1px solid var(--border);border-radius:12px;font-size:12px;background:#fafbfd}
+  .lv-chip .n{color:#333;font-weight:600}
   .kpl-layout{display:grid;grid-template-columns:420px 1fr;gap:14px;align-items:start}
   @media (max-width:1100px){.kpl-layout{grid-template-columns:1fr}}
   .kpl-wrap{max-height:640px;overflow:auto;border:1px solid var(--border);border-radius:8px}
@@ -556,6 +577,10 @@
       <div id="kplBanner" class="kpl-note" style="display:none"></div>
       <div class="kpl-layout">
         <div class="card" style="padding:10px 12px">
+          <div class="kpl-tabs">
+            <button id="kplTabJx" class="on" onclick="kplSetTab('jx')">精选</button>
+            <button id="kplTabHy" onclick="kplSetTab('hy')">行业</button>
+          </div>
           <input class="lg-filter" id="kplSectorSearch" style="margin:0 0 8px" placeholder="搜索板块名称…" oninput="kplRenderSectors()">
           <div class="kpl-wrap"><table id="kplSectorTable"></table></div>
         </div>
@@ -564,6 +589,30 @@
             <span id="kplStockPager" style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;font-weight:400"></span></h3>
           <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="kplStockTable"></table></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-kpllive" style="display:none">
+    <div class="ph-line" style="margin-bottom:14px"></div>
+    <div class="kpl-layout">
+      <div class="card" style="padding:10px 12px">
+        <h3 style="margin-bottom:8px;display:flex;align-items:center">直播
+          <button id="kplVoiceBtn" onclick="kplVoiceToggle()" style="margin-left:10px;padding:2px 10px;font-size:12px;cursor:pointer">🔊 自动播报</button>
+          <button onclick="kplVoiceStop()" title="清空 VoiceWorker 播报队列" style="padding:2px 10px;font-size:12px;cursor:pointer">🔇 清空</button>
+          <span id="kplLivePill" class="kpl-sub" style="margin-left:auto;font-weight:400"></span></h3>
+        <div id="kplLiveBanner" class="kpl-note" style="display:none"></div>
+        <div class="kpl-tabs">
+          <button id="kplLiveTabZb" class="on" onclick="kplLiveSetSrc('zb')">解说</button>
+          <button id="kplLiveTabRadar" onclick="kplLiveSetSrc('radar')">雷达</button>
+        </div>
+        <input class="lg-filter" id="kplLiveSearch" style="margin:0 0 8px" placeholder="搜索股名/代码/内容…" oninput="kplLiveRender()">
+        <div id="kplLiveStream" class="kpl-live-stream"></div>
+      </div>
+      <div class="card" style="padding:10px 12px">
+        <h3 style="margin-bottom:8px;display:flex;align-items:center"><span id="kplLiveStockTitle">直播涉及个股</span>
+          <span class="kpl-sub" style="margin-left:auto;font-weight:400">字段同【板块行情】个股列表</span></h3>
+        <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="kplLiveStockTable"></table></div>
       </div>
     </div>
   </section>
@@ -4181,13 +4230,14 @@ const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察'
                      ['detail', '涨停分析', '🗓️']];
 const NAV = [
   {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️'], ['dieban', '跌停复盘', '📉']]},
-  // KPL 行情子目录（2026-10-27 用户需求）：精选板块 = 开盘啦板块强度排行实时/历史；
+  // KPL 行情子目录（2026-10-27 用户需求；2026-10-28 「精选板块」更名「板块行情」，页内增
+  // 精选/行业页签）：精选 = 开盘啦板块强度排行实时/历史（含服务端 list_son 二级板块）；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
-  {group: 'KPL 行情', items: [['kpl', '精选板块', '📋'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩']]},
+  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
-                    kpl: ['精选板块'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'],
+                    kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 
 function renderSidebar(){
@@ -4235,11 +4285,12 @@ function setView(key){
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
   if (main === 'relay' && STATE.relayView === 'nodes') pulseFetch();   // V2c：进入节点页签即取（60s 后端缓存兜）
   const kpiEl = $('kplMarketKpi');
-  const kplGroup = ['kpl', 'kplbid', 'kplsoon', 'kplvane'];   // 大盘 KPI 条=kpl 组子页公用
+  const kplGroup = ['kpl', 'kpllive', 'kplbid', 'kplsoon', 'kplvane'];   // 大盘 KPI 条=kpl 组子页公用
   if (kpiEl) kpiEl.style.display = kplGroup.includes(main) ? '' : 'none';
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
   else kplViewLeave();
   if (main === 'kplbid' || main === 'kplsoon' || main === 'kplvane') kplDabanEnter(main);   // 打板页签：进页即取快照+开轮询
+  if (main === 'kpllive') kplLiveEnter(); else kplLiveLeave();   // 市场雷达：文本流轮询仅本页运行
 }
 async function kplFetchPlateTree(){
   if (KPL.plateTree && Date.now() - KPL.plateTreeAt < 300000) return;   // 5min 缓存
@@ -4696,8 +4747,9 @@ const KPL = {
   hq: new Map(),                 // 3006 id -> {price, inc_price, inc_rate}
   selected: null,
   sort: {key: 'strength', dir: -1},
+  tab: 'jx',                     // 板块页签：'jx'=精选（强度排行）/ 'hy'=行业（881xxx，App「行业」同款）
   bootstrapped: false, bootstrapping: false, sticky: '',
-  hist: {ranking: [], stocks: null, loadingRank: false, loadingStocks: false},
+  hist: {ranking: [], sons: null, stocks: null, loadingRank: false, loadingStocks: false},
   status: {running: null, lastError: ''},
   sessions: 0, pushes: 0,
   // 成分股分页（一批 100）：stockPage=当前页，stockResolvedKey/stockEffDate=有效日期解析缓存
@@ -4710,6 +4762,9 @@ const KPL = {
   dabanBasis: {},       // 竞昨比原料（昨收/昨量）：date → {map:{code:{prev_date,prev_close,prev_volume_shou}}, failed:{code:ts}, loading}
   plateTree: null,      // {板块id: {name, parent}} —— 2301 CDN 快照（f6=父板块 id，"0"=顶级）
   plateTreeAt: 0,
+  sons: null,           // {父板块id: [子板块行]} —— 排行接口 list_son/list_soninfo（App 同源）。
+                        // null=尚未拿到过（回退旧启发式）；{} =上游确认无子板块（与 App 一致不渲染）
+  sonsNote: '',
   // 打板个股列表快照（2103 订阅推送，2026-10-27 二期）：pidType → 合并快照（REST 读口按页合并；
   // WS daban_stocks 事件只做节流触发拉取，渲染唯一源=REST，避免页合并逻辑双写）
   daban: {},            // {8: {...}, 0: {...}}
@@ -4915,6 +4970,10 @@ async function kplBootstrap(){
         .filter(([pid, meta]) => meta.parent !== '0' && ids.includes(meta.parent))
         .map(([pid]) => pid);
       ids = ids.concat(childIds.filter(id => !ids.includes(id)));
+      // 行业页签（2026-10-28）：881xxx 行业板块（2301 树 flag='4'，全顶级）并入订阅，
+      // 否则「行业」页签无行情流；不订阅则该页签只有空态
+      const hyIds = Object.keys(KPL.plateTree).filter(id => /^881\d{3}$/.test(id));
+      ids = ids.concat(hyIds.filter(id => !ids.includes(id)));
     }
     const r = await jpost(KPL_API + '/subscriptions',
                           {stock_ids: ids, priority_ids: rankIds});
@@ -4952,6 +5011,11 @@ async function kplFetchSectorUniverse(){
       // 盘前日期可能返回全零垃圾行（plate_id="0"），过滤后须仍有有效板块才算数
       const ids = (r.ok && r.items) ? r.items.map(it => it.plate_id).filter(id => isKplSector(id)) : [];
       if (ids.length){
+        // 二级板块名单同源抓取（2026-10-28）：list_son/list_soninfo 服务端下发，App 同款；
+        // sons_unpaired 时结构化透出横幅，不静默丢弃
+        KPL.sons = r.sons || {};
+        KPL.sonsNote = (r.sons_unpaired && r.sons_unpaired.note) || '';
+        if (KPL.sonsNote) kplBanner('二级板块名单异常：' + KPL.sonsNote, '', true);
         if (back > 0) kplBanner(`今日排行尚无数据，订阅宇宙取自 ${date}（fail-visible）`, 'ok');
         return ids;
       }
@@ -4962,10 +5026,30 @@ async function kplFetchSectorUniverse(){
 
 // ---- 渲染：左侧板块列表 ----
 function kplSectorRows(){
+  // 行业页签：881xxx 行业板块（App「行业」同款）；历史模式无行业读口 → 空态
+  if (KPL.tab === 'hy'){
+    if (KPL.mode === 'history') return [];
+    const rows = [];
+    for (const it of KPL.items.values()){
+      if (!/^881\d{3}$/.test(String(it.id))) continue;
+      rows.push({plate_id: it.id, name: it.name,
+                 pct: kq(it, KQ.PCT), main_net: kq(it, KQ.MAIN_NET),
+                 volume_ratio: kq(it, KQ.VR), amount: kq(it, KQ.AMOUNT),
+                 strength: kq(it, KQ.STRENGTH),
+                 zt: KPL.ztDay ? (KPL.ztCount.get((it.name || '').trim()) ?? 0) : null,
+                 _live: it});
+    }
+    const {key, dir} = KPL.sort;
+    rows.sort((a, b) => {
+      const va = a[key] == null ? -Infinity : a[key], vb = b[key] == null ? -Infinity : b[key];
+      return (va - vb) * (dir || -1);
+    });
+    return rows;
+  }
   if (KPL.mode === 'history') return KPL.hist.ranking;
   const rows = [];
   for (const it of KPL.items.values()){
-    if (!isKplSector(it.id)) continue;
+    if (!isKplSector(it.id) || /^881\d{3}$/.test(String(it.id))) continue;   // 881 归行业页签
     rows.push({plate_id: it.id, name: it.name,
                pct: kq(it, KQ.PCT), main_net: kq(it, KQ.MAIN_NET),
                volume_ratio: kq(it, KQ.VR), amount: kq(it, KQ.AMOUNT),
@@ -4981,27 +5065,52 @@ function kplSectorRows(){
   });
   return rows;
 }
-function kplRenderSectors(){
-  let rows = kplSectorRows();
-  // 二级目录（2301 快照 f6=父板块 id）：子板块缩进挂在父板块下（App 同款层级）
+function kplSectorBlocks(){
+  // 精选页签 → [{top, kids:[...]}] 块结构（序号渲染 n / n.k）；行业页签全顶级
+  const rows = kplSectorRows();
+  if (KPL.tab === 'hy') return rows.map(r => ({top: r, kids: []}));
+  // 二级板块（2026-10-28 反汇编 App 修正）：App 的子板块行不是客户端强度过滤，而是
+  // 排行接口 list_son/list_soninfo 服务端直接下发（list_son=父板块 id，list_soninfo=同 19 列
+  // 子板块行，等长按位配对；实测同期 40+ 一级板块有树子板块但服务端仅下发 1 个）。
+  // 网页照搬同一名单：sons[父id]=[子板块行]；实时模式强度/资金列优先 socket 值（无流回退 HTTP 行）。
+  // sons 尚未拿到（排行读口全程失败）时不展示任何子板块（App 同款空态，引导失败本身有横幅）。
+  const sons = KPL.mode === 'history' ? KPL.hist.sons : KPL.sons;
   const tree = KPL.plateTree;
-  if (tree){
-    const byId = {}; rows.forEach(r => { byId[r.plate_id] = r; });
-    const kids = {}, tops = [];
-    rows.forEach(r => {
-      const p = (tree[r.plate_id] || {}).parent;
-      if (p && p !== '0' && byId[p]){
-        // 用户裁决：子板块显示条件=父板块强度 >1000 且子板块强度 >0（无数据视为不满足）
-        const ps = (byId[p].strength == null) ? -1 : byId[p].strength;
-        const cs = (r.strength == null) ? -1 : r.strength;
-        if (ps > 1000 && cs > 0) (kids[p] = kids[p] || []).push(r);
-      }
-      else tops.push(r);
+  const byId = {}; rows.forEach(r => { byId[r.plate_id] = r; });
+  const tops = [];
+  rows.forEach(r => {
+    // 树子板块不进顶级行：只有服务端 son 名单里的子板块才展示（App 同款）；
+    // 父板块不在当前排行宇宙的树子板块仍按顶级行展示（不隐藏数据）
+    const p = tree ? (tree[r.plate_id] || {}).parent : null;
+    if (p && p !== '0' && byId[p]) return;
+    tops.push(r);
+  });
+  const kids = {};
+  Object.entries(sons || {}).forEach(([pid, list]) => {
+    if (!byId[pid]) return;                       // 父板块不在当前排行宇宙：不悬挂
+    const live = list.map(sr => {
+      if (KPL.mode !== 'live') return {...sr};    // 历史模式直接用 HTTP 行（无 socket 流）
+      const it = KPL.items.get(sr.plate_id);      // 实时模式：socket 到流优先，HTTP 行兜底
+      return {
+        plate_id: sr.plate_id, name: sr.name,
+        strength: it ? kq(it, KQ.STRENGTH) : sr.strength,
+        pct: it ? kq(it, KQ.PCT) : sr.pct,
+        main_net: it ? kq(it, KQ.MAIN_NET) : sr.main_net,
+        amount: it ? kq(it, KQ.AMOUNT) : sr.amount,
+        volume_ratio: it ? kq(it, KQ.VR) : sr.volume_ratio,
+        zt: KPL.ztDay ? (KPL.ztCount.get((sr.name || '').trim()) ?? 0) : null,
+      };
     });
-    rows = tops.map(r => (kids[r.plate_id] ? [r].concat(kids[r.plate_id]) : [r])).flat();
-  }
-  const q = ($('kplSectorSearch').value || '').trim().toLowerCase();
+    live.sort((a, b) => (b.strength ?? -Infinity) - (a.strength ?? -Infinity));
+    kids[pid] = live;
+  });
+  return tops.map(r => ({top: r, kids: kids[r.plate_id] || []}));
+}
+function kplRenderSectors(){
   const hist = KPL.mode === 'history';
+  const q = ($('kplSectorSearch').value || '').trim().toLowerCase();
+  const hit = r => !q || (r.name || '').toLowerCase().includes(q) || String(r.plate_id || '').includes(q);
+  const valid = r => !hist || /^8\d{5}$/.test(String(r.plate_id || ''));   // 上游全零垃圾行不进表
   let html = '<thead><tr>' + kth('#')
     + kth('名称')
     + kth('涨停', 'zt')
@@ -5009,15 +5118,10 @@ function kplRenderSectors(){
     + kth('涨幅%', 'pct')
     + kth('主力净额', 'main_net')
     + kth('量比', 'volume_ratio') + '</tr></thead><tbody>';
-  let n = 0;
-  rows.forEach((r, i) => {
-    if (hist && !/^8\d{5}$/.test(String(r.plate_id || ''))) return;   // 上游全零垃圾行不进表
-    if (q && !(r.name || '').toLowerCase().includes(q) && !String(r.plate_id).includes(q)) return;
-    n++;
-    const isChild = tree && (tree[r.plate_id] || {}).parent && (tree[r.plate_id] || {}).parent !== '0';
+  const rowHtml = (r, seq, isChild) => {
     const on = KPL.selected === r.plate_id ? ' class="on"' : '';
-    html += `<tr${on} onclick="kplSelect('${r.plate_id}')"${isChild ? ' style="background:#fbfcfe"' : ''}>`
-      + `<td class="kpl-uni" style="${isChild ? 'padding-left:18px' : ''}">${hist ? (i + 1) : (n)}</td>`
+    return `<tr${on} onclick="kplSelect('${r.plate_id}')"${isChild ? ' style="background:#fbfcfe"' : ''}>`
+      + `<td class="kpl-uni" style="${isChild ? 'padding-left:18px' : ''}">${seq}</td>`
       + `<td${isChild ? ' style="color:var(--muted)"' : ''}>${isChild ? '<span style="color:var(--muted2)">└</span> ' : ''}${esc(r.name || '--')}</td>`
       + `<td class="kpl-uni" title="${r.zt == null
           ? (hist ? '历史分支暂无板块涨停数来源（HTTP 层1 无此列）' : '等待 zt_stocks 事件到流')
@@ -5025,12 +5129,34 @@ function kplRenderSectors(){
       + `<td class="kpl-uni ${kcls(r.pct)}">${kfmtNum(r.pct) + (r.pct == null ? '' : '%')}</td>`
       + `<td class="kpl-uni ${kcls(r.main_net)}">${kfmtAmt(r.main_net)}</td>`
       + `<td class="kpl-uni">${kfmtNum(r.volume_ratio)}</td></tr>`;
+  };
+  // 序号：一级板块整数（1、2、3…），二级板块 n.k（1.1、1.2…）；搜索命中父板块时展示全部子板块
+  let n = 0, shown = 0;
+  kplSectorBlocks().forEach(b => {
+    if (!valid(b.top)) return;
+    const kids = (hit(b.top) ? b.kids : b.kids.filter(hit)).filter(valid);
+    const topShow = hit(b.top);
+    if (!topShow && !kids.length) return;
+    n++;
+    if (topShow){ html += rowHtml(b.top, n, false); shown++; }
+    kids.forEach((k, ki) => { html += rowHtml(k, n + '.' + (ki + 1), true); shown++; });
   });
   html += '</tbody>';
   $('kplSectorTable').innerHTML = html;
-  if (!n) $('kplSectorTable').innerHTML = '<tbody><tr><td class="empty">暂无板块数据 — '
-    + (hist ? '该日期 HTTP 无返回' : '等待 WS 推送（引导订阅失败会每 10s 自动重试，到流后自动填充）') + '</td></tr></tbody>';
+  if (!shown) $('kplSectorTable').innerHTML = '<tbody><tr><td class="empty">暂无板块数据 — '
+    + (KPL.tab === 'hy'
+        ? (hist ? '行业页签仅实时模式（历史无行业排行读口）' : '等待 WS 推送（引导订阅失败会每 10s 自动重试，到流后自动填充）')
+        : (hist ? '该日期 HTTP 无返回' : '等待 WS 推送（引导订阅失败会每 10s 自动重试，到流后自动填充）'))
+    + '</td></tr></tbody>';
   kplUpdateStats();
+}
+function kplSetTab(t){
+  if (KPL.tab === t) return;
+  KPL.tab = t;
+  KPL.sort = t === 'hy' ? {key: 'pct', dir: -1} : {key: 'strength', dir: -1};   // 行业页签默认按涨幅（App 同款）
+  $('kplTabJx').classList.toggle('on', t === 'jx');
+  $('kplTabHy').classList.toggle('on', t === 'hy');
+  kplRenderSectors();
 }
 function kplSetSort(key){
   if (KPL.sort.key === key) KPL.sort.dir = -KPL.sort.dir;
@@ -5167,6 +5293,274 @@ function kplRenderStocks(){
   $('kplStockTable').innerHTML = html;
 }
 
+// ---- 直播（2026-10-28）：双流——解说（App 直播页同源 ZhiBoContent，默认）+ 雷达（个股异动 Radar）----
+// 左栏文本流非表格（用户指定）；右栏个股表字段同板块行情个股列表。
+// 解说=AI 大模型根据行情自动生成（App 同款标注）；历史变体未验证不提供（不猜数）。
+const LIVE = {timer: null, src: 'zb', zb: [], zbSeen: new Set(),
+              radar: [], radarSeen: new Set(), sel: '', freshIds: new Set(),
+              // 语音播报（tools/VoiceWorker 32145，经 :8000 /api/kpl/voice/* 代理）：
+              // on=开关（localStorage 持久）；online=端口探测结果；armed=冷启动已过（首轮流不播历史积压）
+              voice: {on: localStorage.getItem('kplLiveVoice') !== '0', online: null, armed: false, probing: false}};
+const LIVE_SRCS = {
+  zb:    {label: '解说', url: KPL_API + '/live?st=30',  cap: 400, interval: 15000},
+  radar: {label: '雷达', url: KPL_API + '/radar?st=60', cap: 400, interval: 8000},
+};
+
+function kplLiveBanner(msg){
+  const el = $('kplLiveBanner');
+  if (!msg){ el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = ''; el.textContent = msg;
+}
+function kplLiveEnter(){
+  const host = $('kplLiveStream');
+  if (host && !host.dataset.bound){                    // 事件委托只绑一次：上游文本不进 onclick JS 上下文
+    host.dataset.bound = '1';
+    host.addEventListener('click', e => {
+      const el = e.target.closest('.lv-item');
+      if (el) kplLivePick(el.dataset.id || '', el.dataset.code || '');
+    });
+  }
+  kplVoiceProbe();                                     // 语音端口探测（离线到流自动重试接上）
+  kplLivePoll();                                       // 进页/切流即拉一次
+  if (!LIVE.timer) LIVE.timer = setInterval(kplLivePoll, LIVE_SRCS[LIVE.src].interval);
+}
+function kplLiveLeave(){
+  if (LIVE.timer){ clearInterval(LIVE.timer); LIVE.timer = null; }
+  LIVE.voice.armed = false;                            // 离页 disarm：回页首轮流重新武装，缺席期间积压不当新闻播
+}
+function kplLiveSetSrc(s){
+  if (LIVE.src === s) return;
+  LIVE.src = s;
+  LIVE.sel = '';
+  $('kplLiveTabZb').classList.toggle('on', s === 'zb');
+  $('kplLiveTabRadar').classList.toggle('on', s === 'radar');
+  if (LIVE.timer){ clearInterval(LIVE.timer); LIVE.timer = null; }
+  if (LIVE.voice.on) kplVoiceStop();                   // 单一播报：切流即清 VoiceWorker 队列，旧流立即静默（语音关时不打空枪）
+  LIVE.voice.armed = false;                            // 切流：首轮只武装不播报（历史积压不当新闻）
+  kplLiveEnter();
+  kplLiveRender();
+}
+async function kplLivePoll(){
+  const cfg = LIVE_SRCS[LIVE.src];
+  const pollSrc = LIVE.src;                            // 单一播报：轮询发起时的流；返回后已切流则整包作废
+  let r;
+  try {
+    r = await jget(cfg.url);
+    if (!r.ok) throw new Error(r.reason || '读口失败');
+  } catch (e){
+    if (LIVE.src === pollSrc){
+      kplLiveBanner((LIVE.src === 'zb' ? '解说流' : '雷达流') + '读取失败：' + (e.message || e) + '（稍后自动重试）');
+      kplLiveUpdatePill();
+    }
+    return;
+  }
+  if (LIVE.src !== pollSrc) return;                    // 在途轮询返回时已切流：不渲染不播报（防旧流入队）
+  const isZb = LIVE.src === 'zb';
+  if (!LIVE.voice.online) kplVoiceProbe();             // 离线则每轮探测，VoiceWorker 拉起后自动接上
+  const seen = isZb ? LIVE.zbSeen : LIVE.radarSeen;
+  const store = isZb ? LIVE.zb : LIVE.radar;
+  const fresh = [];
+  const freshItems = [];
+  for (const it of (r.items || [])){
+    if (seen.has(it.id)) continue;
+    seen.add(it.id);
+    store.push(it);
+    fresh.push(it.id);
+    freshItems.push(it);
+  }
+  store.sort((a, b) => b.ts - a.ts);
+  if (store.length > cfg.cap){
+    const drop = store.splice(cfg.cap);                // 流窗口 cap；seen 不清：会话内去重
+    if (LIVE.sel && drop.some(x => x.id === LIVE.sel)) LIVE.sel = '';
+  }
+  LIVE.freshIds = new Set(fresh);
+  kplLiveBanner('');
+  if (!LIVE.voice.armed) LIVE.voice.armed = true;      // 首轮流：只武装不播报（避免历史积压刷屏）
+  else if (LIVE.src === pollSrc) kplVoiceSpeakItems(freshItems);   // 语音端口开启=自动播报新消息（仅当前流）
+  $('kplLivePill').textContent = `${cfg.label} ${store.length} 条 · ${cfg.interval / 1000}s 轮询`
+    + (store.length ? ' · 最新 ' + store[0].time : (isZb && r.notice ? ' · ' + r.notice : ''));
+  kplLiveRender();
+}
+function kplLiveUpdatePill(){
+  const cfg = LIVE_SRCS[LIVE.src];
+  const store = LIVE.src === 'zb' ? LIVE.zb : LIVE.radar;
+  $('kplLivePill').textContent = `${cfg.label} ${store.length} 条 · ${cfg.interval / 1000}s 轮询`;
+}
+function kplLiveColor(pct){
+  return pct == null ? 'var(--muted)' : (pct > 0 ? '#d63301' : (pct < 0 ? '#0a8f3c' : 'var(--muted)'));
+}
+function kplLiveRender(){
+  const q = ($('kplLiveSearch').value || '').trim().toLowerCase();
+  const host = $('kplLiveStream');
+  if (LIVE.src === 'zb'){
+    const hit = it => !q || (it.comment || '').toLowerCase().includes(q)
+      || (it.plate_name || '').toLowerCase().includes(q)
+      || (it.stocks || []).some(s => (s.name || '').toLowerCase().includes(q) || (s.code || '').includes(q));
+    const rows = LIVE.zb.filter(hit);
+    host.innerHTML = rows.length ? rows.map(it => {
+      const plate = it.plate_name
+        ? `<span class="lv-plate">${esc(it.plate_name)}${it.plate_pct != null ? ' ' + kfmtNum(it.plate_pct) + '%' : ''}</span>` : '';
+      const chips = (it.stocks || []).map(s =>
+        `<span class="lv-chip"><span class="n">${esc(s.name)}</span>`
+        + `<span style="color:${kplLiveColor(s.pct)}">${kfmtNum(s.pct) + (s.pct == null ? '' : '%')}</span></span>`).join('');
+      // id/code 走 data-* 属性 + 事件委托（评审 major：esc 不转义单引号，不得进 onclick JS 字符串上下文）
+      return `<div class="lv-item${LIVE.sel === it.id ? ' sel' : ''}${LIVE.freshIds.has(it.id) ? ' fresh' : ''}"`
+        + ` data-id="${esc(it.id)}" data-code="${esc((it.stocks && it.stocks[0] && it.stocks[0].code) || '')}">`
+        + `<div><span class="lv-time">${esc(it.time)}</span>${plate}</div>`
+        + `<div class="lv-comment">${esc(it.comment)}</div>`
+        + (chips ? `<div class="lv-chips">${chips}</div>` : '') + `</div>`;
+    }).join('')
+      : '<div style="padding:14px" class="kpl-sub">' + (LIVE.zb.length ? '无匹配解说'
+        : '暂无直播解说 — 等待轮询到流（盘后/非交易时段上游可能无新增）') + '</div>';
+  } else {
+    const hit = it => !q || (it.name || '').toLowerCase().includes(q) || (it.code || '').includes(q)
+      || (it.status || '').toLowerCase().includes(q) || (it.content || '').toLowerCase().includes(q);
+    const rows = LIVE.radar.filter(hit);
+    host.innerHTML = rows.length ? rows.map(it => {
+      const color = it.color === 1 ? '#d63301' : 'var(--muted)';   // status_color 实测仅见 1（涨停系红），其余未知不猜色
+      // id/code 走 data-* 属性 + 事件委托（同上：上游 status/ID 文本不进 JS 上下文）
+      return `<div class="lv-item${LIVE.sel === it.id ? ' sel' : ''}${LIVE.freshIds.has(it.id) ? ' fresh' : ''}"`
+        + ` data-id="${esc(it.id)}" data-code="${esc(it.code)}">`
+        + `<span class="lv-time">${esc(it.time)}</span>`
+        + `<span class="lv-status" style="color:${color}">${esc(it.status)}</span>`
+        + `<span class="lv-name">${esc(it.name)}</span>`
+        + (it.lb_status ? `<span class="lv-lb">${esc(it.lb_status)}</span>` : '')
+        + `<span class="lv-content">${esc(it.content || it.content2)}</span></div>`;
+    }).join('')
+      : '<div style="padding:14px" class="kpl-sub">' + (LIVE.radar.length ? '无匹配消息'
+        : '暂无雷达消息 — 等待轮询到流（盘后/非交易时段上游可能无新增）') + '</div>';
+  }
+  kplLiveRenderStocks();
+}
+function kplLiveStockRows(){
+  if (LIVE.src === 'zb'){
+    const latest = new Map();
+    for (const it of LIVE.zb){                          // items 已按 ts 降序：先到者=最新
+      for (const s of (it.stocks || [])){
+        if (/^\d{6}$/.test(s.code || '') && !latest.has(s.code))
+          latest.set(s.code, {code: s.code, name: s.name, pct0: s.pct, lb: ''});
+      }
+    }
+    return [...latest.values()];
+  }
+  const latest = new Map();
+  for (const it of LIVE.radar){
+    if (/^\d{6}$/.test(it.code || '') && !latest.has(it.code))
+      latest.set(it.code, {code: it.code, name: it.name, pct0: null, lb: it.lb_status || ''});
+  }
+  return [...latest.values()];
+}
+function kplLiveRenderStocks(){
+  const rows = kplLiveStockRows();
+  // 直播涉及个股并入 3006 订阅：行情列 WS 实时覆盖。
+  // 复用 kplSyncStockSubscription 单一签名缓存（KPL.lastSubSig=完整下发清单）：
+  // 与板块行情页共用一份记账，页间切换自动重对账（评审 major：双签名缓存去同步会让回页后停更）
+  kplSyncStockSubscription(rows.map(r => r.code));
+  if (!rows.length){
+    $('kplLiveStockTable').innerHTML = '<tbody><tr><td class="empty">暂无消息个股 — 左侧到流后自动填充</td></tr></tbody>';
+    return;
+  }
+  let html = '<thead><tr><th>代码</th><th>名称</th><th>地位</th><th>现价</th><th>涨幅%</th>'
+    + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
+    + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
+  for (const r of rows){
+    const it = KPL.items.get(r.code);
+    const q = it && it.quotas && it.quotas.length ? it.quotas : null;
+    const gv = k => q ? kq({quotas: q}, k) : null;    // 消息流无行情列；解说模式未到流用消息内 pct 兑底，不猜数
+    const pct = q ? kq({quotas: q}, KQ.PCT) : r.pct0;
+    const liveMark = q ? ' title="WS 实时覆盖"' : (r.pct0 != null ? ' title="消息内涨幅（快照）"' : ' title="等待个股行情到流"');
+    html += `<tr data-code="${r.code}"><td class="kpl-uni">${esc(r.code)}</td><td>${esc(r.name)}</td>`
+      + `<td class="kpl-sub">--</td>`
+      + `<td class="kpl-uni"${liveMark}>${kfmtNum(gv(KQ.PRICE))}</td>`
+      + `<td class="kpl-uni ${kcls(pct)}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni">--</td>`
+      + `<td>${esc(r.lb || '--')}</td>`
+      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_NET))}">${kfmtAmt(gv(KQ.MAIN_NET))}</td>`
+      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_BUY))}">${kfmtAmt(gv(KQ.MAIN_BUY))}</td>`
+      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_SELL))}">${kfmtAmt(gv(KQ.MAIN_SELL))}</td>`
+      + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
+      + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
+      + `<td class="kpl-sub">--</td></tr>`;
+  }
+  html += '</tbody>';
+  $('kplLiveStockTable').innerHTML = html;
+}
+function kplLivePick(id, code){
+  LIVE.sel = (LIVE.sel === id) ? '' : id;
+  kplLiveRender();
+  const el = document.querySelector('#kplLiveStream .lv-item.sel');
+  if (el) el.scrollIntoView({block: 'nearest'});
+  let target = code;
+  if (!target && LIVE.src === 'zb'){                    // 解说条目：定位该条首只关联股
+    const it = LIVE.zb.find(x => x.id === id);
+    target = it && it.stocks && it.stocks.length ? it.stocks[0].code : '';
+  }
+  const tr = target && document.querySelector(`#kplLiveStockTable tr[data-code="${target}"]`);
+  if (tr){
+    tr.scrollIntoView({block: 'center'});
+    tr.querySelectorAll('td').forEach(td => td.style.background = 'var(--blue-bg)');
+    setTimeout(() => tr.querySelectorAll('td').forEach(td => td.style.background = ''), 1600);
+  }
+}
+
+// ---- 直播语音播报（tools/VoiceWorker，本地 32145，经 :8000 /api/kpl/voice/* 代理）----
+// 用户裁决：语音端口开启=自动播报新消息；冷启动首轮流只武装不播报（历史积压不当新闻）；
+// 仅播当前激活流（页不在前不播，避免无人时发声）；离线自动重试，拉起 VoiceWorker 后自动接上。
+async function kplVoiceProbe(){
+  if (LIVE.voice.probing) return LIVE.voice.online;
+  LIVE.voice.probing = true;
+  try {
+    const r = await jget(KPL_API + '/voice/status');
+    LIVE.voice.online = !!(r && r.ok);
+  } catch (e){ LIVE.voice.online = false; }
+  LIVE.voice.probing = false;
+  kplVoiceRenderBtn();
+  return LIVE.voice.online;
+}
+function kplVoiceRenderBtn(){
+  const b = $('kplVoiceBtn');
+  if (!b) return;
+  b.textContent = LIVE.voice.on ? '🔊 自动播报' : '🔇 播报关';
+  b.style.opacity = LIVE.voice.on ? '1' : '0.55';
+  b.style.color = (LIVE.voice.on && LIVE.voice.online === false) ? '#d63301' : '';
+  b.title = LIVE.voice.on
+    ? (LIVE.voice.online === false
+        ? 'VoiceWorker 离线：dotnet run --project tools\\VoiceWorker（拉起后自动接上）'
+        : '自动播报新消息（点击关闭）')
+    : '点击开启自动播报（需 VoiceWorker：dotnet run --project tools\\VoiceWorker）';
+}
+function kplVoiceToggle(){
+  LIVE.voice.on = !LIVE.voice.on;
+  localStorage.setItem('kplLiveVoice', LIVE.voice.on ? '1' : '0');
+  if (LIVE.voice.on){
+    LIVE.voice.armed = false;                          // 开启瞬间：先武装，下轮流起的新消息才播
+    kplVoiceProbe().then(on => {
+      if (on === false) kplLiveBanner('VoiceWorker 未运行：dotnet run --project tools\\VoiceWorker（拉起后自动接上）');   // 探测在途(undefined)不误报
+    });
+  }
+  kplVoiceRenderBtn();
+}
+async function kplVoiceStop(){
+  try { await jpost(KPL_API + '/voice/stop', {}); } catch (e){ /* fail-silent：清队失败不影响页面 */ }
+}
+function kplVoiceSpeakItems(items){
+  // 单一播报：仅当前激活流可入队（选中【解说】只播解说，选中【雷达】只播雷达，互不叠加）；
+  // online!==true 收紧守卫：探测在途（null）不放行，消除空窗期
+  if (!LIVE.voice.on || LIVE.voice.online !== true || !items || !items.length) return;
+  for (const it of items){
+    // 播报文本：解说=（板块名，）+去 AI 标注全文；雷达=名称，状态，短句。超 200 字由服务端截断
+    const text = LIVE.src === 'zb'
+      ? ((it.plate_name ? it.plate_name + '，' : '')
+         + String(it.comment || '').replace(/（该内容由AI大模型根据行情自动生成）/g, '').trim())
+      : [it.name, it.status, it.content2 || it.content].filter(Boolean).join('，');
+    if (!text) continue;
+    jpost(KPL_API + '/voice/speak', {text})
+      .then(r => {                                      // :8000 离线是 200+ok:false（不抛错），必须显式检查
+        if (!r || r.ok === false){ LIVE.voice.online = false; kplVoiceRenderBtn(); }
+      })
+      .catch(() => { LIVE.voice.online = false; kplVoiceRenderBtn(); });   // 发送失败：标离线，下轮流自动重试
+  }
+}
 // ---- 模式切换 / 采集启停 ----
 function kplDateChange(){
   const v = $('kplDate').value;
@@ -5184,12 +5578,14 @@ async function kplLoadRanking(){
   try {
     const r = await jget(KPL_API + '/sector-ranking?date=' + KPL.date);
     KPL.hist.loadingRank = false;
-    if (!r.ok){ kplBanner('排行读取失败：' + (r.reason || '未知')); KPL.hist.ranking = []; }
-    else { kplBanner(`已切换历史 ${KPL.date}（涨停列无来源，显示 "--"；回实时恢复）`, 'ok'); KPL.hist.ranking = r.items || []; }
+    if (!r.ok){ kplBanner('排行读取失败：' + (r.reason || '未知')); KPL.hist.ranking = []; KPL.hist.sons = null; }
+    else { kplBanner(`已切换历史 ${KPL.date}（涨停列无来源，显示 "--"；回实时恢复）`, 'ok');
+            KPL.hist.ranking = r.items || []; KPL.hist.sons = r.sons || {}; }
   } catch (e){
     KPL.hist.loadingRank = false;
     kplBanner('排行请求失败：' + (e.message || e));
     KPL.hist.ranking = [];
+    KPL.hist.sons = null;                              // 评审 minor：网络失败不得沿用上一日期的子板块
   }
   if (!KPL.selected && KPL.hist.ranking.length){ KPL.selected = KPL.hist.ranking[0].plate_id; }
   kplRenderSectors();
@@ -5198,7 +5594,7 @@ async function kplLoadRanking(){
 function kplBackToLive(){
   KPL.mode = 'live'; KPL.date = KPL.today;
   $('kplDate').value = '';
-  KPL.hist.ranking = []; KPL.hist.stocks = null;
+  KPL.hist.ranking = []; KPL.hist.sons = null; KPL.hist.stocks = null;
   kplConnect(); kplEnsureRunning();
   kplRenderMarketKpi();   // KPI 回实时（socket 值）
   kplRenderSectors();

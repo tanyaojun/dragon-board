@@ -102,13 +102,55 @@ QuantBoard 主后端 :8000
 - 3001 板块流与个股流会混合出现（stock_ids 可混合板块 ID 与股票代码）。
 - 订阅规模：**240 板块全量实测稳定（2026-10-27，精选板块页引导订阅：~2s 轮询推 242 id、
   一次 signsvc 管道抖动 codec 自愈重连）**；全市场 1571 板块仍未测。
-- **工作台消费端已上线（2026-10-27）**：JEV 叙事工作台（:8008）侧栏「KPL 行情 › 精选板块」
-  ——当日走本链 WS（经 :8000 中继，:8002 新增 `POST /api/kpl/subscriptions` 动态订
+- **工作台消费端已上线（2026-10-27；2026-10-28 更名「板块行情」+ 精选/行业页签）**：JEV 叙事
+  工作台（:8008）侧栏「KPL 行情 › 板块行情」——「精选」页签=强度排行（含服务端
+  list_son 二级板块，序号 n / n.k），「行业」页签=881xxx 行业板块（2301 树 flag='4'，
+  104 个并入订阅，App「行业」同款，仅实时模式）——当日走本链 WS（经 :8000 中继，
+  :8002 新增 `POST /api/kpl/subscriptions` 动态订
   阅），历史走 HTTP 直连（`kpl_ranking_service.py` + `GET /api/kpl/sector-ranking|
   sector-stocks`，凭据走 `mapping_refresh` 公共出口）；quotas[2]/[3]/[7]/[8]/[9] 列
   已独立源核实（§四），强度（[56]）/涨停家数（`zt_stocks` 事件按 plate 顿号归属聚合，
   口径=当前封住，与 App「涨停」列含触板口径不同）/封单额/涨停时间后续逐项接。成分股
   分页一批 100 只（`sector-stocks?page=`，服务端 st=1000 单发全量+30s 缓存切片）。
+- **直播双流合同（2026-10-28 反汇编实测）**：
+  ① 解说流（App 直播页同源，默认）：`a=ZhiBoContent&c=ConceptionPoint`（apphwhq 域，
+  **需 App 凭据**UserID/Token/DeviceID 走 mapping_refresh 公共出口，仅进请求参数不入库）；
+  反汇编路径：网页版 szlive.html+szlive.js（pchq 域需登录态）→ apphwhq 同参数可用，
+  与 App 直播页逐字一致（样本 zhibo_raw.json）。响应 {List,Notice,Status,Time,date,errcode}；
+  List 项 ID/Time(epoch)/Comment/Type/PlateCode/PlateName/PlateZDF/Stock=[[code,name,pct],…]。
+  内容=AI 大模型根据行情自动生成（App 同款标注）；15s TTL；读口 `GET /api/kpl/live?st=`。
+  ② 个股异动雷达流（个股级，App 市场雷达同源）：`a=Radar&c=HomeDingPan&apiv=w38`（匿名），
+  每页约 15 条，5s TTL；读口 `GET /api/kpl/radar?st=`。
+  两流历史变体（HisConceptionPoint/pchis）未验证，v1 仅实时（不猜数）。
+  消费端：工作台「KPL 行情 › 直播」——左栏文本流页签（解说 15s / 雷达 8s 轮询），
+  右栏个股表字段同板块行情个股列表（解说模式未到流用消息内 pct 兑底；地位/换手/概念
+  无来源显式 `--`；行情列 3006 WS 覆盖，涉及个股动态并入订阅）。pytest 全 mock。
+- **市场雷达/直播流合同（2026-10-28 反汇编实测）**：`a=Radar&c=HomeDingPan&apiv=w38`
+  （apphwhq 域，匿名可调，无 Token/UserID 亦可；社区 apifox 接口文档 + 直连双源验证）。
+  响应 `{list:[...], num, date, time, ttag, errcode}`；list 项字段：time(epoch 秒)/
+  status/stock_name/stockid/plate_type/status_color/zf/content/content2/LBstatus。
+  每页上限约 15 条（st=60 仍返 15），Index 翻页；纯个股事件流（plate_type=1），无官方
+  长解说（直播页顶部长文另源未定位，不猜数）。status_color 实测仅见 1（涨停系红）。
+  消费端：工作台「KPL 行情 › 市场雷达」——左栏文本流（8s 轮询，服务端 5s TTL 兑底，
+  不共用 30s 缓存）、右栏个股表（字段同板块行情个股列表；地位/换手/概念雷达无来源
+  显式 `--`，连板列用 LBstatus；行情列由 3006 WS 覆盖，直播涉及个股动态并入订阅）。
+  读口：`GET /api/kpl/radar?st=`。pytest 全 mock，零真实请求。
+- **直播语音播报合同（2026-10-28）**：解说/雷达新消息接入 `tools/VoiceWorker`（本地
+  32145，`POST /speak {text≤200}`、`GET /status`、`POST /stop`，无 CORS 头）。
+  代理读口：`GET|POST /api/kpl/voice/status|speak|stop`（:8000 已放开 CORS，页面直呼，
+  不依赖 :3000）。用户裁决：**语音端口开启=自动播报**——开关默认开（localStorage
+  `kplLiveVoice`）；冷启动首轮流只武装不播报（历史积压不当新闻）；**单一播报：仅当前
+  激活流入队，切流即 POST /stop 清旧队列+在途轮询作废，两窗口永不叠加发声**；
+  离线 fail-visible 200+offline，每轮探测自动接上。播报文本：解说=
+  （板块名，）+去 AI 标注全文；雷达=名称，状态，短句。路由测试全 mock（零真实发声）。
+- **二级板块显示合同（2026-10-28 反汇编实测）**：App 精选板块的子板块行不是客户端按强度
+  过滤，而是排行接口响应顶层 ``list_son``（获得子板块行的父板块 id 列表）+ ``list_soninfo``
+  （子板块行，同 19 列格式）服务端直接下发，等长按位配对。实测样本：list_son=[801159]、
+  list_soninfo=[智元机器人 801928]，与 App 同屏一致；同期排行宇宙 241 板块中 40+ 个在
+  2301 树里有子板块，但服务端仅下发此 1 个——旧启发式（父强度>1000 且子强度>0，
+  2026-10-27 用户裁决）会多出数据采集/滚珠丝杠等 10 行，已推翻。`get_sector_ranking`
+  已解析为 ``sons``（不等长时不猜配对，透出 ``sons_unpaired``）；工作台精选板块渲染改用
+  sons 名单（sons 从未拿到时才回退旧启发式）。Type=1 查史与 Type=2 实时响应均带此字段。
 - **打板页签消费端已上线（2026-10-27 二期+三期）**：工作台侧栏「KPL 行情 › 集合竞价 /
   即将涨停 / 风向标」——socket 2103 订阅快照读口（§十一），布局沿用精选板块「左板块右个股」，
   左侧=按板块字段聚合（家数+合计），右侧=App 竞价页字段全搬。
