@@ -142,6 +142,33 @@ class TestHistoryReads:
         assert body["ok"] is False and body["degraded"] is True
         assert body["errorCode"] == "1020"
 
+    def test_live_stocks_meta_validation_and_passthrough(self, client, monkeypatch):
+        """直播个股 meta 读口（2026-10-29）：日期/缺码校验 + 服务层透传（零外呼查索引）。"""
+        r = client.get("/api/kpl/live-stocks-meta", params={"date": "bad", "codes": "600000"})
+        assert r.status_code == 400
+        r = client.get("/api/kpl/live-stocks-meta", params={"date": "2026-10-29"})
+        assert r.status_code == 400 and r.json()["reason"] == "missing_codes"
+        captured = {}
+
+        def _fake(codes, date):
+            captured["codes"], captured["date"] = list(codes), date
+            return {"ok": True, "date": date, "building": False,
+                    "hits": {codes[0]: {"rank_title": "龙一", "turnover": 9.9,
+                                        "board_status": "首板", "concept": "机器人",
+                                        "plate_id": "801159"}},
+                    "missed": ["300999"], "failedPlates": [], "indexSize": 1,
+                    "error": None}
+
+        monkeypatch.setattr(
+            kpl_proxy_routes.kpl_ranking_service, "get_live_stocks_meta", _fake)
+        r = client.get("/api/kpl/live-stocks-meta",
+                       params={"date": "2026-10-29", "codes": "603278,300999"})
+        assert r.status_code == 200
+        body = r.json()
+        assert captured["codes"] == ["603278", "300999"] and captured["date"] == "2026-10-29"
+        assert body["hits"]["603278"]["rank_title"] == "龙一"
+        assert body["missed"] == ["300999"]
+
     def test_stocks_service_error_structured_502(self, client, monkeypatch):
         from backend.services.kpl_ranking_service import KplRankingError
 

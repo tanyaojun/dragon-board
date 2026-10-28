@@ -491,3 +491,33 @@ def test_seal_tooltip_mentions_limit_down_rule(html: str) -> None:
     """tooltip 覆盖断板反包候选的未跌停条件（v12 规则的一部分，页面可读）。"""
     row = _fn(html, "tlRowHtml")
     assert "未跌停才可候选" in row
+
+
+def test_kpl_live_stock_table_meta_columns(html):
+    """直播个股表 地位/换手/连板/概念 四列守卫（2026-10-29 用户报告全 "--"）。
+
+    根因：解说/雷达消息流上游不带这四列（解说连板也不带），初版前端硬编码
+    "--" 占位。修复=后端 KPL 板块宇宙惰性 meta 索引（live-stocks-meta，
+    ZhiShuStockList_W8 口径 [8]换手 [23]连板 [24]地位 [4]概念）+ 前端查表渲染。
+
+    守卫点：
+    - 渲染从 meta 查表（rank_title/turnover/board_status/concept）；
+    - 请求 live-stocks-meta 读口（带 date+codes）；
+    - building 渐进 "…"、不在宇宙如实 "--"（fail-visible，不伪装命中）；
+    - 不许回退到硬编码 "--" 三连格。
+    """
+    body = _fn(html, "kplLiveRenderStocks")
+    fetch = _fn(html, "kplLiveFetchStockMeta")
+    assert "rank_title" in body and "turnover" in body
+    assert "board_status" in body and "concept" in body
+    assert "live-stocks-meta" in fetch
+    assert "date=" in fetch and "codes=" in fetch
+    assert "'…'" in body or '"…"' in body or "…" in body   # building 渐进符
+    assert 'metaBuilding' in body
+    # 硬编码占位禁止回归：地位/概念列不得再出现无条件 "--" 格
+    assert '<td class="kpl-sub">--</td>' not in body
+    assert '<td class="kpl-uni">--</td>' not in body
+    # 连板：雷达消息自带 lb_status 优先，meta 兑底
+    assert 'r.lb ||' in body
+    # LIVE 状态带 stockMeta（构建态/签名节流记账）
+    assert "stockMeta" in html[html.index("const LIVE ="):html.index("const LIVE_SRCS")]

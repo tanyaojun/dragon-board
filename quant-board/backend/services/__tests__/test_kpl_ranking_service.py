@@ -557,3 +557,128 @@ def test_live_credentials_from_common_source_and_not_leaked(monkeypatch):
     with pytest.raises(KplRankingError) as ei:
         svc.get_live_commentary()
     assert "Token" not in str(ei.value.detail) and KPL_APP_BASE_PARAMS["Token"] not in str(ei.value.detail)
+
+
+def _wait_stocks_meta(date, pred, timeout=5.0):
+    """真实后台线程构建 → deadline 轮询（不 patch 全局 threading/time，防波及 pytest）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        e = svc._stocks_meta_cache.get(date) or {}
+        if pred(e):
+            return e
+        time.sleep(0.02)
+    raise AssertionError(f"stocks-meta 未在 {timeout}s 内到达预期态: {e.get('state')}")
+
+
+def test_live_stocks_meta_index_building_then_done(monkeypatch):
+    """直播个股 meta 索引（2026-10-29）：惰性后台构建 → hits/missed 如实分账。
+
+    解说/雷达流不带 地位/换手/概念（此前前端硬编码 "--"）；唯一 KPL 口径来源=
+    板块成分股接口。索引按 (date) 建，TTL 内二调零上游；不在板块宇宙如实 missed。
+    """
+    svc._stocks_meta_cache.clear()
+    monkeypatch.setattr(svc, "get_sector_ranking",
+                        lambda date: {"ok": True, "date": date, "items": [
+                            {"plate_id": "801159", "name": "机器人概念", "strength": 100}],
+                         "sons": {}})
+    def fake_stocks(pid, date, page=0, page_size=100):
+        assert pid == "801159" and page == 0
+        return {"ok": True, "date": date, "plate_id": pid, "page": 0,
+                "page_size": page_size, "has_more": False,
+                "items": [{"code": "603278", "name": "大业股份",
+                           "rank_title": "龙一", "turnover": 12.3,
+                           "board_status": "3天2板", "concept": "机器人,减速器"},
+                          {"code": "000001", "name": "平安银行",
+                           "rank_title": "", "turnover": 0.8,
+                           "board_status": "", "concept": ""}]}
+    monkeypatch.setattr(svc, "get_sector_stocks", fake_stocks)
+
+    out = svc.get_live_stocks_meta(["603278", "300999"], "2026-10-28")
+    assert out["ok"] is True
+    entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "done")
+    assert len(entry["index"]) == 2
+    # done 后重读：hits 分账 + missed 如实透出（不伪装命中）
+    out2 = svc.get_live_stocks_meta(["603278", "300999"], "2026-10-28")
+    assert out2["building"] is False
+    assert out2["hits"]["603278"]["rank_title"] == "龙一"
+    assert out2["hits"]["603278"]["concept"] == "机器人,减速器"
+    assert out2["hits"]["603278"]["board_status"] == "3天2板"
+    assert out2["missed"] == ["300999"]
+    # TTL 内二调零上游：改 mock 为爆炸再读一次（不触发重建）
+    def boom(*a, **k):
+        raise AssertionError("索引 TTL 内不得重拉上游")
+    monkeypatch.setattr(svc, "get_sector_ranking", boom)
+    out3 = svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    assert out3["building"] is False and out3["hits"]["603278"]["turnover"] == 12.3
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_ranking_failure_is_error_state(monkeypatch):
+    """排行失败 → error 态结构化透出（fail-visible），不伪装成空宇宙；下次调用自动重建。"""
+    svc._stocks_meta_cache.clear()
+    def boom(date):
+        raise svc.KplRankingError("upstream_http_502", url="x")
+    monkeypatch.setattr(svc, "get_sector_ranking", boom)
+    out = svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    assert out["ok"] is True
+    entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error")
+    assert "upstream_http_502" in str(entry.get("error") or "")
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_build_crash_becomes_error_not_stuck_building(monkeypatch):
+    """非业务异常兜底：构建崩溃 → error 态（不得让 entry 永远钉在 building）。"""
+    svc._stocks_meta_cache.clear()
+    def crash(date):
+        raise RuntimeError("mocked crash")
+    monkeypatch.setattr(svc, "get_sector_ranking", crash)
+    svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error")
+    assert "build_crash" in str(entry.get("error") or "")
+    svc._stocks_meta_cache.clear()
+
+
+# ── 2026-10-29 §9.2/§9.7 勘察处置：层3 1020 结构化 + 盘前空排行不伪装 done ──
+
+def test_sector_stocks_1020_structured_as_date_state(monkeypatch):
+    """层3 1020 结构化：判别探针实证历史日同参数可用 → 主因=当日盘前/数据未生成。
+
+    不伪装空成分股、不误报凭据失效、不重包装为参数错；note 携带处置指引（盘后重试）。
+    """
+    monkeypatch.setattr(
+        svc, "_post_form",
+        lambda url, params, ua: {"errcode": 1020, "errmsg": "参数错误"})
+    with pytest.raises(KplRankingError) as ei:
+        get_sector_stocks("801159", "2099-01-01")
+    assert ei.value.reason == "upstream_1020_date_state"
+    assert ei.value.detail["date"] == "2099-01-01"
+    assert ei.value.detail["plate_id"] == "801159"
+    assert "数据未生成" in ei.value.detail["note"]
+
+
+def test_sector_stocks_other_errcode_keeps_generic_reason(monkeypatch):
+    """非 1020 业务错误不重包装（保留 kpl_errcode 原语义与 errorCode 明细）。"""
+    monkeypatch.setattr(
+        svc, "_post_form",
+        lambda url, params, ua: {"errcode": 7, "errmsg": "other"})
+    with pytest.raises(KplRankingError) as ei:
+        get_sector_stocks("801159", "2099-01-02")
+    assert ei.value.reason == "kpl_errcode"
+    assert ei.value.detail["errorCode"] == "7"
+
+
+def test_live_stocks_meta_empty_ranking_is_error_not_done(monkeypatch):
+    """盘前/未生成：排行全零行被过滤后 items 空 → error 态，不伪装成 done 空 index。
+
+    2026-10-29 层3 判别探针同源结论；error 态让下次调用自动重建（数据生成后可用）。
+    """
+    svc._stocks_meta_cache.clear()
+    monkeypatch.setattr(svc, "get_sector_ranking",
+                        lambda date: {"ok": True, "date": date, "items": [], "sons": {}})
+    def boom(*a, **k):
+        raise AssertionError("空排行不得触发成分股扫描")
+    monkeypatch.setattr(svc, "get_sector_stocks", boom)
+    svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error")
+    assert "ranking_empty" in str(entry.get("error") or "")
+    svc._stocks_meta_cache.clear()

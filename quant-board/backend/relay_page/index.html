@@ -5396,6 +5396,8 @@ function kplRenderStocks(){
 // 解说=AI 大模型根据行情自动生成（App 同款标注）；历史变体未验证不提供（不猜数）。
 const LIVE = {timer: null, src: 'zb', zb: [], zbSeen: new Set(),
               radar: [], radarSeen: new Set(), sel: '', freshIds: new Set(),
+              // 个股 meta（地位/换手/连板/概念，KPL 板块宇宙惰性索引，2026-10-29）
+              stockMeta: {map: {}, building: false, sig: '', fetchedAt: 0, failedAt: null},
               // 语音播报（tools/VoiceWorker 32145，经 :8000 /api/kpl/voice/* 代理）：
               // on=开关（localStorage 持久）；online=端口探测结果；armed=冷启动已过（首轮流不播历史积压）
               voice: {on: localStorage.getItem('kplLiveVoice') !== '0', online: null, armed: false, probing: false}};
@@ -5558,6 +5560,9 @@ function kplLiveRenderStocks(){
     $('kplLiveStockTable').innerHTML = '<tbody><tr><td class="empty">暂无消息个股 — 左侧到流后自动填充</td></tr></tbody>';
     return;
   }
+  kplLiveFetchStockMeta(rows.map(r => r.code));      // 地位/换手/连板/概念：KPL 板块宇宙 meta（惰性索引）
+  const metaMap = LIVE.stockMeta.map, metaBuilding = LIVE.stockMeta.building;
+  const mv = (c, k) => { const m = metaMap[c]; return m ? (m[k] || m[k] === 0 ? m[k] : null) : null; };
   let html = '<thead><tr><th>代码</th><th>名称</th><th>地位</th><th>现价</th><th>涨幅%</th>'
     + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
     + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
@@ -5567,21 +5572,45 @@ function kplLiveRenderStocks(){
     const gv = k => q ? kq({quotas: q}, k) : null;    // 消息流无行情列；解说模式未到流用消息内 pct 兑底，不猜数
     const pct = q ? kq({quotas: q}, KQ.PCT) : r.pct0;
     const liveMark = q ? ' title="WS 实时覆盖"' : (r.pct0 != null ? ' title="消息内涨幅（快照）"' : ' title="等待个股行情到流"');
+    // 地位/换手/连板/概念：KPL 成分股口径（live-stocks-meta）；不在板块宇宙→如实 "--"；
+    // 索引构建中→"…"（渐进可用）；连板优先用雷达消息自带 lb_status（更实时）
+    const dash = metaBuilding ? '…' : '--';
+    const lb = r.lb || mv(r.code, 'board_status') || (metaBuilding ? '…' : '--');
     html += `<tr data-code="${r.code}"><td class="kpl-uni">${esc(r.code)}</td><td>${esc(r.name)}</td>`
-      + `<td class="kpl-sub">--</td>`
+      + `<td><span class="badge b-purple">${esc(mv(r.code, 'rank_title') || dash)}</span></td>`
       + `<td class="kpl-uni"${liveMark}>${kfmtNum(gv(KQ.PRICE))}</td>`
       + `<td class="kpl-uni ${kcls(pct)}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
-      + `<td class="kpl-uni">--</td>`
-      + `<td>${esc(r.lb || '--')}</td>`
+      + `<td class="kpl-uni">${mv(r.code, 'turnover') != null ? kfmtNum(mv(r.code, 'turnover'), 1) : dash}</td>`
+      + `<td>${esc(lb)}</td>`
       + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_NET))}">${kfmtAmt(gv(KQ.MAIN_NET))}</td>`
       + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_BUY))}">${kfmtAmt(gv(KQ.MAIN_BUY))}</td>`
       + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_SELL))}">${kfmtAmt(gv(KQ.MAIN_SELL))}</td>`
       + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
       + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
-      + `<td class="kpl-sub">--</td></tr>`;
+      + `<td class="kpl-sub" title="KPL 板块概念（${mv(r.code, 'plate_id') || '未入宇宙'}）">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
   }
   html += '</tbody>';
   $('kplLiveStockTable').innerHTML = html;
+}
+// 直播个股 meta（2026-10-29）：KPL 板块宇宙惰性索引（后端后台构建，building 期间轮询渐进）。
+// 节流：签名未变 45s 内不重拉；building 中 20s 轮询直到 done；失败 45s 退避。
+function kplLiveFetchStockMeta(codes){
+  const sig = codes.join(',');
+  const m = LIVE.stockMeta;
+  const now = Date.now();
+  const wait = m.building ? 20000 : (m.failedAt ? 45000 : 45000);
+  if (m.sig === sig && now - m.fetchedAt < wait) return;
+  m.sig = sig; m.fetchedAt = now;
+  jget(KPL_API + '/live-stocks-meta?date=' + encodeURIComponent(KPL.date || KPL.today || '') + '&codes=' + encodeURIComponent(sig))
+    .then(r => {
+      if (!r || r.ok === false){ m.failedAt = now; return; }
+      m.map = Object.assign({}, m.map, r.hits || {});
+      m.building = !!r.building;
+      m.failedAt = null;
+      if (r.building) setTimeout(() => { m.fetchedAt = 0; kplLiveRenderStocks(); }, 20000);
+      else kplLiveRenderStocks();
+    })
+    .catch(() => { m.failedAt = now; });
 }
 function kplLivePick(id, code){
   LIVE.sel = (LIVE.sel === id) ? '' : id;

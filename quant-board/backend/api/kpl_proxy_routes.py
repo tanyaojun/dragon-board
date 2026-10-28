@@ -113,6 +113,27 @@ def daban_prev_day_basis(date: str = "", codes: str = ""):
         return JSONResponse(content=exc.to_payload(), status_code=502)
 
 
+@router.get("/live-stocks-meta")
+def live_stocks_meta(date: str = "", codes: str = ""):
+    """直播个股表 meta（地位/换手/连板/概念，KPL 成分股口径 ZhiShuStockList_W8）。
+
+    解说/雷达消息流上游不带这四列（此前前端硬编码 "--"）；本口按日惰性后台构建
+    板块宇宙 code→meta 索引（TTL 1800s，排行→逐板块扫页，全局 2s/发纪律下
+    ~80发≈160s，增量写入渐进可用）：building=True 时返回已命中部分（前端轮询
+    渐进渲染）；missed=不在任何 KPL 板块宇宙（如实透出，不伪装）。同步 def：
+    读口本身零外呼（查进程内索引），不阻塞事件循环。"""
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    code_list = [c for c in (codes or "").split(",") if c.strip()]
+    if not code_list:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "missing_codes"},
+            status_code=400)
+    return JSONResponse(
+        content=kpl_ranking_service.get_live_stocks_meta(code_list, date))
+
+
 @router.get("/plate-tree")
 async def plate_tree() -> JSONResponse:
     """板块树（二级目录映射）：透传 :8002 的 2301 快照懒下载读口。"""

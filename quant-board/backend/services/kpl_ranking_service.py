@@ -257,7 +257,22 @@ def get_sector_stocks(plate_id: str, date: str, page: int = 0, page_size: int = 
          "a": "ZhiShuStockList_W8", "c": "ZhiShuRanking", "PhoneOSNew": 2,
          "old": 1, "apiv": "w21", "VerSion": "5.13.0.0", **creds},
         _UA_STOCKS)
-    _check_errcode(data)
+    try:
+        _check_errcode(data)
+    except KplRankingError as exc:
+        if str((exc.detail or {}).get("errorCode")) == "1020":
+            # 2026-10-29 判别探针（data/backups/kpl-corpus-probe-20261029-l3l2/，
+            # probe1~probe3）：历史日（10-27/10-28）同参数/凭据/host 70s 间隔连发全部
+            # OK；版本矩阵（5.23.0.4/w44、6.3.20.2/w48）、换 host、白名单化简均不影响
+            # ——1020 非参数错亦非限频，主因=当日盘前/数据未生成（与排行端点盘前
+            # 「全零行」同源现象，仅表象不同）。结构化为 date_state 供消费方区分重试
+            # 策略，不伪装成空成分股、不误报凭据失效。
+            raise KplRankingError(
+                "upstream_1020_date_state",
+                plate_id=plate_id, date=date,
+                note="1020 多义（参数/日期未生成/限频）；2026-10-29 判别实证历史日可用，"
+                     "当日盘前主因=数据未生成，盘后重试") from exc
+        raise
     rows = data.get("list") or []
     if not rows and page == 0:
         # 现役凭据失效时该端点返空列表而非 errcode（handoff §一 实测）——
@@ -551,12 +566,129 @@ def get_live_commentary(st: int = 30) -> Dict[str, Any]:
 _PLATE_HIST_TTL_SECONDS = 12 * 3600.0
 
 
+# ── 直播个股 meta 索引（2026-10-29：直播表 地位/换手/连板/概念 四列补齐） ──
+# 解说（ZhiBoContent.Stock=[code,name,pct]）与雷达（Radar：stockid/name/status/LBstatus）
+# 消息流上游**不带** 地位/换手/概念，解说也不带连板——此前前端右栏个股表这四列硬编码 "--"。
+# 唯一 KPL 口径来源=板块成分股接口（ZhiShuStockList_W8，parse_stock_row [8]换手 [23]连板
+# [24]地位 [4]概念）。本索引按日惰性后台构建：排行（RealRankingInfo，30s TTL 共享缓存）→
+# 逐板块翻页扫成分股（每板块间节流）→ code→meta。命中即查表；不在任何板块宇宙的个股
+# 如实 missed（前端显示 "--"，不伪装）；building 期间返回已构建部分（fail-visible 渐进可用）。
+# 盘前/未生成：排行全零行被过滤后 items 空——记 error 态不伪装成 done 空 index
+# （2026-10-29 层3 判别探针同源结论），盘中数据生成后下次调用自动重建。
+_STOCKS_META_TTL_SECONDS = 1800.0     # 地位/概念盘中缓变；连板由雷达实时 lb_status 优先，容忍 30 分钟粒度
+_STOCKS_META_PLATE_SLEEP = 0.0        # 增量节流由 _MIN_INTERVAL_SECONDS=2s 全局纪律兜底（禁连发），板块间不另加睡
+_stocks_meta_lock = threading.Lock()
+_stocks_meta_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _build_stocks_meta(date: str) -> None:
+    """后台线程构建（get_live_stocks_meta 拉起）：排行 → 逐板块成分股 → code→meta。
+
+    单板块失败不中断（failed_plates 计数透出，fail-visible）；排行失败 → error 态。
+    增量写入：每板块完成即持锁合并进索引——全局 2s/发纪律下全宇宙 ~80 发≈160s，
+    前端轮询 10s 内即见强度最高板块的首批 meta，不等全量构建完成。
+    """
+    with _stocks_meta_lock:
+        entry = _stocks_meta_cache.setdefault(
+            date, {"state": "building", "index": {}, "failed_plates": [],
+                   "built_at": time.time(), "error": None})
+        index: Dict[str, Dict[str, Any]] = entry.setdefault("index", {})
+        failed: List[str] = entry.setdefault("failed_plates", [])
+    try:
+        ranking = get_sector_ranking(date)
+        plates = [it for it in (ranking.get("items") or []) if it.get("plate_id")]
+        if not plates:
+            # 盘前/未生成：排行全零行被过滤后为空——不得伪装成「done 空 index」
+            # （2026-10-29 层3 判别探针同源结论），error 态让下次调用自动重建
+            raise KplRankingError("ranking_empty（盘前/数据未生成，fail-visible）")
+        for it in plates:
+            pid = str(it["plate_id"])
+            page = 0
+            plate_hits: Dict[str, Dict[str, Any]] = {}
+            try:
+                while True:
+                    resp = get_sector_stocks(pid, date, page=page)
+                    for s in resp.get("items") or []:
+                        code = str(s.get("code") or "")
+                        if not code or code in index or code in plate_hits:
+                            continue      # 强度高的排行板块优先（遍历序=强度降序）
+                        plate_hits[code] = {
+                            "rank_title": s.get("rank_title") or "",
+                            "turnover": s.get("turnover"),
+                            "board_status": s.get("board_status") or "",
+                            "concept": s.get("concept") or "",
+                            "plate_id": pid,
+                        }
+                    if not resp.get("has_more"):
+                        break
+                    page += 1
+            except KplRankingError:
+                failed.append(pid)
+            if plate_hits:                # 增量合并：一个板块完成立即可被读口命中
+                with _stocks_meta_lock:
+                    for c, m in plate_hits.items():
+                        index.setdefault(c, m)
+    except KplRankingError as exc:
+        with _stocks_meta_lock:
+            entry.update({"state": "error", "built_at": time.time(), "error": str(exc)})
+        return
+    except Exception as exc:               # 非业务异常兜底：不得让 entry 永远钉在 building
+        with _stocks_meta_lock:
+            entry.update({"state": "error", "built_at": time.time(),
+                          "error": f"build_crash: {type(exc).__name__}: {str(exc)[:120]}"})
+        return
+    with _stocks_meta_lock:
+        entry.update({"state": "done", "built_at": time.time(), "error": None})
+
+
+def get_live_stocks_meta(codes: List[str], date: str) -> Dict[str, Any]:
+    """直播个股表 meta（地位/换手/连板/概念，KPL 成分股口径）。
+
+    索引未建/过期 → 起后台线程构建，立即返回 building=True + 已命中部分（前端
+    轮询渐进渲染）；done → hits + missed（missed=不在任何 KPL 板块宇宙，如实透出）。
+    零网络阻塞调用方（构建全程后台线程）。stale 旧索引在重建完成前继续可用。
+    """
+    uniq: List[str] = []
+    for c in codes or []:
+        c = str(c or "").strip()
+        if c and c not in uniq:
+            uniq.append(c)
+    need_build = False
+    with _stocks_meta_lock:
+        entry = _stocks_meta_cache.get(date) or {}
+        fresh = (time.time() - entry.get("built_at", 0)) < _STOCKS_META_TTL_SECONDS
+        index = dict(entry.get("index") or {})
+        state = entry.get("state")
+        if state in (None, "error") or (state == "done" and not fresh):
+            _stocks_meta_cache[date] = {"state": "building", "index": index,
+                                        "built_at": time.time()}
+            entry = _stocks_meta_cache[date]
+            need_build = True
+        hits = {c: index[c] for c in uniq if c in index}
+        building = entry.get("state") == "building"
+        missed = [c for c in uniq if c not in index] if not building else []
+        payload = {"ok": True, "date": date, "building": building,
+                   "hits": hits, "missed": missed,
+                   "failedPlates": entry.get("failed_plates") or [],
+                   "indexSize": len(index),
+                   "error": entry.get("error")}
+    if need_build:
+        # 线程必须在锁外 start：同步/重入执行下构建函数结尾要拿同一把非重入锁，
+        # 锁内 start 会死锁（2026-10-29 测试死锁实录）；锁外 start 生产同样缩短持锁时间
+        threading.Thread(target=_build_stocks_meta, args=(date,),
+                         daemon=True, name=f"kpl-stocks-meta-{date}").start()
+    return payload
+
+
 def get_plate_daily_history(plate_id: str, limit: int = 60) -> Dict[str, Any]:
     """板块日度历史（层2 ZhiShuKLine/GetDayBaseFaceListZDEvnArt，单发全量窗口）。
 
     返回 {"ok": True, "plate_id": ..., "items": [{date, zt_num, qd, lz_info, lz_info_zf,
     is_boom, title}, ...]}（date 升序）；上游/业务错误抛 KplRankingError。LZInfo 原样
     保留（KPL 预计算梯队串，消费方交叉披露不替换自算口径——单一事实源红线）。
+    缺口语义（2026-10-29 反查实证固化，原「待上游确认」结案）：ZTNum 仅记录有涨停家/
+    爆发日，记录间缺口=上游缺记而非零涨停——反查 10-16 缺口日 HisDaBanList 实证
+    机器人链 3 只涨停股在场而层2 无记录（data/backups/kpl-corpus-probe-20261029-l3l2/）。
     """
     limit = max(1, min(int(limit), 100))
     key = f"plthist:{plate_id}:{limit}"
