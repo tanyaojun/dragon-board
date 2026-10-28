@@ -303,3 +303,24 @@ def test_daban_head_passthrough(client, monkeypatch):
     assert body["ok"] is True and body["raw"]["nums"]["tZhangTing"] == 84
     r = client.get("/api/kpl/daban-head", params={"date": "2026-10-26"})
     assert r.status_code == 502 and r.json()["errorCode"] == "1020"
+
+
+def test_daban_prev_day_basis_passthrough(client, monkeypatch):
+    monkeypatch.setattr(
+        kpl_proxy_routes.kpl_ranking_service, "get_daban_prev_day_basis",
+        lambda date, codes: {"ok": True, "date": date,
+                             "basis": {c: {"prev_date": "2026-10-27", "prev_close": 9.66,
+                                           "prev_volume_shou": 200000.0} for c in codes},
+                             "missing": [], "source": "tencent_ifzq"})
+    r = client.get("/api/kpl/daban-prev-day-basis",
+                   params={"date": "2026-10-28", "codes": "603028,301660"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["basis"]["603028"]["prev_close"] == 9.66 and body["missing"] == []
+
+
+def test_daban_prev_day_basis_validation(client):
+    r = client.get("/api/kpl/daban-prev-day-basis")
+    assert r.status_code == 400
+    r = client.get("/api/kpl/daban-prev-day-basis", params={"date": "2026-10-28"})
+    assert r.status_code == 400 and r.json()["reason"] == "missing_codes"

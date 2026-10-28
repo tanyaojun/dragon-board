@@ -313,6 +313,15 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   reason:"no_daban_list_snapshot"}`，不伪装空列表。
 - 前端：WS `daban_stocks` 事件（单页 30 行）只做节流触发（1.5s），渲染唯一源=REST 合并快照，
   页合并逻辑单源在后端（避免双写漂移）。
+- **【竞昨比】列（2026-10-28 用户需求，工作台派生列，非 App 原生列）**：
+  `竞昨比 = 竞价成交量 / 昨日成交量 × 100%`。2103 竞价 quotas（28 位实测）**不含量列**，
+  故派生：`竞价成交量(手) = 竞价成交额 ÷ (竞价价 × 100)`，`竞价价 = 昨收 × (1 + 竞价涨幅/100)`；
+  原料读口 `GET /api/kpl/daban-prev-day-basis?date=&codes=a,b,c`（`kpl_ranking_service.
+  get_daban_prev_day_basis`，腾讯 ifzq 日K：**param 必须带 sh/sz/bj 前缀**，裸码返 param error；
+  qfq 前复权价=除权基准价，与 App 竞价涨幅分母同口径；量列不复权=手）。按日缓存 12h、
+  失败单股 10 分钟内不重试，`missing` 显式透出（fail-visible，列显 `--` 不猜数）。
+  口径自洽校验（2026-10-28 盘中样本 8/8）：`竞价成交额/实际流通` 与 2103 `竞价换手` 逐只吻合
+  （0.46↔0.46、0.54↔0.55、0.12↔0.12…）；竞昨比实测 0.51%–4.29%。
 
 ### 11.3 顺带根治（同轮）：3006 订阅分块
 
@@ -380,8 +389,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 - `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码
   fail-visible）/注册表；`test_kpl_collector_service.py`：会话帧序含 14 帧 2103 分页订阅、
-  页合并快照读口、3006 分块；`tests/api/test_kpl_proxy_routes.py`：daban-list 透传+502。
-  KPL 专项合计 50 passed（全 mock，零真实连接）。
+  页合并快照读口、3006 分块；`tests/api/test_kpl_proxy_routes.py`：daban-list 透传+502、
+  daban-prev-day-basis 透传/校验；`test_kpl_ranking_service.py`：HisDaBanList 白名单参数/空列表
+  fail-visible/按日共享缓存、竞昨比原料（昨日日K 解析/批量失败隔离/失败 10 分钟不重试）；
+  `test_market_history_service.py`：涨跌分布合桶/本地累积缺数/KPI 指数历史。
+  KPL 专项合计 **121 passed**（2026-10-28 实跑，全 mock，零真实连接）。
 - 证据工件（本地 .tmp_review/）：`kpl_daban_frames_20261027.txt`（KPL_DEBUG 帧转储，
   含 count=200 请求密文）；真实快照对照：竞价页 183/183 全量零缺口，赛福天行与 App 竞价页
   同屏逐项一致（13.02 亿/10.01%/机器人概念、海洋经济/4连板/528.0 万/966.7 万）。

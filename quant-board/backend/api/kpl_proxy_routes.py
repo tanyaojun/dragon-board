@@ -79,6 +79,28 @@ def _validate_date(date: str) -> Optional[JSONResponse]:
     return None
 
 
+@router.get("/daban-prev-day-basis")
+def daban_prev_day_basis(date: str = "", codes: str = ""):
+    """竞昨比原料（昨收/昨量）：date 前最近一根日K，腾讯 ifzq 逐股，按日缓存 12h。
+
+    竞昨比=竞价成交量/昨日成交量×100%；竞价成交量=竞价成交额/(竞价价×100)，
+    竞价价=昨收×(1+竞价涨幅/100)。同步 def：批量逐股拉取（首次≤数百发）入线程池，
+    不阻塞事件循环。缺股以 missing 显式透出（fail-visible）。"""
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    code_list = [c for c in (codes or "").split(",") if c.strip()]
+    if not code_list:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "missing_codes"},
+            status_code=400)
+    try:
+        return JSONResponse(
+            content=kpl_ranking_service.get_daban_prev_day_basis(date, code_list))
+    except KplRankingError as exc:
+        return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
 @router.get("/plate-tree")
 async def plate_tree() -> JSONResponse:
     """板块树（二级目录映射）：透传 :8002 的 2301 快照懒下载读口。"""

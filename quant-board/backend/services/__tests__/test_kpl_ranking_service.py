@@ -309,3 +309,73 @@ class TestDabanListHistory:
         assert len(calls) == 1
         assert [p["pid_type"] for p in (p8, p0, p6)] == [8, 0, 6]
         assert p8["items"] == p0["items"] == p6["items"]
+
+
+class TestDabanPrevDayBasis:
+    """竞昨比原料（昨日日K 昨收/昨量，腾讯 ifzq）：全 mock HTTP。"""
+
+    def test_prev_bar_parse(self, monkeypatch):
+        class _FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": {"sh603028": {"qfqday": [
+                    ["2026-10-24", "9.00", "9.10", "9.20", "8.90", "100000.0"],
+                    ["2026-10-27", "9.15", "9.66", "9.70", "9.10", "200000.0"],
+                    ["2026-10-28", "9.70", "9.80", "9.90", "9.60", "30000.0"],
+                ]}}}
+
+        captured = {}
+
+        def fake_get(url, headers=None, trust_env=None, timeout=None):
+            captured["url"] = url
+            return _FakeResp()
+
+        monkeypatch.setattr(svc.httpx, "get", fake_get)
+        b = svc._fetch_tencent_prev_bar("603028", "2026-10-28")
+        # 只取 date 之前最近一根（当日盘中K不得混入）；量列不复权
+        assert b == {"prev_date": "2026-10-27", "prev_close": 9.66,
+                     "prev_volume_shou": 200000.0}
+        assert "param=sh603028,day,2026-10-08,2026-10-28,20,qfq" in captured["url"]
+
+    def test_no_prev_kline_fail_visible(self, monkeypatch):
+        class _FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"data": {"sz888888": {"qfqday": []}}}
+
+        monkeypatch.setattr(svc.httpx, "get", lambda *a, **k: _FakeResp())
+        with pytest.raises(KplRankingError) as ei:
+            svc._fetch_tencent_prev_bar("888888", "2026-10-28")
+        assert ei.value.reason == "no_prev_kline"
+
+    def test_batch_and_fail_isolation(self, monkeypatch):
+        calls = []
+
+        def fake_fetch(code, date):
+            calls.append(code)
+            if code == "999999":
+                raise KplRankingError("no_prev_kline", code=code)
+            return {"prev_date": "2026-10-27", "prev_close": 10.0,
+                    "prev_volume_shou": 50000.0}
+
+        monkeypatch.setattr(svc, "_fetch_tencent_prev_bar", fake_fetch)
+        svc._basis_cache.clear()
+        out = svc.get_daban_prev_day_basis("2026-10-28", ["603028", "999999"])
+        assert out["basis"]["603028"]["prev_close"] == 10.0
+        assert out["missing"] == ["999999"]
+        # 失败单股 10 分钟内不重试（防 4s 页面轮询打爆上游）；命中股不重复拉
+        out2 = svc.get_daban_prev_day_basis("2026-10-28", ["603028", "999999"])
+        assert calls.count("603028") == 1 and calls.count("999999") == 1
+        assert out2["missing"] == ["999999"]
+
+    def test_input_guards(self):
+        svc._basis_cache.clear()
+        with pytest.raises(KplRankingError):
+            svc.get_daban_prev_day_basis("2026-10-28", [])
+        with pytest.raises(KplRankingError) as ei:
+            svc.get_daban_prev_day_basis("2026-10-28", [f"c{i}" for i in range(900)])
+        assert ei.value.reason == "too_many_codes"

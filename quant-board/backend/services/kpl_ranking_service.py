@@ -28,8 +28,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
+
+import httpx
 
 from backend.services.theme.mapping_refresh import KPL_APP_BASE_PARAMS
 
@@ -362,3 +366,98 @@ def get_daban_head_info(date: str) -> Dict[str, Any]:
     payload = {"ok": True, "date": date, "raw": data}
     _store(key, payload)
     return payload
+
+
+# ── 竞昨比原料（2026-10-28）：昨日日K（昨收/昨量），腾讯 ifzq 逐股 ─────────────
+# 背景：2103 竞价 quotas（28 位实测）不含竞价成交量与昨日成交量；竞昨比
+# （竞价成交量/昨日成交量×100%）按如下口径派生：
+#   竞价成交量(手) = 竞价成交额 / (竞价价×100)，竞价价 = 昨收×(1+竞价涨幅/100)
+#   昨收用 qfq 前复权价=除权基准价（与 App 竞价涨幅分母同口径）；量列不复权。
+#   昨日成交量 = date 前最近一根日K 量（手，腾讯/东财同单位，2026-10-28 双源核对）。
+_TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+_BASIS_FETCH_TIMEOUT = 10.0
+_BASIS_TTL_SECONDS = 12 * 3600.0     # date 未跨交易日则昨收/昨量不变，长 TTL
+_BASIS_FAIL_RETRY_SECONDS = 600.0    # 单股失败 10 分钟后允许重试（新股/瞬时网络错）
+_BASIS_MAX_CODES = 800
+_BASIS_CONCURRENCY = 8
+_basis_lock = threading.Lock()
+_basis_cache: Dict[str, Dict[str, Any]] = {}   # date → {"map": {code: basis}, "failed": {code: ts}}
+
+
+def _tencent_symbol(code: str) -> str:
+    """裸代码 → 腾讯 ifzq 符号（param 必须带交易所前缀，裸码返回 param error——实测 2026-10-28）。"""
+    code = str(code).strip()
+    if code[:2] in ("sh", "sz", "bj"):
+        return code
+    if code[:1] == "6" or code[:1] == "9":
+        return "sh" + code
+    if code[:1] in ("0", "2", "3"):
+        return "sz" + code
+    if code[:1] in ("4", "8"):
+        return "bj" + code
+    return "sz" + code
+
+
+def _fetch_tencent_prev_bar(code: str, date: str) -> Dict[str, Any]:
+    """腾讯 ifzq 日K：取 date 之前最近一根日K。返回 {prev_date, prev_close, prev_volume_shou}。"""
+    d = datetime.strptime(date, "%Y-%m-%d").date()
+    start = (d - timedelta(days=20)).strftime("%Y-%m-%d")
+    sym = _tencent_symbol(code)
+    url = (f"{_TENCENT_KLINE_URL}?param={sym},day,{start},{date},20,qfq")
+    resp = httpx.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                 "Chrome/126.0 Safari/537.36",
+                                  "Referer": "https://gu.qq.com/"},
+                     trust_env=False, timeout=_BASIS_FETCH_TIMEOUT)
+    resp.raise_for_status()
+    node = ((resp.json() or {}).get("data") or {}).get(sym) or {}
+    rows = node.get("qfqday") or node.get("day") or []
+    bars = [r for r in rows if isinstance(r, list) and len(r) > 5 and str(r[0]) < date]
+    if not bars:
+        raise KplRankingError("no_prev_kline", code=code, date=date)
+    last = bars[-1]
+    return {"prev_date": str(last[0]),
+            "prev_close": float(last[2]),
+            "prev_volume_shou": float(last[5])}
+
+
+def get_daban_prev_day_basis(date: str, codes: List[str]) -> Dict[str, Any]:
+    """按日批量取竞昨比原料（昨收/昨量）。date 前最近一根日K；结果按日缓存 12h
+    （date 未跨交易日则不变）。失败单股记 failed 时间戳（10 分钟内不重试，防轮询打爆），
+    以 missing 显式透出（fail-visible，不伪装补齐）。"""
+    if not date:
+        raise KplRankingError("missing_date")
+    uniq = []
+    seen = set()
+    for c in codes or []:
+        c = str(c).strip()
+        if c and c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    if not uniq:
+        raise KplRankingError("missing_codes", date=date)
+    if len(uniq) > _BASIS_MAX_CODES:
+        raise KplRankingError("too_many_codes", date=date, count=len(uniq),
+                              note=f"单次上限 {_BASIS_MAX_CODES}")
+    with _basis_lock:
+        entry = _basis_cache.setdefault(date, {"map": {}, "failed": {}})
+    now = time.time()
+    need = [c for c in uniq
+            if c not in entry["map"]
+            and not (entry["failed"].get(c, 0) > now - _BASIS_FAIL_RETRY_SECONDS)]
+    if need:
+        def _one(code: str):
+            try:
+                return code, _fetch_tencent_prev_bar(code, date)
+            except Exception as exc:
+                return code, exc
+        with ThreadPoolExecutor(max_workers=_BASIS_CONCURRENCY) as pool:
+            for code, res in pool.map(_one, need):
+                if isinstance(res, Exception):
+                    entry["failed"][code] = now
+                else:
+                    entry["map"][code] = res
+                    entry["failed"].pop(code, None)
+    basis = {c: entry["map"][c] for c in uniq if c in entry["map"]}
+    missing = [c for c in uniq if c not in entry["map"]]
+    return {"ok": True, "date": date, "basis": basis, "missing": missing,
+            "source": "tencent_ifzq"}

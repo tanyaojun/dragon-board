@@ -264,5 +264,11 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   （东财 push2ex 涨跌分布仅最近交易日可得，本地 data/market_breadth_daily.json 逐日累积，
   更早日期结构化缺数 fail-visible）；服务 `backend/services/market_history_service.py` +
   `test_market_history_service.py`（全 mock）。详见 kpl-socket README §11.4/§11.5。
+- **竞价页【竞昨比】列（2026-10-28 用户需求）**：工作台派生列（非 App 原生），
+  `竞昨比 = 竞价成交量/昨日成交量×100%`；2103 竞价 quotas 无 量 列（实测 28 位），
+  派生口径 `竞价成交量(手)=竞价成交额/(竞价价×100)`、`竞价价=昨收×(1+竞价涨幅/100)`，
+  原料读口 `/api/kpl/daban-prev-day-basis`（腾讯 ifzq 日K，param 必须带 sh/sz/bj 前缀；
+  按日缓存 12h、失败 10 分钟不重试、missing fail-visible）。口径自洽校验 8/8（竞价成交额/实际流通
+  与 2103 竞价换手逐只吻合）。详见 kpl-socket README §11.2。
 - **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
   `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。
