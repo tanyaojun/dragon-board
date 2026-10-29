@@ -15,7 +15,9 @@
 
 字段语义：排行 19 列与成分股 70 列仅部分有权威释义（Gitee mikasama/add_system），
 解析器只映射已对齐字段，未对齐的列原样保留在 ``raw``（fail-visible：不伪装、不丢弃）；
-带「推断」注释的字段待与 KPL App 同屏核对（kpl-socket README §四 同款纪律）。
+带「推断」注释的字段待与 KPL App 同屏核对（kpl-socket README §四 同款纪律）；
+**raw[8] 主力净额已于 2026-10-29 同屏定档**（逐行吻合，证据
+data/backups/kpl-raw8-verify-20261029/，含同屏截图与核对表），摘「推断」；raw[9] 量比仍待核。
 
 纪律：单发间隔 ≥2s（handoff §六，禁连发）；30s TTL 缓存兜页面轮询；
 pytest 全 mock HTTP，不发真实请求。
@@ -107,7 +109,7 @@ def parse_ranking_row(row: List[Any]) -> Dict[str, Any]:
     """排行行 19 列 → 已对齐字段 + raw 原样保留。
 
     已对齐（Gitee 释义 + 2026-10-25 样本核对）：[0]板块代码 [1]名称 [2]强度
-    [3]涨幅% [5]成交额 [8]主力净额(推断,样本为负值) [9]量比(推断)。
+    [3]涨幅% [5]成交额 [8]主力净额(2026-10-29 App 同屏定档) [9]量比(推断)。
     """
     def _num(v: Any) -> Any:
         return v
@@ -118,7 +120,7 @@ def parse_ranking_row(row: List[Any]) -> Dict[str, Any]:
         "strength": _num(row[2]) if len(row) > 2 else None,
         "pct": _num(row[3]) if len(row) > 3 else None,
         "amount": _num(row[5]) if len(row) > 5 else None,
-        "main_net": _num(row[8]) if len(row) > 8 else None,   # 推断
+        "main_net": _num(row[8]) if len(row) > 8 else None,   # 已同屏定档 2026-10-29
         "volume_ratio": _num(row[9]) if len(row) > 9 else None,  # 推断
         "raw": row,
     }

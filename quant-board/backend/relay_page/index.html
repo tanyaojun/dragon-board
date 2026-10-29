@@ -5026,7 +5026,9 @@ function kplHandleEvent(ev){
       // server error 1106（连接错误）＝会话 TTL 到期时服务器对末次 keepalive 的拒绝+断开
       // 信号（2026-10-28 验收实测：cmd=110 raw 帧恒在 close 前一瞬，会话期间数据全量到流），
       // 属例行噪声；订阅超限型 1106 会在订阅期出现且无数据，两者以数据流健康为准。
-      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out|server error: \{'code': 1106/.test(KPL.status.lastError)){
+      // 2026-10-29 增补：Connection{Aborted,Reset}Error（WinError 10053/10054）＝会话轮换时上游/中间设备断 TLS，
+      // 采集器 2s 自愈（session#363/364 实测：双绿数据正常流），与 closed by server 同属重连链例行噪声
+      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out|network: ConnectionAbortedError|network: ConnectionResetError|server error: \{'code': 1106/.test(KPL.status.lastError)){
         kplUpdateStats();
       } else {
         kplBanner(KPL.status.lastError);

@@ -795,7 +795,7 @@ def test_plate_series_line_two_segment_disclosure():
     line = A.plate_series_line(rank_rows, zt_rows, plate_name="机器人概念",
                                label_date="2026-10-28")
     assert "KPL「机器人概念」·801xxx 稳定 ID 锚" in line
-    assert "近3交易日强度/净额（层1·净额推断口径待核）" in line
+    assert "近3交易日强度/净额（层1·净额已同屏定档 2026-10-29）" in line
     assert "10-28 强度31837 净额-482.2亿" in line and "10-24 强度7252 净额?" in line
     assert "板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）" in line
     assert "10-23 家44" in line and "10-28 家24" in line

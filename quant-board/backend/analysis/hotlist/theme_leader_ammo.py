@@ -762,10 +762,11 @@ def _lz_brief(lz_info: str, max_items: int = 4) -> str:
 
 def rank_sentinel_warnings(rank_rows: list[dict] | None,
                            zt_rows: list[dict] | None) -> list[str]:
-    """层1 raw[8]（主力净额·推断口径）程序化哨兵（AMMO 2026-10-28a §9.6 处置）。
+    """层1 raw[8]（主力净额）程序化哨兵（AMMO 2026-10-28a §9.6 处置）。
 
-    不依赖 App 同屏的三条自洽检查，任一越界产出告警串（fail-visible），由
-    `plate_series_line` 拼入层1 段尾——哨兵只加披露、不改判据、不丢数据：
+    raw[8] 已于 2026-10-29 App 同屏定档（data/backups/kpl-raw8-verify-20261029/），
+    本哨兵转为**日常漂移监视器**：上游改列位/口径漂移时越界告警（fail-visible），由
+    `plate_series_line` 拼入层1 段尾——只加披露、不改判据、不丢数据：
 
     - **量级**：|main_net| > amount（主力净额是成交额子集）→ 列位错挂/口径漂移信号；
     - **方向**：n≥4 且 main_net 与 pct 同号率 <0.5 → 净额方向与涨幅大面积背离；
@@ -879,7 +880,7 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
             else:
                 seg += " 净额?"
             segs.append(seg)
-        parts.append(f"近{len(segs)}交易日强度/净额（层1·净额推断口径待核）：" + "；".join(segs))
+        parts.append(f"近{len(segs)}交易日强度/净额（层1·净额已同屏定档 2026-10-29）：" + "；".join(segs))
         sentinel = rank_sentinel_warnings(rank_rows, zt_rows)
         if sentinel:
             # §9.6 处置：raw[8] 口径哨兵越界 → 行内显式告警（fail-visible），不静默
