@@ -14,6 +14,12 @@ OnTheLHBList 响应：{errcode, date, YCnum, orderSign[], ttag,
           stockList: [[stockId, name, price, ?, amount, ?, ...12 列], ...]}]}
 当日未生成时 info=[] 且 orderSign 给出全量 BID 集合（fail-visible 结构化空态，非零伪装）。
 
+**分页合同（2026-10-30 修复）**：两端点默认页极小（OnTheLHBStock 只回 9 行、
+OnTheLHBList 只回 3 组），必须显式 `st=<页大小>` 翻满。实测 2026-10-29：st=300 时
+个股端点 129 行、列表端点 20 组/150 行（去重 129，两端点完全吻合）且饱和（st=500
+同 129）；st=100 时个股端点被截到 100 行（Count=61 为上游口径字段，≠info 行数，
+不可当总数用）。`st` 必须进缓存 key（不同页大小不得共享缓存）。
+
 OnTheLHBStock 响应：{errcode, Count, ttag, info: [[stockId, name, plate, price, zf, tur?,
   amount, incSpeed?, mainNetAmount, mainBuy, mainSell, realTur?, cirMarket, ttlMarket,
   realCirMarket, amplitude, incRateText?, hotVal?, hotChange?, reason, ts, isNew], ...]}
@@ -42,6 +48,9 @@ from backend.services.theme.mapping_refresh import KPL_APP_BASE_PARAMS
 _CACHE: Dict[str, Dict[str, Any]] = {}
 _CACHE_TTL_SECONDS = 30.0
 _CACHE_MAX_KEYS = 64        # 逐出上限：写前清理过期项，超限全清（按日 key 防长期累积）
+# 上游默认页极小（个股 9 行/分组 3 组，2026-10-29 实测），必须显式 st 翻满；
+# st=300 已饱和（10-29 全量个股 129 行/分组 20 组，st=500 同值），留足余量。
+_LHB_PAGE_SIZE = 300
 
 
 def _global_params() -> Dict[str, Any]:
@@ -69,16 +78,21 @@ def _fetch_cached(key: str, params: Dict[str, Any], host: str = _HOST_HISTORY,
 
 
 def fetch_his_lhb_list(date: str) -> Dict[str, Any]:
-    """按日拉「会不会上龙虎榜·历史榜单」分组数据（上游限频，30s TTL 按日共享）。"""
-    return _fetch_cached(f"lhbl:{date}",
+    """按日拉「会不会上龙虎榜·历史榜单」分组数据（上游限频，30s TTL 按日共享）。
+
+    `st` 显式翻满（默认页只回 3 组，2026-10-30 修复）；缓存 key 带页大小防跨形异构。
+    """
+    return _fetch_cached(f"lhbl:{_LHB_PAGE_SIZE}:{date}",
                          {"a": "OnTheLHBList", "c": "HisBeOnTheLHB", "Date": date,
+                          "st": _LHB_PAGE_SIZE,
                           **_global_params()})
 
 
 def fetch_his_lhb_stock(date: str) -> Dict[str, Any]:
-    """按日拉龙虎榜个股历史行（同上限频/TTL）。"""
-    return _fetch_cached(f"lhbs:{date}",
+    """按日拉龙虎榜个股历史行（同上限频/TTL；st 显式翻满，默认页只回 9 行）。"""
+    return _fetch_cached(f"lhbs:{_LHB_PAGE_SIZE}:{date}",
                          {"a": "OnTheLHBStock", "c": "HisBeOnTheLHB", "Date": date,
+                          "st": _LHB_PAGE_SIZE,
                           **_global_params()})
 
 

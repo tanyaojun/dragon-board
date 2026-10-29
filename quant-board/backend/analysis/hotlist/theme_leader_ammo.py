@@ -1200,6 +1200,9 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
       日常可得，上游延迟未生成时才出本状态）→ 显式披露 orderSign；
     - 榜单已生成但相关个股 0 只上榜 → 显式披露 0 只（事实陈述，非方向信号）；
     - 有相关上榜 → 按传入 codes 顺序（龙一优先）列主力净额/买/卖（元→亿）与上榜原因。
+    席位/机构扩维（2026-10-30c）：相关个股若在 GetStockList 营业部个股榜/GetAgencyListV2
+    机构榜（同 facts 归一层，逐端点 fail-visible），追加「席位买入 X亿」「机构净买 X亿
+    （N 家）」；不在榜/端点失败时该段缺席不伪装。机构净买可负（负=净卖出，如实呈现）。
     资金字段非数值一律「--」不伪装 0（复用 jev_lhb_ammo._fmt_yi 单一口径）；主力净额=
     盘中主力大单资金流，非交易所龙虎榜席位额（§13.3 task-3 裁决），行内标注防误消费。
     """
@@ -1233,7 +1236,16 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
         seg = f"{role} {name}（{k}）：主力净额 {_fmt_yi(s.get('main_net_yuan'))}"
         if buy is not None or sell is not None:
             seg += f"（买 {_fmt_yi(buy)} / 卖 {_fmt_yi(sell)}）"
-        return seg + f"，上榜原因 {str(s.get('reason') or '').strip() or '--'}"
+        seg += f"，上榜原因 {str(s.get('reason') or '').strip() or '--'}"
+        # 席位/机构扩维（2026-10-30c）：不在榜/端点失败时缺席，不伪装零（§4.0）
+        sb = ((facts or {}).get("stock_board") or {}).get(k)
+        if sb and sb.get("buy_in") is not None:
+            seg += f"；席位买入 {_fmt_yi(sb.get('buy_in'))}"
+        ag = ((facts or {}).get("agency") or {}).get(k)
+        if ag and ag.get("buy_in") is not None:
+            jn = ag.get("join_num")
+            seg += f"；机构净买 {_fmt_yi(ag.get('buy_in'))}" + (f"（{jn} 家）" if jn else "")
+        return seg
 
     parts = [_seg(k) for k in ordered[:max_items]]
     more = len(ordered) - max_items

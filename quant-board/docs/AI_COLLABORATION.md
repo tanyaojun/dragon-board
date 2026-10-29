@@ -269,7 +269,8 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   同开。读口 /api/kpl/lhb-forecast|lhb-realtime|lhb-history（fail-visible 降级）；
   :8008 龙虎榜🏆页签（Playwright DOM 14/14）；JEV 事实段供给 jev_lhb_ammo.py
   （纯事实组装，禁喂清单合规）；题材龙头语料同源接入（AMMO 2026-10-30a，
-  theme_leader_ammo.lhb_line 按龙一+板内成员过滤，预登记 §23）。协议合同详见
+  theme_leader_ammo.lhb_line 按龙一+板内成员过滤，预登记 §23；2026-10-30b 分页修复
+  st=300、2026-10-30c 席位/机构扩维，预登记 §23 补记）。协议合同详见
   kpl-socket 文档 §十三。
 - **KPI 两卡历史修复（2026-10-28）**：大盘指数（沪/深/创）/涨跌家数历史模式不再显 "--"——
   新增 `/api/market/index-history`（腾讯 ifzq 日 K）与 `/api/market/breadth-history`

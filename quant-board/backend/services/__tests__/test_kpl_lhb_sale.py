@@ -70,3 +70,70 @@ class TestParse:
     def test_parse_non_list_info(self):
         out = ls.parse_lhb_sale({"errcode": "0", "list": "garbage"})
         assert out["rows"] == [] and out["dropped"] == 0
+
+
+STOCK_LIST_SAMPLE = {
+    "errcode": "0", "Time": "2026-10-29", "Total": 2,
+    "list": [
+        {"ID": "601188", "Name": "龙江交通", "IncreaseAmount": "10.06%", "D3": "0",
+         "BuyIn": "121003701.36", "JoinNum": 4, "Turnover": "642104876",
+         "CircPrice": 4569144702.5, "Amplitude": "10.06", "TurnoverRatio": "14.3",
+         "Capitalization": 4569144702.5},
+        {"Name": "缺ID行"},                       # 缺 ID → dropped
+    ],
+    "Count": {"601188": 46980},
+}
+
+AGENCY_SAMPLE = {
+    "errcode": "0", "Time": "2026-10-29", "Day": "2026-10-29", "tag": "lv2",
+    "List": [
+        {"ID": "920296", "Name": "四方股份", "BuyIn": -3225162.13, "JoinNum": 1,
+         "Turnover": "191263535", "IncreaseAmount": "-5.36%", "FengKou": [801573]},
+        "bad-row",                                # 非 dict → dropped
+    ],
+}
+
+
+class TestStockListAndAgency:
+    def test_fetch_stock_list_params(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(lh, "_post_form",
+                            lambda u, p, ua: (calls.append((u, p)), dict(STOCK_LIST_SAMPLE))[1])
+        out = ls.fetch_lhb_stock_list("2026-10-29")
+        url, params = calls[0]
+        assert params["a"] == "GetStockList" and params["c"] == "LongHuBang"
+        assert params["Time"] == "2026-10-29" and params["STAT_SDK_TYPE"] == "500"
+        assert "applhb.longhuvip.com" in url
+        assert ls.parse_lhb_stock_list(out)["total"] == 2
+
+    def test_fetch_agency_params(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(lh, "_post_form",
+                            lambda u, p, ua: (calls.append((u, p)), dict(AGENCY_SAMPLE))[1])
+        out = ls.fetch_lhb_agency("2026-10-29")
+        assert calls[0][1]["a"] == "GetAgencyListV2"
+        assert ls.parse_lhb_agency(out)["date"] == "2026-10-29"
+
+    def test_parse_stock_list(self):
+        out = ls.parse_lhb_stock_list(STOCK_LIST_SAMPLE)
+        assert out["ok"] is True and len(out["rows"]) == 1 and out["dropped"] == 1
+        r0 = out["rows"][0]
+        assert r0["code"] == "601188" and r0["name"] == "龙江交通"
+        assert r0["buy_in"] == "121003701.36"          # 席位买入额，元原样不缩放
+        assert r0["join_num"] == 4 and r0["raw"]["ID"] == "601188"
+        assert out["count_map"] == {"601188": 46980}   # 语义未考，原样透传不消费
+
+    def test_parse_stock_list_count_map_non_dict_passthrough_none(self):
+        out = ls.parse_lhb_stock_list({"errcode": "0", "list": [], "Count": "garbage"})
+        assert out["count_map"] is None and out["rows"] == []
+
+    def test_parse_agency_negative_net_buy(self):
+        out = ls.parse_lhb_agency(AGENCY_SAMPLE)
+        assert out["ok"] is True and len(out["rows"]) == 1 and out["dropped"] == 1
+        r0 = out["rows"][0]
+        assert r0["code"] == "920296"
+        assert r0["buy_in"] == -3225162.13 and r0["join_num"] == 1   # 负=净卖出，元原样
+
+    def test_parse_agency_missing_list_key(self):
+        out = ls.parse_lhb_agency({"errcode": "0"})   # List 大小写陷阱：缺 List → 空
+        assert out["rows"] == [] and out["dropped"] == 0

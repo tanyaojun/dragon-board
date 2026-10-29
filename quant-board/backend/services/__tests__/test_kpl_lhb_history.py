@@ -107,6 +107,8 @@ class TestFetchMocked:
         # a/c 互换是本链关键坑：a=OnTheLHBList, c=HisBeOnTheLHB
         assert params["a"] == "OnTheLHBList" and params["c"] == "HisBeOnTheLHB"
         assert params["Date"] == "2026-10-28"
+        # 分页合同（2026-10-30 修复）：默认页只回 3 组，必须显式 st 翻满
+        assert params["st"] == lh._LHB_PAGE_SIZE
         assert params["Token"] and params["UserID"] and params["DeviceID"]  # 凭据公共出口
         assert "apphis.longhuvip.com" in url
 
@@ -116,6 +118,10 @@ class TestFetchMocked:
         out = lh.fetch_his_lhb_stock("2026-10-28")
         assert lh.parse_his_lhb_stock(out)["count"] == 2
         assert calls[0][1]["a"] == "OnTheLHBStock" and calls[0][1]["c"] == "HisBeOnTheLHB"
+        # 分页合同（2026-10-30 修复）：默认页只回 9 行，必须显式 st 翻满
+        assert calls[0][1]["st"] == lh._LHB_PAGE_SIZE
+        # 不同页大小不得共享缓存：st 进 key（同日重取命中 TTL，只发一枪）
+        assert any(str(lh._LHB_PAGE_SIZE) in k for k in lh._CACHE)
 
     def test_fetch_errcode_raises_structured(self, monkeypatch):
         monkeypatch.setattr(lh, "_post_form", lambda u, p, ua: {"errcode": 1020, "errmsg": "参数出错"})

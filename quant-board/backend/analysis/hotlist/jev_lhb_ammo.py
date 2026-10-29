@@ -20,17 +20,28 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID  # noqa: F401（与方向线同源约定）
-from backend.services import kpl_lhb_history
+from backend.services import kpl_lhb_history, kpl_lhb_sale
 
-AMMO_VERSION_LHB = "2026-10-29a"
+# 2026-10-30b：取数层分页修复（kpl_lhb_history 显式 st=300，默认页个股 9 行/分组 3 组
+# 严重不全——10-29 全量实为 129 只，龙江交通 601188 漏配导致语料误称「0 只上榜」）。
+# 判据/题集零变化（题集 hash 不动），仅事实完整性修复。
+# 2026-10-30c：接入营业部个股榜（GetStockList，席位买入额）与机构榜（GetAgencyListV2，
+# 机构净买额可负）——原 LHB 行只有盘中主力大单资金流口径，非交易所席位额；扩维后相关
+# 个股可披露席位/机构事实。判据/题集零变化。
+AMMO_VERSION_LHB = "2026-10-30c"
 
 
-def collect_lhb_facts(date: str, *, _fetch_list=None, _fetch_stock=None) -> Dict[str, Any]:
+def collect_lhb_facts(date: str, *, _fetch_list=None, _fetch_stock=None,
+                      _fetch_stock_board=None, _fetch_agency=None) -> Dict[str, Any]:
     """按日收集龙虎榜事实（历史链为主；失败结构化降级，不伪装空）。
 
-    返回 {ok, date, version, groups, stocks, degraded/reason}。
+    返回 {ok, date, version, groups, stocks, stock_board, agency, degraded/reason}。
     groups: [{reason, bid, stocks:[{code,name,price,deviation,amount_yuan,turn}]}]；
-    stocks: [{code,name,plate,price,zf,main_net_yuan,main_buy_yuan,main_sell_yuan,reason}]。
+    stocks: [{code,name,plate,price,zf,main_net_yuan,main_buy_yuan,main_sell_yuan,reason}]；
+    stock_board: code → {name, buy_in(席位买入额元), join_num(语义待证不渲染), turnover}
+      （GetStockList 营业部个股榜，2026-10-30c）；
+    agency: code → {name, buy_in(机构净买额元，负=净卖出), join_num(机构家数), turnover}
+      （GetAgencyListV2 机构榜，2026-10-30c）。两维缺席（端点失败/该股不在榜）不伪装。
     """
     out: Dict[str, Any] = {"ok": False, "date": date, "version": AMMO_VERSION_LHB,
                            "groups": [], "stocks": []}
@@ -77,10 +88,33 @@ def collect_lhb_facts(date: str, *, _fetch_list=None, _fetch_stock=None) -> Dict
         "main_sell_yuan": r.get("main_sell"),
         "reason": r.get("reason", ""),
     } for r in (parsed_stock or {}).get("rows") or []]
+    # 个股榜/机构榜扩维（2026-10-30c）：逐端点独立捕获，任一失败不拖垮主链（fail-visible）
+    parsed_sb = None
+    try:
+        raw_sb = (_fetch_stock_board or kpl_lhb_sale.fetch_lhb_stock_list)(date)
+        parsed_sb = kpl_lhb_sale.parse_lhb_stock_list(raw_sb)
+    except Exception as exc:
+        out["degraded"] = True
+        out.setdefault("reasons", []).append(f"lhb_stock_board_fetch_failed: {exc}")
+    parsed_ag = None
+    try:
+        raw_ag = (_fetch_agency or kpl_lhb_sale.fetch_lhb_agency)(date)
+        parsed_ag = kpl_lhb_sale.parse_lhb_agency(raw_ag)
+    except Exception as exc:
+        out["degraded"] = True
+        out.setdefault("reasons", []).append(f"lhb_agency_fetch_failed: {exc}")
+    stock_board = {r["code"]: {"name": r["name"], "buy_in": r["buy_in"],
+                               "join_num": r["join_num"], "turnover": r["turnover"]}
+                   for r in (parsed_sb or {}).get("rows") or []}
+    agency = {r["code"]: {"name": r["name"], "buy_in": r["buy_in"],
+                          "join_num": r["join_num"], "turnover": r["turnover"]}
+              for r in (parsed_ag or {}).get("rows") or []}
     out.update({
         "ok": bool(groups or stocks),
         "groups": groups,
         "stocks": stocks,
+        "stock_board": stock_board,
+        "agency": agency,
         "empty_structured": bool(parsed_list and not groups
                                  and (parsed_list.get("order_sign") or [])),
         "order_sign_count": len((parsed_list or {}).get("order_sign") or []),

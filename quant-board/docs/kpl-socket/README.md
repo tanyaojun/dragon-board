@@ -498,6 +498,17 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   顺序互换是关键坑**（mo0.d 第一参数→c、第二参数→a；记反即 1020）。OnTheLHBList=
   按上榜原因分组榜单（Reason/Index/stockList 12 列）；OnTheLHBStock=个股行 22 列
   （字段族与 2112 Item 同源）。当日未生成 info=[] + orderSign（结构化空态）。
+  **分页坑（2026-10-30 修复）**：两端点默认页极小（个股 9 行/分组 3 组），必须显式
+  `st=300` 翻满（实测 10-29 st=300 饱和：个股 129 行/分组 20 组去重 129，两端点一致；
+  st=100 时个股端点被截到 100 行）；`Count` 字段≠info 行数（同日 61 vs 129），不可当
+  总数用；`st` 必须进缓存 key。
+- **营业部个股榜/机构榜 HTTP**（`kpl_lhb_sale.py`，2026-10-30 开火实测接入）：同域同
+  参数合同——`a=GetStockList|GetAgencyListV2&c=LongHuBang&Time=YYYY-MM-DD&Index=0&
+  Type=0&STAT_SDK_TYPE=500`（一页全量，实测 10-29：个股榜 69 行/机构榜 42 行）。
+  GetStockList=`list` 每股一行（ID/Name/BuyIn 席位买入额元/JoinNum 疑席位家数语义待证/
+  Turnover 成交额/IncreaseAmount…；`Count` 字典语义未考透传不消费）；GetAgencyListV2=
+  **`List`（大写 L）** 每股一行（BuyIn **机构净买额元可负=净卖出**/JoinNum 机构家数/
+  FengKou 风口不消费）；parse 后 raw 原样保留。同族 UpdateList 未接，边界显式。
 - **营业部成交榜 HTTP**（`kpl_lhb_sale.py`，2026-10-29 逆向 j00.F + le0.p + 开火实测）：
   POST applhb（API_LHB 专用域）`a=GetBusinessList&c=LongHuBang&Time=YYYY-MM-DD&Index=0
   &Type=0&STAT_SDK_TYPE=500`（500 一页全量，App 每页 100 分页）；返回
@@ -545,7 +556,9 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `theme_leader_ammo.lhb_line` 按「待判龙一+板内封板成员/双龙一+板内成员」代码过滤
   接入个股级与板块级叙事（四种结构化状态全 fail-visible；主力净额口径行内标注非
   席位额；题集 v13 hash 不变；预登记 theme-leader-nextday-preregistration-20261020
-  §23）。
+  §23）。**席位/机构扩维（LHB 事实层 2026-10-30c）**：collect_lhb_facts 新增
+  stock_board/agency 两维（GetStockList 席位买入额/GetAgencyListV2 机构净买额可负），
+  lhb_line 对相关个股追加对应段（不在榜/端点失败缺席不伪装）。
 - audit 同步：docs/hotlist-jev/jev-direction-material-audit.md §3 C 级第 4 条
   「龙虎榜未采」→ 已接入（大单监控线另行预登记）。
 

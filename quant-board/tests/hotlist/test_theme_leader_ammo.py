@@ -943,6 +943,38 @@ def test_lhb_line_zero_relevant_is_fact_not_direction():
     assert "当日全市场上榜 3 只，本叙事相关个股 0 只上榜（事实披露，非方向信号）" in line
 
 
+def test_lhb_line_seat_and_agency_segments():
+    """席位/机构扩维（2026-10-30c）：相关个股在榜追加席位买入/机构净买段，负净买如实呈现。"""
+    facts = {**LHB_FACTS,
+             "stock_board": {"603278": {"name": "大业股份", "buy_in": "121003701.36",
+                                       "join_num": 4, "turnover": 642104876}},
+             "agency": {"600715": {"name": "文投控股", "buy_in": -3225162.13,
+                                 "join_num": 1, "turnover": 191263535}}}
+    line = A.lhb_line(facts, codes=["603278", "600715"], roles={"603278": "待判龙一"})
+    assert "席位买入 1.21亿" in line
+    assert "机构净买 -0.03亿（1 家）" in line, "机构净卖为负如实呈现，不伪装"
+
+
+def test_lhb_line_seat_agency_absent_is_silent():
+    """不在榜/端点失败时席位与机构段缺席，不伪装零或占位（§4.0）。"""
+    line_old = A.lhb_line(LHB_FACTS, codes=["603278"])
+    line_new = A.lhb_line({**LHB_FACTS, "stock_board": {}, "agency": {}},
+                          codes=["603278"])
+    assert "席位买入" not in line_old and "机构净买" not in line_old
+    assert line_old == line_new
+
+
+def test_lhb_line_seat_agency_none_and_join_num_missing():
+    """buy_in 缺失不产段；join_num 缺失时机构段不带家数括号。"""
+    facts = {**LHB_FACTS,
+             "stock_board": {"603278": {"name": "大业股份", "buy_in": None}},
+             "agency": {"603278": {"name": "大业股份", "buy_in": 8800000,
+                                 "join_num": None}}}
+    line = A.lhb_line(facts, codes=["603278"])
+    assert "席位买入" not in line
+    assert "机构净买 0.09亿" in line and "家）" not in line
+
+
 def test_lhb_line_cap_discloses_overflow():
     stocks = [{"code": f"60000{i}", "name": f"股{i}", "main_net_yuan": None,
                "main_buy_yuan": None, "main_sell_yuan": None, "reason": ""}
