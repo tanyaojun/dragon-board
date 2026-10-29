@@ -824,3 +824,76 @@ def test_live_stocks_meta_all_dates_unavailable_is_error(monkeypatch):
     entry = _wait_stocks_meta("2026-10-29", lambda e: e.get("state") == "error")
     assert "stocks_unavailable_5d" in str(entry.get("error") or "")
     svc._stocks_meta_cache.clear()
+
+
+# ── 2026-10-29 直播横幅排查：孤立空/1020 板块 = 合法空宇宙，不得弹「构建失败」 ──
+
+def _stock_row(code):
+    # meta 构建器消费 get_sector_stocks 的已解析行（dict），不是原始数组
+    return {"code": code, "name": f"股{code}", "rank_title": "龙一",
+            "turnover": 12.3, "board_status": "3天2板", "concept": "机器人,减速器"}
+
+
+def test_live_meta_isolated_empty_plate_not_failed(monkeypatch):
+    """801574 场景回归：孤立板块 1020/空表 = 合法空宇宙——failedPlates 必须为空
+    （不弹「部分板块构建失败」横幅），单列 emptyPlates 披露；其余板块照常入索引。"""
+    svc._stocks_meta_cache.clear()
+    monkeypatch.setattr(svc, "get_sector_ranking", lambda date: {
+        "ok": True, "date": date,
+        "items": [{"plate_id": "801159", "name": "机器人概念", "strength": 100},
+                  {"plate_id": "801574", "name": "年报增长", "strength": 50}],
+        "sons": {}})
+    def fake_stocks(pid, date, page=0, page_size=100):
+        if pid == "801574":
+            # 当日盘中 1020（801574 实测）——孤立命中=空宇宙/未生成
+            raise svc.KplRankingError("upstream_1020_date_state", plate_id=pid, date=date)
+        return {"ok": True, "items": [_stock_row("603278")], "has_more": False}
+    monkeypatch.setattr(svc, "get_sector_stocks", fake_stocks)
+    monkeypatch.setattr(svc, "_stocks_meta_probe_eff_date", lambda date, pid: date)
+    svc.get_live_stocks_meta(["603278"], "2026-10-29")
+    entry = _wait_stocks_meta("2026-10-29", lambda e: e.get("state") == "done")
+    assert entry.get("failed_plates") == [], "孤立空板块不得进 failedPlates（横幅根因）"
+    assert entry.get("empty_plates") == ["801574"]
+    assert "603278" in entry["index"]
+    out = svc.get_live_stocks_meta(["603278"], "2026-10-29")
+    assert out["emptyPlates"] == ["801574"] and out["failedPlates"] == []
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_meta_all_plates_empty_is_error(monkeypatch):
+    """全板块皆空/1020 = 凭据失效或数据未生成 → error 态（不伪装成 done 空索引）。"""
+    svc._stocks_meta_cache.clear()
+    def boom(pid, date, page=0, page_size=100):
+        raise svc.KplRankingError("upstream_1020_date_state", plate_id=pid, date=date)
+    monkeypatch.setattr(svc, "get_sector_ranking", lambda date: {
+        "ok": True, "date": date,
+        "items": [{"plate_id": "801159", "name": "机器人概念", "strength": 100},
+                  {"plate_id": "801574", "name": "年报增长", "strength": 50}],
+        "sons": {}})
+    monkeypatch.setattr(svc, "get_sector_stocks", boom)
+    monkeypatch.setattr(svc, "_stocks_meta_probe_eff_date", lambda date, pid: date)
+    svc.get_live_stocks_meta(["603278"], "2026-10-29")
+    entry = _wait_stocks_meta("2026-10-29", lambda e: e.get("state") == "error")
+    assert "stocks_all_empty" in str(entry.get("error") or "")
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_meta_real_failure_still_disclosed(monkeypatch):
+    """网络类真失败（非空/非1020）仍进 failedPlates 透出（fail-visible 不放松）。"""
+    svc._stocks_meta_cache.clear()
+    monkeypatch.setattr(svc, "get_sector_ranking", lambda date: {
+        "ok": True, "date": date,
+        "items": [{"plate_id": "801159", "name": "机器人概念", "strength": 100},
+                  {"plate_id": "801574", "name": "年报增长", "strength": 50}],
+        "sons": {}})
+    def fake_stocks(pid, date, page=0, page_size=100):
+        if pid == "801574":
+            raise svc.KplRankingError("upstream_http_502", url="x")
+        return {"ok": True, "items": [_stock_row("603278")], "has_more": False}
+    monkeypatch.setattr(svc, "get_sector_stocks", fake_stocks)
+    monkeypatch.setattr(svc, "_stocks_meta_probe_eff_date", lambda date, pid: date)
+    svc.get_live_stocks_meta(["603278"], "2026-10-29")
+    entry = _wait_stocks_meta("2026-10-29", lambda e: e.get("state") == "done")
+    assert entry.get("failed_plates") == ["801574"], "真失败必须照旧透出"
+    assert entry.get("empty_plates") == []
+    svc._stocks_meta_cache.clear()

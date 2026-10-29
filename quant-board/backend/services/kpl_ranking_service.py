@@ -611,6 +611,8 @@ def _build_stocks_meta(date: str) -> None:
     """后台线程构建（get_live_stocks_meta 拉起）：排行 → 逐板块成分股 → code→meta。
 
     单板块失败不中断（failed_plates 计数透出，fail-visible）；排行失败 → error 态。
+    孤立命中空/1020 的板块=合法空宇宙/当日未生成（如 801574 年报增长），单列 empty_plates
+    不进 failed_plates；全板块皆空/1020 才是凭据失效或数据未生成 → error 态。
     当日层3 查史盘中不可用 → 探测回退上一有效交易日（fb 透出，前端标注）。
     增量写入：每板块完成即持锁合并进索引——全局 2s/发纪律下全宇宙 ~80 发≈160s，
     前端轮询 10s 内即见强度最高板块的首批 meta，不等全量构建完成。
@@ -620,7 +622,7 @@ def _build_stocks_meta(date: str) -> None:
             date, {"state": "building", "index": {}, "failed_plates": [],
                    "built_at": time.time(), "error": None})
         index: Dict[str, Dict[str, Any]] = entry.setdefault("index", {})
-        failed: List[str] = entry.setdefault("failed_plates", [])
+        failed: List[tuple[str, str]] = []   # (plate_id, reason)；每轮构建重建，不跨轮累积
     try:
         ranking = get_sector_ranking(date)
         plates = [it for it in (ranking.get("items") or []) if it.get("plate_id")]
@@ -656,12 +658,22 @@ def _build_stocks_meta(date: str) -> None:
                     if not resp.get("has_more"):
                         break
                     page += 1
-            except KplRankingError:
-                failed.append(pid)
+            except KplRankingError as exc:
+                failed.append((pid, str(exc.reason)))
             if plate_hits:                # 增量合并：一个板块完成立即可被读口命中
                 with _stocks_meta_lock:
                     for c, m in plate_hits.items():
                         index.setdefault(c, m)
+        # 空/未生成板块区分（2026-10-29 直播横幅排查）：孤立命中 empty/1020 = 该板块
+        # 成分股合法为空或当日未生成（801574 年报增长实证：10-28 errcode=0 空表、
+        # 10-29 盘中 1020）——不进 failed_plates（不弹「构建失败」横幅），单列
+        # empty_plates 披露；全部板块皆空/1020 才是凭据失效或数据未生成 → error 态。
+        empty_reasons = {"empty_list_check_credentials", "upstream_1020_date_state"}
+        empty_plates = [pid for pid, reason in failed if reason in empty_reasons]
+        real_failed = [pid for pid, reason in failed if reason not in empty_reasons]
+        if len(failed) == len(plates) and not real_failed:
+            raise KplRankingError(
+                "stocks_all_empty（全板块成分股为空：凭据失效或数据未生成，fail-visible）")
     except KplRankingError as exc:
         with _stocks_meta_lock:
             entry.update({"state": "error", "built_at": time.time(),
@@ -675,7 +687,8 @@ def _build_stocks_meta(date: str) -> None:
         return
     with _stocks_meta_lock:
         entry.update({"state": "done", "built_at": time.time(),
-                      "last_attempt_at": time.time(), "error": None})
+                      "last_attempt_at": time.time(), "error": None,
+                      "failed_plates": real_failed, "empty_plates": empty_plates})
 
 
 def get_live_stocks_meta(codes: List[str], date: str) -> Dict[str, Any]:
@@ -720,6 +733,7 @@ def get_live_stocks_meta(codes: List[str], date: str) -> Dict[str, Any]:
         payload = {"ok": True, "date": date, "building": building,
                    "hits": hits, "missed": missed,
                    "failedPlates": entry.get("failed_plates") or [],
+                   "emptyPlates": entry.get("empty_plates") or [],
                    "indexSize": len(index),
                    "fb": entry.get("fb") or None,
                    "error": entry.get("error")}
