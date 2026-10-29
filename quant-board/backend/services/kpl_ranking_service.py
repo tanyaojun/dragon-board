@@ -576,6 +576,8 @@ _PLATE_HIST_TTL_SECONDS = 12 * 3600.0
 # 盘前/未生成：排行全零行被过滤后 items 空——记 error 态不伪装成 done 空 index
 # （2026-10-29 层3 判别探针同源结论），盘中数据生成后下次调用自动重建。
 _STOCKS_META_TTL_SECONDS = 1800.0     # 地位/概念盘中缓变；连板由雷达实时 lb_status 优先，容忍 30 分钟粒度
+_STOCKS_META_RETRY_SECONDS = 60.0     # error 态重建最小间隔（上游不可用/盘前时防 sig 变化放大为无上限重试）
+_STOCKS_META_KEEP_DATES = 5           # 进程内保留最近 N 个日期，超出淘汰非 building 项（防跨交易日累积）
 _STOCKS_META_PLATE_SLEEP = 0.0        # 增量节流由 _MIN_INTERVAL_SECONDS=2s 全局纪律兜底（禁连发），板块间不另加睡
 _stocks_meta_lock = threading.Lock()
 _stocks_meta_cache: Dict[str, Dict[str, Any]] = {}
@@ -630,15 +632,18 @@ def _build_stocks_meta(date: str) -> None:
                         index.setdefault(c, m)
     except KplRankingError as exc:
         with _stocks_meta_lock:
-            entry.update({"state": "error", "built_at": time.time(), "error": str(exc)})
+            entry.update({"state": "error", "built_at": time.time(),
+                          "last_attempt_at": time.time(), "error": str(exc)})
         return
     except Exception as exc:               # 非业务异常兜底：不得让 entry 永远钉在 building
         with _stocks_meta_lock:
             entry.update({"state": "error", "built_at": time.time(),
+                          "last_attempt_at": time.time(),
                           "error": f"build_crash: {type(exc).__name__}: {str(exc)[:120]}"})
         return
     with _stocks_meta_lock:
-        entry.update({"state": "done", "built_at": time.time(), "error": None})
+        entry.update({"state": "done", "built_at": time.time(),
+                      "last_attempt_at": time.time(), "error": None})
 
 
 def get_live_stocks_meta(codes: List[str], date: str) -> Dict[str, Any]:
@@ -653,15 +658,28 @@ def get_live_stocks_meta(codes: List[str], date: str) -> Dict[str, Any]:
         c = str(c or "").strip()
         if c and c not in uniq:
             uniq.append(c)
+    with _stocks_meta_lock:
+        if len(_stocks_meta_cache) > _STOCKS_META_KEEP_DATES:   # 跨日淘汰（review P2-4）
+            keep = sorted(
+                (d for d, e in _stocks_meta_cache.items()
+                 if e.get("state") != "building"),
+                key=lambda d: (_stocks_meta_cache[d].get("built_at") or 0))
+            for d in keep[:max(0, len(keep) - (_STOCKS_META_KEEP_DATES - 1))]:
+                _stocks_meta_cache.pop(d, None)
     need_build = False
     with _stocks_meta_lock:
         entry = _stocks_meta_cache.get(date) or {}
         fresh = (time.time() - entry.get("built_at", 0)) < _STOCKS_META_TTL_SECONDS
         index = dict(entry.get("index") or {})
         state = entry.get("state")
-        if state in (None, "error") or (state == "done" and not fresh):
+        error_cooldown = (
+            state == "error"
+            and (time.time() - entry.get("last_attempt_at", 0)) < _STOCKS_META_RETRY_SECONDS)
+        if state is None or (state == "done" and not fresh) or (
+                state == "error" and not error_cooldown):
             _stocks_meta_cache[date] = {"state": "building", "index": index,
-                                        "built_at": time.time()}
+                                        "built_at": time.time(),
+                                        "last_attempt_at": time.time()}
             entry = _stocks_meta_cache[date]
             need_build = True
         hits = {c: index[c] for c in uniq if c in index}

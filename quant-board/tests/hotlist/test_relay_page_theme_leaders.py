@@ -508,10 +508,19 @@ def test_kpl_live_stock_table_meta_columns(html):
     """
     body = _fn(html, "kplLiveRenderStocks")
     fetch = _fn(html, "kplLiveFetchStockMeta")
+    poll = _fn(html, "kplLiveScheduleMetaPoll")
     assert "rank_title" in body and "turnover" in body
     assert "board_status" in body and "concept" in body
     assert "live-stocks-meta" in fetch
     assert "date=" in fetch and "codes=" in fetch
+    # review P1-1：error/failedPlates 必须被前端消费（fail-visible，禁静默伪装「不在宇宙」）
+    assert "r.error" in fetch and "failedPlates" in fetch
+    assert "kplLiveBanner" in fetch, "fetch 失败必须横幅透出，禁静默回退全 '--'"
+    # review P2-3：直播视图只在实时有意义，meta 固定用当日
+    assert "KPL.today" in fetch and "KPL.date" not in fetch.split("live-stocks-meta")[1].split("'")[0]
+    # review P2-2：building 轮询链单例 + 视图激活校验
+    assert "clearTimeout" in poll and "STATE.view === 'kpl'" in poll
+    assert "LIVE.stockMeta.timer" in html[html.index("function kplLiveLeave"):]
     assert "'…'" in body or '"…"' in body or "…" in body   # building 渐进符
     assert 'metaBuilding' in body
     # 硬编码占位禁止回归：地位/概念列不得再出现无条件 "--" 格
@@ -519,5 +528,6 @@ def test_kpl_live_stock_table_meta_columns(html):
     assert '<td class="kpl-uni">--</td>' not in body
     # 连板：雷达消息自带 lb_status 优先，meta 兑底
     assert 'r.lb ||' in body
-    # LIVE 状态带 stockMeta（构建态/签名节流记账）
+    # LIVE 状态带 stockMeta（构建态/签名节流/失败呈现记账）
     assert "stockMeta" in html[html.index("const LIVE ="):html.index("const LIVE_SRCS")]
+    assert "errShown" in html[html.index("const LIVE ="):html.index("const LIVE_SRCS")]

@@ -5397,7 +5397,8 @@ function kplRenderStocks(){
 const LIVE = {timer: null, src: 'zb', zb: [], zbSeen: new Set(),
               radar: [], radarSeen: new Set(), sel: '', freshIds: new Set(),
               // 个股 meta（地位/换手/连板/概念，KPL 板块宇宙惰性索引，2026-10-29）
-              stockMeta: {map: {}, building: false, sig: '', fetchedAt: 0, failedAt: null},
+              stockMeta: {map: {}, building: false, sig: '', fetchedAt: 0, failedAt: null,
+                          error: null, failedPlates: [], errShown: '', timer: null},
               // 语音播报（tools/VoiceWorker 32145，经 :8000 /api/kpl/voice/* 代理）：
               // on=开关（localStorage 持久）；online=端口探测结果；armed=冷启动已过（首轮流不播历史积压）
               voice: {on: localStorage.getItem('kplLiveVoice') !== '0', online: null, armed: false, probing: false}};
@@ -5426,6 +5427,7 @@ function kplLiveEnter(){
 }
 function kplLiveLeave(){
   if (LIVE.timer){ clearInterval(LIVE.timer); LIVE.timer = null; }
+  if (LIVE.stockMeta.timer){ clearTimeout(LIVE.stockMeta.timer); LIVE.stockMeta.timer = null; }   // review P2-2：离页清轮询链
   LIVE.voice.armed = false;                            // 离页 disarm：回页首轮流重新武装，缺席期间积压不当新闻播
 }
 function kplLiveSetSrc(s){
@@ -5587,7 +5589,8 @@ function kplLiveRenderStocks(){
       + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_SELL))}">${kfmtAmt(gv(KQ.MAIN_SELL))}</td>`
       + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
       + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
-      + `<td class="kpl-sub" title="KPL 板块概念（${mv(r.code, 'plate_id') || '未入宇宙'}）">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
+      + `<td class="kpl-sub" title="KPL 板块概念（${mv(r.code, 'plate_id')
+        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
   }
   html += '</tbody>';
   $('kplLiveStockTable').innerHTML = html;
@@ -5598,19 +5601,38 @@ function kplLiveFetchStockMeta(codes){
   const sig = codes.join(',');
   const m = LIVE.stockMeta;
   const now = Date.now();
-  const wait = m.building ? 20000 : (m.failedAt ? 45000 : 45000);
+  const wait = m.building ? 20000 : (m.failedAt ? 90000 : 45000);   // 失败退避 90s（review P2-1）
   if (m.sig === sig && now - m.fetchedAt < wait) return;
   m.sig = sig; m.fetchedAt = now;
-  jget(KPL_API + '/live-stocks-meta?date=' + encodeURIComponent(KPL.date || KPL.today || '') + '&codes=' + encodeURIComponent(sig))
+  // 直播视图只在实时模式有意义：meta 固定用当日（review P2-3——历史模式下消息流是实时，
+  // 按历史日构建索引会让换手/地位口径错位）
+  jget(KPL_API + '/live-stocks-meta?date=' + encodeURIComponent(KPL.today || '') + '&codes=' + encodeURIComponent(sig))
     .then(r => {
-      if (!r || r.ok === false){ m.failedAt = now; return; }
+      if (!r || r.ok === false){ m.failedAt = now; kplLiveBanner('直播个股 meta 读取失败（稍后自动重试）'); return; }
       m.map = Object.assign({}, m.map, r.hits || {});
       m.building = !!r.building;
+      m.error = r.error || null;
+      m.failedPlates = r.failedPlates || [];
       m.failedAt = null;
-      if (r.building) setTimeout(() => { m.fetchedAt = 0; kplLiveRenderStocks(); }, 20000);
-      else kplLiveRenderStocks();
+      // fail-visible（review P1-1）：error/failedPlates 必须透出，失败态不得静默伪装成「不在宇宙」
+      const errMsg = (r.error ? '直播个股 meta 索引失败：' + r.error : '')
+        + ((r.failedPlates || []).length ? ((r.error ? '；' : '直播个股 meta 部分板块构建失败：')
+           + r.failedPlates.length + ' 个板块（其余照常）') : '');
+      if (errMsg && errMsg !== m.errShown){ m.errShown = errMsg; kplLiveBanner(errMsg + '（自动重试中）'); }
+      if (!errMsg) m.errShown = '';
+      kplLiveScheduleMetaPoll();
     })
-    .catch(() => { m.failedAt = now; });
+    .catch(() => { m.failedAt = now; kplLiveBanner('直播个股 meta 读取失败（稍后自动重试）'); });
+}
+// building 轮询链单例（review P2-2）：排新前清旧 timer，离页清链，回调校验视图激活
+function kplLiveScheduleMetaPoll(){
+  const m = LIVE.stockMeta;
+  if (m.timer) clearTimeout(m.timer);
+  if (!m.building) { kplLiveRenderStocks(); return; }
+  m.timer = setTimeout(() => {
+    m.timer = null; m.fetchedAt = 0;
+    if (STATE.view === 'kpl' && KPL.mode === 'live') kplLiveRenderStocks();
+  }, 20000);
 }
 function kplLivePick(id, code){
   LIVE.sel = (LIVE.sel === id) ? '' : id;

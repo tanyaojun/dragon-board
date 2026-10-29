@@ -682,3 +682,92 @@ def test_live_stocks_meta_empty_ranking_is_error_not_done(monkeypatch):
     entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error")
     assert "ranking_empty" in str(entry.get("error") or "")
     svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_partial_plate_failure_keeps_rest(monkeypatch):
+    """单板块失败 → failed_plates 记账且其余板块照常（增量失败隔离）。"""
+    svc._stocks_meta_cache.clear()
+    monkeypatch.setattr(svc, "get_sector_ranking",
+                        lambda date: {"ok": True, "date": date, "items": [
+                            {"plate_id": "801159", "name": "机器人概念", "strength": 100},
+                            {"plate_id": "801573", "name": "半导体", "strength": 90}], "sons": {}})
+    def fake_stocks(pid, date, page=0, page_size=100):
+        if pid == "801159":
+            raise svc.KplRankingError("upstream_http_502", url="x")
+        return {"ok": True, "date": date, "plate_id": pid, "page": 0,
+                "page_size": page_size, "has_more": False,
+                "items": [{"code": "603061", "name": "金海通", "rank_title": "龙二",
+                           "turnover": 6.1, "board_status": "首板", "concept": "芯片"}]}
+    monkeypatch.setattr(svc, "get_sector_stocks", fake_stocks)
+    svc.get_live_stocks_meta(["603061"], "2026-10-28")
+    entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "done")
+    assert entry["failed_plates"] == ["801159"]
+    assert "603061" in entry["index"], "失败板块不得中断其余板块入库"
+    out = svc.get_live_stocks_meta(["603061"], "2026-10-28")
+    assert out["failedPlates"] == ["801159"] and out["hits"]["603061"]["rank_title"] == "龙二"
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_stale_rebuild_keeps_old_index_available(monkeypatch):
+    """TTL 过期重建：旧索引继续命中（stale 可用），重建后合并新数据。"""
+    svc._stocks_meta_cache.clear()
+    monkeypatch.setattr(svc, "get_sector_ranking",
+                        lambda date: {"ok": True, "date": date, "items": [
+                            {"plate_id": "801159", "name": "机器人概念", "strength": 100}], "sons": {}})
+    monkeypatch.setattr(svc, "get_sector_stocks",
+                        lambda pid, date, page=0, page_size=100:
+                        {"ok": True, "date": date, "plate_id": pid, "page": 0,
+                         "page_size": page_size, "has_more": False,
+                         "items": [{"code": "603278", "name": "大业股份", "rank_title": "龙一",
+                                    "turnover": 12.3, "board_status": "3天2板",
+                                    "concept": "机器人"}]})
+    svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "done")
+    # 把 entry 调老 → 触发 stale 重建
+    with svc._stocks_meta_lock:
+        svc._stocks_meta_cache["2026-10-28"]["built_at"] -= svc._STOCKS_META_TTL_SECONDS + 1
+    out = svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    assert out["building"] is True
+    assert "603278" in out["hits"], "重建期间旧索引必须继续可用（stale 可用）"
+    _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "done")
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_building_partial_hits_visible(monkeypatch):
+    """building 期间已构建部分可被读口命中（渐进可用），missed 不预判。"""
+    svc._stocks_meta_cache.clear()
+    with svc._stocks_meta_lock:
+        svc._stocks_meta_cache["2026-10-28"] = {
+            "state": "building",
+            "index": {"603278": {"rank_title": "龙一", "turnover": 12.3,
+                                 "board_status": "3天2板", "concept": "机器人",
+                                 "plate_id": "801159"}},
+            "failed_plates": [], "built_at": time.time(), "error": None}
+    out = svc.get_live_stocks_meta(["603278", "300999"], "2026-10-28")
+    assert out["building"] is True
+    assert out["hits"]["603278"]["rank_title"] == "龙一", "构建中已命中部分必须可见"
+    assert out["missed"] == [], "building 期间不得把未扫到的股预判为 missed"
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_error_rebuild_cooldown(monkeypatch):
+    """error 态重建最小间隔（review P1-2）：冷却内不重起线程，冷却过后自动重建。"""
+    svc._stocks_meta_cache.clear()
+    calls = {"n": 0}
+
+    def boom(date):
+        calls["n"] += 1
+        raise svc.KplRankingError("upstream_http_502", url="x")
+
+    monkeypatch.setattr(svc, "get_sector_ranking", boom)
+    svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error")
+    out = svc.get_live_stocks_meta(["603278"], "2026-10-28")     # 冷却内
+    assert out["building"] is False and calls["n"] == 1, "冷却内不得重起构建线程"
+    # 冷却过期（last_attempt_at 调老）→ 允许重建
+    with svc._stocks_meta_lock:
+        svc._stocks_meta_cache["2026-10-28"]["last_attempt_at"] -= svc._STOCKS_META_RETRY_SECONDS + 1
+    svc.get_live_stocks_meta(["603278"], "2026-10-28")
+    _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error" and calls["n"] >= 2)
+    assert calls["n"] == 2
+    svc._stocks_meta_cache.clear()
