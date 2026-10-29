@@ -510,10 +510,13 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `/api/kpl/lhb-realtime`（2112/3004 均空帧抑制同 2103 规——2112 以 total=0 为语义清空，
   午间休市推流 total>0/items=[] 不覆盖非空快照；无快照结构化降级 fail-visible）；
   `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）。
-- :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签：预测/实时/历史三卡（缺字段 `--`、降级
-  banner、失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright mock 断言（全部通过），
-  脚本与截图只存本地 `.tmp_review/`，未入仓**（专项契约由 `tests/hotlist/test_relay_page_window.py`
-  与 :8000 透传 mock 测试覆盖）。
+- :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签：预测卡 + 龙虎榜合并表卡（同板块行情
+  个股列表形态；默认当日=3004 实时 5s 轮询，头部日期选择历史日期 → 同表切换
+  HisBeOnTheLHB 分组回看，「今日」按钮/清空回实时；回看模式轮询照跑仅停渲染，
+  banner 按 view 分流互不顶掉；旧独立回看控件已删；缺字段 `--`、降级 banner、
+  失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright 断言（默认实时/
+  回看切换/今日恢复全过），脚本与截图只存本地 `.tmp_review/`，未入仓**
+  （专项契约由 `tests/hotlist/test_relay_page_window.py` 与 :8000 透传 mock 测试覆盖）。
 
 ### 13.3 资金字段口径（task-3 裁决，防误消费）
 
