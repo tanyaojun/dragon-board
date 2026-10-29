@@ -1683,3 +1683,29 @@ def test_quotes_page_fully_removed(html: str, js: str):
     for name in ("renderQuotes", "quotesMatches", "quotesDetailHtml", "qRenderRows",
                  "quotesFilter", "quotesSlots"):
         assert name not in js, f"{name} 残留"
+
+
+# ── 底部状态栏（2026-10-29 用户需求：全站警告/错误系统日志 fail-visible）──
+
+def test_status_bar_wired(html: str, js: str):
+    """状态栏 DOM + 日志总线接线齐备：console 拦截/window.onerror/unhandledrejection。"""
+    assert 'id="sbBar"' in html and 'id="sbPanel"' in html, "状态栏 DOM 缺失"
+    for hook in ("console[lv]", "addEventListener('error'", "addEventListener('unhandledrejection'"):
+        assert hook in js, f"日志总线缺 {hook} 捕获"
+    assert "window.sbLog = sbLog" in js, "应暴露 sbLog 供功能代码调用"
+
+
+def test_status_bar_capture_first_and_no_html_injection(html: str, js: str):
+    """总线安装在 STATE 之前（最早错误也捕获）；错误文本走 textContent 不进 innerHTML。"""
+    assert js.index("// ══ 底部状态栏日志总线") < js.index("const STATE = {"), "总线必须先于页面状态安装"
+    render_fn = _fn(js, "render")
+    # sbRender 内部（bus IIFE 的 render）用 textContent + createElement，不用 innerHTML 拼消息
+    assert "sb-msg" in render_fn and ".textContent = e.msg" in render_fn
+    # 唯一 innerHTML 用途是固定徽标骨架（无消息内容插值）
+    assert "${" not in render_fn, "状态栏 render 不得插值拼 HTML（消息必须 textContent）"
+
+
+def test_status_bar_dedup_counter(js: str):
+    """同条错误去重计数 ×N 挂当前条（非上一条）。"""
+    log_fn = _fn(js, "sbLog")
+    assert "e.n = prev.n" in log_fn and "(e.n > 1 ? '×' + e.n" in log_fn

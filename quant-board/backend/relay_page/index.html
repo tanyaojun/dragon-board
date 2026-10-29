@@ -351,6 +351,31 @@
     border-radius:8px;padding:7px 12px;font-size:12px;line-height:1.5;margin-bottom:10px}
   .kpl-sub{font-size:11px;color:var(--muted2);line-height:1.5}
   .kpl-uni{font-variant-numeric:tabular-nums}
+  /* ---------- 底部状态栏（2026-10-29）：全站警告/错误系统日志，fail-visible ---------- */
+  body{padding-bottom:30px}   /* 避免固定栏遮挡底部内容 */
+  #sbBar{position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#111827;color:#e5e7eb;
+    font-size:12px;border-top:1px solid #374151;user-select:none}
+  #sbBarRow{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;cursor:pointer}
+  #sbBarRow:hover{background:#1f2937}
+  #sbCounts{display:flex;gap:6px;flex-shrink:0}
+  .sb-badge{padding:0 7px;border-radius:9px;font-weight:600;line-height:17px;font-size:11px}
+  .sb-badge.err{background:#7f1d1d;color:#fecaca}
+  .sb-badge.warn{background:#78350f;color:#fde68a}
+  .sb-badge.info{background:#1e3a8a;color:#bfdbfe}
+  #sbLast{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9ca3af}
+  #sbLast.sb-flash{animation:sbflash 1.2s ease-out}
+  @keyframes sbflash{0%{background:#7f1d1d;color:#fff}100%{background:transparent}}
+  #sbToggle{flex-shrink:0;color:#9ca3af}
+  #sbPanel{display:none;max-height:38vh;overflow-y:auto;border-top:1px solid #374151}
+  #sbBar.sb-open #sbPanel{display:block}
+  .sb-line{display:flex;gap:8px;padding:3px 10px;border-bottom:1px solid #1f2937;line-height:1.5}
+  .sb-line:hover{background:#1f2937}
+  .sb-t{color:#6b7280;flex-shrink:0;font-variant-numeric:tabular-nums}
+  .sb-lv{flex-shrink:0;font-weight:600;width:34px}
+  .sb-lv.error{color:#f87171}.sb-lv.warn{color:#fbbf24}.sb-lv.info{color:#60a5fa}.sb-lv.log{color:#9ca3af}
+  .sb-msg{flex:1;white-space:pre-wrap;word-break:break-all;color:#d1d5db}
+  #sbClear{margin-left:auto;flex-shrink:0;color:#9ca3af;cursor:pointer;padding:0 6px}
+  #sbClear:hover{color:#f87171}
 </style>
 </head>
 <body>
@@ -729,7 +754,81 @@
   </section>
 </main>
 
+<div id="sbBar">
+  <div id="sbBarRow" onclick="sbToggle()">
+    <span id="sbCounts"></span>
+    <span id="sbLast"></span>
+    <span id="sbToggle">▲ 日志</span>
+  </div>
+  <div id="sbPanel">
+    <div class="sb-line" style="background:#1f2937"><span id="sbPanelHead" style="color:#9ca3af">系统日志（错误/警告自动捕获，最新在上）</span><span id="sbClear" onclick="event.stopPropagation();sbClear()">清空</span></div>
+    <div id="sbList"></div>
+  </div>
+</div>
 <script>
+// ══ 底部状态栏日志总线（2026-10-29）：最先安装，捕获全站运行时错误/警告 ══
+// 捕获面：window.onerror + 资源加载错误 + unhandledrejection + console.warn/error
+// （保留原 console 行为不吞）；渲染全程 textContent，错误文本不进 innerHTML。
+(function(){
+  const ENTRIES = [], CAP = 500;
+  const $id = id => document.getElementById(id);
+  function fmt(v){
+    if (v == null) return String(v);
+    if (typeof v === 'string') return v;
+    if (v instanceof Error) return v.message + (v.stack ? '\n' + v.stack.split('\n').slice(1, 4).join('\n') : '');
+    try { return JSON.stringify(v); } catch (e) { return String(v); }
+  }
+  function render(){
+    const counts = {error: 0, warn: 0, info: 0};
+    for (const e of ENTRIES) if (counts[e.level] != null) counts[e.level]++;
+    const c = $id('sbCounts');
+    if (c) c.innerHTML =
+      (counts.error ? '<span class="sb-badge err">✖ ' + counts.error + '</span>' : '')
+      + (counts.warn ? '<span class="sb-badge warn">⚠ ' + counts.warn + '</span>' : '')
+      + (counts.info ? '<span class="sb-badge info">ℹ ' + counts.info + '</span>' : '');
+    const list = $id('sbList');
+    if (list){
+      list.textContent = '';
+      for (const e of ENTRIES.slice().reverse()){
+        const line = document.createElement('div'); line.className = 'sb-line';
+        const t = document.createElement('span'); t.className = 'sb-t'; t.textContent = e.t;
+        const lv = document.createElement('span'); lv.className = 'sb-lv ' + e.level; lv.textContent = e.level;
+        const m = document.createElement('span'); m.className = 'sb-msg'; m.textContent = e.msg;
+        line.append(t, lv, m); list.appendChild(line);
+      }
+    }
+  }
+  function sbLog(level, msg){
+    const e = {level, msg, t: new Date().toLocaleTimeString('zh-CN', {hour12: false}), n: 1};
+    const prev = ENTRIES[0];
+    if (prev && prev.level === level && prev.msg === msg){ prev.n = (prev.n || 1) + 1; e.n = prev.n; }   // 同条去重计数
+    else { ENTRIES.unshift(e); if (ENTRIES.length > CAP) ENTRIES.length = CAP; }
+    render();
+    if (level === 'error' || level === 'warn'){
+      const last = $id('sbLast');
+      if (last){ last.textContent = (e.n > 1 ? '×' + e.n + ' ' : '') + msg;
+        last.classList.remove('sb-flash'); void last.offsetWidth; last.classList.add('sb-flash'); }
+    }
+  }
+  window.sbLog = sbLog;
+  window.sbToggle = function(){ $id('sbBar').classList.toggle('sb-open');
+    $id('sbToggle').textContent = $id('sbBar').classList.contains('sb-open') ? '▼ 收起' : '▲ 日志';
+    if ($id('sbBar').classList.contains('sb-open')) render(); };
+  window.sbClear = function(){ ENTRIES.length = 0; render(); $id('sbLast').textContent = ''; };
+  // console.warn/error 拦截（保留原行为）
+  for (const lv of ['warn', 'error']){
+    const orig = console[lv].bind(console);
+    console[lv] = function(){ sbLog(lv, Array.prototype.map.call(arguments, fmt).join(' ')); orig.apply(console, arguments); };
+  }
+  window.addEventListener('error', ev => {
+    if (ev.message) sbLog('error', (ev.message || '') + ' @' + (ev.filename || '').split('/').pop() + ':' + ev.lineno + ':' + ev.colno);
+    else if (ev.target && ev.target !== window) sbLog('error', '资源加载失败：' + (ev.target.tagName || '') + ' ' + (ev.target.src || ev.target.href || ''));
+  }, true);
+  window.addEventListener('unhandledrejection', ev => {
+    const r = ev.reason;
+    sbLog('error', '未处理 Promise 拒绝：' + fmt(r && r.message ? r.message : r));
+  });
+})();
 const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, dieban: null,
   tlData: { loading: false, error: null, doc: null, rows: [] },
