@@ -256,7 +256,7 @@ def test_four_views_have_no_bold_page_titles(html: str):
         assert "<h2" not in seg, f"{anchor} 页头粗体标题应已删除（与 tab 名重复）"
         assert 'class="page-head"' not in seg, f"{anchor} 整块页头（标题+小字辅助行）应已删除"
         assert 'class="ph-line"' not in seg, f"{anchor} 页头分隔线应已删除"
-    # 其它工作台页（总览/热榜行情/涨停复盘）不在本次范围，标题保留
+    # 其它工作台页（总览/涨停复盘/连板行情）不在本次范围，标题保留
     assert html.count("<h2>") >= 3, "非 relay 子页的页头标题不应被误删"
 
 
@@ -1590,3 +1590,96 @@ def test_temperature_confidence_in_kpi_card_and_eod_window(js: str):
     assert "${temp ?? '-'}${confChip(tempAns.confidence)}" in rk, "KPI 温度卡须带置信 chip"
     re_ = _fn(js, "renderEod")
     assert "(a[tempKey]||{}).confidence" in re_, "日级窗口温度行不得再硬编码 null 置信"
+
+
+# ── 连板行情页（2026-10-29 用户裁决：韭研 fields[] 左目录 + 成分股右列表 + KPL 3006 行情；
+#    仅内存态不落库；热榜行情页同轮删除）──
+
+def test_lianban_view_wired(html: str, js: str):
+    """侧栏入口 + 视图 + 面包屑接线齐备（setView 自动显隐 tab-lianban）。"""
+    assert 'id="tab-lianban"' in html, "缺 tab-lianban 视图"
+    assert "['lianban', '连板行情'" in html, "侧栏缺连板行情入口"
+    assert "lianban: ['连板行情']" in js, "VIEW_CRUMB 缺连板行情"
+
+
+def test_lianban_board_dir_columns(html: str, js: str):
+    """左栏目录七列（2026-10-29 用户需求）：#/板块/家数 + 节点/聚合涨幅/主力净额/成交额。"""
+    boards = _fn(js, "lbRenderBoards")
+    for col in ("板块", "家数", "节点", "聚合涨幅", "主力净额", "成交额"):
+        assert col in boards, f"左栏目录缺「{col}」列"
+    # 节点/聚合涨幅复刻板块节点模块（同源合同）：NODE_CN 徽标 + aggN10.pctMean
+    assert "NODE_CN[nr.node]" in boards and "NODE_BADGE[nr.node]" in boards
+    assert "aggN10.pctMean" in boards, "聚合涨幅应取 aggN10.pctMean（近10日活跃股均值）"
+    assert "KQ.MAIN_NET" in boards and "KQ.AMOUNT" in boards, "主力净额/成交额=成员股 quotas 聚合"
+    # 节点数据源：sector-nodes 读口（lbLoad 拉取，按 board 名匹配）
+    load = _fn(js, "lbLoad")
+    assert "sector-nodes" in load, "lbLoad 应拉板块节点读口"
+    assert "LB.nodesRows[row.board]" in load, "按 board 名匹配韭研板块"
+
+
+def test_lianban_layout_left_dir_right_stocks(html: str):
+    """左栏板块目录表 + 右栏成分股表（.kpl-layout 左目录右列表，参照 KPL 板块行情）。"""
+    assert 'class="kpl-layout"' in html.split('tab-lianban')[1].split('</section>')[0]
+    assert 'id="lbBoardTable"' in html and 'id="lbStockTable"' in html
+    assert 'id="lbBoardSearch"' in html, "左栏缺板块搜索"
+
+
+def test_lianban_memory_only_no_persistence(js: str):
+    """仅内存态：LB 状态对象无 localStorage/sessionStorage/IndexedDB 写入；读口=jiuyan-action。"""
+    for fn_name in ("lbLoad", "lbRenderBoards", "lbRenderStocks", "lbSyncSubscription",
+                    "lbEnter", "lbLeave"):
+        body = _fn(js, fn_name)
+        for bad in ("localStorage", "sessionStorage", "indexedDB"):
+            assert bad not in body, f"{fn_name} 不得持久化（{bad}）"
+    assert "jiuyan-action" in _fn(js, "lbLoad"), "连板数据读口应为 /api/hotlist-jev/jiuyan-action"
+    assert "setInterval" in _fn(js, "lbEnter"), "动态更新应有轮询计时器"
+    assert "clearInterval" in _fn(js, "lbLeave"), "离开页签应停计时器"
+
+
+def test_lianban_kpl_socket_subscription_and_guards(js: str):
+    """行情列接入 KPL socket：个股并入共享订阅缓存；3006 口径护栏不猜数。"""
+    sub = _fn(js, "lbSyncSubscription")
+    assert "lbCode(s.code)" in sub, "订阅码必须经 lbCode 归一化（实测全集带交易所前缀 sz001219）"
+    assert "kplSyncStockSubscription" in sub, "板块宇宙已引导时应复用共享订阅缓存"
+    assert "stock_ids: codes" in sub, "宇宙未引导时应直接订阅个股清单"
+    stocks = _fn(js, "lbRenderStocks")
+    assert "lbCode(s.code)" in stocks, "hq 查找键必须用归一化 6 位码"
+    assert "KPL.hq.get" in stocks, "行情列应读 3006 KPL.hq 实时覆盖"
+    assert "hq.price / 10000" in stocks, "price ×10000 缩放合同（113000=11.30 元）"
+    assert "hq.inc_rate / 100" in stocks, "inc_rate ×100 换算合同（125→1.25%）"
+    assert "21" in stocks, "涨幅越界护栏（|pct|>21 → '--'，口径异常不猜数）"
+    assert "韭研盘口快照价" in stocks, "行情未到流应兑底韭研快照价并标注"
+    # 连板列：韭研 num 实测为「X天X板」字符串，纯数字才拼「板」（修「X天X板板」重复后缀）
+    assert "/^\\d+$/.test(numRaw) ? numRaw + '板' : numRaw" in stocks
+
+
+def test_lianban_meta_date_guard(js: str):
+    """直达页时 KPL.today 必须补当日（空 date → live-stocks-meta 400 → 领涨/换手/概念永无值）。"""
+    enter = _fn(js, "lbEnter")
+    assert "!KPL.today" in enter and "KPL.today =" in enter, "lbEnter 缺 KPL.today 兑底"
+    meta = _fn(js, "kplLiveFetchStockMeta")
+    assert "KPL.today" in meta
+
+
+def test_lianban_stock_table_fields_match_kpl_sector_page(js: str):
+    """右栏个股表字段与 KPL【板块行情】个股列表一致（2026-10-29 用户裁决，非盘点表换页）。"""
+    stocks = _fn(js, "lbRenderStocks")
+    for col in ("代码", "名称", "地位", "现价", "涨幅%", "换手%", "连板",
+                "主力净", "主力买", "主力卖", "量比", "成交额", "概念"):
+        assert col in stocks, f"个股表缺 KPL 板块行情同款列「{col}」"
+    # 行情值同源：WS 3001 混合流 quotas 优先（与板块行情同源）+ stockMeta 地位/换手/概念
+    assert "KPL.items.get(code)" in stocks, "行情应优先读 3001 quotas（KPL.items，与板块行情同源）"
+    assert "gv(KQ.MAIN_NET)" in stocks and "gv(KQ.AMOUNT)" in stocks and "gv(KQ.VR)" in stocks
+    assert "mv(code, 'rank_title')" in stocks and "mv(code, 'turnover')" in stocks
+    assert "mv(code, 'concept')" in stocks, "概念列应来自 live-stocks-meta"
+    load = _fn(js, "lbLoad")
+    assert "kplLiveFetchStockMeta" in load, "lbLoad 应拉个股 meta（地位/换手/概念）"
+
+
+def test_quotes_page_fully_removed(html: str, js: str):
+    """删除回归锁：热榜行情页（tab-quotes/quotes-review/热榜行情）零残留（2026-10-29 用户裁决）。"""
+    assert "tab-quotes" not in html and "热榜行情</h2>" not in html
+    assert "quotes-review" not in html
+    for name in ("renderQuotes", "quotesMatches", "quotesDetailHtml", "qRenderRows",
+                 "quotesFilter", "quotesSlots"):
+        assert name not in js, f"{name} 残留"

@@ -418,6 +418,31 @@ def _official_exclude(stock_name: Any, code: str) -> str | None:
     return None
 
 
+def _reseal_verdict(date: str, code: str) -> str:
+    """THS 炸板池命中股的 TDX 日线收盘复核（尾盘回封补证，2026-10-29 光洋股份实测）。
+
+    THS 15:00 帧的炸板池是**快照时点口径**：尾盘集合竞价（14:57-15:00）回封的股在帧内
+    仍带 LIMIT_FAILED 标（光洋股份 10-29 latest=20.82 差 1 tick，15:00:00 集合竞价回封
+    20.83，韭研 num=4天4板/time=15:00:00 与 TDX 日线收盘 +9.98% 双自证），照搬会把真
+    涨停错杀成炸板。收盘价权威补证：当日收盘落在涨停价（ammo.closed_at_limit 同一
+    板籍阈值）→ sealed，炸板池判定被回封打穿。
+
+    返回 _bar_verdict 口径：sealed=回封（不标 zhaban）；broken/suspended/unknown=
+    维持炸板判定——日线不可用时行为与旧版完全一致（宁维持原口径，不让数据洞改判）。
+    """
+    try:
+        bars = _daily_bars(code)
+    except Exception:
+        return "unknown"
+    if not bars:
+        return "unknown"
+    try:
+        adj = _adj_prev_series(date, code, bars)
+    except Exception:
+        adj = {}
+    return _bar_verdict(code, date, bars, adj)
+
+
 def jiuyan_board_info(db, date: str,
                       allow_midday_fallback: bool = False) -> tuple[dict[str, dict], dict]:
     """韭研个股高度/封板时间/板块 join + 触板二分（2026-10-11 方案A，用户裁决）。
@@ -427,6 +452,8 @@ def jiuyan_board_info(db, date: str,
     THS 15:00 炸板池二分：
     - zhaban=True：在今日炸板池 → 非涨停股（断板/触板未封），不进涨停口径；
       openNum=THS 开板次数（open_num，None 不透传）随 zhaban 附带；
+    - zhabanResealed=True：在今日炸板池但 TDX 日线证实尾盘回封（2026-10-29 光洋股份）
+      → 收盘价权威补证，不标 zhaban（按涨停计）；日线不可用 → 维持 zhaban（同旧版）；
     - excluded：'st'|'bse'（官方简图不计入涨停家数的 5 只差额，10-09 实测 3 ST + 2 北交所）；
     - boardUnmarked=True：num 空且昨日在「昨日涨停池」（昨日触板-昨日炸板）→ 真漏标连板；
       昨日炸板股今日涨停=首板，不得误标（10-09 金健米业/东亚药业教训）；
@@ -483,9 +510,16 @@ def jiuyan_board_info(db, date: str,
                         # 涨停复盘【原因】列（2026-10-20）：异动解析首行，缺失 None 不伪造
                         "reason": expound_reason(stock)}
                 if ths_found and code in failed_today:
-                    info["zhaban"] = True
-                    if failed_today[code].get("open_num") is not None:
-                        info["openNum"] = failed_today[code]["open_num"]
+                    if _reseal_verdict(date, code) == "sealed":
+                        # 尾盘集合竞价回封（2026-10-29 光洋股份实测）：THS 15:00 帧炸板池
+                        # 是快照时点口径，会被收盘前最后一笔回封打穿。收盘价权威补证 →
+                        # 不进炸板口径，只标 zhabanResealed 注记（fail-visible：不静默
+                        # 吞掉炸板池命中事实）；openNum 对回封股无炸板卡语义，不透传。
+                        info["zhabanResealed"] = True
+                    else:
+                        info["zhaban"] = True
+                        if failed_today[code].get("open_num") is not None:
+                            info["openNum"] = failed_today[code]["open_num"]
                 excl = _official_exclude(stock.get("name"), code)
                 if excl:
                     info["excluded"] = excl
@@ -602,7 +636,8 @@ def jiuyan_consecutive_streaks(db, date: str, targets: dict[str, int],
     targets={code: 区间板数 M}；today_sealed=今日封板集合（None=今日不可二分，全返 None）。
     连续高度=今日起往前连续封板的交易日数，封顶 M（连续高度不可能超区间总板数）；
     任一历史日既不能由池证实也不能由日线证实 → None（宁缺毋猜）。
-    消费方：热榜行情 quotes-review；涨停复盘「高度」口径不消费本函数。
+    消费方：涨停复盘 limitup-labels（board join 透传 streak）；原「热榜行情
+    quotes-review」页面已于 2026-10-29 随页删除（消费链已移除，函数保留）。
 
     2026-10-16 停牌分辨（用户裁决「不算断板，跳过续算」）：**停牌日不是交易日、
     不构成断板**。600825 新华传媒 14天11板，10-13/14/15 上交所停牌（TDX 日线该三日

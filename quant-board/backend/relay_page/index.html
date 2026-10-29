@@ -147,7 +147,7 @@
   .lf-bar input[type=date]{width:116px;padding:6px 8px;font-size:12px}  /* 区间日期控件收窄：原生默认宽右侧留白（2026-10-10 用户指出瑕疵） */
   .lf-bar .sep{font-size:12px;color:var(--muted2)}  /* 区间分隔符：勿用 .cnt（其 margin-left:auto 会吞空白） */
   .lf-bar .cnt{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
-  /* 涨停分析表分页（2026-10-19 用户需求：原计数改为分页，每页上限 20 条） */
+  /* 连板情绪表分页（2026-10-19 用户需求：原计数改为分页，每页上限 20 条） */
   .lf-bar .pager{margin-left:auto;display:flex;gap:6px;align-items:center;white-space:nowrap}
   .lf-bar .pager button{border:1px solid var(--border2);border-radius:8px;background:#fff;color:var(--text);
                         padding:4px 9px;font-size:12px;cursor:pointer}
@@ -217,7 +217,7 @@
   /* ---------- 题材龙头台账（2026-10-20；面板/表格/展开完全复用涨停复盘样式） ---------- */
   /* 只补涨停复盘没有的增量：证据门/证据徽章/早报段/明细卡内标题。
      右三角、行展开、明细卡底、板块 chip、筛选条、KPI 条**一律复用**原样式，
-     不另造并行类（用户 2026-10-20：样式风格须与涨停分析一致）。
+     不另造并行类（用户 2026-10-20：样式风格须与连板情绪一致）。
      回填行高亮与「回填」小标样式已随 2026-10-26 用户裁决删除；
      证据列首版的铺文截断样式已随 2026-10-27 徽章化裁决删除。 */
   .tl-ev{font-size:10px;padding:0 4px;border-radius:5px;background:#e0f2fe;color:#0369a1;
@@ -395,16 +395,28 @@
       <div id="ovIndexFoot" style="font-size:11px;color:var(--muted);margin-top:6px"></div></div>
   </section>
 
-  <section id="tab-quotes" style="display:none">
-    <div class="page-head"><div><h2>热榜行情</h2>
-      <p>八平台热榜个股的投票 / 生命周期 / 共振 / 趋势 / 热度 / 量价五维判读，按帧回看与筛选。</p></div></div>
+  <section id="tab-lianban" style="display:none">
+    <div class="page-head"><div><h2>连板行情</h2>
+      <p>韭研打标链每日连板名单（板块目录 → 成分股），右栏个股表与 KPL【板块行情】个股列表同字段（地位/现价/涨幅/换手/连板/主力净/买/卖/量比/成交额/概念），行情接入 KPL socket 实时推送；仅内存态动态更新，不落库、服务端不缓存。</p></div></div>
     <div class="ph-line"></div>
-    <div class="card">
-      <h3>热榜行情 <span class="hint" id="quotesHint"></span></h3>
-      <div class="lf-bar" style="margin-bottom:8px">帧选择：<select id="quoteSlotSel" onchange="qSlotChange(this.value)"><option value="">加载中…</option></select><span id="quoteSlotHint" style="color:var(--muted2);margin-left:8px"></span></div>
-      <div class="kpi-strip" id="quotesKpi" style="margin-bottom:12px"></div>
-      <div class="lf-bar" id="quotesFilterBar"></div>
-      <table id="quotesTable"></table>
+    <div class="flex" style="margin-bottom:10px">
+      <span class="pill" id="lbPill"><span class="dot"></span>未加载</span>
+      <button onclick="lbLoad()">刷新</button>
+      <span class="kpl-sub" id="lbMeta"></span>
+      <span style="flex:1"></span>
+      <span class="kpl-sub" id="lbWsHint"></span>
+    </div>
+    <div id="lbBanner" class="kpl-note" style="display:none"></div>
+    <div class="kpl-layout">
+      <div class="card" style="padding:10px 12px">
+        <h3 style="margin-bottom:8px">板块目录 <span class="hint" id="lbBoardHint"></span></h3>
+        <input class="lg-filter" id="lbBoardSearch" style="margin:0 0 8px" placeholder="搜索板块名称…" oninput="lbRenderBoards()">
+        <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="lbBoardTable"></table></div>
+      </div>
+      <div class="card" style="padding:10px 12px">
+        <h3 style="margin-bottom:8px" id="lbStockTitle">成分股列表</h3>
+        <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="lbStockTable"></table></div>
+      </div>
     </div>
   </section>
 
@@ -468,7 +480,7 @@
       </div>
     </div>
 
-    <!-- ④ 板块与龙头（v6，2026-10-19）：数据取自该日存档 relayStructure，与 JEV 叙事同一事实源 -->
+    <!-- ④ 板块龙头（v6，2026-10-19）：数据取自该日存档 relayStructure，与 JEV 叙事同一事实源 -->
     <div class="rv" id="rv-leaders">
       <div class="card" style="margin-top:18px">
         <h3>🧵 板块接力链（三日）<span class="hint" id="sectorChainHint"></span></h3>
@@ -480,7 +492,7 @@
       </div>
     </div>
 
-    <!-- ⑤ 涨停分析（原「判定明细」，2026-10-19 改名；行内展开的判定明细卡沿用原名） -->
+    <!-- ⑤ 连板情绪（原「判定明细」，2026-10-19 改名；行内展开的判定明细卡沿用原名） -->
     <div class="rv" id="rv-detail">
       <div class="card" style="margin-top:18px">
         <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
@@ -488,10 +500,10 @@
       </div>
     </div>
 
-    <!-- ⑥ 题材龙头（2026-10-20）：v2 题目集投喂台账。与涨停分析同构——共用页头
+    <!-- ⑥ 题材龙头（2026-10-20）：v2 题目集投喂台账。与连板情绪同构——共用页头
         #relayKpi（点行=KPI 联动该日）与 tabbar 右侧时间范围控件（rangedSeries 同一区间）；
         行=区间内全部龙头-日，左侧三角展开 jev 调用日志卡（lg-card 范式）。
-        KPI 卡不另建（删除初版 tlKpi：与涨停分析并排两套 KPI 是重复视觉）。 -->
+        KPI 卡不另建（删除初版 tlKpi：与连板情绪并排两套 KPI 是重复视觉）。 -->
     <div class="rv" id="rv-themes">
       <div class="card" style="margin-top:18px">
         <div id="tlBanner"></div>
@@ -719,7 +731,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, quotes: null, dieban: null,
+const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, dieban: null,
   tlData: { loading: false, error: null, doc: null, rows: [] },
                         // 题材龙头（rv-themes）：区间内全部龙头-日（tlFetch 按 relayRange 取）
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
@@ -727,7 +739,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   // tlUi=筛选+展开+分页, tlSort=表头排序, tlNarr=投喂语料懒拉缓存
   tlUi: { q: '', board: '', industry: '', origin: '', choice: '', stage: '',
           outcome: '', gateOnly: false, openKey: null, page: 1,
-          // 明细卡（对齐涨停分析 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
+          // 明细卡（对齐连板情绪 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
           mode: 'detail', q1: '', q2: '' },
   tlSort: { key: 'date', dir: -1 },   // 区间台账默认最新在前（同 relay/detail 的日期列）
   tlNarr: {},           // code → {narrative, questionsRaw}（懒拉；null=请求中）
@@ -741,11 +753,6 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   rerunMsg: null,        // {key,ok,text}：最近一次重跑结果，按 entry 显示在详情卡内（fail-visible）
   bandRefresh: null,     // 分带表刷新任务 {running,startedAt,error,logTail}（零模型调用，页面轮询）
   bandRefreshTimer: null,
-  quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' }, res: { mode: 'detail', q1: '', q2: '' }, trd: { mode: 'detail', q1: '', q2: '' },
-    hea: { mode: 'detail', q1: '', q2: '' }, vpq: { mode: 'detail', q1: '', q2: '' } },
-  quotesSlots: [],  // 当日有 jev 判读的槽位（quotes-review 响应 voteSlots，帧选择器数据源）
-  quotesFilter: { q: '', vote: '', lc: '', res: '', trd: '', hea: '', vpq: '', agree: '' },
-  quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   diebanFilter: { q: '', board: '', scope: 'neg', streak: '', draw: '' },
   relayFilter: { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' },
@@ -758,7 +765,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayBack: null,    // 预设按钮的回退点（“再点一次恢复上次区间”）
   relayPreset: null,  // 最近点过的预设（展示意图；高亮以区间等价判定为准）
   relaySort: { key: 'date', dir: -1 },
-  relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
+  relayPage: 1,   // 连板情绪表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
   pulse: { loading: false, error: null, api: null, view: 'candidates' },   // V2c 盘中红盘提示
@@ -834,68 +841,8 @@ const DRIVER_CN = {product_event:'产品事件', capital_flow:'资金接力', co
 const CAT_DEPTH_CN = {core_main_business:'核心主业承接', new_business_scaling:'新业务放量承接', new_business_early:'新业务早期承接', equity_or_affiliate:'股权关联传导', concept_assembly:'概念组装弱关联', insufficient_evidence:'信息不足'};
 const BUY_SIDE_CN = {independent_catalyst:'自身独立催化', sector_follow:'板块联动跟随', high_board_relay:'高位卡位/情绪接力', pure_sentiment:'纯情绪修复', insufficient:'信息不足'};
 const FRESH_CN = {fresh_catalyst:'新鲜', continuing:'延续', none:'无明确催化', unclear:'信息不足'};
-// 热榜行情页（quotes-review 读口）：LC 五段中文名 + 档位序/色（S/A 绿、B 蓝、C 灰、D/E 红；缺 '--'）
-const LC_STAGE_CN = {ignition:'点火', expansion:'扩散', crowded:'拥挤', reversal:'反转', cooling:'降温'};
-const LC_STAGE_ORDER = {ignition:0, expansion:1, crowded:2, reversal:3, cooling:4};
-const LC_STAGE_COLOR = {ignition:'#16a34a', expansion:'#2563eb', crowded:'#a16207', reversal:'#dc2626', cooling:'#94a3b8'};
-// 共振维独立判读（RES 试点题集）：jevv 方向序 + 中文名 + 强度分带色（与 ammo STRENGTH_BANDS 同口径）
-const RES_DIR_CN = {buy:'走强', sell:'走弱', hold:'同步', insufficient:'判据不足'};
-const RES_DIR_ORDER = {buy:0, hold:1, sell:2, insufficient:3};
-const RES_BANDS = [[85,'#16a34a'],[67,'#2563eb'],[50,'#a16207'],[27,'#94a3b8'],[-1,'#dc2626']];
-const resBandColor = s => { for (const [floor, c] of RES_BANDS) if (s >= floor) return c; return 'var(--muted2)'; };
-// 趋势维独立判读（TRD 试点题集，2026-10-15）：方向中文名 + 模式（series=序列模式 / fallback=帧行字段模式）
-const TRD_DIR_CN = {buy:'多头', sell:'空头', hold:'震荡', insufficient:'判据不足'};
-const TRD_DIR_ORDER = {buy:0, hold:1, sell:2, insufficient:3};
-const TRD_MODE_CN = {series:'序列模式', fallback:'帧行模式'};
-// 热度维（HEA）/量价维（VPQ）独立判读（2026-10-15 试点第四/五维）
-const HEA_TIER_CN = {A:'A 强势', B:'B 中上', C:'C 兜底', D:'D 弱势', unknown:'锚缺失'};
-const VPQ_TIER_CN = {A:'A 放量流入', B:'B 放量', C:'C 封板/缩量', D:'D 下跌', E:'E 硬风险', unknown:'锚缺失'};
-const VPQ_QUAD_CN = {rise_volume:'放量上涨', rise_shrink:'缩量上涨', normal:'中态',
-                     fall_volume:'放量下跌', fall_shrink:'缩量下跌'};
-const HEA_DIR_CN = {buy:'关注升', sell:'关注降', hold:'同步', insufficient:'判据不足'};
-const VPQ_DIR_CN = {buy:'偏多', sell:'偏空', hold:'中性', insufficient:'判据不足'};
-const TIER_ORDER = {A:0, B:1, C:2, D:3, E:4, unknown:5};
-// V2 逻辑推理题读数（2026-10-15 升版）：主问=归因/演化（热度）、主因/可交易性（量价）；
-// 锚=runner 同输入机械复算，不是引擎读数——徽标色按「对锚一致/分歧」上色
-const HEA_ATTR_CN = {individual_strong:'个体强', market_wide_rise:'全池普涨',
-                     individual_weak:'个体弱', market_wide_fall:'跑输普涨',
-                     follow_market:'跟随市场', insufficient:'判据不足'};
-const HEA_ATTR_ORDER = {individual_strong:0, market_wide_rise:1, follow_market:2,
-                          market_wide_fall:3, individual_weak:4, insufficient:5};
-const HEA_EVOL_ORDER = {igniting:0, volatile:1, sustaining:2, fading:3, dormant:4, insufficient:5};
-const VPQ_CAUSE_ORDER = {volume_expansion_up:0, shrink_up:1, neutral:2, volume_expansion_down:3,
-                         shrink_down:4, fund_outflow:5, over_volume_exhaustion:6, insufficient:7};
-const VPQ_TRAD_ORDER = {tradable:0, abnormal_fund_flow:1, limit_up_blocked:2,
-                        limit_down_blocked:3, insufficient:4};
-const HEA_ATTR_TONE = {individual_strong:'#16a34a', market_wide_rise:'#a16207',
-                       individual_weak:'#dc2626', market_wide_fall:'#a16207',
-                       follow_market:'#6b7280', insufficient:'#9ca3af'};
-const HEA_EVOL_CN = {igniting:'刚发酵', sustaining:'高位平稳', fading:'退潮',
-                     dormant:'低位平稳', volatile:'反复', insufficient:'判据不足'};
-const HEA_EVOL_TONE = {igniting:'#16a34a', sustaining:'#0891b2', fading:'#dc2626',
-                       dormant:'#6b7280', volatile:'#a16207', insufficient:'#9ca3af'};
-const VPQ_CAUSE_CN = {over_volume_exhaustion:'疑似出货', fund_outflow:'资金流出',
-                      volume_expansion_up:'放量上涨', volume_expansion_down:'放量下跌',
-                      shrink_up:'缩量上涨', shrink_down:'缩量下跌',
-                      neutral:'中态', insufficient:'判据不足'};
-const VPQ_CAUSE_TONE = {over_volume_exhaustion:'#dc2626', fund_outflow:'#dc2626',
-                        volume_expansion_up:'#16a34a', volume_expansion_down:'#a16207',
-                        shrink_up:'#0891b2', shrink_down:'#6b7280',
-                        neutral:'#6b7280', insufficient:'#9ca3af'};
-const VPQ_TRAD_CN = {tradable:'可交易', limit_up_blocked:'涨停封死',
-                     limit_down_blocked:'跌停封死', abnormal_fund_flow:'资金异常',
-                     insufficient:'判据不足'};
-const VPQ_TRAD_TONE = {tradable:'#16a34a', limit_up_blocked:'#dc2626',
-                       limit_down_blocked:'#dc2626', abnormal_fund_flow:'#a16207',
-                       insufficient:'#9ca3af'};
-const TIER_RANK = {S:6, A:5, B:4, C:3, D:2, E:1};
-const tierB = v => badge(v||'--', (v==='S'||v==='A')?'b-green':v==='B'?'b-blue':(v==='D'||v==='E')?'b-red':'b-gray');
-const dirB = v => v==='buy' ? badge('buy','b-green') : v==='sell' ? badge('sell','b-red') : v==='hold' ? badge('hold','b-gray') : '';
-const agreeB = v => v==='agree' ? badge('一致','b-green') : v==='diverge' ? badge('分歧','b-amber') : '';
 const numOr = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
 const fmtYi = v => { const n = numOr(v, null); return n == null ? '--' : (n / 1e8).toFixed(2); };
-const fmtYiCell = v => { const n = numOr(v, null); return n == null ? '--' : (n / 1e8).toFixed(2) + ' 亿'; };
-const boardsCell = v => v == null ? '--' : (v > 1 ? v + '板' : '首板');
 const fmtPctChg = v => { const n = numOr(v, null); return n == null ? '--' : (n > 0 ? '+' : '') + n.toFixed(2) + '%'; };
 
 const badge = (txt, cls) => txt ? `<span class="badge ${cls}">${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
@@ -1209,13 +1156,12 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels, quotes, band, dieban;
+  let series, slots, labels, band, dieban;
   try {
-    [series, slots, labels, quotes, band, dieban] = await Promise.all([
+    [series, slots, labels, band, dieban] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
-      jget('/api/hotlist-jev/quotes-review?with_docs=1' + (date ? '&date=' + date : '')).then(r => { STATE.quotesSlots = r.voteSlots || []; return r; }),
       // 离线分带读数（fail-visible：缺失/损坏 → {ok:false,reason,hint}，页面显式标注未生成）
       jget('/api/hotlist-jev/relay-band').catch(e => ({ ok: false, degraded: true,
         reason: 'band_read_failed: ' + (e && e.message ? e.message : '?') })),
@@ -1250,14 +1196,13 @@ async function loadAll(){
   STATE.slots = STATE.rawSlots.filter(s => s.status === 'ok');
   STATE.eod = slots.eod;
   STATE.labels = labels;
-  STATE.quotes = quotes;
   STATE.band = band;
   STATE.dieban = dieban;
   bandRefreshSync();   // 接管后端正在跑的分带刷新任务（页面刷新/多标签/双击重入时不断链）
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderQuotes(); renderDieban();
+  renderRelayTab(); renderLabels(); renderDieban();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
@@ -1484,7 +1429,7 @@ function rSel(label, key){
 function rSet(k, v){ STATE.relayFilter[k] = v; STATE.relayPage = 1; renderRelayTab(); }
 function rClear(){ STATE.relayFilter = { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' };
   STATE.relayPage = 1; renderRelayTab(); }
-// ── 涨停分析表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
+// ── 连板情绪表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
 // 每页上限 20 条；只影响本表行切片，KPI/分带/相位等仍吃全量筛选集（口径不变）。
 const RELAY_PAGE_SIZE = 20;
 function relayPageTotal(n){ return Math.max(1, Math.ceil(n / RELAY_PAGE_SIZE)); }
@@ -1778,7 +1723,7 @@ function renderRelayKpi(shown){
     + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`;
 }
 
-// ---------- 板块与龙头（v6，2026-10-19）----------
+// ---------- 板块龙头（v6，2026-10-19）----------
 // 数据 = 该日 relay 存档的 relayStructure（与 JEV 叙事同一事实源）；v5 旧代文档无此字段
 // → 显「旧代未采集」（fail-visible），不写 '-' 冒充；选中行没预入缓存时走 relayDocFetch 懒拉。
 const SECTOR_BASIS_CN = {
@@ -2104,7 +2049,7 @@ function labRerun(key){
 }
 
 // ---------- 题材龙头（连板指数子视图 rv-themes，2026-10-20） ----------
-// 与【涨停分析】同构（用户裁决：共用 KPI 卡与时间范围，删除初版自建 KPI）：
+// 与【连板情绪】同构（用户裁决：共用 KPI 卡与时间范围，删除初版自建 KPI）：
 //   · 行源 = **当前区间内全部龙头-日**（`/api/hotlist-jev/theme-leaders?start&end`，
 //     区间与 rangedSeries 同一 `STATE.relayRange`，rangeRefresh 联动重拉）；
 //   · 页头 KPI = 共用 `#relayKpi`（点行 = relayRow(date) 选中该日，KPI 跟随）；
@@ -2230,7 +2175,7 @@ async function tlFetch(){
   const qs = [];
   if (rg.start) qs.push('start=' + encodeURIComponent(rg.start));
   if (rg.end) qs.push('end=' + encodeURIComponent(rg.end));
-  // 刷新机制对齐涨停分析（2026-10-20 用户裁决）：60s 轮询同区间 → **后台静默刷新**，
+  // 刷新机制对齐连板情绪（2026-10-20 用户裁决）：60s 轮询同区间 → **后台静默刷新**，
   // 旧数据保持可见（不闪「加载中」、不丢焦点/展开态）；只有区间真正变化才显示加载态。
   const key = tlRangeKey();
   const bg = STATE.tlData && STATE.tlData.rangeKey === key && (STATE.tlData.rows || []).length > 0;
@@ -2593,7 +2538,7 @@ function tlRefresh(){
   tlRenderRows();
 }
 
-// 区间级告警（混代际 / 含回填）：fail-visible，不与涨停分析 KPI 混放
+// 区间级告警（混代际 / 含回填）：fail-visible，不与连板情绪 KPI 混放
 function tlRenderBanner(){
   const el = $('tlBanner'); if (!el) return;
   const d = STATE.tlData;
@@ -2666,7 +2611,7 @@ function tlRenderBar(){
 }
 
 // 表格：日期列 + 可排序表头 + 分页 20（relayPageSlice 同规格）；点行=选中该日（KPI 联动），
-// 三角=展开调用日志卡（与涨停分析的 relayRow/relayToggle 分工完全一致）。
+// 三角=展开调用日志卡（与连板情绪的 relayRow/relayToggle 分工完全一致）。
 function tlRenderRows(){
   const el = $('tlTable'); if (!el) return;
   const d = STATE.tlData || {};
@@ -2837,7 +2782,7 @@ function tlRowHtml(r, f){
     + (open ? '<tr class="lg-detail"><td colspan="15">' + tlDetailHtml(r) + '</td></tr>' : '');
 }
 
-// ── 明细卡：jev 调用日志卡（lg-card 范式，与涨停分析同构） ──
+// ── 明细卡：jev 调用日志卡（lg-card 范式，与连板情绪同构） ──
 function tlOpenRow(){
   const k = STATE.tlUi.openKey;
   if (!k) return null;
@@ -3095,7 +3040,7 @@ const SCOPE_PRED = { zt: s => !s.zhaban && !s.excluded, zhaban: s => s.zhaban,
   excluded: s => s.excluded, all: () => true, rewrap: REWRAP_PRED };
 function labelBoardOf(s){ return s.boardName || s.board || '未分板块'; }
 // 真连板口径（2026-10-19 用户裁决：KPI/筛选/排序吃真连板，不再用空间板数 M 冒充；
-// 后端与 market_metrics/quotes-review 同源 jiuyan_streak_map）：
+// 后端与 market_metrics 同源 jiuyan_streak_map）：
 // number=「至今日」连续封板数（N==M 直取 / N>M 回溯 / num=None→1）；
 // null=断板股回溯不可算（不冒充，单列「真连板未定」）；
 // undefined=旧档/连板 join 缺失（随 boardJoinDegraded 注记）→ 回落 boards 旧口径，不新增猜数
@@ -3616,429 +3561,6 @@ function dbDetailHtml(e){
   </div>`;
 }
 
-// ---------- 热榜行情：15:00 收盘槽全量 + 五维档位 + 双题集复核台账（quotes-review 读口） ----------
-// 展示语言对齐涨停复盘页：KPI 卡（一致/分歧卡可点击筛选）+ 筛选条 + 可排序表 + 行展开
-// jev 请求/返回/原始 JSON（复用 JSON 树/复制/元信息组件）；缺失一律 '--'（fail-visible）。
-const qTier = (r, k) => ((r.tiers || {})[k]) || '';
-const qVoteDir = r => (((r.jev || {}).vote || {}).direction) || '';
-const qLcStage = r => (((r.jev || {}).lc || {}).stage) || '';
-// 共振列（就地改造，2026-10-14）：有 jev 共振判读 → 以 jev 读数为准（等同【周期】列待遇）；
-// 无判读 → 回落引擎档位徽标（试点未开火期间列位不退化成全 '--'，不丢既有信息）。
-const qRes = r => ((r.jev || {}).res) || null;
-const qResDir = r => (qRes(r) || {}).direction || '';
-// 趋势列（就地改造，2026-10-15）：有 jev 趋势判读 → 以 jev 读数为准（等同【周期】列待遇）；
-// 无判读 → 回落引擎档位徽标（试点未开火期间列位不退化成全 '--'，不丢既有信息）。
-const qTrd = r => ((r.jev || {}).trd) || null;
-const qTrdDir = r => (qTrd(r) || {}).direction || '';
-const qHea = r => ((r.jev || {}).hea) || null;
-const qHeaAttr = r => (qHea(r) || {}).attribution || '';
-const qHeaEvol = r => (qHea(r) || {}).evolution || '';
-const qHeaTier = r => (qHea(r) || {}).tier || '';
-const qVpq = r => ((r.jev || {}).vpq) || null;
-const qVpqCause = r => (qVpq(r) || {}).cause || '';
-const qVpqTrad = r => (qVpq(r) || {}).tradability || '';
-const qVpqTier = r => (qVpq(r) || {}).tier || '';
-const tierKey = t => TIER_RANK[t] || 0;
-function quotesMatches(r, f){
-  if (f.q){ const q = f.q.toLowerCase();
-    if (!String(r.code || '').toLowerCase().includes(q) && !String(r.name || '').toLowerCase().includes(q)) return false; }
-  if (f.vote){ const d = qVoteDir(r);
-    if (f.vote === 'none'){ if (d) return false; } else if (d !== f.vote) return false; }
-  if (f.lc){ const st = qLcStage(r);
-    if (f.lc === 'none'){ if (st) return false; } else if (st !== f.lc) return false; }
-  if (f.res){ const d = qResDir(r);
-    if (f.res === 'none'){ if (d) return false; } else if (d !== f.res) return false; }
-  if (f.trd){ const d = qTrdDir(r);
-    if (f.trd === 'none'){ if (d) return false; } else if (d !== f.trd) return false; }
-  if (f.hea){ const t = qHeaAttr(r);
-    if (f.hea === 'none'){ if (t) return false; } else if (t !== f.hea) return false; }
-  if (f.vpq){ const t = qVpqCause(r);
-    if (f.vpq === 'none'){ if (t) return false; } else if (t !== f.vpq) return false; }
-  if (f.agree && ((r.jev || {}).agree) !== f.agree) return false;
-  return true;
-}
-function qSel(label, key, opts){
-  const cur = STATE.quotesFilter[key];
-  const list = [['', label + ' · 全部']].concat(opts);
-  return `<select title="${esc(label)}筛选" onchange="qSet('${key}', this.value)">`
-    + list.map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('') + '</select>';
-}
-function qSet(k, v){ STATE.quotesFilter[k] = v; qRenderAll(); }
-function qQ(v){ STATE.quotesFilter.q = v; qRenderRows(); }  // 搜索只重渲染表体，输入焦点不丢
-function qClear(){ STATE.quotesFilter = { q: '', vote: '', lc: '', res: '', trd: '', hea: '', vpq: '', agree: '' }; renderQuotes(); }
-function setQuotesSort(key){
-  const s = STATE.quotesSort;
-  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = (key === 'rank' || key === 'code') ? 1 : -1; }
-  qRenderRows();
-}
-function renderQuotes(){
-  renderQuoteSlotSel();
-  const Q = STATE.quotes;
-  if (!Q || Q.ok === false){
-    STATE.quotesEntries = [];
-    $('quotesKpi').innerHTML = ''; $('quotesFilterBar').innerHTML = '';
-    $('quotesHint').textContent = (Q && Q.reason) || '读口失败';
-    $('quotesTable').innerHTML = `<tr><td class="empty">${esc((Q && Q.reason) || '读口失败')}</td></tr>`;
-    return;
-  }
-  if (Q.noData || !(Q.rows || []).length){
-    STATE.quotesEntries = [];
-    $('quotesKpi').innerHTML = ''; $('quotesFilterBar').innerHTML = '';
-    $('quotesHint').textContent = Q.reason || '';
-    // 两种 noData（无 15:00 帧 / 帧在但行集空）表体都显后端结构化 reason，不硬编码误导文案
-    $('quotesTable').innerHTML = `<tr><td class="empty">${esc(Q.reason || '该日无行情帧（非交易日或未采集）')}</td></tr>`;
-    return;
-  }
-  qRenderKpi(); qRenderBar(); qRenderRows();
-}
-
-function renderQuoteSlotSel(){
-  const sel = $('quoteSlotSel');
-  if (!sel) return;
-  const slots = STATE.quotesSlots || [];
-  const cur = (STATE.quotes && STATE.quotes.slotTime) || '';
-  const hint = $('quoteSlotHint');
-  if (!slots.length){
-    sel.innerHTML = '<option value="">无 jev 判读帧</option>';
-    if (hint) hint.textContent = '';
-    return;
-  }
-  sel.innerHTML = slots.map(s => '<option value="' + esc(s) + '"' + (s === cur ? ' selected' : '') + '>' + esc(s) + ' 帧</option>').join('');
-  if (hint) hint.textContent = '共 ' + slots.length + ' 个有 jev 结果的槽位';
-}
-async function qSlotChange(slot){
-  const date = $('date').value;
-  if (!date) return;
-  const path = '/api/hotlist-jev/quotes-review?with_docs=1&date=' + encodeURIComponent(date) + (slot ? '&slotTime=' + encodeURIComponent(slot) : '');
-  try {
-    STATE.quotes = await jget(path);
-    renderQuotes();
-  } catch (err) {
-    // fail-visible：切帧失败不弹阻断式 alert，留在页面内说明，且保留上一帧数据。
-    // 先重建选择器（复位选中项）再写提示，否则提示会被 renderQuoteSlotSel 覆盖掉。
-    renderQuoteSlotSel();
-    const hint = $('quoteSlotHint');
-    if (hint) hint.textContent = '切帧失败：' + err.message + '（仍显示原帧）';
-  }
-}
-function qRenderKpi(){
-  const s = (STATE.quotes || {}).summary || {}, f = STATE.quotesFilter;
-  const v = s.vote || {}, l = s.lc || {}, rs = s.resonance || {}, td = s.trend || {}, rk = s.risk || {};
-  const stages = l.stages || {};
-  const stageTxt = Object.keys(LC_STAGE_CN).map(k => `${LC_STAGE_CN[k]} ${stages[k] || 0}`).join(' · ');
-  const resTxt = `走强 ${rs.buy || 0} / 走弱 ${rs.sell || 0} / 同步 ${rs.hold || 0}`
-    + (rs.modelInsufficient ? ` / 判据不足 ${rs.modelInsufficient}` : '');
-  const trdTxt = `多头 ${td.buy || 0} / 空头 ${td.sell || 0} / 震荡 ${td.hold || 0}`
-    + (td.modelInsufficient ? ` / 判据不足 ${td.modelInsufficient}` : '');
-  const ht = s.heat || {}, vp = s.volumePrice || {};
-  const heatTxt = Object.entries(ht.attributions || {}).map(([k, v]) => `${HEA_ATTR_CN[k] || k} ${v}`).join(' / ');
-  const volTxt = Object.entries(vp.causes || {}).map(([k, v]) => `${VPQ_CAUSE_CN[k] || k} ${v}`).join(' / ');
-  const card = (k, v2, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
-  const aCard = (k, v2, sub, key) => `<div class="kpi click${f.agree === key ? ' on' : ''}" title="点击筛选：${k}" onclick="qSet('agree', '${f.agree === key ? '' : key}')"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
-  const riskTotal = (rk.data_insufficient || 0) + (rk.partial || 0);
-  $('quotesKpi').innerHTML =
-    card('热榜股总数', s.total ?? '-', `五维可算 ${s.tiered ?? 0} · ${STATE.quotes.slotTime || '--'} 槽`)
-    + card('VOTE 方向复核', v.ok ?? '-', `buy ${v.buy || 0} / sell ${v.sell || 0} / hold ${v.hold || 0} · 未复核 ${v.unreviewed ?? '-'}`)
-    + card('LC 生命周期复核', l.ok ?? '-', `${stageTxt || '无复核'} · 未复核 ${l.unreviewed ?? '-'}`)
-    + card('RES 共振复核', rs.ok ?? '-', `${resTxt || '无复核'} · 一致 ${s.resAgree ?? 0} 分歧 ${s.resDiverge ?? 0} · 未复核 ${rs.unreviewed ?? '-'}`)
-    + card('TRD 趋势复核', td.ok ?? '-', `${trdTxt || '无复核'} · 一致 ${s.trdAgree ?? 0} 分歧 ${s.trdDiverge ?? 0} · 未复核 ${td.unreviewed ?? '-'}`)
-    + card('HEA 热度复核', ht.ok ?? '-', `${heatTxt || '无复核'} · 归因对锚 ${s.heaAgree ?? 0} 一致 / ${s.heaDiverge ?? 0} 分歧 · 未复核 ${ht.unreviewed ?? '-'}`)
-    + card('VPQ 量价复核', vp.ok ?? '-', `${volTxt || '无复核'} · 主因对锚 ${s.vpqAgree ?? 0} 一致 / ${s.vpqDiverge ?? 0} 分歧 · 未复核 ${vp.unreviewed ?? '-'}`)
-    + aCard('方向一致', s.agree ?? '-', 'jev ↔ 五维对照锚（点击筛选）', 'agree')
-    + aCard('方向分歧', s.diverge ?? '-', '并列观察者 · 台账披露（点击筛选）', 'diverge')
-    + card('风险留痕', riskTotal ? `${rk.data_insufficient || 0} / ${rk.partial || 0}` : '0',
-      `data_insufficient / partial（不足不调用不猜）`);
-}
-function qRenderBar(){
-  const bar = $('quotesFilterBar');
-  const ae = document.activeElement;
-  // 输入/下拉聚焦时跳过重建（60s 轮询不夺焦点；状态由 STATE 持有，值同步靠下次重建）
-  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
-  bar.innerHTML =
-    `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.quotesFilter.q)}" oninput="qQ(this.value)">`
-    + qSel('jev方向', 'vote', [['buy', 'buy'], ['sell', 'sell'], ['hold', 'hold'], ['none', '未复核']])
-    + qSel('LC阶段', 'lc', Object.entries(LC_STAGE_CN).concat([['none', '未复核']]))
-    + qSel('jev共振', 'res', [['buy', '走强'], ['hold', '同步'], ['sell', '走弱'], ['insufficient', '判据不足'], ['none', '未复核']])
-    + qSel('jev趋势', 'trd', [['buy', '多头'], ['hold', '震荡'], ['sell', '空头'], ['insufficient', '判据不足'], ['none', '未复核']])
-    + qSel('jev热度归因', 'hea', [['individual_strong', '个体强'], ['market_wide_rise', '全池普涨'], ['individual_weak', '个体弱'], ['market_wide_fall', '跑输普涨'], ['follow_market', '跟随市场'], ['insufficient', '判据不足'], ['none', '未复核']])
-    + qSel('jev量价主因', 'vpq', [['volume_expansion_up', '放量上涨'], ['volume_expansion_down', '放量下跌'], ['shrink_up', '缩量上涨'], ['shrink_down', '缩量下跌'], ['fund_outflow', '资金流出'], ['over_volume_exhaustion', '疑似出货'], ['neutral', '中态'], ['insufficient', '判据不足'], ['none', '未复核']])
-    + qSel('一致性', 'agree', [['agree', '一致'], ['diverge', '分歧']])
-    + `<button onclick="qClear()">清除筛选</button>`
-    + `<span class="cnt" id="quotesCnt"></span>`;
-}
-function qRenderRows(){
-  const Q = STATE.quotes || {}, f = STATE.quotesFilter, ui = STATE.quotesUi;
-  const all = Q.rows || [];
-  let shown = all.filter(r => quotesMatches(r, f));
-  const s = STATE.quotesSort;
-  const kv = { code: r => r.code || '', name: r => r.name || '', board: r => r.board || '',
-    price: r => numOr(r.price, -1), change: r => numOr(r.change, -999),
-    rank: r => r.rank == null ? 99999 : r.rank,
-    res: r => tierKey(qTier(r, 'resonance')), trend: r => tierKey(qTier(r, 'trend')),
-    heat: r => tierKey(qTier(r, 'heat')), vp: r => tierKey(qTier(r, 'volumePrice')),
-    cycle: r => LC_STAGE_ORDER[qLcStage(r)] ?? -1,
-    res: r => { const d = qResDir(r);
-      return d ? 100 + (RES_DIR_ORDER[d] ?? 9) : tierKey(qTier(r, 'resonance')); },
-    trd: r => { const d = qTrdDir(r);
-      return d ? 100 + (TRD_DIR_ORDER[d] ?? 9) : tierKey(qTier(r, 'trend')); },
-    hea: r => { const a = qHeaAttr(r);
-      return a ? 100 + (HEA_ATTR_ORDER[a] ?? 9) : tierKey(qTier(r, 'heat')); },
-    vpq: r => { const c = qVpqCause(r);
-      return c ? 100 + (VPQ_CAUSE_ORDER[c] ?? 9) : tierKey(qTier(r, 'vp')); },
-    boards: r => r.boards == null ? -1 : r.boards,
-    amount: r => numOr(r.amount, -1), cir: r => numOr(r.cirMV, -1),
-    vote: r => qVoteDir(r) || '', conf: r => numOr(((r.jev || {}).vote || {}).confidence, -1),
-    agree: r => { const a = (r.jev || {}).agree; return a === 'agree' ? 0 : a === 'diverge' ? 1 : 2; } };
-  shown = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
-    return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
-  STATE.quotesEntries = shown.map(r => ({ key: String(r.code || ''), label: (r.name || r.code || '?') + ' ' + (r.code || ''),
-    row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null,
-    resDoc: (r.docs || {}).res || null, trdDoc: (r.docs || {}).trd || null,
-      heaDoc: (r.docs || {}).hea || null, vpqDoc: (r.docs || {}).vpq || null }));
-  const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
-  const hasFilter = f.q || f.vote || f.lc || f.res || f.trd || f.hea || f.vpq || f.agree;
-  $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '--'} 槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
-    + (Q.boardJoinDegraded ? ` · 连板降级:${Q.boardJoinDegraded}` : '')
-    + (Q.resonanceSlotNote ? ` · ${Q.resonanceSlotNote}（当前帧无共振判读，列位回落引擎档位）` : '')
-    + (Q.trendSlotNote ? ` · ${Q.trendSlotNote}（当前帧无趋势判读，列位回落引擎档位）` : '')
-    + (Q.heatSlotNote ? ` · ${Q.heatSlotNote}（当前帧无热度判读，列位回落引擎档位）` : '')
-    + (Q.volumeSlotNote ? ` · ${Q.volumeSlotNote}（当前帧无量价判读，列位回落引擎档位）` : '')
-    + (Q.summary && Q.summary.streakUnverified ? ` · 断板连板不可验 ${Q.summary.streakUnverified} 例` : '');
-  const th = (label, key) => `<th class="sortable" onclick="setQuotesSort('${key}')">${label}${sortMark(s, key)}</th>`;
-  const rows = shown.map(r => {
-    const e = STATE.quotesEntries.find(x => x.row === r);
-    const open = ui.openKey === e.key;
-    const chg = numOr(r.change, null);
-    const chgColor = chg == null ? '' : chg > 0 ? 'var(--red)' : chg < 0 ? 'var(--green)' : '';
-    const cyc = qLcStage(r);
-    const conf = numOr(((r.jev || {}).vote || {}).confidence, null);
-    const rs = qRes(r), rsDir = rs ? rs.direction : '', rsScore = rs ? numOr(rs.score, null) : null;
-    // 共振列（就地改造）：有 jev 判读 → 方向徽标 + 强度分带数；无判读 → 引擎档位徽标（回落不丢信息）
-    const resCell = rsDir
-      ? `${dirB(rsDir)}<span class="num" style="margin-left:6px;color:${resBandColor(rsScore == null ? -1 : rsScore)}">${rsScore == null ? '--' : Math.round(rsScore)}</span>`
-      : tierB(qTier(r, 'resonance'));
-    const td = qTrd(r), tdDir = td ? td.direction : '', tdScore = td ? numOr(td.score, null) : null;
-    const trdCell = tdDir
-      ? `${dirB(tdDir)}<span class="num" style="margin-left:6px;color:${resBandColor(tdScore == null ? -1 : tdScore)}">${tdScore == null ? '--' : Math.round(tdScore)}</span>`
-      : tierB(qTier(r, 'trend'));
-    const trdTip = tdDir
-      ? `jev 趋势独立判读：${TRD_DIR_CN[tdDir] || tdDir}（强度 ${tdScore == null ? '缺' : Math.round(tdScore)} · 置信 P${Math.round((td.confidence == null ? 0 : td.confidence) * 100)}% · 模式 ${TRD_MODE_CN[td.mode] || td.mode || '缺'}） · 引擎对照锚 ${qTier(r, 'trend') || '--'} ${((r.jev || {}).trdAgree) === 'agree' ? '一致' : ((r.jev || {}).trdAgree) === 'diverge' ? '分歧' : '锚缺失'}`
-      : `引擎趋势档位 ${qTier(r, 'trend') || '--'}（无 jev 趋势判读：试点题集未开火 / 该帧无判读 / 出现次数 <2 留痕）`;
-    // 热度列（就地改造）：有 jev 档位判读 → 档位徽标 + 语义方向 chip；无判读 → 引擎档位回落
-    const ha = qHea(r), haAttr = ha ? ha.attribution : '', haEvol = ha ? ha.evolution : '';
-    const heaCell = haAttr
-      ? `<span class="chip" style="color:${HEA_ATTR_TONE[haAttr] || 'inherit'}">${HEA_ATTR_CN[haAttr] || haAttr}</span>${haEvol ? `<span class="chip plain" style="margin-left:6px;color:${HEA_EVOL_TONE[haEvol] || 'inherit'}">${HEA_EVOL_CN[haEvol] || haEvol}</span>` : ''}`
-      : tierB(qTier(r, 'heat'));
-    const heaTip = haAttr
-      ? `jev 热度复核（V2·自证题集）：归因 ${HEA_ATTR_CN[haAttr] || haAttr}（P${Math.round((ha.attributionConfidence == null ? 0 : ha.attributionConfidence) * 100)}%）· 形态 ${HEA_EVOL_CN[haEvol] || haEvol || '缺'} · 复算锚 ${HEA_ATTR_CN[ha.attributionAnchor] || ha.attributionAnchor || '--'} ${((r.jev || {}).heaAgree) === 'agree' ? '一致' : ((r.jev || {}).heaAgree) === 'diverge' ? '分歧' : '锚缺失'} · 档位基线 ${HEA_TIER_CN[ha.tier] || ha.tier || '--'}（引擎 ${qTier(r, 'heat') || '--'}）`
-      : `引擎热度档位 ${qTier(r, 'heat') || '--'}（无 jev 热度判读：试点题集未开火 / 该帧无判读）`;
-    // 量价列（就地改造）：有 jev 档位判读 → 档位徽标 + 象限 chip；无判读 → 引擎档位回落
-    const vp2 = qVpq(r), vpCause = vp2 ? vp2.cause : '', vpTrad = vp2 ? vp2.tradability : '';
-    const vpqCell = vpCause
-      ? `<span class="chip" style="color:${VPQ_CAUSE_TONE[vpCause] || 'inherit'}">${VPQ_CAUSE_CN[vpCause] || vpCause}</span>${vpTrad ? `<span class="chip plain" style="margin-left:6px;color:${VPQ_TRAD_TONE[vpTrad] || 'inherit'}">${VPQ_TRAD_CN[vpTrad] || vpTrad}</span>` : ''}`
-      : tierB(qTier(r, 'volumePrice'));
-    const vpqTip = vpCause
-      ? `jev 量价复核（V2·自证题集）：主因 ${VPQ_CAUSE_CN[vpCause] || vpCause}（P${Math.round((vp2.causeConfidence == null ? 0 : vp2.causeConfidence) * 100)}%）· 可交易性 ${VPQ_TRAD_CN[vpTrad] || vpTrad || '缺'} · 复算锚 ${VPQ_CAUSE_CN[vp2.causeAnchor] || vp2.causeAnchor || '--'} ${((r.jev || {}).vpqAgree) === 'agree' ? '一致' : ((r.jev || {}).vpqAgree) === 'diverge' ? '分歧' : '锚缺失'} · 档位基线 ${VPQ_TIER_CN[vp2.tier] || vp2.tier || '--'}（引擎 ${qTier(r, 'volumePrice') || '--'}）`
-      : `引擎量价档位 ${qTier(r, 'volumePrice') || '--'}（无 jev 量价判读：试点题集未开火 / 该帧无判读）`;
-    const resTip = rsDir
-      ? `jev 共振独立判读：${RES_DIR_CN[rsDir] || rsDir}（强度 ${rsScore == null ? '缺' : Math.round(rsScore)} · 置信 P${Math.round((rs.confidence == null ? 0 : rs.confidence) * 100)}%） · 引擎对照锚 ${qTier(r, 'resonance') || '--'} ${((r.jev || {}).resAgree) === 'agree' ? '一致' : ((r.jev || {}).resAgree) === 'diverge' ? '分歧' : '锚缺失'}`
-      : `引擎共振档位 ${qTier(r, 'resonance') || '--'}（无 jev 共振判读：试点题集未开火 / 该帧无判读 / 原料不足留痕）`;
-    return `<tr class="lg-row${open ? ' open' : ''}" onclick="qRow('${js(e.key)}')">
-    <td><span class="lg-caret">▶</span>${esc(r.code || '')}</td><td>${esc(r.name || '')}</td>
-    <td>${esc(r.board || '--')}</td>
-    <td class="num">${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'}</td>
-    <td class="num" style="color:${chgColor}">${fmtPctChg(r.change)}</td>
-    <td class="num">${r.rank != null ? '#' + r.rank : '--'}</td>
-    <td class="num">${boardsCell(r.boards)}</td>
-    <td title="${esc(resTip)}">${resCell}</td>
-    <td title="${esc(trdTip)}">${trdCell}</td>
-    <td title="${esc(heaTip)}">${heaCell}</td><td title="${esc(vpqTip)}">${vpqCell}</td>
-    <td style="color:${cyc ? (LC_STAGE_COLOR[cyc] || 'var(--muted2)') : 'var(--muted2)'}">${cyc ? esc(LC_STAGE_CN[cyc] || cyc) : '--'}</td>
-    <td class="num">${fmtYiCell(r.amount)}</td><td class="num">${fmtYiCell(r.cirMV)}</td>
-    <td>${dirB(qVoteDir(r)) || '<span style="color:var(--muted2)">--</span>'}</td>
-    <td class="num">${conf != null ? 'P' + Math.round(conf * 100) + '%' : '--'}</td>
-    <td>${agreeB((r.jev || {}).agree)}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="17">${quotesDetailHtml(e)}</td></tr>` : '');
-  }).join('');
-  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('板块', 'board')}${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('连板', 'boards')}<th class="sortable" title="有 jev 共振判读时显示 jev 读数（走强/同步/走弱 + 强度），否则回落引擎档位徽标" onclick="setQuotesSort('res')">共振${sortMark(s, 'res')}</th><th class="sortable" title="有 jev 趋势判读时显示 jev 读数（多头/震荡/空头 + 强度），否则回落引擎档位徽标" onclick="setQuotesSort('trd')">趋势${sortMark(s, 'trd')}</th><th class="sortable" title="有 jev 热度逻辑判读时显示 jev 读数（个体强/全池普涨等归因 + 形态），否则回落引擎档位徽标" onclick="setQuotesSort('hea')">热度${sortMark(s, 'hea')}</th><th class="sortable" title="有 jev 量价逻辑判读时显示 jev 读数（放量上涨/资金流出等主因 + 可交易性），否则回落引擎档位徽标" onclick="setQuotesSort('vpq')">量价${sortMark(s, 'vpq')}</th>${th('周期', 'cycle')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
-    + (rows || '<tr><td colspan="17" class="empty">无匹配个股（调整筛选条件）</td></tr>');
-}
-function qRenderAll(){ qRenderKpi(); qRenderBar(); qRenderRows(); }
-// 行展开：VOTE/LC/RES/TRD/HEA/VPQ 六题集各一块 lg-card（各自 详细信息/原始 JSON 切换 + 筛选 + 复制）
-function qOpenEntry(){ return (STATE.quotesEntries || []).find(x => x.key === STATE.quotesUi.openKey) || null; }
-function qKindUi(kind){ return kind === 'vote' ? STATE.quotesUi.vote : kind === 'lc' ? STATE.quotesUi.lc : kind === 'res' ? STATE.quotesUi.res : kind === 'trd' ? STATE.quotesUi.trd : kind === 'hea' ? STATE.quotesUi.hea : STATE.quotesUi.vpq; }
-function qDocOf(e, kind){ return kind === 'vote' ? e.voteDoc : kind === 'lc' ? e.lcDoc : kind === 'res' ? e.resDoc : kind === 'trd' ? e.trdDoc : kind === 'hea' ? e.heaDoc : e.vpqDoc; }
-const QKIND_TITLE = { vote: '🎯 VOTE · 方向投票复核', lc: '🔄 LC · 生命周期复核', res: '🌀 RES · 共振独立复核', trd: '📈 TRD · 趋势独立复核', hea: '🔥 HEA · 热度独立复核', vpq: '💰 VPQ · 量价独立复核' };
-const QKIND_EMPTY = {
-  vote: '该股无 jev 复核存档（原料不足留痕 / 未进判读人口；抽样帽已于 2026-10-14 取消）',
-  lc: '该股无 jev 复核存档（原料不足留痕 / 未进判读人口；抽样帽已于 2026-10-14 取消）',
-  res: '该股无共振判读存档（试点题集未开火 / 该帧无判读 / 出现次数 <9 等原料不足留痕）',
-  trd: '该股无趋势判读存档（试点题集未开火 / 该帧无判读 / 出现次数 <2 等原料不足留痕）',
-  hea: '该股无热度判读存档（试点题集未开火 / 该帧无判读 / 横截面 percentile 缺失留痕）',
-  vpq: '该股无量价判读存档（试点题集未开火 / 该帧无判读 / 涨幅或量比缺失留痕）' };
-function qRow(key){
-  const e = (STATE.quotesEntries || []).find(x => x.key === key);
-  if (!e) return;
-  const ui = STATE.quotesUi;
-  ui.openKey = ui.openKey === key ? null : key;
-  ui.vote = { mode: 'detail', q1: '', q2: '' }; ui.lc = { mode: 'detail', q1: '', q2: '' };
-  ui.res = { mode: 'detail', q1: '', q2: '' }; ui.trd = { mode: 'detail', q1: '', q2: '' };
-  ui.hea = { mode: 'detail', q1: '', q2: '' }; ui.vpq = { mode: 'detail', q1: '', q2: '' };
-  qRenderRows();
-}
-function qMode(kind, m, ev){ ev.stopPropagation(); qKindUi(kind).mode = m; qRenderRows(); }
-function qFilter(kind, side, v){
-  const ui = qKindUi(kind);
-  if (side === 'req') ui.q1 = v; else ui.q2 = v;
-  const e = qOpenEntry(); if (!e) return;
-  $('q' + kind + (side === 'req' ? 'ReqTree' : 'RespTree')).innerHTML
-    = treeHtml(side === 'req' ? qReqOf(e, kind) : qRespOf(e, kind), v);
-}
-function qCopy(kind, what, ev){
-  ev.stopPropagation();
-  const e = qOpenEntry(); if (!e) return;
-  const txt = JSON.stringify(what === 'doc' ? qDocOf(e, kind) : what === 'req' ? qReqOf(e, kind) : qRespOf(e, kind), null, 2);
-  copyText(txt, ev.currentTarget);
-}
-// 请求侧 = 当次下发线上的载荷（{state, model, questions}，与 jev_client POST body 同形）
-function qReqOf(e, kind){
-  const d = qDocOf(e, kind); if (!d) return null;
-  const narrative = d.narrativeRaw != null ? d.narrativeRaw : (d.narrative != null ? d.narrative : null);
-  return { state: narrative, model: d.model != null ? d.model : null,
-    questions: d.questionsRaw != null ? d.questionsRaw : { _note: '该存档未落 questionsRaw（旧文档）' } };
-}
-// 响应侧 = 存档 envelope 原文；缺 envelope 时如实注明并给已落库解析结果（不伪造）
-function qRespOf(e, kind){
-  const d = qDocOf(e, kind); if (!d) return null;
-  if (d.responseRaw) return d.responseRaw;
-  const base = { _note: 'responseRaw 未存档（envelope 原文见 CF AI Gateway 日志）',
-    answers: d.answers || undefined, model: d.model, usage: d.usage };
-  if (kind === 'vote') return { ...base, voteDirection: d.voteDirection,
-    voteConfidence: d.voteConfidence, voteProbabilities: d.voteProbabilities };
-  if (kind === 'lc') return { ...base, lcStage: d.lcStage, lcConfidence: d.lcConfidence, lcProbabilities: d.lcProbabilities };
-  if (kind === 'res') return { ...base, resonanceDirection: d.resonanceDirection,
-    resonanceConfidence: d.resonanceConfidence, resonanceProbabilities: d.resonanceProbabilities,
-    resonanceScore: d.resonanceScore, shortExcess: d.shortExcess, engineDirection: d.engineDirection,
-    engineScore: d.engineScore, engineTier: d.engineTier, bars: d.bars };
-  if (kind === 'trd') return { ...base, trendDirection: d.trendDirection,
-    trendConfidence: d.trendConfidence, trendProbabilities: d.trendProbabilities,
-    trendScore: d.trendScore, mode: d.mode, bars: d.bars,
-    engineDirection: d.engineDirection, engineScore: d.engineScore,
-    engineSignedScore: d.engineSignedScore, engineTier: d.engineTier };
-  if (kind === 'hea') return { ...base, heatAttribution: d.heatAttribution,
-    heatAttributionConfidence: d.heatAttributionConfidence,
-    attributionAnchor: d.attributionAnchor,
-    heatEvolution: d.heatEvolution, heatEvolutionConfidence: d.heatEvolutionConfidence,
-    evolutionAnchor: d.evolutionAnchor,
-    heatTier: d.heatTier, heatTierConfidence: d.heatTierConfidence,
-    heatDirection: d.heatDirection, heatConfidence: d.heatConfidence,
-    enginePercentile: d.enginePercentile, enginePercentileDelta: d.enginePercentileDelta,
-    engineRelativeToMarket: d.engineRelativeToMarket, engineTier: d.engineTier };
-  return { ...base, volumeCause: d.volumeCause, volumeCauseConfidence: d.volumeCauseConfidence,
-    causeAnchor: d.causeAnchor,
-    volumeTradability: d.volumeTradability,
-    volumeTradabilityConfidence: d.volumeTradabilityConfidence,
-    tradabilityAnchor: d.tradabilityAnchor,
-    volumeTier: d.volumeTier, volumeTierConfidence: d.volumeTierConfidence,
-    volumeQuadrant: d.volumeQuadrant, volumeDirection: d.volumeDirection,
-    volumeConfidence: d.volumeConfidence,
-    engineScore: d.engineScore, engineDirection: d.engineDirection,
-    engineQuadrant: d.engineQuadrant, engineTier: d.engineTier };
-}
-function qDocCard(e, kind){
-  const d = qDocOf(e, kind), ui = qKindUi(kind);
-  const title = QKIND_TITLE[kind];
-  if (!d) return `<div class="lg-card"><div class="lg-head"><div class="lg-title">${title}</div></div>`
-    + `<div class="lg-empty">${QKIND_EMPTY[kind]}</div></div>`;
-  const u = d.usage || {}, st = d.status || '-';
-  const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
-  const rf = d.riskFlag || {};
-  const head = `<div class="lg-head"><div class="lg-title">${title}</div><span class="lg-asof">${esc(fmtTime(d.computedAt))}</span>
-    <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="qMode('${kind}', 'detail', event)">详细信息</button>
-    <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="qMode('${kind}', 'raw', event)">原始 JSON</button></div></div>`;
-  const meta = `<div class="lg-meta">
-    <div><div class="k">持续时间</div><div class="v">${d.latencyMs != null ? d.latencyMs + ' ms' : '-'}</div></div>
-    <div><div class="k">输入 tokens</div><div class="v">${u.input_tokens != null ? u.input_tokens.toLocaleString() : '-'}</div></div>
-    <div><div class="k">输出 tokens</div><div class="v">${u.output_tokens != null ? u.output_tokens.toLocaleString() : '-'}</div></div>
-    <div><div class="k">状态</div><div class="v" style="color:${stColor}">${esc(st)}</div></div>
-    <div><div class="k">riskFlag</div><div class="v">${esc(rf.level || '-')}</div></div>
-    ${d.errorCode ? `<div><div class="k">错误码</div><div class="v" style="color:#dc2626">${esc(d.errorCode)}</div></div>` : ''}</div>`;
-  let body;
-  if (ui.mode === 'raw'){
-    body = `<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0"><b>存档文档 JSON（原始）</b><button class="lg-copy" onclick="qCopy('${kind}', 'doc', event)">⧉ 复制</button></div><pre>${esc(JSON.stringify(d, null, 2))}</pre></div>`;
-  } else {
-    // RES/TRD 卡多一行「读数摘要」（方向/强度/置信/出现次数/引擎对照锚）——原料与锚同屏，判读可复核
-    const resSum = (kind === 'res' || kind === 'trd' || kind === 'hea' || kind === 'vpq') ? `<div class="lg-meta">
-      <div><div class="k">jev 读数</div><div class="v">${dirB(kind === 'res' ? d.resonanceDirection : d.trendDirection) || '--'} ${kind === 'res' ? (d.resonanceDirection ? (RES_DIR_CN[d.resonanceDirection] || '') : '') : (d.trendDirection ? (TRD_DIR_CN[d.trendDirection] || '') : '')}${kind === 'hea' ? ('<span style="color:' + (HEA_ATTR_TONE[d.heatAttribution] || 'inherit') + '">' + (HEA_ATTR_CN[d.heatAttribution] || d.heatAttribution || '') + '</span> ' + (HEA_EVOL_CN[d.heatEvolution] || d.heatEvolution || '')) : ''}${kind === 'vpq' ? ('<span style="color:' + (VPQ_CAUSE_TONE[d.volumeCause] || 'inherit') + '">' + (VPQ_CAUSE_CN[d.volumeCause] || d.volumeCause || '') + '</span> ' + (VPQ_TRAD_CN[d.volumeTradability] || d.volumeTradability || '')) : ''}</div></div>
-      <div><div class="k">强度 score</div><div class="v" style="color:${(kind === 'res' ? d.resonanceScore : d.trendScore) == null ? 'var(--muted2)' : resBandColor(kind === 'res' ? d.resonanceScore : d.trendScore)}">${(kind === 'res' ? d.resonanceScore : d.trendScore) == null ? '--' : Math.round(kind === 'res' ? d.resonanceScore : d.trendScore)}</div></div>
-      <div><div class="k">置信</div><div class="v">${(kind === 'res' ? d.resonanceConfidence : d.trendConfidence) == null ? '--' : 'P' + Math.round((kind === 'res' ? d.resonanceConfidence : d.trendConfidence) * 100) + '%'}</div></div>
-      <div><div class="k">出现次数</div><div class="v">${d.bars == null ? '--' : d.bars}</div></div>
-      <div><div class="k">引擎对照锚</div><div class="v">${esc(d.engineDirection || '--')} / ${esc(d.engineTier || '--')}${d.engineScore == null ? '' : ' · score ' + Math.round(d.engineScore)}</div></div>
-      ${kind === 'trd' ? `<div><div class="k">判读模式</div><div class="v">${esc(TRD_MODE_CN[d.mode] || d.mode || '--')}</div></div>` : ''}
-      ${kind === 'hea' ? `<div><div class="k">归因复算</div><div class="v">${esc(HEA_ATTR_CN[d.heatAttribution] || d.heatAttribution || '--')} · 形态 ${esc(HEA_EVOL_CN[d.heatEvolution] || d.heatEvolution || '缺')} · 复算锚 ${esc(HEA_ATTR_CN[d.attributionAnchor] || d.attributionAnchor || '--')} · 档位基线 ${esc(HEA_TIER_CN[d.heatTier] || d.heatTier || '--')}（引擎 ${esc(d.engineTier || '--')}）</div></div>` : ''}
-      ${kind === 'vpq' ? `<div><div class="k">主因复算</div><div class="v">${esc(VPQ_CAUSE_CN[d.volumeCause] || d.volumeCause || '--')} · 可交易性 ${esc(VPQ_TRAD_CN[d.volumeTradability] || d.volumeTradability || '缺')} · 复算锚 ${esc(VPQ_CAUSE_CN[d.causeAnchor] || d.causeAnchor || '--')} · 档位基线 ${esc(VPQ_TIER_CN[d.volumeTier] || d.volumeTier || '--')}（引擎 ${esc(d.engineTier || '--')}）</div></div>` : ''}
-      </div>` : '';
-    body = resSum + `<div class="lg-panels">
-      <div class="lg-panel"><div class="lg-phead"><b>请求</b><span class="st">state+model+questions</span><button class="lg-copy" onclick="qCopy('${kind}', 'req', event)">⧉ 复制</button></div>
-        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q1)}" oninput="qFilter('${kind}', 'req', this.value)">
-        <div class="lg-tree" id="q${kind}ReqTree">${treeHtml(qReqOf(e, kind), ui.q1)}</div></div>
-      <div class="lg-panel"><div class="lg-phead"><b>响应</b><span class="dot" style="background:${stColor}"></span><span class="st">${esc(st)}</span><button class="lg-copy" onclick="qCopy('${kind}', 'resp', event)">⧉ 复制</button></div>
-        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q2)}" oninput="qFilter('${kind}', 'resp', this.value)">
-        <div class="lg-tree" id="q${kind}RespTree">${treeHtml(qRespOf(e, kind), ui.q2)}</div></div>
-    </div>`;
-  }
-  const foot = `<div class="lg-foot"><span><span class="k">来源</span> <code>${esc(d.origin || '-')}</code></span>
-    <span><span class="k">题集版本</span> <code>${esc(d.questionSetVersion || '未知')}</code></span>
-    <span><span class="k">题集 hash</span> <code>${esc(String(d.questionSetHash || '-').slice(0, 12))}</code></span>
-    <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
-  return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${body}${foot}</div>`;
-}
-function quotesDetailHtml(e){
-  const r = e.row, j = r.jev || {};
-  const t = r.tiers || {};
-  const tierTxt = v => v || '--';
-  const rs = j.res || {};
-  const resChip = rs.direction ? `<span class="chip plain">jev共振 ${esc(RES_DIR_CN[rs.direction] || rs.direction)}${rs.score != null ? ' 强度' + Math.round(rs.score) : ''}${rs.confidence != null ? ' P' + Math.round(rs.confidence * 100) + '%' : ''}</span>`
-    : `<span class="chip plain">jev共振 --（无判读，列位回落引擎档位）</span>`;
-  const trd = j.trd || {};
-  const trdChip = trd.direction ? `<span class="chip plain">jev趋势 ${esc(TRD_DIR_CN[trd.direction] || trd.direction)}${trd.score != null ? ' 强度' + Math.round(trd.score) : ''}${trd.confidence != null ? ' P' + Math.round(trd.confidence * 100) + '%' : ''}${trd.mode ? ' · ' + (TRD_MODE_CN[trd.mode] || trd.mode) : ''}</span>`
-    : `<span class="chip plain">jev趋势 --（无判读，列位回落引擎档位）</span>`;
-  const hea = j.hea || {};
-  const heaChip = hea.attribution
-    ? `<span class="chip plain">jev热度归因 ${esc(HEA_ATTR_CN[hea.attribution] || hea.attribution)}${hea.attributionConfidence != null ? ' P' + Math.round(hea.attributionConfidence * 100) + '%' : ''} · 形态 ${esc(HEA_EVOL_CN[hea.evolution] || hea.evolution || '缺')} · 复算锚 ${esc(HEA_ATTR_CN[hea.attributionAnchor] || hea.attributionAnchor || '--')}</span>`
-    : `<span class="chip plain">jev热度 --（无判读，列位回落引擎档位）</span>`;
-  const heaAgreeChip = j.heaAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">归因对锚 一致</span>'
-    : j.heaAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">归因对锚 分歧</span>'
-    : (hea.attribution && hea.attribution !== 'insufficient' ? '<span class="chip plain">归因对锚 锚缺失</span>' : '');
-  const vpq = j.vpq || {};
-  const vpqChip = vpq.cause
-    ? `<span class="chip plain">jev量价主因 ${esc(VPQ_CAUSE_CN[vpq.cause] || vpq.cause)}${vpq.causeConfidence != null ? ' P' + Math.round(vpq.causeConfidence * 100) + '%' : ''} · 可交易性 ${esc(VPQ_TRAD_CN[vpq.tradability] || vpq.tradability || '缺')} · 复算锚 ${esc(VPQ_CAUSE_CN[vpq.causeAnchor] || vpq.causeAnchor || '--')}</span>`
-    : `<span class="chip plain">jev量价 --（无判读，列位回落引擎档位）</span>`;
-  const vpqAgreeChip = j.vpqAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">主因对锚 一致</span>'
-    : j.vpqAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">主因对锚 分歧</span>'
-    : (vpq.cause && vpq.cause !== 'insufficient' ? '<span class="chip plain">主因对锚 锚缺失</span>' : '');
-  const trdAgreeChip = j.trdAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">趋势对照 一致</span>'
-    : j.trdAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">趋势对照 分歧</span>'
-    : (trd.direction ? '<span class="chip plain">趋势对照 锚缺失</span>' : '');
-  const resAgreeChip = j.resAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">共振对照 一致</span>'
-    : j.resAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">共振对照 分歧</span>'
-    : (rs.direction ? '<span class="chip plain">共振对照 锚缺失</span>' : '');
-  const summary = `<div class="lg-card"><div class="lg-head"><div class="lg-title">${esc(e.label)}</div>
-    <span class="lg-asof"># ${r.rank != null ? r.rank : '--'} · 连板 ${boardsCell(r.boards)} · 最新价 ${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'} · 成交额 ${fmtYi(r.amount)} 亿 · 流通值 ${fmtYi(r.cirMV)} 亿</span></div>
-    <div class="flex" style="margin-top:10px">
-      <span class="chip plain">共振 ${tierTxt(t.resonance)}</span><span class="chip plain">趋势 ${tierTxt(t.trend)}</span>
-      <span class="chip plain">热度 ${tierTxt(t.heat)}</span><span class="chip plain">量价 ${tierTxt(t.volumePrice)}</span>
-      <span class="chip plain">周期 ${t.cycle ? (LC_STAGE_CN[t.cycle] || t.cycle) : '--'}</span><span class="chip plain">五维 ${tierTxt(t.synergy)}</span>
-      ${j.vote ? `<span class="chip plain">jev方向 ${j.vote.direction ? esc(j.vote.direction) : '--'}${j.vote.confidence != null ? ' P' + Math.round(j.vote.confidence * 100) + '%' : ''}</span>` : ''}
-      ${j.lc ? `<span class="chip plain">jev阶段 ${j.lc.stage ? esc(LC_STAGE_CN[j.lc.stage] || j.lc.stage) : '--'}</span>` : ''}
-      ${resChip}${resAgreeChip}
-      ${trdChip}${trdAgreeChip}
-      ${heaChip}${heaAgreeChip}${vpqChip}${vpqAgreeChip}
-      ${agreeB(j.agree)}
-    </div></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:12px">${summary}${qDocCard(e, 'vote')}${qDocCard(e, 'lc')}${qDocCard(e, 'res')}${qDocCard(e, 'trd')}${qDocCard(e, 'hea')}${qDocCard(e, 'vpq')}</div>`;
-}
-
 // ---------- 明细存档：调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ----------
 // 数据事实：series/relay-index 读口整文档返回；slot/eod 存 questionsRaw+responseRaw(envelope)，
 // state 线上载荷=narrative 文本（jev_client POST body：{state, model, questions}）；
@@ -4265,19 +3787,19 @@ function lgCopy(view, what, ev){
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
   ['nodes', '板块节点', '🧭'],
-                     ['leaders', '板块与龙头', '🐉'], ['themes', '题材龙头', '👑'],
-                     // 2026-10-19 用户裁决：页名由「判定明细」改为「涨停分析」（表内行展开的
+                     ['leaders', '板块龙头', '🐉'], ['themes', '题材龙头', '👑'],
+                     // 2026-10-19 用户裁决：页名由「判定明细」改为「连板情绪」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
-                     ['detail', '涨停分析', '🗓️']];
+                     ['detail', '连板情绪', '🗓️']];
 const NAV = [
-  {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️'], ['dieban', '跌停复盘', '📉']]},
+  {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['dieban', '跌停复盘', '📉']]},
   // KPL 行情子目录（2026-10-27 用户需求；2026-10-28 「精选板块」更名「板块行情」，页内增
   // 精选/行业页签）：精选 = 开盘啦板块强度排行实时/历史（含服务端 list_son 二级板块）；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
   {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩'], ['kpllhb', '龙虎榜', '🏆']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
-const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
+const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
                     kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'], kpllhb: ['龙虎榜'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 
@@ -4299,6 +3821,216 @@ function sbFilter(q){
   }
 }
 function toggleSidebar(){ $('app').classList.toggle('collapsed'); }
+// ══════════ 连板行情（韭研打标链名单 + KPL 3006 实时价，2026-10-29）══════════
+// 数据：GET /api/hotlist-jev/jiuyan-action（复用现有读口，纯读零写入）；前端仅内存态
+// 动态更新（60s 轮询），不落库、服务端不缓存。行情列=KPL socket 3006 个股实时价：
+//   price ×10000 缩放（113000=11.30 元，README §四独立源核实）；
+//   inc_rate ×100 换算为涨幅%（协议测试锚 125→1.25），越界护栏 |pct|>21 → '--'（口径异常不猜数）；
+//   3006 未到流时现价兑底韭研盘口快照价（title 标注），涨幅如实 '--'。
+// 订阅复用 kplSyncStockSubscription 共享签名缓存（与板块行情/直播页同一份记账，页间切换自动重对账）。
+const LB = { doc: null, dates: [], loading: false, error: null, selected: null, nodesRows: {}, seq: 0,
+             pollTimer: null, quoteTimer: null };
+function lbPill(txt, cls){ const p = $('lbPill'); if (!p) return;
+  p.className = 'pill' + (cls ? ' ' + cls : '');
+  p.innerHTML = '<span class="dot"></span>' + esc(txt); }
+function lbBanner(msg){ const b = $('lbBanner'); if (!b) return;
+  if (!msg){ b.style.display = 'none'; return; }
+  b.style.display = ''; b.textContent = msg; }
+async function lbLoad(){
+  if (LB.loading) return;
+  LB.loading = true;
+  const seq = ++LB.seq;   // 过期响应守卫（2026-10-29 评审）：60s 轮询与手动刷新重叠时旧响应不覆盖
+  lbPill('加载中…', '');
+  const date = $('date').value;
+  try {
+    const r = await jget('/api/hotlist-jev/jiuyan-action' + (date ? '?date=' + encodeURIComponent(date) : ''));
+    LB.doc = r.doc || null; LB.dates = r.dates || [];
+    LB.error = (r.ok === false || r.degraded) ? (r.reason || r.error || '读口降级') : null;
+    if (!LB.doc && !LB.error) LB.error = r.reason || '该日无韭研名单（未采集或非交易日）';
+    lbPill(LB.error ? '降级' : '正常', LB.error ? 'bad' : 'ok');
+    lbBanner(LB.error || '');
+    LB.fallback = r.dateFallback || null;   // 生效日回退标注（r 是 try 块级作用域，出块前存）
+    if (seq !== LB.seq) return;   // 过期响应：不覆盖状态、不重渲染
+  } catch (e) {
+    if (seq === LB.seq){
+      LB.error = '读口失败：' + (e && e.message ? e.message : e);
+      LB.doc = null; lbPill('失败', 'bad'); lbBanner(LB.error);
+    }
+  }
+  if (seq !== LB.seq) return;
+  LB.loading = false;
+  const fields = (LB.doc && LB.doc.fields) || [];
+  if (!fields.some(f => f.name === LB.selected)) LB.selected = fields.length ? fields[0].name : null;
+  const total = fields.reduce((m, f) => m + ((f.stocks || []).length), 0);
+  const fb = LB.fallback ? ' · 名单回落 ' + LB.fallback.requested + '→' + LB.fallback.served : '';
+  $('lbMeta').textContent = LB.doc ? ((LB.doc.tradingDate || '') + ' · ' + (LB.doc.updateKind === 'final' ? '全日' : '午间')
+    + ' · ' + fields.length + ' 板块 ' + total + ' 只 · ' + (LB.doc.fetchedAt || '') + fb) : '';
+  lbRenderBoards(); lbRenderStocks(); lbSyncSubscription();
+  // 板块节点/聚合涨幅：复用板块节点读口（同源 analysis/hotlist/sector_nodes，确定性
+  // 收盘定档 + 盘中自带 dateFallback 回退）；按 board 名匹配韭研板块目录。
+  try {
+    const nr = await jget('/api/hotlist-jev/sector-nodes?days=5' + (date ? '&date=' + encodeURIComponent(date) : ''));
+    LB.nodesRows = {};
+    for (const row of ((nr.doc && nr.doc.rows) || [])) LB.nodesRows[row.board] = row;
+  } catch (e) { if (seq === LB.seq) LB.nodesRows = {}; }   // fail-visible：失败目录节点列显 '--'，不阻断名单主链
+  if (seq !== LB.seq) return;
+  lbRenderBoards();
+  // 领涨/换手/概念 meta：live-stocks-meta 惰性索引（与直播页共用 LIVE.stockMeta 单一事实源）
+  LB.codes = [];
+  for (const b of fields) for (const s of (b.stocks || [])){
+    const c = lbCode(s.code);
+    if (c && !LB.codes.includes(c)) LB.codes.push(c);
+  }
+  if (LB.codes.length) kplLiveFetchStockMeta(LB.codes);
+}
+function lbView(){
+  const q = ($('lbBoardSearch').value || '').trim().toLowerCase();
+  return ((LB.doc && LB.doc.fields) || []).filter(f => !q || (f.name || '').toLowerCase().includes(q));
+}
+function lbRenderBoards(){
+  // 列：#/板块/家数 + 节点/聚合涨幅（复刻板块节点模块：node + aggN10.pctMean）
+  //   + 主力净额/成交额（成员股 KPL WS quotas 聚合，KQ.MAIN_NET/AMOUNT，未到流 '--'）
+  const fields = lbView();
+  let html = '<thead><tr><th>#</th><th>板块</th><th>家数</th><th>节点</th><th>聚合涨幅</th><th>主力净额</th><th>成交额</th></tr></thead><tbody>';
+  fields.forEach((f, i) => {
+    const nr = LB.nodesRows[f.name];
+    const nodeCell = nr
+      ? `<span class="badge ${NODE_BADGE[nr.node] || 'b-gray'}" title="${esc(NODE_TIP[nr.node] || '')}">${esc(NODE_CN[nr.node] || nr.node || '--')}</span>`
+      : '<span style="color:var(--muted2)" title="板块节点读口无此板块（THS 封窗池未含或读口未到数）">--</span>';
+    const aggP = nr && nr.aggN10 && nr.aggN10.pctMean != null ? nr.aggN10.pctMean : null;
+    const aggTip = nr && nr.aggN10
+      ? '近10日活跃股聚合均值（成员' + nr.aggN10.memberN + ' · 有行情' + nr.aggN10.quotedN
+        + ' · 翻红率' + Math.round((nr.aggN10.redRatio || 0) * 100) + '%）'
+      : '板块节点读口无此板块';
+    // 主力净额/成交额 = 成员股 KPL WS 3001 quotas 聚合（与右栏个股表同源，未到流不算）
+    let mainNet = null, amount = null, quoted = 0, total = 0;
+    for (const s of (f.stocks || [])){
+      total++;
+      const c = lbCode(s.code);
+      const it = c ? KPL.items.get(c) : null;
+      const q = it && it.quotas && it.quotas.length ? it.quotas : null;
+      if (!q) continue;
+      quoted++;
+      const mn = kq({quotas: q}, KQ.MAIN_NET), am = kq({quotas: q}, KQ.AMOUNT);
+      if (mn != null) mainNet = (mainNet || 0) + mn;
+      if (am != null) amount = (amount || 0) + am;
+    }
+    const aggTip2 = '成员股 KPL 行情聚合（已到流 ' + quoted + '/' + total + '；未到流不计入，非零值不伪造）';
+    const on = LB.selected === f.name ? ' class="on"' : '';
+    html += `<tr${on} onclick="lbSelectAt(${i})"><td class="kpl-uni">${i + 1}</td><td>${esc(f.name || '--')}</td>`
+      + `<td class="kpl-uni">${(f.stocks || []).length}</td>`
+      + `<td>${nodeCell}</td>`
+      + `<td class="kpl-uni ${kcls(aggP)}" title="${esc(aggTip)}">${kfmtNum(aggP) + (aggP == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni ${kcls(mainNet)}" title="${esc(aggTip2)}">${quoted ? kfmtAmt(mainNet) : '--'}</td>`
+      + `<td class="kpl-uni" title="${esc(aggTip2)}">${quoted ? kfmtAmt(amount) : '--'}</td></tr>`;
+  });
+  html += '</tbody>';
+  $('lbBoardTable').innerHTML = fields.length ? html
+    : '<tbody><tr><td class="empty">' + esc(LB.error || '无板块数据（等待读口到数）') + '</td></tr></tbody>';
+  $('lbBoardHint').textContent = fields.length ? fields.length + ' 板块' : '';
+}
+function lbSelectAt(i){
+  const f = lbView()[i];
+  if (!f) return;
+  LB.selected = f.name;
+  lbRenderBoards(); lbRenderStocks();
+}
+// 韭研 code 归一化：实测全集带交易所前缀（sz001219/sh603006，2026-10-29 审计发现），
+// KPL 3006 订阅/hq 键均为纯 6 位——剥前缀取尾 6 位；无法归一化返回 ''（fail-visible 不猜）。
+function lbCode(c){ const m = String(c || '').match(/(\d{6})\s*$/); return m ? m[1] : ''; }
+function lbRenderStocks(){
+  const f = ((LB.doc && LB.doc.fields) || []).find(x => x.name === LB.selected);
+  if (!f){
+    $('lbStockTitle').textContent = '成分股列表';
+    $('lbStockTable').innerHTML = '<tbody><tr><td class="empty">左侧点选板块查看成分股</td></tr></tbody>';
+    return;
+  }
+  $('lbStockTitle').textContent = f.name + ' · ' + (f.stocks || []).length + ' 只';
+  // 右栏个股表字段与 KPL【板块行情】个股列表完全一致（用户裁决 2026-10-29）：
+  // 代码/名称/领涨/现价/涨幅%/换手%/连板/主力净/主力买/主力卖/量比/成交额/概念。
+  // 行情值：WS 3001 混合流 quotas 优先（KPL.items，与板块行情同源）→ 3006 hq 兑底价/涨幅
+  // → 韭研盘口快照价最后兜底（fail-visible，不猜数）；地位/换手/概念：
+  // live-stocks-meta 惰性索引（与直播页共用同一份 LIVE.stockMeta，单一事实源）。
+  const metaMap = LIVE.stockMeta.map, metaBuilding = LIVE.stockMeta.building;
+  const mv = (c, k) => { const m = metaMap[c]; return m ? (m[k] || m[k] === 0 ? m[k] : null) : null; };
+  const dash = metaBuilding ? '…' : '--';
+  let html = '<thead><tr><th>代码</th><th>名称</th><th>领涨</th><th>现价</th><th>涨幅%</th>'
+    + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
+    + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
+  for (const s of (f.stocks || [])){
+    const code = lbCode(s.code);
+    const it = code ? KPL.items.get(code) : null;
+    const q = it && it.quotas && it.quotas.length ? it.quotas : null;
+    const gv = k => q ? kq({quotas: q}, k) : null;
+    const hq = code ? KPL.hq.get(code) : null;
+    const price = gv(KQ.PRICE) != null ? gv(KQ.PRICE)
+      : (hq && hq.price != null ? hq.price / 10000 : s.price);
+    const rateRaw = gv(KQ.PCT) != null ? gv(KQ.PCT)
+      : (hq && hq.inc_rate != null ? hq.inc_rate / 100 : null);
+    const pct = (rateRaw != null && Math.abs(rateRaw) <= 21) ? rateRaw : null;   // 越界=口径异常 → '--'
+    const liveMark = q ? ' title="WS 实时覆盖"'
+      : (hq ? ' title="3006 实时价"'
+        : (s.price != null ? ' title="韭研盘口快照价（等待行情到流）"' : ''));
+    // 连板列：韭研打标口径优先（本页核心名单），缺则回 KPL meta board_status；
+    // num 实测为「X天X板」字符串（2026-10-29 修「X天X板板」）——纯数字才拼「板」，其余原样
+    const numRaw = s.num == null ? '' : String(s.num);
+    const lbTxt = numRaw ? (/^\d+$/.test(numRaw) ? numRaw + '板' : numRaw)
+      : (mv(code, 'board_status') || dash);
+    html += `<tr data-code="${code}"><td class="kpl-uni">${esc(code || '--')}</td><td>${esc(s.name || '--')}</td>`
+      + `<td><span class="badge b-purple">${esc(mv(code, 'rank_title') || dash)}</span></td>`
+      + `<td class="kpl-uni"${liveMark}>${kfmtNum(price)}</td>`
+      + `<td class="kpl-uni ${kcls(pct)}" title="${pct == null ? '等待个股行情（3001 quotas / 3006 inc_rate ×100，越界护栏 21%）' : 'KPL 实时涨幅'}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni">${mv(code, 'turnover') != null ? kfmtNum(mv(code, 'turnover'), 1) : dash}</td>`
+      + `<td class="kpl-uni">${esc(lbTxt)}</td>`
+      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_NET))}">${kfmtAmt(gv(KQ.MAIN_NET))}</td>`
+      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_BUY))}">${kfmtAmt(gv(KQ.MAIN_BUY))}</td>`
+      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_SELL))}">${kfmtAmt(gv(KQ.MAIN_SELL))}</td>`
+      + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
+      + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
+      + `<td class="kpl-sub" title="KPL 板块概念（${esc(String(mv(code, 'plate_id') || ''))
+        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）${LIVE.stockMeta.fb ? ' · 数据日 ' + esc(String(LIVE.stockMeta.fb)) : ''}">${esc(String(mv(code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
+  }
+  html += '</tbody>';
+  $('lbStockTable').innerHTML = html;
+}
+function lbSyncSubscription(){
+  const codes = [];
+  for (const b of ((LB.doc && LB.doc.fields) || []))
+    for (const s of (b.stocks || [])){
+      const c = lbCode(s.code);
+      if (c && !codes.includes(c)) codes.push(c);
+    }
+  if (!codes.length) return;
+  if (KPL.universeIds.length){ kplSyncStockSubscription(codes); return; }   // 共享签名缓存（板块宇宙已引导）
+  const sig = 'lb:' + codes.join(',');                                      // 板块宇宙未引导：直接订阅个股清单
+  if (sig === KPL.lastSubSig) return;
+  KPL.lastSubSig = sig;
+  jpost(KPL_API + '/subscriptions', {stock_ids: codes})
+    .then(r => { if (!r.ok){ KPL.lastSubSig = ''; lbBanner('个股实时订阅被拒：' + ((r.subscriptions && r.subscriptions.reason) || '')); } })
+    .catch(e => { KPL.lastSubSig = ''; lbBanner('个股实时订阅失败：' + (e.message || e)); });
+}
+function lbEnter(){
+  if (!KPL.today){   // 直达连板行情页时补当日（KPL.today 由 kplViewEnter 设置；空则
+    const d = new Date();   // live-stocks-meta 请求 date='' → 后端 400 → 领涨/换手/概念永无值）
+    KPL.today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  kplConnect(); kplEnsureRunning();   // 3006 行情流：进入页签即连 WS（离开由 kplViewLeave 断）
+  lbLoad();
+  if (!LB.pollTimer) LB.pollTimer = setInterval(() => { if (STATE.view === 'lianban') lbLoad(); }, 60000);
+  if (!LB.quoteTimer) LB.quoteTimer = setInterval(() => {
+    if (STATE.view !== 'lianban') return;
+    lbRenderStocks();
+    if (LB.codes && LB.codes.length) kplLiveFetchStockMeta(LB.codes);   // building 期间继续拉（内部节流）
+    const w = $('lbWsHint');
+    if (w) w.textContent = (KPL.ws && KPL.ws.readyState === 1)
+      ? 'WS 已连接 · 行情到流 ' + KPL.items.size + '/' + KPL.hq.size : 'WS 未连接';
+  }, 3000);
+}
+function lbLeave(){
+  if (LB.pollTimer){ clearInterval(LB.pollTimer); LB.pollTimer = null; }
+  if (LB.quoteTimer){ clearInterval(LB.quoteTimer); LB.quoteTimer = null; }
+  const w = $('lbWsHint'); if (w) w.textContent = '';
+}
 function setView(key){
   const [main, sub] = key.split('/');
   STATE.view = main;
@@ -4329,7 +4061,9 @@ function setView(key){
   const kpiEl = $('kplMarketKpi');
   const kplGroup = ['kpl', 'kpllive', 'kplbid', 'kplsoon', 'kplvane'];   // 大盘 KPI 条=kpl 组子页公用
   if (kpiEl) kpiEl.style.display = kplGroup.includes(main) ? '' : 'none';
+  if (main !== 'lianban') lbLeave();   // 连板行情轮询计时器只在页内活
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
+  else if (main === 'lianban'){ lbEnter(); }   // WS 保持（离开 kpl 组断链由下方 kplViewLeave 负责）
   else kplViewLeave();
   if (main === 'kplbid' || main === 'kplsoon' || main === 'kplvane') kplDabanEnter(main);   // 打板页签：进页即取快照+开轮询
   if (main === 'kpllhb') kplLhbEnter(); else kplLhbLeave();   // 龙虎榜页签：进页即取双快照+开轮询
@@ -4844,7 +4578,7 @@ renderSidebar();
 const _d = new Date();
 $('date').value = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
 // 只监听 change：input 事件会在 fill/清空中间态触发空 date 请求（422 竞态覆盖）
-$('date').addEventListener('change', () => { STATE.relayFocus = null; loadAll(); });
+$('date').addEventListener('change', () => { STATE.relayFocus = null; loadAll(); if (STATE.view === 'lianban') lbLoad(); });
 // 快捷键：Ctrl/Cmd+K 聚焦侧栏搜索；Ctrl/Cmd+B 收起侧栏（对齐 CF 控制台习惯）
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'){ e.preventDefault(); $('sbSearch').focus(); }
@@ -4969,8 +4703,8 @@ function kplConnect(){
     if (KPL.ws !== ws) return;
     KPL.ws = null;
     kplSetWsPill(KPL.wsWant && KPL.mode === 'live' ? 'connecting' : 'closed');
-    if (KPL.wsWant && KPL.mode === 'live' && STATE.view === 'kpl')
-      setTimeout(() => { if (KPL.wsWant && !KPL.ws && STATE.view === 'kpl') kplConnect(); }, 2000);
+    if (KPL.wsWant && KPL.mode === 'live' && (STATE.view === 'kpl' || STATE.view === 'lianban'))
+      setTimeout(() => { if (KPL.wsWant && !KPL.ws && (STATE.view === 'kpl' || STATE.view === 'lianban')) kplConnect(); }, 2000);
   };
   ws.onerror = () => { if (KPL.ws === ws) kplSetWsPill('error'); };
 }
@@ -5103,6 +4837,7 @@ async function kplBootstrap(){
                           {stock_ids: ids, priority_ids: rankIds});
     if (!r.ok) throw new Error((r.subscriptions && r.subscriptions.reason) || '订阅更新被拒');
     KPL.universeIds = ids;                // 成分股并入订阅时必须带上板块宇宙
+    if (STATE.view === 'lianban') lbSyncSubscription();   // 引导晚于直发：补发被替换语义覆盖掉的个股清单（2026-10-29 评审）
     if (!r.running) kplEnsureRunning();   // 采集器停着时订阅照收，需拉起才有流
     if (KPL.hist.stocks && KPL.hist.stocks.length && KPL.mode === 'live')
       kplSyncStockSubscription(KPL.hist.stocks.map(r => r.code));   // 引导晚于点选的补发
@@ -5118,7 +4853,7 @@ async function kplBootstrap(){
 // 引导从未成功、WS 掉线）则先修 WS 再重放引导（POST 幂等，排行读口有 30s 缓存兜）。
 let kplStallCount = 0;
 setInterval(() => {
-  if (STATE.view !== 'kpl' || KPL.mode !== 'live' || KPL.bootstrapping) return;
+  if ((STATE.view !== 'kpl' && STATE.view !== 'lianban') || KPL.mode !== 'live' || KPL.bootstrapping) return;
   if (KPL.items.size >= 20){ kplStallCount = 0; return; }
   kplStallCount++;
   if (!KPL.ws || KPL.ws.readyState !== 1){ kplConnect(); return; }
@@ -5385,7 +5120,7 @@ function kplRenderStocks(){
       + (KPL.selected ? '该板块暂无成分股返回（盘中可能尚未生成，稍后刷新或回看历史日）' : '左侧点选板块查看成分股') + '</td></tr></tbody>';
     return;
   }
-  let html = '<thead><tr><th>代码</th><th>名称</th><th>地位</th><th>现价</th><th>涨幅%</th>'
+  let html = '<thead><tr><th>代码</th><th>名称</th><th>领涨</th><th>现价</th><th>涨幅%</th>'
     + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
     + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
   const live = KPL.mode === 'live';
@@ -5588,10 +5323,10 @@ function kplLiveRenderStocks(){
     $('kplLiveStockTable').innerHTML = '<tbody><tr><td class="empty">暂无消息个股 — 左侧到流后自动填充</td></tr></tbody>';
     return;
   }
-  kplLiveFetchStockMeta(rows.map(r => r.code));      // 地位/换手/连板/概念：KPL 板块宇宙 meta（惰性索引）
+  kplLiveFetchStockMeta(rows.map(r => r.code));      // 领涨/换手/连板/概念：KPL 板块宇宙 meta（惰性索引）
   const metaMap = LIVE.stockMeta.map, metaBuilding = LIVE.stockMeta.building;
   const mv = (c, k) => { const m = metaMap[c]; return m ? (m[k] || m[k] === 0 ? m[k] : null) : null; };
-  let html = '<thead><tr><th>代码</th><th>名称</th><th>地位</th><th>现价</th><th>涨幅%</th>'
+  let html = '<thead><tr><th>代码</th><th>名称</th><th>领涨</th><th>现价</th><th>涨幅%</th>'
     + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
     + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
   for (const r of rows){
@@ -5600,7 +5335,7 @@ function kplLiveRenderStocks(){
     const gv = k => q ? kq({quotas: q}, k) : null;    // 消息流无行情列；解说模式未到流用消息内 pct 兑底，不猜数
     const pct = q ? kq({quotas: q}, KQ.PCT) : r.pct0;
     const liveMark = q ? ' title="WS 实时覆盖"' : (r.pct0 != null ? ' title="消息内涨幅（快照）"' : ' title="等待个股行情到流"');
-    // 地位/换手/连板/概念：KPL 成分股口径（live-stocks-meta）；不在板块宇宙→如实 "--"；
+    // 领涨/换手/连板/概念：KPL 成分股口径（live-stocks-meta）；不在板块宇宙→如实 "--"；
     // 索引构建中→"…"（渐进可用）；连板优先用雷达消息自带 lb_status（更实时）
     const dash = metaBuilding ? '…' : '--';
     const lb = r.lb || mv(r.code, 'board_status') || (metaBuilding ? '…' : '--');
@@ -5615,8 +5350,8 @@ function kplLiveRenderStocks(){
       + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_SELL))}">${kfmtAmt(gv(KQ.MAIN_SELL))}</td>`
       + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
       + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
-      + `<td class="kpl-sub" title="KPL 板块概念（${mv(r.code, 'plate_id')
-        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）${LIVE.stockMeta.fb ? ' · 数据日 ' + LIVE.stockMeta.fb : ''}">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
+      + `<td class="kpl-sub" title="KPL 板块概念（${esc(String(mv(r.code, 'plate_id') || ''))
+        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）${LIVE.stockMeta.fb ? ' · 数据日 ' + esc(String(LIVE.stockMeta.fb)) : ''}">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
   }
   html += '</tbody>';
   $('kplLiveStockTable').innerHTML = html;

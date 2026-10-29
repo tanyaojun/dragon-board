@@ -240,14 +240,26 @@ def test_board_dragons_grouped_and_final_missing():
 
 
 class _LabelsCol:
-    """hotlist_jev_driver_labels 替身：find_one 按 _id（PHASE 哨兵）、find 按 tradingDate+origin 排除。"""
+    """hotlist_jev_driver_labels 替身：find_one 按 query 匹配（_id 精确 / tradingDate
+    精确或 $lt+$ne / origin $ne）；2026-10-27 读口交易日历回退（resolve_view_date）
+    会向 find_one 传 sort= kwarg，fake 必须接住，否则路由读口 502（存量红转绿）。"""
 
     def __init__(self, docs):
         self.docs = docs
 
-    def find_one(self, query, projection=None):
+    @staticmethod
+    def _match(value, cond):
+        if isinstance(cond, dict):
+            if "$ne" in cond and value == cond["$ne"]:
+                return False
+            if "$lt" in cond and not (value is not None and value < cond["$lt"]):
+                return False
+            return True
+        return value == cond
+
+    def find_one(self, query, projection=None, sort=None):
         for d in self.docs:
-            if d.get("_id") == query.get("_id"):
+            if all(self._match(d.get(k), v) for k, v in query.items()):
                 return dict(d)
         return None
 
@@ -423,7 +435,7 @@ def test_limitup_route_streak_passthrough(monkeypatch):
     """2026-10-19 用户报障：涨停复盘 KPI 四板以上/最高板显示的是空间最高板。
 
     修法：路由 board join 段透传 streak（jiuyan_streak_map 真连板单一事实源，与
-    market_metrics/quotes-review 同源）；boards/days 保留「N天M板」空间口径作注记。
+    market_daily_limit_down_stocks 同源）；boards/days 保留「N天M板」空间口径作注记。
     - 纯连板 5天5板 → streak=5；
     - 断板股 7天4板 → streak=回溯值（本测 2，由单源给），空间 M=4 不冒充；
     - 韭研首板（num=None）→ streak=1；
@@ -479,6 +491,55 @@ def test_limitup_route_streak_passthrough(monkeypatch):
     # 2026-10-21 review 护栏：兜底注记只在真兜底（final 缺失回退午盘）时出现，
     # EOD 路径（final 在档）不得携带 boardJoinSlot
     assert "boardJoinSlot" not in resp.json()
+
+
+def test_board_info_reseal_fallback(monkeypatch):
+    """尾盘回封补证（2026-10-29 光洋股份）：炸板池命中但日线证实回封 → zhabanResealed
+    而非 zhaban（涨停口径不被错杀）；broken → 维持 zhaban（openNum 照传，同旧版）。"""
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+
+    def fake_verdict(date, code):
+        return "sealed" if code == "600004" else "broken"
+
+    monkeypatch.setattr(jiuyan_mod, "_reseal_verdict", fake_verdict)
+    today = [
+        {"code": "600004", "name": "尾盘回封", "num": "4天4板", "time": "15:00:00"},
+        {"code": "600005", "name": "真炸板", "num": None, "time": "13:00:00"},
+    ]
+    cols = {
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("机器人", today)]),
+            _final("2026-10-08", [("X", [])]),
+        ]),
+        "snapshot_frames": FramesCol([
+            _pool_frame("2026-10-09", [], failed_items=[
+                {"code": "600004", "open_num": 29}, {"code": "600005", "open_num": 3}]),
+            _pool_frame("2026-10-08", []),
+        ]),
+    }
+    info, meta = jiuyan_board_info(MultiFakeDb(cols), "2026-10-09")
+    assert info["600004"]["zhabanResealed"] is True
+    assert "zhaban" not in info["600004"] and "openNum" not in info["600004"]
+    assert info["600005"]["zhaban"] is True and info["600005"]["openNum"] == 3
+    assert "zhabanResealed" not in info["600005"]
+
+
+def test_reseal_verdict_reads_daily_bars(monkeypatch):
+    """_reseal_verdict 走日线收盘复核：收在涨停价 → sealed；未封 → broken；
+    无棒（离线护栏打空棒/新上市）→ unknown → 调用方维持旧口径不动。"""
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+
+    def bars_for(close):
+        return [{"date": "2026-10-08", "close": 10.0},
+                {"date": "2026-10-09", "close": close}]
+
+    monkeypatch.setattr(jiuyan_mod, "_daily_bars", lambda code: bars_for(11.0))
+    monkeypatch.setattr(jiuyan_mod, "_adj_prev_series", lambda date, code, bars: {})
+    assert jiuyan_mod._reseal_verdict("2026-10-09", "002708") == "sealed"
+    monkeypatch.setattr(jiuyan_mod, "_daily_bars", lambda code: bars_for(10.5))
+    assert jiuyan_mod._reseal_verdict("2026-10-09", "002708") == "broken"
+    monkeypatch.setattr(jiuyan_mod, "_daily_bars", lambda code: [])
+    assert jiuyan_mod._reseal_verdict("2026-10-09", "002708") == "unknown"
 
 
 def test_board_info_midday_fallback_intraday():

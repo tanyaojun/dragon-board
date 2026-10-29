@@ -97,10 +97,14 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                         stock["zhaban"] = True
                         if info.get("openNum") is not None:
                             stock["openNum"] = info["openNum"]
+                    if info.get("zhabanResealed"):
+                        # 尾盘回封口径注记（2026-10-29）：炸板池命中但收盘价证实回封，
+                        # 按涨停计；前端可展示注记（fail-visible，不冒充普通封板）
+                        stock["zhabanResealed"] = True
                     if info.get("excluded"):
                         stock["excluded"] = info["excluded"]
             # 2026-10-19 增补（用户报障：涨停复盘 KPI 四板以上/最高板显示的是空间最高板）：
-            # 真连板口径与 market_metrics/quotes-review 同源 jiuyan_streak_map（N==M 直取 /
+            # 真连板口径与 market_metrics 同源 jiuyan_streak_map（N==M 直取 /
             # N>M 回溯 / num=None→首板 1；断板回溯不可算→None 不冒充；今日炸板→None）。
             # boards 保留「N天M板」空间口径作注记；KPI 分桶/筛选/排序改吃 streak。
             streaks = jiuyan_streak_map(db, date, allow_midday_fallback=True)

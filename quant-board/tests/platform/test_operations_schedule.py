@@ -83,10 +83,11 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     # 炸板归因打标（hotlist_jev_zhaban_labels），反序则当日归因永远赶不上叙事组装
     # （2026-10-14/10-15 实证：relay 16:18-16:27 出数、归因 16:20-16:36 才落库，
     # 叙事只能写「未覆盖（0/N，归因证据缺失）」）。
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
     assert "jevVoteRecheck" not in result["results"]  # 2026-10-15 用户裁决摘除（浪费 token）
+    assert "voteWinrateLedger" not in result["results"]  # 2026-10-29 随热榜行情页删除一并摘除（读口已 drop）
     assert result["results"]["calibDriftMonitor"]["skipped"] is True  # dry_run 短路
     assert result["results"]["relayIndex"]["skipped"] is True  # dry_run 短路
     assert result["results"]["sectorNodes"]["skipped"] is True  # 2026-10-24 v1 挂链（纯本地 advisory）
@@ -997,8 +998,8 @@ def test_deep_valley_failure_does_not_flip_chain(monkeypatch: Any) -> None:
 
 
 # ── jevVoteRecheck 自动步已摘除（2026-10-15 用户裁决「v4 挂自动调度可以删掉了，浪费 token」）──
-# 判读能力保留在 runner（backend/operations/jev_vote_confirm.py）手动 --fire 路径；
-# 摘除后链上零 jev 调用，winrate 台账只对已落档判读生效。
+# vote 判读/台账全链（jev_vote_confirm/jev_vote_winrate_ledger）已随热榜行情页删除
+# 一并移除（2026-10-29 用户裁决 A：6 个 pilot 集合 drop + 生产脚本顺链清理）。
 
 
 def test_after_market_chain_has_no_jev_vote_recheck_step():

@@ -695,6 +695,7 @@ def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str,
         if not dates:
             return {"ok": True, "dates": [], "doc": None}
         target_date = date or dates[-1]["date"]
+        date_fallback = None
         doc = get_action_doc(db, target_date, kind)
         if doc is None and date is None:
             # 最新日可能只有 midday——回落找该日任一 kind
@@ -702,11 +703,33 @@ def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str,
                 doc = get_action_doc(db, target_date, k)
                 if doc:
                     break
+        elif doc is None and date is not None:
+            # 生效日回退（2026-10-29 隔日看盘）：先同日回落另一 kind（请求日有 midday
+            # 无 final → 午间名单照显，更新）；同日全缺 → 跨日回退 < 请求日最新有档日；
+            # dateFallback 仅跨日时透出。
+            for k in ("final", "midday"):
+                if k != kind:
+                    doc = get_action_doc(db, target_date, k)
+                    if doc:
+                        break
+            if doc is None:
+                earlier = [d["date"] for d in dates if d["date"] < target_date]
+                if earlier:
+                    served = earlier[-1]
+                    for k in (kind, "final", "midday"):
+                        doc = get_action_doc(db, served, k)
+                        if doc:
+                            break
+                    if doc:
+                        date_fallback = {"requested": target_date, "served": served}
         if doc is None:
             return {"ok": True, "dates": dates, "doc": None,
                     "degraded": True, "reason": f"{target_date}:{kind} 未落库"}
         doc = {k: v for k, v in doc.items() if k != "_id"}
-        return {"ok": True, "dates": dates, "doc": doc}
+        result = {"ok": True, "dates": dates, "doc": doc}
+        if date_fallback:
+            result["dateFallback"] = date_fallback
+        return result
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"jiuyan_read_failed: {exc}"}
 

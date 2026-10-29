@@ -8,7 +8,8 @@
 - HisBeOnTheLHB 历史（kpl_lhb_history）：交易所分组榜单 Reason + stockList、个股行
   22 列（同字段族）。
 
-「jev 语料管道入口」= 方向线 ammo 模块（jev_driver_ammo/jev_resonance_ammo 同构）：
+「jev 语料管道入口」= 方向线 ammo 模块（jev_driver_ammo 同构；原 jev_resonance_ammo
+已随热榜行情页删除移除，2026-10-29）：
 本模块提供 collect_lhb_facts（取数+归一）与 build_lhb_facts_lines（事实行组装），
 方向线叙事层按需引用。本模块不调用 jev（红线 7），取数失败走结构化降级不伪装。
 

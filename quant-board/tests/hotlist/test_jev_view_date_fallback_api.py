@@ -4,7 +4,7 @@
 覆盖面 = 五个带 date 精确匹配的读口 + 共享助手 resolve_view_date：
 - /relay-index：day 文档回退（接力四卡/今日连板情绪主表盘中看上一交易日）
 - /series：全日无槽位/EOD 文档时整体回退（KPI 前四卡/逐槽/EOD 窗口）
-- /limitup-labels、/quotes-review、/dieban-review：生效日接线（monkeypatch 捕获委托参数）
+- /limitup-labels、/dieban-review：生效日接线（monkeypatch 捕获委托参数）
 - 交易日历口径：回退锚=集合内 < 指定日最大 tradingDate（档案日即交易日），
   盘中当日有档（槽位帧）时不回退（实时优先）。
 
@@ -184,7 +184,7 @@ def test_series_keeps_today_when_slots_exist(series_client):
     assert "dateFallback" not in body
 
 
-# ── /limitup-labels、/quotes-review、/dieban-review：生效日接线 ────────────
+# ── /limitup-labels、/dieban-review：生效日接线 ────────────
 
 def test_limitup_labels_delegates_to_fallback_date(monkeypatch):
     captured = {}
@@ -207,31 +207,6 @@ def test_limitup_labels_delegates_to_fallback_date(monkeypatch):
     body = r.json()
     assert captured["date"] == _D2       # 后续梯队/板块/连板 join 全部跟随生效日
     assert body["date"] == _D2
-    assert body["dateFallback"] == {"requested": _TODAY, "served": _D2}
-
-
-def test_quotes_review_delegates_to_fallback_date(monkeypatch):
-    captured = {}
-
-    def fake_collect(db, date, **kwargs):
-        captured["date"] = date
-        return {"ok": True, "date": date, "rows": [], "noData": False}
-
-    monkeypatch.setattr(
-        "backend.api.hotlist_jev_quotes_routes.collect_quotes_review", fake_collect)
-    db = FakeDb({"snapshot_frames": FakeCol([
-        {"_id": f"{_D2}:15:00", "datasetId": "dragonboard_live", "type": "half_hour",
-         "tradingDate": _D2, "slotTime": "15:00"}])})
-    monkeypatch.setattr(
-        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
-        lambda: db,
-    )
-    client = TestClient(app)
-    r = client.get("/api/hotlist-jev/quotes-review",
-                   params={"date": _TODAY, "with_docs": 1})
-    assert r.status_code == 200
-    body = r.json()
-    assert captured["date"] == _D2
     assert body["dateFallback"] == {"requested": _TODAY, "served": _D2}
 
 

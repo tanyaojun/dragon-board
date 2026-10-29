@@ -1,5 +1,11 @@
 # 行情列表五维信号 jev 复核双题集 正式预登记（2026-10-12 用户五裁决后落方案；同日 pilot 收官）
 
+> **⚠️ 全链终止（2026-10-29 用户裁决 A）**：本预登记对应的展示端（热榜行情页 quotes-review）、
+> 生产脚本（jev_vote_confirm 等 4 个 recheck 操作 + ammo 层）与数据集（6 个 `*_pilot` 集合）
+> 已全部删除/drop，归档见 `data/backups/mongoexport_20261029_quotes_pilot_archive/`；
+> 决策记录见 [lianban-page-quotes-removal-20261029.md](lianban-page-quotes-removal-20261029.md)。
+> 以下正文为历史过程档，不再作为运行手册。
+
 > 性质：**新题集双立**（非改门）。状态：判据文本已按 2026-10-12 五裁决修订，**待用户逐字确认后冻结**；
 > 冻结以开火时 `_questions_hash` 为准（开火后只能文档向代码回写，反向改代码=作废 pilot）。
 > 本文件同时是 jev 叙事平台正式立项后第一个按新定位立项的批次（见 §〇）。
