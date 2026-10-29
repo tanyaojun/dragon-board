@@ -205,9 +205,6 @@
   .sb-item.on{background:#e8eaed;color:var(--text);font-weight:600}
   .sb-item .ic{width:16px;text-align:center;flex:none;font-size:12px}
   .sb-item.sub{padding-left:22px}
-  .sb-foot{margin-top:auto;padding:10px 14px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted2)}
-  .sb-kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
-  .sb-kv b{color:var(--muted);font-weight:600}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
   .topbar{display:flex;align-items:center;position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid var(--border);
           padding:9px 22px;display:flex;align-items:center;gap:10px;min-height:var(--top-h)}
@@ -365,11 +362,6 @@
     </div>
     <div class="sb-search"><span>🔍</span><input id="sbSearch" placeholder="快速搜索…" oninput="sbFilter(this.value)"><kbd>Ctrl K</kbd></div>
     <nav class="sb-nav" id="sbNav"></nav>
-    <div class="sb-foot" id="sbFoot">
-      <div class="sb-kv"><span>判定口径</span><b id="sbVer">--</b></div>
-      <div class="sb-kv"><span>统计区间</span><b id="sbWin">--</b></div>
-      <div class="sb-kv"><span>分带表</span><b id="sbBand">--</b></div>
-    </div>
   </aside>
   <div class="main">
     <header class="topbar">
@@ -377,7 +369,7 @@
       <div class="crumb" id="crumb"></div>
       <div class="spacer"></div>
       <input type="date" id="date">
-      <span class="pill" id="srcPill"><span class="dot"></span>数据源 :8000</span>
+      <span class="pill" id="srcPill"><span class="dot"></span>数据源正常</span>
       <span class="pill" id="refreshPill"><span class="dot"></span><span id="refreshAt">未刷新</span></span>
       <button onclick="loadAll()">刷新</button>
     </header>
@@ -386,7 +378,7 @@
     <main class="content" id="content">
   <section id="tab-overview">
     <div class="page-head"><div><h2>总览</h2>
-      <p>当日逐槽日内演化 · EOD 日级窗口 · 大盘分时走势叠加直播看点。数据实时透传 :8000，缺数与降级原因始终显式标注。</p></div></div>
+      <p>当日逐槽日内演化 · EOD 日级窗口 · 大盘分时走势叠加直播看点。</p></div></div>
     <div class="ph-line"></div>
     <div class="kpi-strip" id="kpiRow"></div>
     <div class="grid g3" style="margin-top:14px">
@@ -537,7 +529,7 @@
 
   <section id="tab-labels" style="display:none">
     <div class="page-head"><div><h2>涨停复盘</h2>
-      <p>韭研触板名单按 THS 炸板池二分（涨停 / 炸板 / 剔除）后的梯队分布、连板高度与驱动标签汇总，可下钻到个股调用日志。</p></div></div>
+      <p>韭研触板名单按 THS 炸板池二分（涨停 / 炸板 / 剔除）后的梯队分布、连板高度与驱动标签汇总。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
       <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
@@ -550,7 +542,7 @@
 
   <section id="tab-dieban" style="display:none">
     <div class="page-head"><div><h2>跌停复盘</h2>
-      <p>个股名单三源并集：<b>全市场逐股跌停</b>（东财跌停池 → 行情快照 → 本地日线重算，一天一文档，逐行标来源）∪ 采集池（250 只热榜池）当日快照行 ∪ 同花顺大幅回撤池逐股；跌停判定与连跌回溯统一走 <code>core/limit_rules</code> 同一条阈值线。全市场跌停家数单列 KPI 并与逐股同源对账。缺逐股文档、家数存疑、口径降级、池内/全市场差额始终显式标注（fail-visible，不伪 0）。</p></div></div>
+      <p>个股名单 = 全市场逐股跌停 ∪ 采集池 ∪ 同花顺大幅回撤池；缺源与口径降级显式标注。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
       <h3>负反馈名单与口径汇总 <span class="hint" id="diebanHint"></span></h3>
@@ -1003,7 +995,7 @@ const bandDayMap = () => { const m = {}; for (const o of bandDays()) m[o.d] = o;
 // 客户端统计表统一用它，避免「客户端 n=64 / 诊断 n=63」类口径不一致
 const measurable = rows => rows.filter(o => o.premA != null);
 const bandDiagMissing = () => { const b = STATE.band || {};
-  return !b.ok ? `<div class="warn">离线分带表未就绪（${esc(b.reason || 'unknown')}）——${esc(b.hint || '跑 scripts/jev_relay_band_diagnostic.py --emit-json')} ${bandRefreshBtn()}</div>` : ''; };
+  return !b.ok ? `<div class="warn">离线分带表未就绪（${esc(b.reason || 'unknown')}）——${esc(b.hint || '可点右侧按钮在页面内刷新')} ${bandRefreshBtn()}</div>` : ''; };
 
 // ══ 分带表刷新（2026-10-19 用户需求）══════════════════════════════════════════
 // 【分带观察】滞后/缺失时页面内一键重算，不再要求手敲命令行。后端在 :8000 起后台任务跑
@@ -1017,8 +1009,8 @@ const bandElapsed = ts => { if (!ts) return '?';
 const bandRefreshBtn = (label) => {
   const st = STATE.bandRefresh || {};
   return `<button class="rerun"${st.running ? ' disabled' : ''}
-    title="零模型调用（只读 Mongo + 本地通达信日线），全窗约 5–9 分钟；完成后本页自动刷新"
-    onclick="event.stopPropagation(); bandRefresh()">${esc(st.running ? `刷新中…（${bandElapsed(st.startedAt)}）` : (label || '刷新分带表（零模型调用）'))}</button>`;
+    title="全窗约 5–9 分钟，完成后本页自动刷新"
+    onclick="event.stopPropagation(); bandRefresh()">${esc(st.running ? `刷新中…（${bandElapsed(st.startedAt)}）` : (label || '刷新分带表'))}</button>`;
 };
 function bandRefreshWarnHtml(){
   const st = STATE.bandRefresh || {};
@@ -1054,7 +1046,7 @@ function bandRefresh(){
   // 先占位再弹确认：防止 confirm 弹窗期间重复点击 → 并发 POST 得到 already_running
   STATE.bandRefresh = { running: true, startedAt: null };
   renderBandRefreshWarn();
-  const ok = window.confirm('刷新离线分带表？\n\n零模型调用（只读 Mongo + 本地通达信日线），全窗约 5–9 分钟。\n期间本页每 5 秒轮询，完成后自动刷新。');
+  const ok = window.confirm('刷新离线分带表？\n\n全窗约 5–9 分钟。\n期间本页每 5 秒轮询，完成后自动刷新。');
   if (!ok){ STATE.bandRefresh = null; renderBandRefreshWarn(); return; }
   jpost('/api/hotlist-jev/relay-band/refresh', {})
     .then(r => {
@@ -1250,7 +1242,7 @@ async function loadAll(){
   }
   $('srcPill').className = (series && series.ok === false) ? 'pill bad' : 'pill';
   $('srcPill').innerHTML = (series && series.ok === false)
-    ? '<span class="dot"></span>读库降级' : '<span class="dot"></span>数据源 :8000';
+    ? '<span class="dot"></span>读库降级' : '<span class="dot"></span>数据源正常';
   STATE.series = series.series || [];
   STATE.day = series.day || null;
   STATE.wzsBaseline = series.wzsBaseline || null;   // 全史延续率（现算，审查 SF-2）
@@ -1715,7 +1707,6 @@ function renderRelayTab(){
   $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th><th>题材</th>${th('龙头强度', 'leader')}</tr>`
     + (body || '<tr><td colspan="10" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   renderRelayAnalysis();
-  const sbv = $('sbVer'); if (sbv) sbv.textContent = vers.length > 1 ? vers.join('+') : (vers[0] || '?');
 }
 // 分区筛选枚举（与 zoneOf 同源，不另抄阈值）
 // 分区筛选枚举：直接由 ZONE_DEF 派生（单一事实源，不再手抄 label；
@@ -2334,12 +2325,12 @@ function renderNodes(){
   const bgErr = d.error && doc
     ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据</div>' : '';
   if (d.error && !doc){
-    head.innerHTML = '<div class="lf-warn">⚠️ 板块节点读口异常：' + esc(d.error) + '（非「无存档」）</div>';
+    head.innerHTML = '<div class="lf-warn">⚠️ 板块节点读口异常：' + esc(d.error)  + '</div>';
     $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
     return;
   }
   if (!doc){
-    head.innerHTML = '<div class="lf-warn">该日无板块节点存档（盘后链未跑 / 非交易日 / 早于 v1 投产日）</div>';
+    head.innerHTML = '<div class="lf-warn">该日无板块节点存档（盘后链未跑 / 非交易日）</div>';
     $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
     return;
   }
@@ -2537,7 +2528,7 @@ function pulseRender(){
     box.innerHTML = '<div class="hint">盘中红盘提示加载中…</div>'; return;
   }
   if (d.error && !d.api){
-    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口异常：' + esc(d.error) + '（非「无提示」）</div>'; return;
+    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口异常：' + esc(d.error)  + '</div>'; return;
   }
   const r = d.api || {};
   if (r.ok === false){
@@ -4561,10 +4552,7 @@ function renderDiagPanel(agg){
     renderBandRefreshWarn(); return; }
   const w = b.window || {};
   const rows = agg.rows;
-  const sbw = $('sbWin'); const rg = STATE.relayRange || {};
-  if (sbw) sbw.textContent = rows.length ? `${rows[0].d} ~ ${rows[rows.length-1].d}（${rows.length} 日）`
-    : (rg.start || rg.end ? '区间内无读数' : `${w.start} ~ ${w.end}`);
-  const sbb = $('sbBand'); if (sbb) sbb.textContent = String(b.generatedAt || '').replace('T', ' ').slice(5);
+  const rg = STATE.relayRange || {};
   const bars = b.bars || {};
   renderBandRefreshWarn();   // 滞后/缺失/刷新中 → banner（含一键刷新按钮，零模型调用）
   const bandRows = agg.bands.filter(r => BAND_ORDER.includes(r.name));
