@@ -221,8 +221,10 @@ def fetch_plate_zt_history(plate_id: str, label_date: str,
                            window_days: int = 5) -> dict:
     """板块涨停家记录（P1-1/G3）：层2 一枪全史 → ≤标注日近 N 个记录日。
 
-    **层2 仅记录有涨停家/爆发日**（实测算力 28 天空窗），记录间缺口≠零涨停——渲染层
-    显式标注，不伪装连续序列；失败 fail-visible 结构化。
+    **层2 仅记录有涨停家/爆发日**——记录间缺口=上游缺记≠零涨停（2026-10-29 反查
+    实证固化，原「待上游确认」结案：10-16 缺口日 HisDaBanList 实证机器人链 3 只涨停
+    股在场而层2 无记录，见 data/backups/kpl-corpus-probe-20261029-l3l2/）——渲染层
+    显式标注缺口率，不伪装连续序列；失败 fail-visible 结构化。
     """
     try:
         from backend.services.kpl_ranking_service import get_plate_daily_history
@@ -866,22 +868,27 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             return None
         pid = smatch["plate_id"]
         if pid not in series_cache:
-            zt = fetch_plate_zt_history(pid, date)
-            zt_rows = zt.get("zt_rows") or [] if zt.get("ok") else []
-            zt_err = None if zt.get("ok") else str(zt.get("error") or "unknown")  # P2-11
             # 层1 连续段：韭研日轴（复用 trading_dates_before 单一实现）近 N 日 + 当日
             kname = str(smatch.get("name") or "")
             days = trading_dates_before(db, date, 5, dataset_id) + [date]
+            zt = fetch_plate_zt_history(pid, date, window_days=len(days))
+            zt_rows = zt.get("zt_rows") or [] if zt.get("ok") else []
+            zt_err = None if zt.get("ok") else str(zt.get("error") or "unknown")  # P2-11
             rank_rows = []
             for d in days:
                 it = _rank_hist_map(d).get(kname)
                 if it is None:
                     continue   # 该日层1 无数据（未生成/失败）→ 缺日如实，不插值
                 rank_rows.append({"date": d, "strength": it.get("strength"),
-                                  "main_net": it.get("main_net")})
+                                  "main_net": it.get("main_net"),
+                                  # §9.6 哨兵原料：方向/量级自洽检查需 pct/amount
+                                  "pct": it.get("pct"), "amount": it.get("amount")})
             series_cache[pid] = plate_series_line(
                 rank_rows, zt_rows, plate_name=kname, label_date=date,
-                zt_fetch_error=zt_err)
+                zt_fetch_error=zt_err,
+                # §9.7 缺口率：窗口交易日数（韭研日轴，与层1 连续段同日历）；
+                # review P1-1 修复：声明窗口首日，层2 先过滤再计数，不把展示切片数当窗口记录数
+                trading_days=len(days), window_first_date=days[0])
         return series_cache.get(pid)
 
     for b in sorted(sector_todo_boards):

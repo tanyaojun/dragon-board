@@ -65,7 +65,13 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # （igniting/fermenting 时空间不得 peak、延续不得 ending，除非点名锚/基线数字+新证据）；
 # ⑤A2 拆题——板块级两题（深度/延续）每板块 1 次（双龙一并列结构行，
 # `build_sector_narrative`），个股级两题（续板/空间）每轨龙一各 1 次。
-QUESTION_SET_VERSION_THEME_LEADER = "v12"
+# **v13 = 2026-10-29 未封板 insufficient 禁令**（预登记
+# theme-leader-v13-unsealed-insufficient-preregistration-20261029，用户批准换代；
+# 题面三处）：①续板题规则⑤补「锚缺失≠可判 insufficient——基线/承接/梯队/题材证据
+# 任一在场必须按①给档，锚缺失仅强制降置信 ≤0.6」；②空间题规则③补未封板分支默认档
+# =空间锚最细出率桶起判，锚行整体缺席才允许自判；③两题 insufficient criteria 补
+# 对称禁令（10-28 首批实证：上海九百双题证据在场仍答 insufficient）。
+QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -411,7 +417,11 @@ QUESTIONS_THEME_LEADER = {
                         "候选），本题=判断其次日**重新上板**的概率：封板质量/封板时间类结构"
                         "判据不适用，改按断板后承接（板内炸板面、昨日仍封数）、板块梯队与"
                         "题材证据判断；未封板龙一通常没有同构历史锚，此时以证据为主，锚缺失"
-                        "如实对待、不得编造基准；⑥若叙事标注分轨（主板/双创），待判龙头为"
+                        "如实对待、不得编造基准——锚缺失如实对待**不等于**可判 insufficient："
+                        "只要叙事中结构基线行（含任一出率桶）、承接行、梯队行、题材证据任一"
+                        "在场，就必须按规则①对齐中枢给档，此时锚缺失仅要求降低置信"
+                        "（confidence ≤0.6），不得以「无同构历史锚」作为 insufficient 理由；"
+                        "⑥若叙事标注分轨（主板/双创），待判龙头为"
                         "其轨内按 10 日涨幅取出的龙一，身位表述以轨内为准，另一轨龙一仅作"
                         "板块结构事实。",
         "criteria": {
@@ -424,7 +434,8 @@ QUESTIONS_THEME_LEADER = {
             "verylow_lt25": "很低 <25%：结构示警（板块家数少 + 封板晚 + 无梯队）"
                             "且题材无催化或已明显退潮",
             "insufficient": "证据不足：关键证据缺失（语料未采集、产业树与题材事件与板内解析均无"
-                            "该板块证据、板块结构不可考），不强行归类",
+                            "该板块证据、板块结构不可考），不强行归类；未封板场景：结构基线行"
+                            "有任一出率桶时不得选本档（v13）",
         },
     },
     "leader_headroom": {
@@ -442,7 +453,11 @@ QUESTIONS_THEME_LEADER = {
                         "③默认起判档（按龙头当日连板高度）：1-3 板 → peak 起判、4 板及以上 → "
                         "space_1 起判——依据=历史同高度再走≥1板率（1-3 板桶仅一到三成、4+ 桶"
                         "约三成七）与主线核心退潮日照续的分层杀伤证据，非桶众数；连板高度不可算"
-                        "时无默认档，按 ② 对锚判断；默认档只是起点，偏离仍须按 ② 引用锚行"
+                        "时（含待判龙头今日未封板的断板反包候选）默认档按「空间锚」最细出率桶"
+                        "起判（无按高度细分则用总体行，如总体再走≥1板率不足三成 → peak 侧"
+                        "起判）；锚行同样必须先对齐，偏离仍须按 ② 点名锚行数字并给锚外新证据；"
+                        "锚行整体缺席（叙事无空间锚行）才允许按证据自判，且此时若为未封板场景"
+                        " confidence ≤0.6；默认档只是起点，偏离仍须按 ② 引用锚行"
                         "数字并给新证据；④跨题一致性（v12）：同一叙事的「题材炒作深度」若判 "
                         "igniting/fermenting，本题默认不得选 peak，除非点名锚行数字并给锚外"
                         "新证据；与延续题 strong_extend 明显矛盾时同样须引用锚行数字说明；"
@@ -458,7 +473,7 @@ QUESTIONS_THEME_LEADER = {
             "peak": "空间已尽：题材退潮/临近结束，或龙头身位被替代/催化断流，"
                     "当前高度大概率就是顶部（锚行读数参照：同高度再走≥1板率不足三成）",
             "insufficient": "证据不足：仅当语料未采集或三层证据（产业树/事件·新闻/板内解析）"
-                            "同时无痕迹",
+                            "同时无痕迹；叙事含空间锚行（有率值）时不得选本档（v13）",
         },
     },
 }
@@ -745,26 +760,109 @@ def _lz_brief(lz_info: str, max_items: int = 4) -> str:
     return "、".join(parts)
 
 
+def rank_sentinel_warnings(rank_rows: list[dict] | None,
+                           zt_rows: list[dict] | None) -> list[str]:
+    """层1 raw[8]（主力净额·推断口径）程序化哨兵（AMMO 2026-10-28a §9.6 处置）。
+
+    不依赖 App 同屏的三条自洽检查，任一越界产出告警串（fail-visible），由
+    `plate_series_line` 拼入层1 段尾——哨兵只加披露、不改判据、不丢数据：
+
+    - **量级**：|main_net| > amount（主力净额是成交额子集）→ 列位错挂/口径漂移信号；
+    - **方向**：n≥4 且 main_net 与 pct 同号率 <0.5 → 净额方向与涨幅大面积背离；
+      （全同号不告警：5~6 日窗内强趋势板块全同号属正常，不足以定性）
+    - **秩相关**：层1 strength 与层2 QD 在 ≥3 个共同记录日 Spearman 秩相关 <0 →
+      两条强度口径互证失败。
+
+    字段缺失/样本不足的行如实跳过（不插值、不伪装）；无越界返回 []。
+    """
+    rows = [r for r in (rank_rows or []) if isinstance(r, dict)]
+    zts = [z for z in (zt_rows or []) if isinstance(z, dict)]
+    warns: list[str] = []
+
+    def _f(v: Any) -> float | None:
+        return float(v) if isinstance(v, (int, float)) else None
+
+    # ① 量级：|净额| > 成交额
+    bad_mag = [r for r in rows
+               if (mn := _f(r.get("main_net"))) is not None
+               and (amt := _f(r.get("amount"))) is not None and amt > 0
+               and abs(mn) > amt]
+    if bad_mag:
+        warns.append(f"净额>成交额 ×{len(bad_mag)} 日")
+
+    # ② 方向：净额与涨幅同号率
+    pairs = [(mn, pc) for r in rows
+             if (mn := _f(r.get("main_net"))) is not None and mn != 0
+             and (pc := _f(r.get("pct"))) is not None and pc != 0]
+    if len(pairs) >= 4:
+        same = sum(1 for mn, pc in pairs if (mn > 0) == (pc > 0))
+        if same / len(pairs) < 0.5:
+            warns.append(f"净额与涨幅同号率 {same}/{len(pairs)} <0.5")
+
+    # ③ 秩相关：层1 strength × 层2 QD（共同记录日）
+    by_date = {str(z.get("date") or ""): z for z in zts}
+    pair_sq = [(s, q) for r in rows
+               if (s := _f(r.get("strength"))) is not None
+               and (q := _f(by_date.get(str(r.get("date") or ""),
+                                            {}).get("qd"))) is not None]
+    if len(pair_sq) >= 3:
+        def _ranks(vals: list[float]) -> list[float]:
+            order = sorted(range(len(vals)), key=lambda i: vals[i])
+            ranks = [0.0] * len(vals)
+            i = 0
+            while i < len(order):
+                j = i
+                while j + 1 < len(order) and vals[order[j + 1]] == vals[order[i]]:
+                    j += 1
+                avg = (i + j) / 2 + 1
+                for k in range(i, j + 1):
+                    ranks[order[k]] = avg
+                i = j + 1
+            return ranks
+
+        rs, rq = _ranks([p[0] for p in pair_sq]), _ranks([p[1] for p in pair_sq])
+        n = len(pair_sq)
+        ds = [a - b for a, b in zip(rs, rq)]
+        rho = 1 - 6 * sum(d * d for d in ds) / (n * (n * n - 1))
+        if rho < 0:
+            warns.append(f"层1强度×层2QD 秩相关 {rho:+.2f}<0（{n} 日）")
+    return warns
+
+
 def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, *,
                       plate_name: str, label_date: str, window_days: int = 5,
-                      zt_fetch_error: str | None = None) -> str | None:
+                      zt_fetch_error: str | None = None,
+                      trading_days: int | None = None,
+                      window_first_date: str | None = None) -> str | None:
     """板块序列行（P1-1，G2/G3）：KPL 801xxx 稳定 ID 锚，双段口径各自如实标注。
 
     - **层 1 连续段**：近 N 个交易日（韭研日轴）排名/强度/主力净额（raw[8]，**推断口径
       待 App 同屏核对**，行内显式标注）——连续无缺口；
-    - **层 2 涨停家段**：ZTNum 仅记录有涨停家/爆发日（实测算力 28 天空窗），记录间缺口
-      **不能解读为零涨停**（可能是上游缺记），只列记录日并显式标注该限制——堵死
+    - **层 2 涨停家段**：ZTNum 仅记录有涨停家/爆发日，记录间缺口**不能解读为零涨停**
+      （2026-10-29 反查实证：缺口日 HisDaBanList 有该板块涨停股，上游缺记），只列记录
+      日并显式标注该限制与窗口缺口率（`trading_days` 给出时）——堵死
       「无行=零涨停」的伪趋势误读（§4.0 禁伪装缺口）；
     - 尾附当日 LZInfo 梯队串（G4：KPL 预计算，交叉披露**不替换自算口径**）。
-    rank_rows 与 zt_rows 均空 → None（调用方不出行；匹配状态由板块强度行披露）。
+    `window_first_date`（review P1-1 修复，2026-10-29）：声明交易窗口首日时，层2 记录先按
+    [首日, 标注日] 过滤再计数/展示——否则展示切片（最近 N 条）可能把窗口内首日挤掉
+    （无缺口说成有缺口）或把窗外记录算作在场（不在场说成在场），两个方向都违 §4.0；
+    且窗口声明后即使窗内 0 条记录也出层2 段（「仅0条记录」本身是强缺口信号，不得缺席）。
+    缺省 None = 旧口径（≤标注日最近 window_days 条，不变）。
+    rank_rows 与 zt_rows 均空且未声明窗口 → None（调用方不出行；匹配状态由板块强度行披露）。
     """
     rank_rows = [r for r in (rank_rows or [])
                  if str(r.get("date") or "") <= str(label_date)][-window_days:]
     zt_rows = [r for r in (zt_rows or [])
-               if str(r.get("date") or "") <= str(label_date)][-window_days:]
-    if not rank_rows and not zt_rows and not zt_fetch_error:
+               if str(r.get("date") or "") <= str(label_date)]
+    window_declared = bool(window_first_date)
+    if window_declared:
+        zt_rows = [r for r in zt_rows
+                   if str(window_first_date) <= str(r.get("date") or "")]
+    else:
+        zt_rows = zt_rows[-window_days:]
+    if not rank_rows and not zt_rows and not zt_fetch_error and not window_declared:
         return None
-    if not rank_rows and not zt_rows:
+    if not rank_rows and not zt_rows and not window_declared:
         # P2-11（review）：层2 拉取失败不得静默缺席（§4.0）——失败行显式披露
         return (f"板块序列（KPL「{plate_name}」·801xxx 稳定 ID 锚）："
                 f"层1/层2 均无记录；层2 涨停梯队历史拉取失败：{zt_fetch_error}（fail-visible）")
@@ -782,11 +880,24 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
                 seg += " 净额?"
             segs.append(seg)
         parts.append(f"近{len(segs)}交易日强度/净额（层1·净额推断口径待核）：" + "；".join(segs))
-    if zt_rows:
+        sentinel = rank_sentinel_warnings(rank_rows, zt_rows)
+        if sentinel:
+            # §9.6 处置：raw[8] 口径哨兵越界 → 行内显式告警（fail-visible），不静默
+            parts.append("口径哨兵告警（raw[8] 推断口径自检·fail-visible）：" + "；".join(sentinel))
+    if zt_rows or window_declared:
         segs = [f"{str(r['date'])[5:]} 家{r['zt_num'] if r.get('zt_num') is not None else '?'}"
                 for r in zt_rows]
-        parts.append(f"板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）："
-                     + "；".join(segs))
+        head_txt = "板块涨停家（层2·仅记录有涨停家/爆发日"
+        if isinstance(trading_days, int) and trading_days > 0:
+            # §9.7 处置：窗口缺口率量化——计数对象=窗口过滤后的记录（review P1-1 修复：
+            # 不得把展示切片数当窗口记录数，两个方向都不得虚报）
+            head_txt += f"，窗口{trading_days}交易日仅{len(zt_rows)}条记录"
+        head_txt += "，记录间缺口≠零涨停）"
+        if not zt_rows:
+            # 窗口声明后 0 条记录：缺席本身是强缺口信号，显式出段（§4.0），不静默无层2
+            parts.append(head_txt + "：窗口内无记录（上游未记录该窗口任何涨停家，缺口≠零涨停）")
+        else:
+            parts.append(head_txt + "：" + "；".join(segs))
     if zt_rows:
         last = zt_rows[-1]
         lz = _lz_brief(last.get("lz_info") or "")

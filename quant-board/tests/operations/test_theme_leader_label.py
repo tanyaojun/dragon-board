@@ -201,8 +201,8 @@ def test_run_writes_docs_and_is_idempotent(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
-    assert doc["questionSetVersion"] == "v12"
-    assert doc["questionSetHash"] == "4255eb9f5a46"   # v12 双龙一分轨+判据修复（v1-v11 hash 留档在预登记文档）
+    assert doc["questionSetVersion"] == "v13"
+    assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
     assert doc["ammoVersion"] == "2026-10-28b"   # 涨停原因行+板块强度行+轨别身位（预登记 §4）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
@@ -251,7 +251,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v12", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v13", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -1136,3 +1136,64 @@ def test_label_persists_answer_reasons_when_present(env):
     L.run("2026-10-19", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
     assert doc["answerReasons"] == {}, "夹具答案无 reason → 空 dict 如实落库"
+
+
+# ── review P1-1/P2 修复回归（2026-10-29）：_series_line 接线 + 窗口过滤 ──
+
+def test_series_line_wiring_sentinel_and_window_in_narrative(env, monkeypatch):
+    """ops 接线钉死：pct/amount 透传触发哨兵、trading_days/window_first_date 传入后
+    层2 按窗口过滤计数（窗外记录不展示不计数），落库 narrative 含全部证据。"""
+    calls, db = env
+
+    def fake_strength(day):
+        return {"ok": True, "items": [
+            # |净额| > 成交额 → 哨兵量级告警必须在落库 narrative 出现
+            {"plate_id": "801159", "name": "机器人概念", "strength": 31837,
+             "pct": 1.0, "amount": 1e9, "main_net": -48221868016}]}
+
+    monkeypatch.setattr(L, "fetch_plate_strength", fake_strength)
+    monkeypatch.setattr(L, "fetch_live_commentary", lambda st=60: {"ok": False, "reason": "t"})
+
+    five_days = ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"]
+    monkeypatch.setattr(L, "trading_dates_before",
+                        lambda db, date, n, dataset_id=None: list(five_days))
+
+    def fake_zt(plate_id, label_date, window_days=5):
+        assert plate_id == "801159" and window_days == 6, "窗口交易日数必须=len(days)"
+        return {"ok": True, "zt_rows": [
+            {"date": "2026-10-09", "zt_num": 9, "lz_info": ""},    # 窗外 → 不得展示/计数
+            {"date": "2026-10-15", "zt_num": 3, "lz_info": ""},
+            {"date": "2026-10-16", "zt_num": 4, "lz_info": ""}]}
+
+    monkeypatch.setattr(L, "fetch_plate_zt_history", fake_zt)
+
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["ok"] == 4
+    narrative = db[L.COLLECTION].docs["2026-10-19:603278"]["narrative"]
+    assert "口径哨兵告警（raw[8] 推断口径自检·fail-visible）" in narrative
+    assert "净额>成交额 ×5" in narrative, "pct/amount 必须从强度行透传到哨兵（夹具 5 个交易日同一条越界行）"
+    # 窗口 6 交易日（5 前日 + 当日），窗内仅 2 条记录；窗外 10-09 不得入行
+    assert "窗口6交易日仅2条记录" in narrative
+    assert "10-09" not in narrative, "窗外记录不得被算作窗口内在场（review P1-1）"
+    assert "10-15 家3" in narrative and "10-16 家4" in narrative
+
+
+def test_series_line_zero_in_window_records_still_disclosed(env, monkeypatch):
+    """窗内 0 条记录：层2 段必须显式出「仅0条记录」（缺口信号本身，§4.0 不静默缺席）。"""
+    calls, db = env
+    monkeypatch.setattr(L, "fetch_plate_strength",
+                        lambda day: {"ok": True, "items": [
+                            {"plate_id": "801159", "name": "机器人概念",
+                             "strength": 31837, "pct": 1.0,
+                             "amount": 9e9, "main_net": -3e8}]})
+    monkeypatch.setattr(L, "fetch_live_commentary", lambda st=60: {"ok": False, "reason": "t"})
+    monkeypatch.setattr(L, "trading_dates_before",
+                        lambda db, date, n, dataset_id=None: [
+                            "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16"])
+    monkeypatch.setattr(L, "fetch_plate_zt_history",
+                        lambda plate_id, label_date, window_days=5: {"ok": True, "zt_rows": [
+                            {"date": "2026-10-09", "zt_num": 9, "lz_info": ""}]})
+    L.run("2026-10-19", confirm_budget=True)
+    narrative = db[L.COLLECTION].docs["2026-10-19:603278"]["narrative"]
+    assert "窗口6交易日仅0条记录" in narrative
+    assert "窗口内无记录" in narrative

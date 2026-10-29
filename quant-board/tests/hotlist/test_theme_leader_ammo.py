@@ -49,7 +49,11 @@ def test_question_set_frozen_hash_and_versions():
     v10 rank_board_stocks_space 淘汰删除）；②深度题「贫料 ≠ 断流」；③延续题
     strong_extend 引用义务扩源（结构再点火信号）+ ending 方向约束；④跨题一致性硬规则；
     ⑤A2 拆题（板块级两题/个股级两题）+ AMMO 2026-10-28a（涨停原因行/板块强度行）。
-    AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
+    **v13 = 2026-10-29 未封板 insufficient 禁令（hash 见断言，预登记
+    theme-leader-v13-unsealed-insufficient-preregistration-20261029）**：①续板题规则⑤补
+    「锚缺失≠可判 insufficient，证据行任一在场必须按①给档并强制降置信 ≤0.6」；
+    ②空间题规则③补未封板分支默认档=空间锚最细出率桶起判，锚行整体缺席才允许自判；
+    ③两题 insufficient criteria 补对称禁令。AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
     **2026-10-24d review 处置**（断板改同名成员口径 prevStill，迁移场景不出负数；
@@ -65,9 +69,9 @@ def test_question_set_frozen_hash_and_versions():
     事实源，龙一+板内并列；板块强度行 plate_strength_line：KPL 层1 名称桥，未匹配
     fail-visible）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v12"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v13"
     assert A.AMMO_VERSION_THEME_LEADER == "2026-10-28b"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "4255eb9f5a46"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "5d50645e5dc8"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -82,16 +86,24 @@ def test_question_set_frozen_hash_and_versions():
     ins = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
     assert "无论上调还是下调" in ins, "硬规则②双向：下调偏离锚同样须引用锚行数字+新证据"
     assert "1-3 板 → peak 起判" in ins and "space_1 起判" in ins, "默认起判档映射在场"
-    assert "连板高度不可算时无默认档" in ins, "高度不可算 fail-visible 不硬套默认档"
+    # v13 修订：高度不可算含未封板分支，默认档改由空间锚最细出率桶起判
+    assert "连板高度不可算时（含待判龙头今日未封板的断板反包候选）" in ins, "v13 未封板分支接线"
+    assert "默认档按「空间锚」最细出率桶起判" in ins, "v13 未封板默认档=空间锚起判"
+    assert "锚行整体缺席（叙事无空间锚行）才允许按证据自判" in ins, "v13 锚缺席才可自判"
     crit = A.QUESTIONS_THEME_LEADER["leader_headroom"]["criteria"]
     assert "再走≥1板率三成上下" in crit["space_1"], "space_1 绑锚行读数（非写死绝对阈值）"
     assert "再走≥1板率不足三成" in crit["peak"], "peak 绑锚行读数"
     assert "锚行读数参照" not in crit["space_2plus"], "space_2plus 零命中先观察，不加校准（§21.3 范围）"
+    assert "叙事含空间锚行（有率值）时不得选本档" in crit["insufficient"], "v13 空间题对称禁令"
     # v11 两项（预登记 §22，2026-10-27 用户批准）：续板规则①对称化 + 延续性引用义务
     cont = A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["instructions"]
     assert "必须先对齐的概率中枢" in cont, "规则①对称化：中枢语义"
     assert "上调或下调" in cont and "按连板高度」桶为中枢" in cont, "双向偏离义务+同桶未出率回退"
     assert "个股打标交叉行" in cont, "打标交叉行列入可引证据"
+    # v13：续板题⑤未封板 insufficient 禁令 + 强制降置信
+    assert "锚缺失如实对待**不等于**可判 insufficient" in cont, "v13 反向禁令接线"
+    assert "confidence ≤0.6" in cont, "v13 未封板锚缺失强制降置信"
+    assert "结构基线行有任一出率桶时不得选本档" in A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["criteria"]["insufficient"], "v13 续板题对称禁令"
     tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
     # v12 修订：引用义务扩源（结构再点火）+ ending 方向约束；v11 保守条款改为板块级表述
     assert "引用义务（v12 修订）" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"
@@ -811,3 +823,64 @@ def test_plate_series_line_zt_fetch_error_p2_11():
                                zt_fetch_error="http 502")
     assert line is not None and "层2 涨停梯队历史拉取失败：http 502" in line
     assert A.plate_series_line([], [], plate_name="X", label_date="2026-10-28") is None
+
+
+# ── §9.6/§9.7 处置（AMMO 2026-10-28a 勘察补丁）：层1 哨兵 + 层2 缺口率 ──
+
+
+def test_rank_sentinel_warnings_clean():
+    """正常样本（量级自洽、方向偏正、强度秩相关为正）→ 无告警。"""
+    rank_rows = [
+        {"date": "2026-10-24", "strength": 100, "main_net": -5e8, "pct": -1.0, "amount": 8e9},
+        {"date": "2026-10-27", "strength": 200, "main_net": 3e8, "pct": 2.0, "amount": 9e9},
+        {"date": "2026-10-28", "strength": 300, "main_net": 6e8, "pct": 4.0, "amount": 1e10},
+    ]
+    zt_rows = [{"date": "2026-10-24", "zt_num": 2, "qd": 10},
+               {"date": "2026-10-27", "zt_num": 3, "qd": 20},
+               {"date": "2026-10-28", "zt_num": 5, "qd": 30}]
+    assert A.rank_sentinel_warnings(rank_rows, zt_rows) == []
+
+
+def test_rank_sentinel_warnings_magnitude_and_direction():
+    """量级越界（|净额|>成交额）与方向背离（同号率<0.5）各自告警；样本不足不误报。"""
+    rows = [{"date": f"2026-10-2{d}", "strength": 100, "main_net": -1e10,
+             "pct": 3.0, "amount": 5e9} for d in (2, 3, 4, 5)]
+    warns = A.rank_sentinel_warnings(rows, [])
+    assert any("净额>成交额 ×4" in w for w in warns)
+    assert any("同号率 0/4 <0.5" in w for w in warns)
+    # n=3 不触发方向告警（样本不足不定性）；量级仍报
+    assert not any("同号率" in w for w in A.rank_sentinel_warnings(rows[:3], []))
+    # 字段缺失行如实跳过，不误报不误崩
+    assert A.rank_sentinel_warnings([{"date": "2026-10-28"}], []) == []
+
+
+def test_rank_sentinel_warnings_rank_correlation():
+    """层1 strength 与层2 QD 秩相关为负（≥3 共同日）→ 互证失败告警；<3 日不定性。"""
+    rank_rows = [{"date": f"2026-10-2{d}", "strength": s}
+                 for d, s in ((2, 100), (3, 500), (4, 900))]
+    zt_rows = [{"date": f"2026-10-2{d}", "zt_num": 1, "qd": q}
+               for d, q in ((2, 99), (3, 50), (4, 1))]
+    warns = A.rank_sentinel_warnings(rank_rows, zt_rows)
+    assert any("秩相关 -1.00<0（3 日）" in w for w in warns)
+    assert A.rank_sentinel_warnings(rank_rows[:2], zt_rows[:2]) == []
+
+
+def test_plate_series_line_sentinel_appended():
+    """哨兵越界 → 层1 段尾追加告警（fail-visible），不静默、不丢强度数据。"""
+    rank_rows = [{"date": "2026-10-28", "strength": 31837,
+                  "main_net": -48221868016, "pct": 1.0, "amount": 1e9}]
+    line = A.plate_series_line(rank_rows, None, plate_name="机器人概念",
+                               label_date="2026-10-28")
+    assert "口径哨兵告警（raw[8] 推断口径自检·fail-visible）" in line
+    assert "净额>成交额 ×1" in line and "强度31837" in line
+
+
+def test_plate_series_line_gap_rate_quantified():
+    """§9.7：trading_days 给出时层2 段标窗口缺口率；缺省口径不变（向后兼容）。"""
+    zt_rows = [{"date": "2026-10-23", "zt_num": 44, "lz_info": ""},
+               {"date": "2026-10-28", "zt_num": 24, "lz_info": ""}]
+    line = A.plate_series_line([], zt_rows, plate_name="X", label_date="2026-10-28",
+                               trading_days=6)
+    assert "窗口6交易日仅2条记录，记录间缺口≠零涨停" in line
+    line2 = A.plate_series_line([], zt_rows, plate_name="X", label_date="2026-10-28")
+    assert "板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）" in line2
