@@ -163,20 +163,23 @@ def test_dieban_missing_name_no_st_false_positive():
 
 
 def test_advdec_tone_words_by_ratio():
-    """2026-10-16 语气词修正（审计问题 #9）：ratio<1 = 跌多涨少（偏弱）。
+    """2026-10-30d 语料精简（用户裁决）：语气词删，比值数字承载全部信息。
 
-    旧口径 0.8-1.25 全写「没人买也没人卖」——26 家全市场跌停的日子（池内 0.82）会被读成僵持。
+    历史：2026-10-16 审计问题 #9 曾修正语气词措辞；本轮按「比值+分子分母已完整，
+    文字语气可推导」整体删除，断言改为「无语气词、数字在场」。
     """
     rows = [_row("600001", 5.0), _row("600002", -5.0)]
     db = FakeDb({"snapshot_stock_rows": FakeCol(rows)})
     assert advdec_ratio(db, "2026-09-30") == (1, 1, 0, 1.0)
-    assert "均衡" in _advdec_segment(db, "2026-09-30")
+    seg1 = _advdec_segment(db, "2026-09-30")
+    assert "池内涨跌比 1.0（涨1/跌1）" in seg1
     rows2 = [dict(_row("600001", 5.0), tradingDate="2026-10-09"),
              dict(_row("600002", -5.0), tradingDate="2026-10-09"),
              dict(_row("600003", -5.0), tradingDate="2026-10-09")]
     db2 = FakeDb({"snapshot_stock_rows": FakeCol(rows2)})
     seg = _advdec_segment(db2, "2026-10-09")
-    assert "跌多涨少（偏弱）" in seg and "没人买也没人卖" not in seg
+    assert "池内涨跌比 0.5（涨1/跌2）" in seg
+    assert "偏弱" not in seg and "均衡" not in seg and "没人买也没人卖" not in seg
 
 
 def test_advdec_dataset_isolated():
@@ -307,7 +310,7 @@ def test_market_facts_line_zhaban_rate_dual_caliber():
     })
     line = market_facts_line(db, "2026-09-30")
     assert "炸板率 0.0%（" in line and "炸板 0 家）" in line
-    assert "触板未封 6 家（含冲刺 6 家），未封率 14.3%（6/42）" in line
+    assert "触板未封 6/42（含冲刺 6 家，未封率 14.3%）" in line
 
 
 def test_market_facts_line_zhaban_rate_single_when_no_rushing():
@@ -466,4 +469,4 @@ def test_rushing_pool_ok_and_empty_is_legit_zero():
     m = market_metrics(db, "2026-09-30")
     assert m["rushingCount"] == 0             # 合法 0，不是 None
     line = market_facts_line(db, "2026-09-30")
-    assert "触板未封 0 家（含冲刺 0 家），未封率 0.0%（0/36）" in line
+    assert "触板未封 0/36（含冲刺 0 家，未封率 0.0%）" in line

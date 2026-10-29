@@ -251,7 +251,7 @@ def test_block_fail_visible_paths():
                                         board_name="机器人", date="2026-10-22")
     assert "当日题材事件：无匹配" in out4["text"]
     # 2026-10-24a：新闻与日历双空合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话）
-    assert "题材新闻/前瞻日历：均无匹配（「机器人」Kword 标签与日历均未命中" in out4["text"]
+    assert "题材新闻/前瞻日历：均无匹配" in out4["text"]  # 2026-10-30d 精简：重复解释括号删
     assert "近两日题材新闻：无匹配" not in out4["text"]
     assert "未来 3 日既定事件：无匹配" not in out4["text"]
     assert out4["evidenceMissing"] is False, "产业树正文在 → 有可用证据，不判缺失"
@@ -413,7 +413,7 @@ def test_driver_tag_channel_supplements_mismatched_first_match():
     out = D.build_theme_evidence_block(db, board_name="半导体", date="2026-10-22",
                                        leader_code="603733")
     text = out["text"]
-    assert "板块级催化原文（韭研产业树「半导体」，匹配方式 exact" in text, "首通道保留不替换"
+    assert "板块级催化原文（韭研产业树「半导体」" in text, "首通道保留不替换（2026-10-30d：exact 常态不标注）"
     assert "驱动标签补充映射" in text
     assert "词「存储芯片」" in text and "命中产业树「存储芯片」" in text
     assert "现货价续涨" in text, "补的是对口催化正文"

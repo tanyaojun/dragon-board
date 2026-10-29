@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v13"
     assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-30a"   # 龙虎榜事实行（预登记 §23）；前批=涨停原因行+板块强度行+轨别身位（§4）
+    assert doc["ammoVersion"] == "2026-10-30d"   # 语料精简换代（2026-10-30 用户裁决）；题集 hash 不变
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -355,7 +355,7 @@ def test_build_one_and_sector_wire_lhb_line():
     n = built["narrative"]
     assert "待判龙一 大业股份（603278）：主力净额 0.52亿" in n
     assert "相关个股 雪人股份（002639）：主力净额 --" in n
-    assert n.index("个股打标交叉") < n.index("龙虎榜（HisBeOnTheLHB") < n.index("【题材证据")
+    assert n.index("个股打标交叉") < n.index("龙虎榜（主力净额") < n.index("【题材证据")
     # 未传入（旧行为）→ 不出行
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
@@ -372,7 +372,7 @@ def test_build_one_and_sector_wire_lhb_line():
     built_f = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
                           market_line="涨停 46 家",
                           lhb_facts={"ok": False, "reason": "fetch_failed: x"})
-    assert "--（fetch_failed: x，fail-visible，不冒充）" in built_f["narrative"]
+    assert "--（fetch_failed: x）" in built_f["narrative"]
 
 
 def test_build_one_wires_history_and_headroom_anchor():
@@ -391,15 +391,17 @@ def test_build_one_wires_history_and_headroom_anchor():
     ]
     built = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), rows_baseline,
                         market_line="涨停 46 家",
-                        board_history={"机器人": [("2026-10-16", 3), ("2026-10-17", 5)]})
+                        board_history={"机器人": [("2026-10-15", 4), ("2026-10-16", 3),
+                                                ("2026-10-17", 5)]})
     n = built["narrative"]
-    assert "近 2 日该板块封板家数（旧→新，缺口日不列）：10-16 3 · 10-17 5" in n
+    assert "近 3 日该板块封板家数（旧→新，缺口日不列）：10-15 4 · 10-16 3 · 10-17 5" in n, \
+        "2026-10-30d：序列 ≥3 日才出行（fixture 由 2 日扩为 3 日）"
     assert "空间锚" in n and "总体 再走≥1板率" in n   # 2026-10-26a 每档基率化
     # 2026-10-24c 三行：前向轴紧跟盘面行、梯队/炸板面紧跟结构行；昨日口径=总数−仍封出断板
     # （2026-10-19 是周一；weekday 桩=周一~五交易日）
     assert "交易日轴（前向）：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \
         "（日历源 weekday，节假日顺延未经验证）" in n
-    assert "昨日该板块封板 6 只，今日仍封 3 只（断板 3）" in n
+    assert "昨日该板块封板 6 只，今日仍封 3 只" in n, "2026-10-30d：断板=差值可推导不复述"
     assert "板块梯队形态：首板 3 家 / 2板 1 家 / 3板+ 1 家；龙头 3 板，次高 2 板（领先 +1）" in n
     assert "板内炸板面：今日触板未封 2 家（昨日 1 家）" in n
     i_struct, i_lad = n.index("板块「机器人」今日封板"), n.index("板块梯队形态")
@@ -431,8 +433,8 @@ def test_build_one_driver_cross_join_and_fail_visible():
                        "freshness": "fresh_catalyst", "buySideLogic": "high_board_relay",
                        "computedAt": "2026-10-27T12:35:14"}
     built = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
-    assert ("个股打标交叉（另一条打标链对该公司当日涨停的机器判定，供交叉参考；"
-            "打标链题集 v4.0·午盘槽）") in built["narrative"]
+    assert "个股打标交叉（打标链 v4.0·午盘槽）：" in built["narrative"], \
+        "2026-10-30d：工程注记删，版本+槽位保留"
     assert built["driverCross"] == {"found": True, "labelSlot": "midday",
                                     "questionSetVersion": "v4.0"}
     # final 优先于 midday（同日两槽并存取 final）
@@ -447,7 +449,7 @@ def test_build_one_driver_cross_join_and_fail_visible():
                        "label": "policy", "computedAt": "2026-10-27T17:00:00"}
     built2b = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
     assert built2b["driverCross"]["labelSlot"] == "final" \
-        and "打标链题集 v3.1" in built2b["narrative"]
+        and "打标链 v3.1" in built2b["narrative"]
     # 无任何打标行 → fail-visible 缺席行（不伪装方向性结论）
     built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
@@ -631,8 +633,8 @@ def test_day_leader_rows_prev_still_same_board_scope(monkeypatch):
                           followers_ge_ladder=2, prev_board_n=row["prevBoardN"],
                           prev_peers=row["prevPeers"], prev_total=row["prevTotal"],
                           prev_still=row["prevStill"])
-    assert "昨日该板块封板 1 只，今日仍封 1 只（断板 0）" in line
-    assert "断板 -2" not in line and "今日仍封 3 只" not in line, "成员口径的负数/失真不得进叙事"
+    assert "昨日该板块封板 1 只，今日仍封 1 只" in line
+    assert "断板" not in line and "今日仍封 3 只" not in line, "成员口径的负数/失真不得进叙事；断板不复述（2026-10-30d）"
 
 
 # ── 单一龙头对账（2026-10-24 双龙头事故：10-23 机器人板块赛福天/大业股份并存） ──
@@ -1120,10 +1122,10 @@ def test_kpl_live_line_rendering():
     assert "KPL直播播报（实时流·仅标注时点可得，窗口 09:15~15:00，全窗 60 条）" in hit
     assert "14:35 AI硬件（光通信）持续异动" in hit
     none = kpl_live_line([], board="AI影视", total=60, window="09:15~15:00")
-    assert "当日无「AI影视」相关播报" in none and "无数据 ≠ 无催化" in none
+    assert "当日无「AI影视」相关播报" in none and "无数据 ≠ 无催化" not in none, "2026-10-30d：重复自我解释删"
     un = kpl_live_line([], board="AI影视",
                        unavailable="实时流不可回放（窗口内无标注日条目，历史日无直播归档）")
-    assert "不可用（实时流不可回放" in un and "不冒充" in un
+    assert "不可用（实时流不可回放" in un and "不冒充" not in un
 
 
 # ── P1-2 直播日归档 / P1-1 序列 / P2-2 reason 透传（2026-10-28 用户裁决） ──

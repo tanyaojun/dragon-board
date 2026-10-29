@@ -559,6 +559,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   §23）。**席位/机构扩维（LHB 事实层 2026-10-30c）**：collect_lhb_facts 新增
   stock_board/agency 两维（GetStockList 席位买入额/GetAgencyListV2 机构净买额可负），
   lhb_line 对相关个股追加对应段（不在榜/端点失败缺席不伪装）。
+  **语料精简（AMMO 2026-10-30d，2026-10-30 用户确认删除清单后执行）**：删重复自我解释
+  与工程注记（「无数据 ≠ 无催化」复述/fail-visible 行话/可推导语气/端点名/空间锚定义
+  复述等），事实与防误读锚全保留；近 N 日家数序列 ≥3 日才出行；共享行（盘面事实/涨跌比）
+  同步生效于打标链；题集 hash 不变，预登记 §23 补记。
 - audit 同步：docs/hotlist-jev/jev-direction-material-audit.md §3 C 级第 4 条
   「龙虎榜未采」→ 已接入（大单监控线另行预登记）。
 

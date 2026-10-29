@@ -130,7 +130,12 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 净额口径行内标注（盘中主力大单资金流，非交易所龙虎榜席位额，lhb-scaling-verification
 # §13.3 裁决）。题集判据零改动（沿 2026-10-24c 先例：纯语料补行不动题面 hash；把龙虎榜
 # 列为判据显式引用源须另走换代预登记）。
-AMMO_VERSION_THEME_LEADER = "2026-10-30a"
+# 2026-10-30d（语料精简，2026-10-30 用户确认删除清单后执行）：删重复自我解释与工程注记
+# ——「无数据 ≠ 无催化」复述、「fail-visible/不冒充」行话、「跌多涨少（偏弱）」/「（断板 X）」
+# 可推导语气、端点名（HisBeOnTheLHB/expound）、「匹配方式 exact」「另一条打标链…供交叉
+# 参考」注记、空间锚定义复述；近 1 日家数序列改为 ≥3 日才出行。事实与防误读锚全保留。
+# 共享行（盘面事实/池内涨跌比/触板未封在 jev_label_jiuyan，与打标链同源）同步生效。
+AMMO_VERSION_THEME_LEADER = "2026-10-30d"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -685,10 +690,9 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
     streak_pairs = [p for p in kept if streak_bucket(p[0].get("streak")) == sk]
     if len(streak_pairs) >= min_combo_n:
         parts.append(f"按连板高度[{sk}] {_stat(streak_pairs)}")
-    cen = (f"；剔右删失周期样本 {censored} 个（次日仍封但样本流断，周期未确认终结）"
-           if censored else "")
-    return ("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔；"
-            "再走≥1板率=历史同结构龙头自当日高度至少再封一板的占比）："
+    cen = (f"；剔右删失样本 {censored} 个" if censored else "")
+    # 2026-10-30d 语料精简：再走≥1板率定义在题面 ③ 已给，叙事侧不重复
+    return ("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）："
             + "；".join(parts) + f"；总体 {_stat(kept)}{cen}")
 
 
@@ -701,8 +705,8 @@ def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
     if prev_peers is None:
         prev_txt = "昨日同板块不可考"
     elif isinstance(prev_still, int) and prev_total is not None:
-        prev_txt = (f"昨日该板块封板 {prev_total} 只，{still_txt}"
-                    f"（断板 {prev_total - prev_still}）")
+        # 2026-10-30d 语料精简：断板 = 两数之差可推导，不再复述（断板不可算分支保留）
+        prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}"
     elif prev_total is None:
         prev_txt = f"昨日该板块封板总数不可考（{still_txt}）"
     else:
@@ -710,7 +714,8 @@ def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
         duan_txt = (f"断板 {duan}" if duan is not None and duan >= 0 else "断板不可算")
         prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}（{duan_txt}）"
     hist_txt = ""
-    if history:
+    # 2026-10-30d 语料精简：序列 <3 日时与昨日承接行几乎全重叠，不出行（≥3 日才列）
+    if history and len(history) >= 3:
         seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
         hist_txt = f"；近 {len(history)} 日该板块封板家数（旧→新，缺口日不列）：{seq}"
     elif history is not None and not history:
@@ -934,10 +939,9 @@ def kpl_live_line(entries: list[dict] | None, *, board: str, total: int = 0,
         head += f"，窗口 {window}"
     head += f"，全窗 {total} 条）"
     if unavailable:
-        return f"{head}：不可用（{unavailable}，fail-visible，不冒充）"
+        return f"{head}：不可用（{unavailable}）"
     if not entries:
-        return (f"{head}：当日无「{board}」相关播报"
-                f"（fail-visible，无数据 ≠ 无催化）")
+        return f"{head}：当日无「{board}」相关播报"
     parts = []
     for e in entries[:max_items]:
         c = re.sub(r"\s+", " ", str(e.get("comment") or "")).strip()
@@ -1109,8 +1113,7 @@ def driver_cross_line(label_doc: dict | None) -> str:
     slot = str(label_doc.get("labelSlot") or "")
     slot_cn = {"final": "收盘槽", "midday": "午盘槽"}.get(slot, slot or "槽位不可考")
     qs = str(label_doc.get("questionSetVersion") or "版本不可考")
-    head = (f"个股打标交叉（另一条打标链对该公司当日涨停的机器判定，供交叉参考；"
-            f"打标链题集 {qs}·{slot_cn}）：")
+    head = f"个股打标交叉（打标链 {qs}·{slot_cn}）："
     # 驱动类别概率真身=driverProbabilities（labelProbabilities 为 API 层旧别名，兜底旧档）
     label_seg = _top2(label_doc.get("driverProbabilities")
                       or label_doc.get("labelProbabilities"), DRIVER_LABEL_CN) \
@@ -1152,7 +1155,7 @@ def limitup_reason_line(entries: list[tuple[str, str | None]]) -> str | None:
     missing = sum(1 for _, r in entries if not str(r or '').strip())
     tail = f"（{missing}/{len(entries)} 不可考，fail-visible）" if missing == len(entries) \
         else (f"（不可考 {missing}，fail-visible）" if missing else "")
-    return "涨停原因（韭研板内解析 expound，与打标链读口同源）：" + "；".join(parts) + tail
+    return "涨停原因：" + "；".join(parts) + tail
 
 
 def plate_strength_line(match: dict) -> str:
@@ -1166,7 +1169,7 @@ def plate_strength_line(match: dict) -> str:
     """
     if not isinstance(match, dict) or not match.get("ok"):
         reason = (match or {}).get("reason") or "unknown"
-        return f"板块强度（KPL 801xxx 指数·按日查史口径）：不可用（{reason}，fail-visible，不冒充）"
+        return f"板块强度（KPL 801xxx 指数·按日查史）：不可用（{reason}）"
     rank, total = match.get("rank"), match.get("total")
     rank_txt = (f"#{rank}/{total}" if isinstance(rank, int) and isinstance(total, int)
                 else "排名不可考")
@@ -1178,8 +1181,8 @@ def plate_strength_line(match: dict) -> str:
     name = str(match.get("name") or "")
     alias_txt = "，别名表" if match.get("aliasUsed") else ""
     name_txt = (f"（匹配 KPL 板块「{name}」{alias_txt}）" if name
-                else "（名称桥匹配信息缺失，fail-visible）")
-    return (f"板块强度（KPL 801xxx 指数·按日查史口径{'' if name else '·未匹配'}）"
+                else "（名称桥匹配信息缺失）")
+    return (f"板块强度（KPL 801xxx 指数·按日查史{'' if name else '·未匹配'}）"
             f"{name_txt}：当日排名 {rank_txt}，{strength_txt}，{pct_txt}")
 
 
@@ -1208,8 +1211,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     """
     from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
 
-    head = ("龙虎榜（HisBeOnTheLHB 按日查史；主力净额=盘中主力大单资金流口径，"
-            "非交易所龙虎榜席位额）：")
+    head = "龙虎榜（主力净额=盘中主力大单资金流口径，非交易所席位额）："
     stocks = [s for s in (facts or {}).get("stocks") or [] if isinstance(s, dict)]
     if not stocks:
         if (facts or {}).get("empty_structured"):
@@ -1217,7 +1219,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
                     f"{facts.get('order_sign_count', 0)} 组；榜约盘后生成，缺当日事实≠无上榜）")
         reason = (facts or {}).get("reason") or ("当日无上榜个股行" if (facts or {}).get("ok")
                                                  else "no_data")
-        return f"{head}--（{reason}，fail-visible，不冒充）"
+        return f"{head}--（{reason}）"
     by_code = {str(s.get("code") or "")[-6:]: s for s in stocks if str(s.get("code") or "")[-6:]}
     ordered: list[str] = []
     for c in (codes or []):

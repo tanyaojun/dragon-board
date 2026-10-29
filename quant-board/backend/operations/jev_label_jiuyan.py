@@ -901,15 +901,9 @@ def _advdec_segment(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
     if not ad:
         return " · 池内涨跌结构 不可算（fail-visible）"
     up, down, flat, ratio = ad
-    # 2026-10-16 语气词修正（审计问题 #9）：0.82 的跌多涨少日旧口径显示「没人买也没人买」，
-    # 26 家全市场跌停的日子这句语气词会把退潮读成僵持。band 语义按 ratio<1 即偏弱重划。
-    if ratio > 1.25:
-        tone = "单边偏强"
-    elif ratio >= 1.0:
-        tone = "均衡"
-    else:
-        tone = "跌多涨少（偏弱）"
-    return f' · 池内涨跌比 {ratio}（涨{up}/跌{down}，{tone}）'
+    # 2026-10-30d 语料精简（用户裁决）：比值+分子分母已完整，语气词可推导，删（原语气词
+    # 曾因审计问题 #9 重划 band；现信息由 ratio 数字承载，不再用文字复述）。
+    return f' · 池内涨跌比 {ratio}（涨{up}/跌{down}）'
 
 
 def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
@@ -964,8 +958,8 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         unsealed = zb_n + rush_n
         touch_total = zt_n + unsealed
         rate2 = round(unsealed / touch_total * 100, 1) if touch_total else 0.0
-        unsealed_txt = (f" · 触板未封 {unsealed} 家（含冲刺 {rush_n} 家），"
-                        f"未封率 {rate2}%（{unsealed}/{touch_total}）")
+        unsealed_txt = (f" · 触板未封 {unsealed}/{touch_total}"
+                        f"（含冲刺 {rush_n} 家，未封率 {rate2}%）")
     three_plus = (cur["ladder"].get("three") or 0) + (cur["ladder"].get("four") or 0) + (cur["ladder"].get("high") or 0)
     ladder_txt = (f'一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}')
     src = cur.get("ladderSource")

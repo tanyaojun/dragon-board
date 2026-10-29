@@ -435,11 +435,12 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
 
     lines = [BLOCK_HEADER]
     if not state.get("ok"):
-        lines.append("题材语料（韭研产业树 + 开盘啦事件层）未采集（fail-visible：无数据 ≠ 无催化）。"
+        lines.append("题材语料（韭研产业树 + 开盘啦事件层）未采集（无数据 ≠ 无催化）。"
                      "请勿据此判断催化有无。")
     else:
         stale = "" if not state.get("stale") else f"（注意：语料最近采集日 {state.get('latestFetchDate')}，非当日）"
-        lines.append(f"取数日 {date}，语料：产业树 {state.get('industry')} 节点 / "
+        # 2026-10-30d 语料精简：产业树节点总数对判题无信息量，不出
+        lines.append(f"取数日 {date}，语料："
                      f"题材事件 {state.get('topic')} · 新闻 {state.get('news')} · "
                      f"日历 {state.get('calendar')} 条{stale}")
 
@@ -465,9 +466,12 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             gap_txt = f"晚于取数日 {-gap} 天（回放含未来信息，仅作对照，不得当离线重放结论）"
         else:
             gap_txt = "未知"
+        # 2026-10-30d 语料精简：匹配方式 exact 为常态不出，非 exact（弱关联）仍如实标注
+        _m = str(match.get('method') or '')
+        _m_txt = f"，匹配方式 {_m}" if _m and _m != "exact" else ""
         lines.append(
-            f"板块级催化原文（韭研产业树「{node.get('name')}」，匹配方式 "
-            f"{match.get('method')}，热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
+            f"板块级催化原文（韭研产业树「{node.get('name')}」{_m_txt}，"
+            f"热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
             f"{_clip(node.get('content'), content_chars)}")
 
     # S3 驱动标签补充映射（2026-10-24b）：龙头驱动标签词命中产业树**不同**节点时
@@ -504,7 +508,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                          f"（不代表无催化；若板块当日仍涨停，则纯资金/情绪驱动特征明显）")
     if state.get("ok"):
         if not ev_hits:
-            lines.append(f"当日题材事件：无匹配（「{board_name}」相关事件未命中，无数据 ≠ 无催化）")
+            lines.append("当日题材事件：无匹配")
         else:
             lines.append("当日题材事件（开盘啦题材事件，仅标题+热度+日期，2026-10-28 用户裁决）")
             for ev in ev_hits:
@@ -524,13 +528,11 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     news_no_match = news_section and not news_hits
     cal_no_match = cal_section and not cal_hits
     if news_no_match and cal_no_match:
-        lines.append(f"题材新闻/前瞻日历：均无匹配（「{board_name}」Kword 标签与日历均未命中，"
-                     f"无数据 ≠ 无催化）")
+        lines.append("题材新闻/前瞻日历：均无匹配")
     else:
         if news_section:
             if news_no_match:
-                lines.append(f"近两日题材新闻：无匹配（Kword 题材标签未命中「{board_name}」，"
-                             f"无数据 ≠ 无催化）")
+                lines.append("近两日题材新闻：无匹配")
             else:
                 lines.append("近两日题材新闻（开盘啦题材新闻，Kword 题材标签关联）：")
                 for it in news_hits:
@@ -545,8 +547,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                                  f"（{it.get('matchHow')}{st_txt}）")
         if cal_section:
             if cal_no_match:
-                lines.append(f"未来 {window_days} 日既定事件：无匹配（「{board_name}」相关事件未命中，"
-                             f"无数据 ≠ 无催化）")
+                lines.append(f"未来 {window_days} 日既定事件：无匹配")
             else:
                 lines.append(f"未来 {window_days} 日既定事件（开盘啦题材日历）：")
                 for ev in cal_hits:
