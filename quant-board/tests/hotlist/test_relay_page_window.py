@@ -1709,3 +1709,23 @@ def test_status_bar_dedup_counter(js: str):
     """同条错误去重计数 ×N 挂当前条（非上一条）。"""
     log_fn = _fn(js, "sbLog")
     assert "e.n = prev.n" in log_fn and "(e.n > 1 ? '×' + e.n" in log_fn
+
+
+def test_banner_errors_routed_to_status_bar(js: str):
+    """2026-10-30 用户需求：各视图连接/服务端报错横幅同步进底部状态栏（非浏览器 console）。"""
+    routed = {
+        'kplBanner': '[板块行情]', 'lbBanner': '[连板行情]', 'kplLiveBanner': '[直播]',
+        'kplDabanBanner': '[涨停复盘]', 'kplLhbBanner': '[龙虎榜]',
+    }
+    for fn_name, tag in routed.items():
+        body = _fn(js, fn_name)
+        assert 'sbLog(' in body and tag in body, f"{fn_name} 未挂接状态栏（缺 {tag} 前缀）"
+    # render 类错误分支（读口异常/降级）同样透出
+    for tag in ('[题材龙头]', '[跌停复盘]', '[板块节点]', '[盘中红盘]'):
+        assert f"sbLog('error', '{tag}" in js or f"sbLog('warn', '{tag}" in js, f"{tag} 报错分支未挂状态栏"
+
+
+def test_kpl_banner_only_errors_not_ok(js: str):
+    """kplBanner 正常提示（kind='ok'）不上报，只上报 error/warn 路径。"""
+    body = _fn(js, "kplBanner")
+    assert "kind !== 'ok' && window.sbLog" in body, "ok 提示不得进错误状态栏"

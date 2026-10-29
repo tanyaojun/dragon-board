@@ -2368,8 +2368,10 @@ function renderNodes(){
   const doc = d.doc;
   const bgErr = d.error && doc
     ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据</div>' : '';
+  if (bgErr && window.sbLog) sbLog('warn', '[板块节点] 后台刷新失败：' + d.error);
   if (d.error && !doc){
     head.innerHTML = '<div class="lf-warn">⚠️ 板块节点读口异常：' + esc(d.error)  + '</div>';
+    if (window.sbLog) sbLog('error', '[板块节点] ' + d.error);
     $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
     return;
   }
@@ -2572,11 +2574,11 @@ function pulseRender(){
     box.innerHTML = '<div class="hint">盘中红盘提示加载中…</div>'; return;
   }
   if (d.error && !d.api){
-    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口异常：' + esc(d.error)  + '</div>'; return;
+    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口异常：' + esc(d.error)  + '</div>'; if (window.sbLog) sbLog('error', '[盘中红盘] ' + d.error); return;
   }
   const r = d.api || {};
   if (r.ok === false){
-    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口降级：' + esc(r.reason || '未知原因') + '</div>'; return;
+    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口降级：' + esc(r.reason || '未知原因') + '</div>'; if (window.sbLog) sbLog('warn', '[盘中红盘] ' + (r.reason || '未知原因')); return;
   }
   const stage = r.evidenceStageCN || '';
   const meta = r.meta || {};
@@ -2645,12 +2647,14 @@ function tlRenderBanner(){
   if (d.error && !(d.rows || []).length){
     el.innerHTML = '<div class="lf-warn">⚠️ 题材龙头读口异常：' + esc(d.error)
       + '（非「区间内无投喂」）</div>';
+    if (window.sbLog) sbLog('error', '[题材龙头] ' + d.error);
     return;
   }
   // 后台静默刷新失败 + 旧数据仍可见（§4.0）：错误必须有出口，不得伪装成正常数据
   const bgErr = d.error && (d.rows || []).length
     ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error)
       + '）——当前展示的是上次成功数据</div>' : '';
+  if (bgErr && window.sbLog) sbLog('warn', '[题材龙头] 后台刷新失败：' + d.error + '（展示上次成功数据）');
   const doc = d.doc || {};
   if (doc.no_data){ el.innerHTML = '<div class="lf-warn">区间内无题材龙头投喂记录'
     + '（16:20 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
@@ -3414,6 +3418,7 @@ function dbRenderBanner(D){
   if (!host) return;
   if (!D || D.ok === false){
     host.innerHTML = `<div class="banner amber"><span>⚠️</span><span>跌停复盘读口不可用：${esc((D && D.reason) || '未知原因')}（不展示空页冒充无数据）</span></div>`;
+    if (window.sbLog) sbLog('error', '[跌停复盘] ' + ((D && D.reason) || '未知原因'));
     return;
   }
   const msgs = [];
@@ -3934,7 +3939,8 @@ function lbPill(txt, cls){ const p = $('lbPill'); if (!p) return;
   p.innerHTML = '<span class="dot"></span>' + esc(txt); }
 function lbBanner(msg){ const b = $('lbBanner'); if (!b) return;
   if (!msg){ b.style.display = 'none'; return; }
-  b.style.display = ''; b.textContent = msg; }
+  b.style.display = ''; b.textContent = msg;
+  if (window.sbLog) sbLog('error', '[连板行情] ' + msg); }
 async function lbLoad(){
   if (LB.loading) return;
   LB.loading = true;
@@ -4768,6 +4774,7 @@ function kplBanner(msg, kind, sticky){
   el.style.background = kind === 'ok' ? 'var(--green-bg)' : 'var(--amber-bg)';
   el.style.color = kind === 'ok' ? 'var(--green)' : 'var(--amber)';
   el.style.borderColor = kind === 'ok' ? '#bbf7d0' : '#fde68a';
+  if (kind !== 'ok' && window.sbLog) sbLog('error', '[板块行情] ' + msg);   // 连接/服务端报错进底部状态栏（2026-10-30）
 }
 function kplSetWsPill(state){
   const p = $('kplWsPill');
@@ -5271,6 +5278,7 @@ function kplLiveBanner(msg){
   const el = $('kplLiveBanner');
   if (!msg){ el.style.display = 'none'; el.textContent = ''; return; }
   el.style.display = ''; el.textContent = msg;
+  if (window.sbLog) sbLog('warn', '[直播] ' + msg);   // meta 读取失败/VoiceWorker 未运行等可用性警告
 }
 function kplLiveEnter(){
   const host = $('kplLiveStream');
@@ -5767,7 +5775,7 @@ function kplDabanBanner(view, msg){
   const el = $(DABAN_PAGES[view].p + 'Banner');
   if (!msg){ el.style.display = 'none'; return; }
   el.style.display = ''; el.textContent = '✘ ' + msg;
-}
+  if (window.sbLog) sbLog('error', '[涨停复盘] ' + msg); }
 
 // ════ 龙虎榜页签（2026-10-29 三期：2112 预测 + 3004 实时 + HisBeOnTheLHB 历史）════
 // fail-visible：降级读口把 reason 透出到 banner；缺字段/无数据渲染 '--'，不伪装 0/空。
@@ -5776,6 +5784,7 @@ function kplLhbBanner(elId, msg){
   const el = $(elId);
   if (!msg){ el.style.display = 'none'; return; }
   el.style.display = ''; el.textContent = msg;
+  if (window.sbLog) sbLog('warn', '[龙虎榜] ' + msg);   // 降级 reason 透出同步进状态栏
 }
 function kplFmtYi(v){                     // 元 → 亿（只接受纯数值串，防「3.5亿」类预格式化串被前缀解析成错量级）
   const s = String(v);
