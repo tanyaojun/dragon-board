@@ -123,7 +123,14 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # ④（2026-10-28b，code review P1-4）：个股级叙事头部注入轨别身位〔主板龙一/双创龙一〕
 # ——题面规则⑥/空间题⑤的前提「若叙事标注分轨」此前不成立，双轨身位对模型不可见；
 # AMMO_VERSION_THEME_LEADER 同批换代。
-AMMO_VERSION_THEME_LEADER = "2026-10-28b"
+# 2026-10-30a（龙虎榜事实行，2026-10-30 用户指示；预登记 §23）：新增 lhb_line——join
+# 当日 HisBeOnTheLHB 龙虎榜事实（取数单一源=jev_lhb_ammo.collect_lhb_facts，与方向线
+# task-6 同源；个股级=待判龙一+板内封板成员、板块级=双龙一+板内封板成员代码过滤），
+# 四种结构化状态全 fail-visible（取数失败/榜单未生成/0 只上榜/有上榜逐只列），主力
+# 净额口径行内标注（盘中主力大单资金流，非交易所龙虎榜席位额，lhb-scaling-verification
+# §13.3 裁决）。题集判据零改动（沿 2026-10-24c 先例：纯语料补行不动题面 hash；把龙虎榜
+# 列为判据显式引用源须另走换代预登记）。
+AMMO_VERSION_THEME_LEADER = "2026-10-30a"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1176,6 +1183,64 @@ def plate_strength_line(match: dict) -> str:
             f"{name_txt}：当日排名 {rank_txt}，{strength_txt}，{pct_txt}")
 
 
+# ── 龙虎榜事实行（AMMO 2026-10-30a，2026-10-30 用户指示；预登记 §23） ──
+
+def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = None,
+             max_items: int = 6) -> str:
+    """龙虎榜事实行（AMMO 2026-10-30a）：按叙事相关个股过滤当日 HisBeOnTheLHB 事实。
+
+    `facts` = `jev_lhb_ammo.collect_lhb_facts(date)` 归一产物（operations 层一次取数全日
+    共用，与板块强度/直播同哲学；本函数零 IO 零模型）；`codes` = 叙事相关代码（个股级=
+    待判龙一 + 板内封板成员；板块级=双龙一 + 板内封板成员；可带交易所前缀，取后 6 位）；
+    `roles` = code(后 6 位) → 身位（如「待判龙一」「主板龙一」），缺省「相关个股」。
+
+    四种结构化状态全 fail-visible（§4.0，不伪装、不插值、不给方向结论）：
+    - 取数失败/双端点均不可用 → 「--（reason）」；
+    - 当日分组榜单未生成（榜约盘后生成；挂链 17:30（2026-10-30 改时）晚于生成时点，
+      日常可得，上游延迟未生成时才出本状态）→ 显式披露 orderSign；
+    - 榜单已生成但相关个股 0 只上榜 → 显式披露 0 只（事实陈述，非方向信号）；
+    - 有相关上榜 → 按传入 codes 顺序（龙一优先）列主力净额/买/卖（元→亿）与上榜原因。
+    资金字段非数值一律「--」不伪装 0（复用 jev_lhb_ammo._fmt_yi 单一口径）；主力净额=
+    盘中主力大单资金流，非交易所龙虎榜席位额（§13.3 task-3 裁决），行内标注防误消费。
+    """
+    from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
+
+    head = ("龙虎榜（HisBeOnTheLHB 按日查史；主力净额=盘中主力大单资金流口径，"
+            "非交易所龙虎榜席位额）：")
+    stocks = [s for s in (facts or {}).get("stocks") or [] if isinstance(s, dict)]
+    if not stocks:
+        if (facts or {}).get("empty_structured"):
+            return (head + f"--（当日分组榜单未生成，上游 orderSign="
+                    f"{facts.get('order_sign_count', 0)} 组；榜约盘后生成，缺当日事实≠无上榜）")
+        reason = (facts or {}).get("reason") or ("当日无上榜个股行" if (facts or {}).get("ok")
+                                                 else "no_data")
+        return f"{head}--（{reason}，fail-visible，不冒充）"
+    by_code = {str(s.get("code") or "")[-6:]: s for s in stocks if str(s.get("code") or "")[-6:]}
+    ordered: list[str] = []
+    for c in (codes or []):
+        k = str(c or "")[-6:]
+        if k and k in by_code and k not in ordered:
+            ordered.append(k)
+    if not ordered:
+        return (head + f"当日全市场上榜 {len(stocks)} 只，"
+                "本叙事相关个股 0 只上榜（事实披露，非方向信号）")
+
+    def _seg(k: str) -> str:
+        s = by_code[k]
+        role = (roles or {}).get(k, "相关个股")
+        name = str(s.get("name") or "") or k
+        buy, sell = s.get("main_buy_yuan"), s.get("main_sell_yuan")
+        seg = f"{role} {name}（{k}）：主力净额 {_fmt_yi(s.get('main_net_yuan'))}"
+        if buy is not None or sell is not None:
+            seg += f"（买 {_fmt_yi(buy)} / 卖 {_fmt_yi(sell)}）"
+        return seg + f"，上榜原因 {str(s.get('reason') or '').strip() or '--'}"
+
+    parts = [_seg(k) for k in ordered[:max_items]]
+    more = len(ordered) - max_items
+    tail = f"（另 {more} 只相关上榜略，fail-visible 披露）" if more > 0 else ""
+    return head + "；".join(parts) + tail
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
@@ -1184,6 +1249,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            zhaban_line: str | None = None,
                            driver_cross: str | None = None,
                            reason_line: str | None = None,
+                           lhb_facts_line: str | None = None,
                            plate_strength: str | None = None,
                            series_line: str | None = None,
                            live_line: str | None = None,
@@ -1201,7 +1267,9 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     None 不出行（打标缺席由 driver_cross_line 出 fail-visible 缺席行，不走本参数）。
     `plate_strength`（AMMO 2026-10-28a G2）= KPL 板块强度行，属板级盘面事实，排在炸板面行后、
     基线前；None 不出行。`reason_line`（AMMO 2026-10-28a §4.1）= 涨停原因行（韭研 expound），
-    排在打标交叉行后、证据块前；None 不出行。
+    排在打标交叉行后、证据块前；None 不出行。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
+    事实行（lhb_line 产出，取数单一源 jev_lhb_ammo.collect_lhb_facts），排在涨停原因行后、
+    证据块前；None 不出行（未传入时旧行为不变）。
     """
     lines = [
         f"{date} 交易日 · {market_line}",
@@ -1231,6 +1299,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(driver_cross)
     if reason_line:
         lines.append(reason_line)
+    if lhb_facts_line:
+        lines.append(lhb_facts_line)
     lines.append(evidence_block)
     return "\n".join(lines)
 
@@ -1243,13 +1313,16 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
                            plate_strength: str | None = None,
                            series_line: str | None = None,
                            live_line: str | None = None,
-                           reason_line: str | None = None) -> str:
+                           reason_line: str | None = None,
+                           lhb_facts_line: str | None = None) -> str:
     """板块级叙事（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3）。
 
     与个股级叙事差异：头部「待判板块」，结构行=双龙一并列（structure_line_dual）；
     基线行以第一轨（main 优先）龙一为参照行（分轨锚缺位如实，历史窗人群不随规则换代）；
     **不含**空间锚行（空间题不在板块级子集）与个股打标交叉行（个股轴归各自龙头叙事，
-    板块级以涨停原因行提供带动证据关键词）。顺序固定，便于逐字复现与回归比对。
+    板块级以涨停原因行提供带动证据关键词）。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
+    事实行（双龙一 + 板内封板成员代码过滤），排在涨停原因行后、证据块前；None 不出行。
+    顺序固定，便于逐字复现与回归比对。
     """
     lines = [f"{date} 交易日 · {market_line}"]
     if forward_axis:
@@ -1269,5 +1342,7 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
     lines.append(baseline)
     if reason_line:
         lines.append(reason_line)
+    if lhb_facts_line:
+        lines.append(lhb_facts_line)
     lines.append(evidence_block)
     return "\n".join(lines)

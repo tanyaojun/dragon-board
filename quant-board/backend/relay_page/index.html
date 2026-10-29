@@ -2654,7 +2654,7 @@ function tlRenderBanner(){
     sbLog('warn', '[题材龙头] 后台刷新失败：' + d.error + '（展示上次成功数据）');
   const doc = d.doc || {};
   if (doc.no_data){ el.innerHTML = '<div class="lf-warn">区间内无题材龙头投喂记录'
-    + '（16:20 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
+    + '（17:30 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
   // 多代际警示已结项（用户 2026-10-22 裁决）：v1/v2/v3 历史档不回改是设计内常态，
   // 行级版本徽章已可见，长期挂黄牌无增量信息。样本来源警示横幅同步下线
   //（2026-10-26 用户裁决：来源语义在「来源」筛选与明细卡页脚已可考，横幅常驻属视觉噪音）。
@@ -2730,7 +2730,7 @@ function tlRenderRows(){
   if (doc.no_data){
     el.innerHTML = '<tr><td class="empty">' + esc((STATE.relayRange || {}).start || '最早')
       + ' ~ ' + esc((STATE.relayRange || {}).end || '最新')
-      + ' 无题材龙头投喂记录（16:20 槽位未跑，或区间早于投产日）</td></tr>';
+      + ' 无题材龙头投喂记录（17:30 槽位未跑，或区间早于投产日）</td></tr>';
     const ph2 = $('tlPagerHost'); if (ph2) ph2.innerHTML = ''; return;
   }
   const rows = tlSorted(tlFiltered());

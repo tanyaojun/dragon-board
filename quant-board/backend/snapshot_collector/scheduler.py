@@ -74,7 +74,8 @@ class SnapshotCollectorScheduler:
         self._jiuyan_last: dict[str, Any] | None = None
         self._jiuyan_label_last: dict[str, Any] | None = None
         self._jiuyan_theme_last: dict[str, Any] | None = None
-        # 题材层龙头投喂（16:20，2026-10-20 用户裁决：每日 ≈29k tokens 包络，幂等）
+        # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时：龙虎榜榜约 17:00 盘后生成，
+        # 晚于旧 16:20 挂链；每日 ≈29k tokens 包络，幂等）
         self._theme_leader_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
@@ -517,10 +518,11 @@ _THEME_CORPUS_ATTEMPTS = (
 # （名单覆盖稳定 + 避免与采集抢网络）；16:00 收盘链对已投喂个股幂等跳过。
 _JIUYAN_MIDDAY_LABEL_AT = datetime.time(12, 30)
 
-# 题材层龙头投喂时点（2026-10-20 用户裁决「每日自动投喂、累积到 20 交易日」）：
-# 16:20 = 晚于 16:10 题材语料刷新（当日催化正文先入库）+ 15:35 收盘名单；
+# 题材层龙头投喂时点（2026-10-20 用户裁决「每日自动投喂、累积到 20 交易日」；
+# **2026-10-30 用户裁决改 17:30**：龙虎榜榜约 17:00 盘后生成，17:30 挂链使当日龙虎榜
+# 事实行（AMMO 2026-10-30a lhb_line）当日可得；仍晚于 16:10 题材语料刷新 + 15:35 收盘名单；
 # 每日 1 call/龙头（实测 13 只 ≈29k tokens/日），子进程幂等（同股同日不重复投喂）。
-_THEME_LEADER_LABEL_AT = datetime.time(16, 20)
+_THEME_LEADER_LABEL_AT = datetime.time(17, 30)
 # 失败重试：每日最多 3 次，间隔 ≥10 分钟（防一次通道抖动吃掉整天 pilot 样本）
 _THEME_LEADER_MAX_ATTEMPTS = 3
 _THEME_LEADER_RETRY_AFTER = datetime.timedelta(minutes=10)
@@ -612,7 +614,7 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                             break
                 # 午盘投喂（2026-10-20 用户裁决）：12:30 用当日午盘名单喂 jev；
                 # 子进程内部再卡一次「午盘名单 fetchedAt 窗口」，重启补跑时不会拿收盘数据冒充午盘
-                # 题材层龙头投喂（16:20）：独立集合/独立题集代际。
+                # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时）：独立集合/独立题集代际。
                 # **限次退避重试**：失败（通道/取数/子进程）不一次判死——否则 8001 重启撞上
                 # 通道短暂不可用就会让那一天永远补不上（2026-10-20 实测：代理挂 → 9/9 degraded）。
                 # 规则：每日最多 `_THEME_LEADER_MAX_ATTEMPTS` 次，两次间隔 ≥ `_THEME_LEADER_RETRY_AFTER`。

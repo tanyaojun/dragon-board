@@ -155,11 +155,14 @@ def env(monkeypatch):
         [dict(r) for r in BASELINE], {"start": "2026-07-16", "end": "2026-10-16", "rows": 6}))
     monkeypatch.setattr("backend.operations.jev_label_jiuyan.market_facts_line",
                         lambda db, date, dataset_id=None: "涨停 46 家（30 分位）")
-    # KPL 原料（强度/直播）零网络打桩：fail-visible 行文，不影响判定链断言
+    # KPL 原料（强度/直播/龙虎榜）零网络打桩：fail-visible 行文，不影响判定链断言
     monkeypatch.setattr(L, "fetch_plate_strength",
                         lambda date: {"ok": False, "reason": "test_disabled"})
     monkeypatch.setattr(L, "fetch_live_commentary",
                         lambda st=60: {"ok": False, "reason": "test_disabled"})
+    monkeypatch.setattr(L, "fetch_lhb_facts",
+                        lambda date: {"ok": False, "date": date,
+                                      "reason": "test_disabled"})
     return calls, db
 
 
@@ -203,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v13"
     assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-28b"   # 涨停原因行+板块强度行+轨别身位（预登记 §4）
+    assert doc["ammoVersion"] == "2026-10-30a"   # 龙虎榜事实行（预登记 §23）；前批=涨停原因行+板块强度行+轨别身位（§4）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -334,6 +337,42 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     assert sec["themeSpeculationDepth"] == "fermenting"
     assert sec["themeContinuation"] == "strong_extend"
     assert sec["leaderNextdayContinue"] is None
+
+
+def test_build_one_and_sector_wire_lhb_line():
+    """龙虎榜事实行（AMMO 2026-10-30a）：个股级=待判龙一优先+板内封板成员，
+    板块级=双龙一轨别身位；lhb_facts=None 不出行（旧行为不变）；fetch 失败 fail-visible。"""
+    facts = {"ok": True, "stocks": [
+        {"code": "603278", "name": "大业股份", "main_net_yuan": 52000000,
+         "main_buy_yuan": 90000000, "main_sell_yuan": -38000000,
+         "reason": "日涨幅偏离值达7%的证券"},
+        {"code": "002639", "name": "雪人股份", "main_net_yuan": None,
+         "main_buy_yuan": None, "main_sell_yuan": None, "reason": ""},
+    ]}
+    row = dict(ROWS[0], boardCodes=["603278", "002639"])
+    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
+                        market_line="涨停 46 家", lhb_facts=facts)
+    n = built["narrative"]
+    assert "待判龙一 大业股份（603278）：主力净额 0.52亿" in n
+    assert "相关个股 雪人股份（002639）：主力净额 --" in n
+    assert n.index("个股打标交叉") < n.index("龙虎榜（HisBeOnTheLHB") < n.index("【题材证据")
+    # 未传入（旧行为）→ 不出行
+    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                         market_line="涨停 46 家")
+    assert "龙虎榜" not in built0["narrative"]
+    # 板块级：双龙一轨别身位；不在榜的龙一不出现
+    brows = [dict(ROWS[0], segment="main", boardCodes=["603278", "002639"]),
+             dict(ROWS[1], segment="growth")]
+    built_s = L.build_sector_one(FakeDb(), "2026-10-19", brows, BASELINE,
+                                 market_line="涨停 46 家", lhb_facts=facts)
+    ns = built_s["narrative"]
+    assert "主板龙一 大业股份（603278）" in ns
+    assert "雪人股份（002639）" in ns and "双创龙一 亚邦股份（603188）：" not in ns, "不在榜的龙一不出现在龙虎榜行（结构行身位不受影响）"
+    # 取数失败 → fail-visible 行（不伪装无上榜）
+    built_f = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
+                          market_line="涨停 46 家",
+                          lhb_facts={"ok": False, "reason": "fetch_failed: x"})
+    assert "--（fetch_failed: x，fail-visible，不冒充）" in built_f["narrative"]
 
 
 def test_build_one_wires_history_and_headroom_anchor():

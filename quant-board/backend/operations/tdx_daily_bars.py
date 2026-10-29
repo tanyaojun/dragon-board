@@ -78,7 +78,7 @@ def gain10_from_bars(bars: dict[str, dict] | None, end_date: str,
     """截至 `end_date` 的 N 交易日收盘涨幅（%）：C(end)/C(endo−window) − 1。
 
     样本不足 window+1 根 → None（不伪造）；end 当日尚未收盘的 bar 也参与（调用方
-    保证在收盘后调用，与 16:20 挂链时点一致）。
+    保证在收盘后调用，与 17:30 挂链时点一致）。
     """
     if not bars:
         return None

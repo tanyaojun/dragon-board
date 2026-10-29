@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.analysis.hotlist import theme_event_digest as digest
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
+from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
 from backend.analysis.hotlist.theme_leader_ammo import (
     AMMO_VERSION_THEME_LEADER,
     QUESTION_SET_HASH_THEME_LEADER,
@@ -54,6 +55,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     driver_cross_line,
     headroom_anchor_line,
     kpl_live_line,
+    lhb_line,
     plate_series_line,
     limitup_reason_line,
     plate_strength_line,
@@ -187,7 +189,7 @@ LIVE_ARCHIVE_COLLECTION = "kpl_live_daily"
 def get_live_for_label(db: Any, date: str) -> dict:
     """标注用直播流（P1-2 日归档）：归档优先 → 当日实时（取后归档）→ 历史日缺席降级。
 
-    归档集合 `kpl_live_daily`（_id=date）：16:20 挂链标注当日时实时取数并落库，此后
+    归档集合 `kpl_live_daily`（_id=date）：挂链（17:30，2026-10-30 改时）标注当日时实时取数并落库，此后
     回填/复盘/评估读归档——**存的是标注时点当日文本**，无 look-ahead；历史日无归档
     → {ok: False, reason}（fail-visible，不把今天直播冒充历史语料）。
     """
@@ -276,6 +278,44 @@ def live_entries_for_board(live_payload: dict, board: str,
     return entries, {"total": len(day_items), "window": f"{tmin}~{tmax}"}
 
 
+def fetch_lhb_facts(date: str) -> dict:
+    """龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用，单一源=jev_lhb_ammo.collect_lhb_facts。
+
+    与方向线 task-6 同源（禁第二套取数）；失败/未生成均为结构化降级（collect 内部已
+    逐端点捕获，行文由 lhb_line 承担），非 jev 调用、不花 token。挂链 17:30（2026-10-30
+    用户裁决改时）晚于榜生成（约 17:00 盘后），当日事实行当日可得；上游延迟未生成时
+    为结构化空态——行内显式披露，不伪装成「无上榜」。
+    """
+    try:
+        return collect_lhb_facts(date)
+    except Exception as exc:  # noqa: BLE001 — 双端点均异常的兜底（collect 内部已各端点捕获）
+        return {"ok": False, "date": date, "degraded": True,
+                "reason": f"fetch_failed: {exc}"}
+
+
+def _lhb_codes_roles(codes: list[str], roles_in: list[tuple[str, str | None]]) -> tuple[list[str], dict[str, str]]:
+    """龙虎榜行过滤入参组装（AMMO 2026-10-30a）：相关代码去重 + 身位映射。
+
+    `codes` = 额外相关代码（板内封板成员）；`roles_in` = [(code, 身位|None)]，身位缺省
+    「相关个股」。统一取后 6 位（兼容带交易所前缀的代码）。
+    """
+    roles: dict[str, str] = {}
+    ordered: list[str] = []
+    for code, role in roles_in:
+        k = str(code or "")[-6:]
+        if not k:
+            continue
+        if k not in ordered:
+            ordered.append(k)
+        if role:
+            roles.setdefault(k, role)
+    for c in codes:
+        k = str(c or "")[-6:]
+        if k and k not in ordered:
+            ordered.append(k)
+    return ordered, roles
+
+
 def expound_map(db: Any, date: str) -> dict[str, tuple[str, str | None]]:
     """当日全市场涨停原因映射（裁决③，预登记 §4.1）：code → (name, reason|None)。
 
@@ -312,7 +352,7 @@ def reason_entries_for_leaders(rows: list[dict], expounds: dict[str, tuple[str, 
         name, reason = expounds.get(code, (str(row.get("name") or ""), None))
         entries.append((f"{seg_cn} {name}", reason))
     return entries
-# 代际来源：`live` = 当日 16:20 挂链（前瞻样本）；`backfill` = 事后补跑历史日。
+# 代际来源：`live` = 当日挂链（17:30，2026-10-30 改时；前瞻样本）；`backfill` = 事后补跑历史日。
 # **评估必须分开统计**：事后补跑的日子可能看到「当时还不存在」的语料（如题材料只在 10-20 采集），
 # 混进前瞻样本会把泄漏当成模型能力（预登记 §11 H1 回填方案）。
 SAMPLE_ORIGIN_LIVE = "live"
@@ -531,7 +571,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               reason_entries: list[tuple[str, str | None]] | None = None,
               series_line: str | None = None,
               segment: str | None = None,
-              live_line: str | None = None) -> dict:
+              live_line: str | None = None,
+              lhb_facts: dict | None = None) -> dict:
     """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。"""
     from backend.operations.jev_label_jiuyan import market_facts_line
 
@@ -544,6 +585,10 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
                                               sealed_codes=sealed or None)
     # 打标交叉（AMMO 2026-10-27b）：零调用 join 打标链当日该股行（final>midday）
     driver_doc = fetch_driver_label(db, date, str(row.get("code") or ""))
+    # 龙虎榜事实行（AMMO 2026-10-30a）：待判龙一优先 + 板内封板成员，lhb_facts=None 不出行
+    lhb_codes, lhb_roles = _lhb_codes_roles(
+        [str(c) for c in (row.get("boardCodes") or [])],
+        [(str(row.get("code") or ""), "待判龙一")])
     narrative = build_leader_narrative(
         date=date,
         market_line=market_line,
@@ -565,6 +610,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         driver_cross=driver_cross_line(driver_doc),
         reason_line=limitup_reason_line(reason_entries or []),
+        lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
+                        if lhb_facts is not None else None),
         evidence_block=block["text"],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
@@ -586,7 +633,8 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
                      strength_match: dict | None = None,
                      reason_entries: list[tuple[str, str | None]] | None = None,
                      series_line: str | None = None,
-                     live_line: str | None = None) -> dict:
+                     live_line: str | None = None,
+                     lhb_facts: dict | None = None) -> dict:
     """组装一条**板块级**投喂（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3）。
 
     `board_rows` = 该板块分轨龙一行（≤2，main 优先）；基线/梯队/炸板面以首轨龙一为参照行
@@ -601,6 +649,12 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         market_line = market_facts_line(db, date, dataset_id)
     ref = board_rows[0]
     sealed = frozenset(ref.get("boardCodes") or ())
+    # 龙虎榜事实行（AMMO 2026-10-30a）：双龙一（轨别身位）+ 板内封板成员
+    lhb_codes, lhb_roles = _lhb_codes_roles(
+        [str(c) for c in (ref.get("boardCodes") or [])],
+        [(str(r.get("code") or ""),
+          {"main": "主板龙一", "growth": "双创龙一"}.get(r.get("segment"), "龙一"))
+         for r in board_rows])
     block = digest.build_theme_evidence_block(db, board_name=ref["board"], date=date,
                                               leader_code="",
                                               sealed_codes=sealed or None)
@@ -620,6 +674,8 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         live_line=live_line,
         baseline=baseline_line(rows_baseline, ref, BASELINE_MIN_SAMPLES),
         reason_line=limitup_reason_line(reason_entries or []),
+        lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
+                        if lhb_facts is not None else None),
         evidence_block=block["text"],
         board=str(ref["board"]),
     )
@@ -825,6 +881,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     strength_payload = fetch_plate_strength(date)
     live_payload = get_live_for_label(db, date)
     expounds = expound_map(db, date)
+    # 龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用（与板块强度/直播同哲学）
+    lhb_facts = fetch_lhb_facts(date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -905,7 +963,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             series_line=_series_line(b, smatch),
             live_line=kpl_live_line(le, board=b, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
-                                    unavailable=lm.get("unavailable")))
+                                    unavailable=lm.get("unavailable")),
+            lhb_facts=lhb_facts)
         built["rows"] = brows
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k] for k in SECTOR_QUESTIONS}
         built_all.append(built)
@@ -922,7 +981,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             segment=row.get("segment"),
             live_line=kpl_live_line(le, board=rb, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
-                                    unavailable=lm.get("unavailable")))
+                                    unavailable=lm.get("unavailable")),
+            lhb_facts=lhb_facts)
         built["row"] = row
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k] for k in LEADER_QUESTIONS}
         built_all.append(built)

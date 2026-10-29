@@ -351,7 +351,8 @@ def theme_leader_label_enabled() -> bool:
 
 def run_theme_leader_label_once(today: str | None = None, *,
                                 dry_run: bool = False) -> dict[str, Any]:
-    """题材层「板块龙头隔日连板」投喂（16:20 调度，2026-10-20 用户裁决挂链）。
+    """题材层「板块龙头隔日连板」投喂（17:30 调度，2026-10-20 挂链；
+    2026-10-30 用户裁决改时）。
 
     与个股驱动链的关系：完全独立集合（`hotlist_jev_theme_leader_labels`）、独立题集代际，
     每条 = 一个**板块龙头**（不是每只涨停股），**1 call/龙头/日**（≈13–20 次/日，
@@ -359,7 +360,8 @@ def run_theme_leader_label_once(today: str | None = None, *,
 
     门控：开关（`THEME_LEADER_LABEL_ENABLED`）→ 交易日（非抛错日历：bridge 宕机不丢一天）→
     子进程自身幂等（`_id={date}:{code}` 已 `status=ok` 跳过，重跑不重复烧 token）。
-    时点选 16:20：晚于 16:10 的题材语料刷新（当日晚于收盘的催化正文先进库）与 15:35 收盘名单。
+    时点 17:30：晚于 16:10 的题材语料刷新（当日晚于收盘的催化正文先进库）与 15:35 收盘名单；
+    晚于龙虎榜榜生成（约 17:00 盘后），当日龙虎榜事实行（AMMO 2026-10-30a）当日可得。
 
     预算语义（§1.2-7）：本步属**预登记日包络**下的常态挂链（用户已批准 ≈29k tokens/交易日），
     故直接带 `--confirm-budget`；无包络的路必须走 CLI 人工批准。

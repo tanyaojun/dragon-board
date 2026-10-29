@@ -70,7 +70,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v13"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-28b"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30a"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "5d50645e5dc8"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -884,3 +884,85 @@ def test_plate_series_line_gap_rate_quantified():
     assert "窗口6交易日仅2条记录，记录间缺口≠零涨停" in line
     line2 = A.plate_series_line([], zt_rows, plate_name="X", label_date="2026-10-28")
     assert "板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）" in line2
+
+
+# ── 龙虎榜事实行（AMMO 2026-10-30a，预登记 §23） ──
+
+LHB_FACTS = {
+    "ok": True, "date": "2026-10-29", "version": "2026-10-29a",
+    "groups": [], "stocks": [
+        {"code": "600715", "name": "文投控股", "plate": "文教", "price": 4.2,
+         "zf": 10.06, "main_net_yuan": 150000000, "main_buy_yuan": 230000000,
+         "main_sell_yuan": -80000000, "reason": "日涨幅偏离值达7%的证券"},
+        {"code": "002639", "name": "雪人股份", "plate": "机器人", "price": 9.0,
+         "zf": 5.24, "main_net_yuan": None, "main_buy_yuan": None,
+         "main_sell_yuan": None, "reason": ""},
+        {"code": "603278", "name": "大业股份", "plate": "机器人", "price": 12.0,
+         "zf": 10.02, "main_net_yuan": 52000000, "main_buy_yuan": 90000000,
+         "main_sell_yuan": -38000000, "reason": "连续三个交易日内收盘价格涨幅偏离值累计20%"},
+    ],
+}
+
+
+def test_lhb_line_fetch_failure_fail_visible():
+    line = A.lhb_line({"ok": False, "reason": "lhb_list_fetch_failed: boom"},
+                      codes=["603278"])
+    assert line.startswith("龙虎榜（HisBeOnTheLHB 按日查史")
+    assert "主力净额=盘中主力大单资金流口径，非交易所龙虎榜席位额" in line, "口径标注防误消费"
+    assert "--（lhb_list_fetch_failed: boom，fail-visible，不冒充）" in line
+    assert A.lhb_line(None, codes=["603278"]) == \
+        A.lhb_line({"ok": False, "reason": "no_data"}, codes=["603278"])
+
+
+def test_lhb_line_empty_structured_discloses_ordersign():
+    line = A.lhb_line({"ok": False, "empty_structured": True, "order_sign_count": 3,
+                       "stocks": []}, codes=["603278"])
+    assert "当日分组榜单未生成" in line and "orderSign=3 组" in line
+    assert "榜约盘后生成，缺当日事实≠无上榜" in line, "不把未生成伪装成无上榜"
+
+
+def test_lhb_line_matches_leader_first_and_roles():
+    line = A.lhb_line(LHB_FACTS, codes=["603278", "sh600715", "002639"],
+                      roles={"603278": "待判龙一"})
+    assert "待判龙一 大业股份（603278）：主力净额 0.52亿（买 0.90亿 / 卖 -0.38亿），" \
+        "上榜原因 连续三个交易日内收盘价格涨幅偏离值累计20%" in line
+    assert "相关个股 文投控股（600715）：主力净额 1.50亿（买 2.30亿 / 卖 -0.80亿），" \
+        "上榜原因 日涨幅偏离值达7%的证券" in line
+    # 龙一优先（传入顺序），交易所前缀取后 6 位
+    assert line.index("603278") < line.index("600715") < line.index("002639")
+
+
+def test_lhb_line_missing_numbers_and_reason_are_dash_not_zero():
+    line = A.lhb_line(LHB_FACTS, codes=["002639"], roles={"002639": "板内成员"})
+    assert "板内成员 雪人股份（002639）：主力净额 --，上榜原因 --" in line, \
+        "非数值资金/缺原因出 --，不伪装 0"
+
+
+def test_lhb_line_zero_relevant_is_fact_not_direction():
+    line = A.lhb_line(LHB_FACTS, codes=["300001", "300002"])
+    assert "当日全市场上榜 3 只，本叙事相关个股 0 只上榜（事实披露，非方向信号）" in line
+
+
+def test_lhb_line_cap_discloses_overflow():
+    stocks = [{"code": f"60000{i}", "name": f"股{i}", "main_net_yuan": None,
+               "main_buy_yuan": None, "main_sell_yuan": None, "reason": ""}
+              for i in range(8)]
+    facts = {"ok": True, "stocks": stocks}
+    codes = [s["code"] for s in stocks]
+    line = A.lhb_line(facts, codes=codes)
+    assert line.count("相关个股") == 6 and "另 2 只相关上榜略，fail-visible 披露" in line
+
+
+def test_narrative_lhb_line_placement_after_reason_line():
+    """个股级/板块级叙事：龙虎榜行排涨停原因行后、证据块前；None 不出行（旧行为不变）。"""
+    base = dict(date="2026-10-19", market_line="涨停 46 家",
+                structure="结构行", baseline="基线行", evidence_block="【题材证据】")
+    lhb = A.lhb_line(LHB_FACTS, codes=["603278"], roles={"603278": "待判龙一"})
+    n = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278",
+                                 reason_line="涨停原因行", lhb_facts_line=lhb)
+    assert n.index("涨停原因行") < n.index("龙虎榜（HisBeOnTheLHB") < n.index("【题材证据】")
+    n2 = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278")
+    assert "龙虎榜" not in n2
+    s = A.build_sector_narrative(**base, board="机器人", reason_line="涨停原因行",
+                                 lhb_facts_line=lhb)
+    assert s.index("涨停原因行") < s.index("龙虎榜（HisBeOnTheLHB") < s.index("【题材证据】")

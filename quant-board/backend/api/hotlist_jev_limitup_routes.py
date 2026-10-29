@@ -163,7 +163,7 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
 
 
 # ── 题材层「板块龙头隔日连板」投喂读口（2026-10-20 加） ──
-# 集合：hotlist_jev_theme_leader_labels（16:20 每日投喂 / 或 scripts/theme_leader_pilot_eval 回填）
+# 集合：hotlist_jev_theme_leader_labels（17:30 每日投喂，2026-10-30 改时 / 或 scripts/theme_leader_pilot_eval 回填）
 # 目的：让「v2 题目集 + 实际投喂的语料」在前端可见（研究↔展示同步，AGENTS §1.2-5）。
 # 纯读；无文档 → no_data=true（fail-visible，不伪造空成功）。
 @router.get("/theme-leaders")

@@ -540,7 +540,12 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 - `backend/analysis/hotlist/jev_lhb_ammo.py`：collect_lhb_facts（取数+归一）+
   build_lhb_facts_lines（纯事实行）。零引擎判断产物（禁喂清单合规）；取数失败/
-  结构化空态显式 `--` 行不伪装。方向线消费入口与 driver/resonance ammo 同构。
+  结构化空态显式 `--` 行不伪装。方向线消费入口与 driver/resonance ammo 同构；
+  **题材龙头语料同源消费（AMMO 2026-10-30a，2026-10-30 用户指示）**：
+  `theme_leader_ammo.lhb_line` 按「待判龙一+板内封板成员/双龙一+板内成员」代码过滤
+  接入个股级与板块级叙事（四种结构化状态全 fail-visible；主力净额口径行内标注非
+  席位额；题集 v13 hash 不变；预登记 theme-leader-nextday-preregistration-20261020
+  §23）。
 - audit 同步：docs/hotlist-jev/jev-direction-material-audit.md §3 C 级第 4 条
   「龙虎榜未采」→ 已接入（大单监控线另行预登记）。
 
