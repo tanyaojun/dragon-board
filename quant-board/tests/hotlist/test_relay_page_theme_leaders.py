@@ -192,8 +192,10 @@ def test_backfill_warning_display_removed(html: str) -> None:
 
 
 def test_read_error_is_fail_visible(html: str) -> None:
+    """读口异常 fail-visible（2026-10-30 新口径：报错黄条页内删除，只进底部状态栏）。"""
     banner = _fn(html, "tlRenderBanner")
-    assert "读口异常" in banner and "非「区间内无投喂」" in banner
+    assert "sbLog('error', '[题材龙头] '" in banner, "读口异常须进底部状态栏"
+    assert "题材龙头读口异常：" not in banner and "后台刷新失败（" not in banner, "页内报错黄条已删（8e6a507b），不得回渲染（no_data 中性提示保留）"
     assert "theme_leaders_read_failed" in html
 
 
@@ -202,11 +204,13 @@ def test_bg_refresh_failure_has_visible_exit(html: str) -> None:
 
     事故实录：初版 bg 失败分支写 error 但 banner/表体都以「无 rows」为前置，
     读口挂掉时页面照常显示旧数据 + refreshAt 照常刷新，用户零感知。
+    2026-10-30 新口径：出口=底部状态栏（页内黄条已删，8e6a507b）。
     """
     fetch = _fn(html, "tlFetch")
     banner = _fn(html, "tlRenderBanner")
     assert "const bg = " in fetch, "同区间轮询走静默刷新"
-    assert "bgErr" in banner and "后台刷新失败" in banner and "上次成功数据" in banner,         "bg 失败必须追加 warn 行（§4.0 不得伪装成正常数据）"
+    assert "sbLog('warn', '[题材龙头] 后台刷新失败：'" in banner, "bg 失败必须进状态栏（§4.0 不得伪装成正常数据）"
+    assert "上次成功数据" in banner, "状态栏须标注展示的是上次成功数据"
 
 
 def test_no_reran_dead_variable(html: str) -> None:
