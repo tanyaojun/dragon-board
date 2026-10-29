@@ -190,6 +190,32 @@ def lhb_history(date: str = ""):
     })
 
 
+@router.get("/lhb-sale")
+async def lhb_sale(date: str = "", type_: int = 0) -> JSONResponse:
+    """营业部成交榜读口（GetBusinessList，applhb 域）：按日全市场营业部买/卖额聚合。
+
+    同步 def（同 lhb_history 理由）：上游限频分钟级，30s TTL 缓存内直回。
+    必传 date（缺参返 422 结构化降级）；当日盘前/盘中 list=[] 属结构化空态
+    （营业部榜约 17:00 盘后生成），显式 note 提示不伪装。
+    """
+    from backend.services import kpl_lhb_sale as lhb_sale_svc
+    if not date:
+        return JSONResponse(status_code=422, content={
+            "ok": False, "degraded": True, "reason": "missing_date",
+            "note": "必传 date=YYYY-MM-DD（营业部榜按日拉取，无默认回看）"})
+    try:
+        raw = lhb_sale_svc.fetch_lhb_sale(date, type_)
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "degraded": True, "reason": "upstream_error",
+            "note": str(exc)[:200]})
+    parsed = lhb_sale_svc.parse_lhb_sale(raw)
+    if not parsed["rows"]:
+        parsed["note"] = ("该日期营业部榜为空（盘前/盘中查当日属正常：榜约 17:00 盘后生成；"
+                          "非交易日亦空），非降级")
+    return JSONResponse(content=parsed)
+
+
 @router.get("/daban-list-history")
 async def daban_list_history(date: str = "", pid_type: int = 8) -> JSONResponse:
     """按日打板个股列表历史收盘帧（HisDaBanList HTTP，App 市场情绪·日期回看同款读口）。

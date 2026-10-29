@@ -50,7 +50,9 @@ def _global_params() -> Dict[str, Any]:
     return {"apiv": "w48", "VerSion": "6.3.20.2", "PhoneOSNew": 1, "Red": 0, **creds}
 
 
-def _fetch_cached(key: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _fetch_cached(key: str, params: Dict[str, Any], host: str = _HOST_HISTORY,
+                  ua: str = _UA_STOCKS) -> Dict[str, Any]:
+    """30s TTL 缓存（key 需自带命名空间）；host/ua 可注入（营业部链 applhb 复用）。"""
     cached = _CACHE.get(key)
     if cached and time.time() - cached["ts"] < _CACHE_TTL_SECONDS:
         return cached["data"]
@@ -60,7 +62,7 @@ def _fetch_cached(key: str, params: Dict[str, Any]) -> Dict[str, Any]:
         _CACHE.pop(k, None)
     if len(_CACHE) >= _CACHE_MAX_KEYS:
         _CACHE.clear()
-    data = _post_form(_HOST_HISTORY, params, _UA_STOCKS)
+    data = _post_form(host, params, ua)
     _check_errcode(data)
     _CACHE[key] = {"ts": time.time(), "data": data}
     return data

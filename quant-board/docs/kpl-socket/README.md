@@ -498,6 +498,13 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   顺序互换是关键坑**（mo0.d 第一参数→c、第二参数→a；记反即 1020）。OnTheLHBList=
   按上榜原因分组榜单（Reason/Index/stockList 12 列）；OnTheLHBStock=个股行 22 列
   （字段族与 2112 Item 同源）。当日未生成 info=[] + orderSign（结构化空态）。
+- **营业部成交榜 HTTP**（`kpl_lhb_sale.py`，2026-10-29 逆向 j00.F + le0.p + 开火实测）：
+  POST applhb（API_LHB 专用域）`a=GetBusinessList&c=LongHuBang&Time=YYYY-MM-DD&Index=0
+  &Type=0&STAT_SDK_TYPE=500`（500 一页全量，App 每页 100 分页）；返回
+  {ID, Name, Buy, Sell(元原样), JoinNum}，实测 2026-10-28 Total=229。**当日盘前/盘中
+  list=[] 属结构化空态（榜约 17:00 盘后生成）**。同族 GetAgencyListV2（机构榜）/
+  GetStockList（个股榜）未接，边界显式。证据 `.tmp_review/lhbsale_probe_results.jsonl`
+  （本地，不入仓）。
 
 ### 13.2 开关与读口
 
@@ -509,13 +516,16 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - 快照读口（:8002 / :8000 透传 / :8008 页面消费）：`GET /api/kpl/lhb-forecast`、
   `/api/kpl/lhb-realtime`（2112/3004 均空帧抑制同 2103 规——2112 以 total=0 为语义清空，
   午间休市推流 total>0/items=[] 不覆盖非空快照；无快照结构化降级 fail-visible）；
-  `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）。
+  `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）；
+  `GET /api/kpl/lhb-sale?date=&type_=0`（:8000 本地处理 kpl_lhb_sale 营业部榜，30s TTL；
+  缺 date 422，空榜带结构化空态 note）。
 - :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签：预测卡 + 龙虎榜合并表卡（同板块行情
-  个股列表形态；默认当日=3004 实时 5s 轮询，头部日期选择历史日期 → 同表切换
-  HisBeOnTheLHB 分组回看，「今日」按钮/清空回实时；回看模式轮询照跑仅停渲染，
-  banner 按 view 分流互不顶掉；旧独立回看控件已删；缺字段 `--`、降级 banner、
-  失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright 断言（默认实时/
-  回看切换/今日恢复全过），脚本与截图只存本地 `.tmp_review/`，未入仓**
+  个股列表形态；头部「选股/营业部」分段切换 + 日期选择：选股=默认当日 3004 实时
+  5s 轮询、选历史日期同表切换 HisBeOnTheLHB 分组回看；营业部=GetBusinessList 按日榜
+  （# / 营业部 / 买入额亿 / 卖出额亿 / 参与次数）；「今日」按钮回当日；回看/营业部模式
+  轮询照跑仅停渲染，banner 按 view 分流互不顶掉；缺字段 `--`、降级 banner、
+  失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright 断言（实时/回看/营业部
+  三视图切换全过），脚本与截图只存本地 `.tmp_review/`，未入仓**
   （专项契约由 `tests/hotlist/test_relay_page_window.py` 与 :8000 透传 mock 测试覆盖）。
 
 ### 13.3 资金字段口径（task-3 裁决，防误消费）

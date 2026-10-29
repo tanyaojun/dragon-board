@@ -399,3 +399,44 @@ def test_lhb_history_ok(client, monkeypatch):
     assert body["ok"] is True and body["list"]["date"] == "2026-10-28"
     assert body["list"]["order_sign"] == []      # 结构化空态保留
     assert body["stocks"]["count"] == 0
+
+
+def test_lhb_sale_missing_date_structured_422(client):
+    r = client.get("/api/kpl/lhb-sale")
+    assert r.status_code == 422
+    body = r.json()
+    assert body["ok"] is False and body["degraded"] is True
+    assert body["reason"] == "missing_date"
+
+
+def test_lhb_sale_upstream_error_structured_502(client, monkeypatch):
+    from backend.services import kpl_lhb_sale as sale_svc
+    def boom(date, type_=0):
+        raise RuntimeError("upstream limit")
+    monkeypatch.setattr(sale_svc, "fetch_lhb_sale", boom)
+    r = client.get("/api/kpl/lhb-sale?date=2026-10-28")
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and body["reason"] == "upstream_error"
+
+
+def test_lhb_sale_ok_with_empty_note(client, monkeypatch):
+    from backend.services import kpl_lhb_sale as sale_svc
+    monkeypatch.setattr(sale_svc, "fetch_lhb_sale",
+                        lambda date, type_=0: {"errcode": "0", "Time": date,
+                                               "Total": 0, "list": []})
+    r = client.get("/api/kpl/lhb-sale?date=2026-10-29")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["rows"] == [] and body["total"] == 0
+    assert "盘后生成" in body["note"]             # 结构化空态显式提示，不伪装
+
+    monkeypatch.setattr(sale_svc, "fetch_lhb_sale",
+                        lambda date, type_=0: {"errcode": "0", "Time": date,
+                                               "Total": 1, "list": [
+            {"ID": "1", "Name": "华泰证券总部", "Buy": "100.0",
+             "Sell": "50.0", "JoinNum": 2}]})
+    r = client.get("/api/kpl/lhb-sale?date=2026-10-28")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rows"][0]["name"] == "华泰证券总部" and "note" not in body

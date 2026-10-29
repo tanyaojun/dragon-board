@@ -711,8 +711,12 @@
         </div>
         <div class="card" style="padding:10px 12px">
           <h3 style="margin-bottom:8px;display:flex;align-items:center"><span>龙虎榜</span>
-            <input type="date" id="kplLhbRtDate" style="margin-left:auto" onchange="kplLhbDateChange()" title="默认当日实时；选历史日期回看">
-            <button onclick="kplLhbBackToRt()">今日</button>
+            <span class="kpl-tabs" style="margin:0 0 0 10px">
+              <button id="kplLhbViewStock" class="on" onclick="kplLhbSetView('stock')">选股</button>
+              <button id="kplLhbViewSale" onclick="kplLhbSetView('sale')">营业部</button>
+            </span>
+            <input type="date" id="kplLhbRtDate" style="margin-left:auto" onchange="kplLhbDateChange()" title="选股：默认当日实时/选日期回看；营业部：按日榜（约 17:00 盘后生成）">
+            <button onclick="kplLhbTodayBtn()">今日</button>
             <span class="kpl-sub" id="kplLhbRtMeta" style="margin-left:8px"></span></h3>
           <div class="kpl-wrap" style="max-height:calc(100vh - 480px)"><table id="kplLhbRtTable"></table></div>
         </div>
@@ -4900,7 +4904,8 @@ const KPL = {
   dabanMode: {},        // view → 'live' | 'history'（精选板块同款：日期切换+回实时）
   dabanDate: {},        // view → 历史模式日期
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
-  lhb: {fc: null, rt: null, his: null, hisDate: '', view: 'rt', rtMsgs: [], hisMsg: ''},   // view：rt=当日实时 | his=历史回看（合并同表）
+  lhb: {fc: null, rt: null, his: null, hisDate: '', view: 'rt', rtMsgs: [], hisMsg: '',
+        sale: null, saleDate: '', saleMsg: ''},   // view：rt=当日实时 | his=历史回看 | sale=营业部榜
   lhbPoll: null,
 };
 // quotas 语义索引：[2]涨幅% [3]成交额 [7]/[8]/[9]主力买/卖/净（东财独立源核实）；
@@ -5995,6 +6000,7 @@ function kplLhbBannerUpdate(){
   const msgs = [];
   if (KPL.lhb.view === 'rt' && (KPL.lhb.rtMsgs || []).length) msgs.push(...KPL.lhb.rtMsgs);
   if (KPL.lhb.view === 'his' && KPL.lhb.hisMsg) msgs.push(KPL.lhb.hisMsg);
+  if (KPL.lhb.view === 'sale' && KPL.lhb.saleMsg) msgs.push(KPL.lhb.saleMsg);
   kplLhbBanner('kplLhbBanner', msgs.join('；'));
 }
 function kplLhbRender(){
@@ -6004,6 +6010,7 @@ function kplLhbRender(){
   $('kplLhbFcMeta').textContent = fc ? ('latest_day=' + (fc.latest_day || '--') + ' items=' + (fc.items || []).length) : '无快照';
   // 合并表（同板块行情个股列表形态）：默认当日=3004 实时；选历史日期=HisBeOnTheLHB 回看
   if (KPL.lhb.view === 'his'){ kplLhbHisTableRender(); kplLhbBannerUpdate(); return; }
+  if (KPL.lhb.view === 'sale'){ kplLhbSaleTableRender(); kplLhbBannerUpdate(); return; }
   $('kplLhbRtMeta').textContent = '当日实时 · ' + (rt ? ('days=' + ((rt.days || []).join(',') || '--')
     + ' 区间=' + (rt.min_mtime ?? '--') + '-' + (rt.max_mtime ?? '--')) : '无快照');
   // 2112 预测列表（reason/hot_val/main_net 全展示）
@@ -6032,16 +6039,72 @@ function kplLhbRender(){
     : '<tr><td colspan="6" style="color:var(--muted)">' + (rt ? '--（本帧无 items）' : '--（无快照）') + '</td></tr>';
   kplLhbBannerUpdate();
 }
+function kplLhbToday(){
+  // KPL.today 仅在主行情页 kplViewEnter 赋值；直达龙虎榜页签时空 → 懒初始化兑底
+  if (!KPL.today){
+    const d = new Date();
+    KPL.today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+      + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  return KPL.today;
+}
+function kplLhbSetView(v){
+  if (v === 'sale'){
+    KPL.lhb.view = 'sale';
+    kplLhbSaleLoad(KPL.lhb.saleDate || kplLhbToday());   // 默认当日（盘前/盘中空态显式提示）
+  } else {
+    kplLhbBackToRt();                                // 选股：清日期回实时
+  }
+  $('kplLhbViewStock').classList.toggle('on', v !== 'sale');
+  $('kplLhbViewSale').classList.toggle('on', v === 'sale');
+}
 function kplLhbDateChange(){
   const d = $('kplLhbRtDate').value;
-  if (!d || d === KPL.today){ kplLhbBackToRt(); return; }   // 清空/当日 → 实时视图
+  if (KPL.lhb.view === 'sale'){ kplLhbSaleLoad(d || kplLhbToday()); return; }
+  if (!d || d === kplLhbToday()){ kplLhbBackToRt(); return; }   // 清空/当日 → 实时视图
   KPL.lhb.view = 'his';
   kplLhbHisLoad(d);
+}
+function kplLhbTodayBtn(){
+  if (KPL.lhb.view === 'sale'){ $('kplLhbRtDate').value = ''; KPL.lhb.saleDate = ''; kplLhbSaleLoad(kplLhbToday()); return; }
+  kplLhbBackToRt();
 }
 function kplLhbBackToRt(){
   $('kplLhbRtDate').value = '';
   KPL.lhb.view = 'rt'; KPL.lhb.his = null; KPL.lhb.hisMsg = '';
   kplLhbRender();
+}
+async function kplLhbSaleLoad(d){
+  KPL.lhb.saleDate = d;
+  if (!$('kplLhbRtDate').value) $('kplLhbRtDate').value = d;
+  try {
+    const resp = await fetch(KPL_API + '/lhb-sale?date=' + d);
+    const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+    if (!r.ok){
+      KPL.lhb.sale = null;
+      KPL.lhb.saleMsg = '营业部 ' + d + ' 读取失败：' + (r.reason || '') + (r.note ? '（' + r.note + '）' : '');
+      kplLhbRender();
+      return;
+    }
+    KPL.lhb.sale = r;
+    KPL.lhb.saleMsg = r.note || '';
+    kplLhbRender();
+  } catch (e){
+    KPL.lhb.saleMsg = '营业部 ' + d + ' 请求失败：' + (e.message || e);
+    kplLhbRender();
+  }
+}
+function kplLhbSaleTableRender(){
+  const s = KPL.lhb.sale, d = KPL.lhb.saleDate;
+  const rows = (s && s.rows) || [];
+  $('kplLhbRtMeta').textContent = '营业部 ' + d + ' · ' + (s ? (s.total ?? rows.length) + ' 家' : '无数据');
+  if (!s){ $('kplLhbRtTable').innerHTML = '<tr><td style="color:var(--muted)">--（读取失败；见 banner 说明）</td></tr>'; return; }
+  $('kplLhbRtTable').innerHTML = rows.length
+    ? '<tr><th>#</th><th>营业部</th><th>买入额</th><th>卖出额</th><th>参与次数</th></tr>'
+      + rows.map((r, i) => '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(r.name || '--') + '</td>'
+        + '<td class="num">' + kplFmtYi(r.buy) + '</td><td class="num">' + kplFmtYi(r.sell) + '</td>'
+        + '<td class="num">' + kplFmtVal(r.join_num) + '</td></tr>').join('')
+    : '<tr><td colspan="5" style="color:var(--muted)">--（该日无数据；见 banner 说明）</td></tr>';
 }
 async function kplLhbHisLoad(d){
   KPL.lhb.hisDate = d;
