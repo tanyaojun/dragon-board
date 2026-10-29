@@ -5620,11 +5620,7 @@ function kplLiveFetchStockMeta(codes){
         + ((r.failedPlates || []).length ? ((r.error ? '；' : '直播个股 meta 部分板块构建失败：')
            + r.failedPlates.length + ' 个板块（其余照常）') : '');
       if (errMsg && errMsg !== m.errShown){ m.errShown = errMsg; kplLiveBanner(errMsg + '（自动重试中）'); }
-      else if (!errMsg){ m.errShown = '';
-        // 层3 查史当日盘中不可用 → 已回退上一交易日（2026-10-29 实测）：透明标注口径
-        const fbMsg = r.fb ? '直播个股 meta 已回退 ' + r.fb + '（当日层3 未生成，换手/连板为上一交易日口径）' : '';
-        if (fbMsg !== m.errShown){ m.errShown = fbMsg; kplLiveBanner(fbMsg); }
-      }
+      else if (!errMsg) m.errShown = '';   // fb 回退不弹横幅（2026-10-29 用户裁决）：仅在概念列 tooltip 静默标注数据日
       kplLiveScheduleMetaPoll();
     })
     .catch(() => { m.failedAt = now; kplLiveBanner('直播个股 meta 读取失败（稍后自动重试）'); });
