@@ -5398,7 +5398,7 @@ const LIVE = {timer: null, src: 'zb', zb: [], zbSeen: new Set(),
               radar: [], radarSeen: new Set(), sel: '', freshIds: new Set(),
               // 个股 meta（地位/换手/连板/概念，KPL 板块宇宙惰性索引，2026-10-29）
               stockMeta: {map: {}, building: false, sig: '', fetchedAt: 0, failedAt: null,
-                          error: null, failedPlates: [], errShown: '', timer: null},
+                          error: null, failedPlates: [], fb: null, errShown: '', timer: null},
               // 语音播报（tools/VoiceWorker 32145，经 :8000 /api/kpl/voice/* 代理）：
               // on=开关（localStorage 持久）；online=端口探测结果；armed=冷启动已过（首轮流不播历史积压）
               voice: {on: localStorage.getItem('kplLiveVoice') !== '0', online: null, armed: false, probing: false}};
@@ -5590,7 +5590,7 @@ function kplLiveRenderStocks(){
       + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
       + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
       + `<td class="kpl-sub" title="KPL 板块概念（${mv(r.code, 'plate_id')
-        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
+        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）${LIVE.stockMeta.fb ? ' · 数据日 ' + LIVE.stockMeta.fb : ''}">${esc(String(mv(r.code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
   }
   html += '</tbody>';
   $('kplLiveStockTable').innerHTML = html;
@@ -5613,13 +5613,18 @@ function kplLiveFetchStockMeta(codes){
       m.building = !!r.building;
       m.error = r.error || null;
       m.failedPlates = r.failedPlates || [];
+      m.fb = r.fb || null;
       m.failedAt = null;
       // fail-visible（review P1-1）：error/failedPlates 必须透出，失败态不得静默伪装成「不在宇宙」
       const errMsg = (r.error ? '直播个股 meta 索引失败：' + r.error : '')
         + ((r.failedPlates || []).length ? ((r.error ? '；' : '直播个股 meta 部分板块构建失败：')
            + r.failedPlates.length + ' 个板块（其余照常）') : '');
       if (errMsg && errMsg !== m.errShown){ m.errShown = errMsg; kplLiveBanner(errMsg + '（自动重试中）'); }
-      if (!errMsg) m.errShown = '';
+      else if (!errMsg){ m.errShown = '';
+        // 层3 查史当日盘中不可用 → 已回退上一交易日（2026-10-29 实测）：透明标注口径
+        const fbMsg = r.fb ? '直播个股 meta 已回退 ' + r.fb + '（当日层3 未生成，换手/连板为上一交易日口径）' : '';
+        if (fbMsg !== m.errShown){ m.errShown = fbMsg; kplLiveBanner(fbMsg); }
+      }
       kplLiveScheduleMetaPoll();
     })
     .catch(() => { m.failedAt = now; kplLiveBanner('直播个股 meta 读取失败（稍后自动重试）'); });

@@ -583,10 +583,33 @@ _stocks_meta_lock = threading.Lock()
 _stocks_meta_cache: Dict[str, Dict[str, Any]] = {}
 
 
+def _stocks_meta_probe_eff_date(date: str, probe_plate: str) -> str:
+    """层3 查史当日盘中不可用（2026-10-29 实测 Date=今天 → 1020_date_state，昨日正常）
+    → 逐日回退探测首只成分股可用的交易日（与前端板块行情 kplShiftDate 回退同款实践）。
+    上限 5 步（跳周末）；全不可用返回 ""（调用方按 error 处理，fail-visible）。
+    探针命中后 (plate,date,page=0) 进 30s TTL 缓存，构建首轮零浪费。
+    """
+    from datetime import date as _d, timedelta
+    cur = _d.fromisoformat(date)
+    for _ in range(5):
+        ds = cur.isoformat()
+        try:
+            r = get_sector_stocks(probe_plate, ds, page=0)
+            if r.get("items"):
+                return ds
+        except KplRankingError:
+            pass
+        cur -= timedelta(days=1)
+        while cur.weekday() >= 5:          # 跳周末
+            cur -= timedelta(days=1)
+    return ""
+
+
 def _build_stocks_meta(date: str) -> None:
     """后台线程构建（get_live_stocks_meta 拉起）：排行 → 逐板块成分股 → code→meta。
 
     单板块失败不中断（failed_plates 计数透出，fail-visible）；排行失败 → error 态。
+    当日层3 查史盘中不可用 → 探测回退上一有效交易日（fb 透出，前端标注）。
     增量写入：每板块完成即持锁合并进索引——全局 2s/发纪律下全宇宙 ~80 发≈160s，
     前端轮询 10s 内即见强度最高板块的首批 meta，不等全量构建完成。
     """
@@ -603,13 +626,20 @@ def _build_stocks_meta(date: str) -> None:
             # 盘前/未生成：排行全零行被过滤后为空——不得伪装成「done 空 index」
             # （2026-10-29 层3 判别探针同源结论），error 态让下次调用自动重建
             raise KplRankingError("ranking_empty（盘前/数据未生成，fail-visible）")
+        eff_date = _stocks_meta_probe_eff_date(date, str(plates[0]["plate_id"]))
+        if not eff_date:
+            raise KplRankingError(
+                "stocks_unavailable_5d（层3 近 5 个交易日均不可用，fail-visible）")
+        if eff_date != date:
+            with _stocks_meta_lock:
+                entry["fb"] = eff_date
         for it in plates:
             pid = str(it["plate_id"])
             page = 0
             plate_hits: Dict[str, Dict[str, Any]] = {}
             try:
                 while True:
-                    resp = get_sector_stocks(pid, date, page=page)
+                    resp = get_sector_stocks(pid, eff_date, page=page)
                     for s in resp.get("items") or []:
                         code = str(s.get("code") or "")
                         if not code or code in index or code in plate_hits:
@@ -689,6 +719,7 @@ def get_live_stocks_meta(codes: List[str], date: str) -> Dict[str, Any]:
                    "hits": hits, "missed": missed,
                    "failedPlates": entry.get("failed_plates") or [],
                    "indexSize": len(index),
+                   "fb": entry.get("fb") or None,
                    "error": entry.get("error")}
     if need_build:
         # 线程必须在锁外 start：同步/重入执行下构建函数结尾要拿同一把非重入锁，

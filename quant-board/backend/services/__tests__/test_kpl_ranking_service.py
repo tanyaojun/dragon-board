@@ -692,8 +692,13 @@ def test_live_stocks_meta_partial_plate_failure_keeps_rest(monkeypatch):
                             {"plate_id": "801159", "name": "机器人概念", "strength": 100},
                             {"plate_id": "801573", "name": "半导体", "strength": 90}], "sons": {}})
     def fake_stocks(pid, date, page=0, page_size=100):
-        if pid == "801159":
+        if pid == "801573":                       # 失败板块放非探针位（探针=plates[0]）
             raise svc.KplRankingError("upstream_http_502", url="x")
+        if pid == "801159":
+            return {"ok": True, "date": date, "plate_id": pid, "page": 0,
+                    "page_size": page_size, "has_more": False,
+                    "items": [{"code": "000678", "name": "襄阳轴承", "rank_title": "龙一",
+                               "turnover": 18.9, "board_status": "5连板", "concept": "机器人"}]}
         return {"ok": True, "date": date, "plate_id": pid, "page": 0,
                 "page_size": page_size, "has_more": False,
                 "items": [{"code": "603061", "name": "金海通", "rank_title": "龙二",
@@ -701,10 +706,12 @@ def test_live_stocks_meta_partial_plate_failure_keeps_rest(monkeypatch):
     monkeypatch.setattr(svc, "get_sector_stocks", fake_stocks)
     svc.get_live_stocks_meta(["603061"], "2026-10-28")
     entry = _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "done")
-    assert entry["failed_plates"] == ["801159"]
-    assert "603061" in entry["index"], "失败板块不得中断其余板块入库"
-    out = svc.get_live_stocks_meta(["603061"], "2026-10-28")
-    assert out["failedPlates"] == ["801159"] and out["hits"]["603061"]["rank_title"] == "龙二"
+    assert entry["failed_plates"] == ["801573"]
+    assert "000678" in entry["index"], "失败板块不得中断其余板块入库"
+    out = svc.get_live_stocks_meta(["000678", "603061"], "2026-10-28")
+    assert out["failedPlates"] == ["801573"]
+    assert out["hits"]["000678"]["rank_title"] == "龙一"
+    assert out["missed"] == ["603061"], "失败板块的成分股如实 missed（不伪装命中）"
     svc._stocks_meta_cache.clear()
 
 
@@ -770,4 +777,50 @@ def test_live_stocks_meta_error_rebuild_cooldown(monkeypatch):
     svc.get_live_stocks_meta(["603278"], "2026-10-28")
     _wait_stocks_meta("2026-10-28", lambda e: e.get("state") == "error" and calls["n"] >= 2)
     assert calls["n"] == 2
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_falls_back_when_today_layer3_unavailable(monkeypatch):
+    """当日层3 查史盘中不可用（2026-10-29 实测 1020_date_state）→ 回退上一交易日，
+    fb 透出、昨日数据正常入库；连板/换手/地位/概念照常命中。"""
+    svc._stocks_meta_cache.clear()
+
+    def fake_stocks(pid, date, page=0, page_size=100):
+        if date == "2026-10-29":
+            raise svc.KplRankingError("upstream_1020_date_state", url="x")
+        return {"ok": True, "date": date, "plate_id": pid, "page": 0,
+                "page_size": page_size, "has_more": False,
+                "items": [{"code": "000678", "name": "襄阳轴承", "rank_title": "龙一",
+                           "turnover": 18.89, "board_status": "5连板",
+                           "concept": "机器人概念"}]}
+
+    monkeypatch.setattr(svc, "get_sector_ranking",
+                        lambda date: {"ok": True, "date": date, "items": [
+                            {"plate_id": "801159", "name": "机器人概念", "strength": 100}],
+                         "sons": {}})
+    monkeypatch.setattr(svc, "get_sector_stocks", fake_stocks)
+    svc.get_live_stocks_meta(["000678"], "2026-10-29")
+    entry = _wait_stocks_meta("2026-10-29", lambda e: e.get("state") == "done")
+    assert entry["index"]["000678"]["board_status"] == "5连板"
+    out = svc.get_live_stocks_meta(["000678"], "2026-10-29")
+    assert out["fb"] == "2026-10-28", "回退日必须 fb 透出（fail-visible，不伪装当日口径）"
+    assert out["hits"]["000678"]["concept"] == "机器人概念"
+    svc._stocks_meta_cache.clear()
+
+
+def test_live_stocks_meta_all_dates_unavailable_is_error(monkeypatch):
+    """近 5 个交易日层3 全不可用 → error 态（fail-visible，不伪装空宇宙）。"""
+    svc._stocks_meta_cache.clear()
+
+    def boom(pid, date, page=0, page_size=100):
+        raise svc.KplRankingError("upstream_1020", url="x")
+
+    monkeypatch.setattr(svc, "get_sector_ranking",
+                        lambda date: {"ok": True, "date": date, "items": [
+                            {"plate_id": "801159", "name": "机器人概念", "strength": 100}],
+                         "sons": {}})
+    monkeypatch.setattr(svc, "get_sector_stocks", boom)
+    svc.get_live_stocks_meta(["000678"], "2026-10-29")
+    entry = _wait_stocks_meta("2026-10-29", lambda e: e.get("state") == "error")
+    assert "stocks_unavailable_5d" in str(entry.get("error") or "")
     svc._stocks_meta_cache.clear()
