@@ -583,10 +583,17 @@ class TestLhbSnapshots:
         assert snap["total"] == 2 and snap["items"][0]["stock_id"] == "600715"
         assert snap["items"][0]["reason"] == "偏离-7%"
         assert "ts" in snap
-        # 覆盖语义：新帧直接替换
-        payload2 = proto.pb_varint_field(10, 1)
-        svc._dispatch(proto.parse_incoming(_push(daban.CMD_FORECAST_LHB, b"daban/", payload2)))
-        assert svc.get_lhb_forecast()["total"] == 1
+        # 空帧抑制（同 2103/3004 规；2026-10-29 午间实测：休市推流 total=96/items=[]）
+        payload_empty = proto.pb_varint_field(10, 1)   # total=1 但无 items
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_FORECAST_LHB, b"daban/", payload_empty)))
+        kept = svc.get_lhb_forecast()
+        assert kept["total"] == 2 and kept["items"][0]["stock_id"] == "600715"
+        assert "last_empty_seen" in kept
+        # total=0 才是服务端语义清空，正常覆盖（payload 需非空，纯空帧走 decode-fail 降级）
+        svc._dispatch(proto.parse_incoming(_push(
+            daban.CMD_FORECAST_LHB, b"daban/", proto.pb_bytes(12, b"2026-10-29"))))
+        cleared = svc.get_lhb_forecast()
+        assert cleared["total"] == 0 and cleared["items"] == []
 
     def test_3004_push_populates_snapshot_with_empty_frame_suppression(self, svc):
         from backend.services import kpl_lhb_protocol as lhb

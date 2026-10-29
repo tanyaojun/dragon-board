@@ -501,11 +501,14 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 ### 13.2 开关与读口
 
-- collector 开关：`daban_lhb=True`（2112）、`lhb_realtime=True`（3004/3101），默认关、
-  独立于 `daban_subs`。**生产建议与 daban_subs 同开**：最小订阅面会话寿命极短
-  （16 sessions/100s error 1002 循环；全订阅面 2 sessions/100s）。
+- collector 开关：`daban_lhb=True`（2112）、`lhb_realtime=True`（3004/3101），构造器默认关、
+  独立于 `daban_subs`。**生产入口 serve_kpl_socket 默认全开**（环境变量
+  `KPL_DABAN_LHB=0` / `KPL_LHB_REALTIME=0` 显式关闭，切换需重启进程；2026-10-29 起
+  生效——此前生产未传参导致 ：8008 页面「无快照」降级）。生产建议与 daban_subs 同开：
+  最小订阅面会话寿命极短（16 sessions/100s error 1002 循环；全订阅面 2 sessions/100s）。
 - 快照读口（:8002 / :8000 透传 / :8008 页面消费）：`GET /api/kpl/lhb-forecast`、
-  `/api/kpl/lhb-realtime`（2112 直覆盖含空帧 / 3004 空帧不覆盖非空快照；无快照结构化降级 fail-visible）；
+  `/api/kpl/lhb-realtime`（2112/3004 均空帧抑制同 2103 规——2112 以 total=0 为语义清空，
+  午间休市推流 total>0/items=[] 不覆盖非空快照；无快照结构化降级 fail-visible）；
   `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）。
 - :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签：预测/实时/历史三卡（缺字段 `--`、降级
   banner、失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright mock 断言（全部通过），

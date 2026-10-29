@@ -241,8 +241,8 @@ class KplCollectorService:
         # 3004/3101 RealtimeLHB 实时龙虎榜选股（ServiceHqList 族，App 基线 quotaType=6/
         # sortType=1/limitType=4/bjsType=1；默认关，独立于 daban_subs/daban_lhb）
         self._lhb_realtime = bool(lhb_realtime)
-        # 龙虎榜快照缓存（task-4 读口）：2112 全量帧**直覆盖（含空帧）**；3004 **空帧抑制**
-        # （全市场 30 项推流，同 2103 规：空 items 不覆盖非空快照，仅刷 ts + last_empty_seen）
+        # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
+        # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
         self._lhb_realtime_snap: Optional[Dict[str, Any]] = None
         self._daban_lists: Dict[int, Dict[int, Dict[str, Any]]] = {}   # pidType → {index: 页快照}
@@ -950,8 +950,19 @@ class KplCollectorService:
                     pass
             event_type = DABAN_EVENT_NAMES.get(cmd) or LHB_EVENT_NAMES.get(cmd, "daban")
             if cmd == daban.CMD_FORECAST_LHB:
-                # 2112 全量帧直接覆盖快照（读口 get_lhb_forecast）
-                self._lhb_forecast_snap = {**data, "ts": time.time()}
+                # 2112 空帧抑制（同 2103/3004 规；2026-10-29 午间实测：休市推流
+                # total=96/items=[]，直覆盖会冲掉盘中非空快照）：items 空 && total>0
+                # 视为空推流不覆盖；total=0 才是服务端语义清空，正常覆盖
+                new_fc_items = data.get("items") or []
+                prev_fc = self._lhb_forecast_snap
+                if (not new_fc_items and (data.get("total") or 0) > 0
+                        and prev_fc and (prev_fc.get("items") or [])):
+                    kept_fc = dict(prev_fc)
+                    kept_fc["ts"] = time.time()
+                    kept_fc["last_empty_seen"] = time.time()
+                    self._lhb_forecast_snap = kept_fc
+                else:
+                    self._lhb_forecast_snap = {**data, "ts": time.time()}
             elif cmd in (lhb.CMD_REALTIME_LHB_SUB, lhb.CMD_REALTIME_LHB_RANGE):
                 # 3004/3101 空帧抑制（同 2103 规）：空 items 不覆盖非空快照
                 new_items = data.get("items") or []

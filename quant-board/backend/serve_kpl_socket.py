@@ -45,6 +45,15 @@ _SIGNVC_SHELL = os.environ.get(
     '/system/bin/app_process32 /system/bin com.yzj.kaipanh.newindex.data.SignSvc"',
 )
 _DEVICE_ID = os.environ.get("KPL_DEVICE_ID", "4a81acf4-b516-3e79-ae26-40a67af7b97c")  # 设备指纹（参与 WBE 签名，非 token 级机密；env 可覆盖）
+
+# 龙虎榜采集开关（task-4）：默认开（2112 预测 + 3004/3101 实时）。
+# 显式关闭：KPL_DABAN_LHB=0 / KPL_LHB_REALTIME=0（切换需重启进程）。
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+_DABAN_LHB = _env_flag("KPL_DABAN_LHB")
+_LHB_REALTIME = _env_flag("KPL_LHB_REALTIME")
 # 身份凭据只从环境变量读（不入仓；正式值在 quant-board/.env.local，游客 userId=0 可收
 # 行情但会话寿命较短；进程环境已设同名变量时以环境变量优先——settings 加载器不覆盖）
 _USER_ID = os.environ.get("KPL_USER_ID", "0")
@@ -64,7 +73,8 @@ else:
 _service_lock = asyncio.Lock()
 _service = KplCollectorService(
     _codec,
-    device_id=_DEVICE_ID, user_id=_USER_ID, token=_TOKEN)
+    device_id=_DEVICE_ID, user_id=_USER_ID, token=_TOKEN,
+    daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME)
 
 
 def _get_service() -> KplCollectorService:
