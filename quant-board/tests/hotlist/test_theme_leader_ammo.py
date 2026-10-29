@@ -70,7 +70,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v13"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30d"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30e"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "5d50645e5dc8"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
