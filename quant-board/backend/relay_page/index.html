@@ -692,6 +692,37 @@
       </div>
     </div>
   </section>
+
+  <section id="tab-kpllhb" style="display:none">
+    <div class="ph-line" style="margin-bottom:14px"></div>
+    <div class="card">
+      <div class="flex" style="margin-bottom:10px">
+        <span class="kpl-sub kpl-uni" id="kplLhbStats"></span>
+        <span style="flex:1"></span>
+        <span class="kpl-sub">数据源：2112 会不会上龙虎榜预测 + 3004 RealtimeLHB（socket 订阅快照）；历史=HisBeOnTheLHB HTTP（a/c 与 D1 参数互换链）</span>
+        <button onclick="kplLhbRefresh()">刷新</button>
+      </div>
+      <div id="kplLhbBanner" class="kpl-note" style="display:none"></div>
+      <div class="kpl-layout">
+        <div class="card" style="padding:10px 12px">
+          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span>会不会上龙虎榜（2112 预测）</span>
+            <span class="kpl-sub" id="kplLhbFcMeta" style="margin-left:auto"></span></h3>
+          <div class="kpl-wrap" style="max-height:calc(100vh - 480px)"><table id="kplLhbFcTable"></table></div>
+        </div>
+        <div class="card" style="padding:10px 12px">
+          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span>实时龙虎榜选股（3004）</span>
+            <span class="kpl-sub" id="kplLhbRtMeta" style="margin-left:auto"></span></h3>
+          <div class="kpl-wrap" style="max-height:calc(100vh - 480px)"><table id="kplLhbRtTable"></table></div>
+        </div>
+      </div>
+      <h3 style="margin:14px 0 8px;display:flex;align-items:center"><span>历史龙虎榜回看（按上榜原因分组）</span>
+        <input type="date" id="kplLhbHisDate" style="margin-left:auto" onchange="kplLhbHisLoad()">
+        <button onclick="kplLhbHisLoad()">查历史</button>
+      </h3>
+      <div id="kplLhbHisBanner" class="kpl-note" style="display:none"></div>
+      <div class="kpl-wrap" style="max-height:480px"><table id="kplLhbHisTable"></table></div>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -4252,11 +4283,11 @@ const NAV = [
   // KPL 行情子目录（2026-10-27 用户需求；2026-10-28 「精选板块」更名「板块行情」，页内增
   // 精选/行业页签）：精选 = 开盘啦板块强度排行实时/历史（含服务端 list_son 二级板块）；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
-  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩']]},
+  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩'], ['kpllhb', '龙虎榜', '🏆']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
-                    kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'],
+                    kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'], kpllhb: ['龙虎榜'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 
 function renderSidebar(){
@@ -4310,6 +4341,7 @@ function setView(key){
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
   else kplViewLeave();
   if (main === 'kplbid' || main === 'kplsoon' || main === 'kplvane') kplDabanEnter(main);   // 打板页签：进页即取快照+开轮询
+  if (main === 'kpllhb') kplLhbEnter(); else kplLhbLeave();   // 龙虎榜页签：进页即取双快照+开轮询
   if (main === 'kpllive') kplLiveEnter(); else kplLiveLeave();   // 市场雷达：文本流轮询仅本页运行
 }
 async function kplFetchPlateTree(){
@@ -4871,6 +4903,9 @@ const KPL = {
   dabanPlate: {},       // view → 左侧点选的板块过滤（空=全部）
   dabanMode: {},        // view → 'live' | 'history'（精选板块同款：日期切换+回实时）
   dabanDate: {},        // view → 历史模式日期
+  // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
+  lhb: {fc: null, rt: null, his: null, hisDate: ''},
+  lhbPoll: null,
 };
 // quotas 语义索引：[2]涨幅% [3]成交额 [7]/[8]/[9]主力买/卖/净（东财独立源核实）；
 // [56]=板块强度（2026-10-27 双源对账：80 板块 55 个与 HTTP 排行强度误差<0.1%，其余为取数时差）
@@ -5907,6 +5942,141 @@ function kplDabanBanner(view, msg){
   const el = $(DABAN_PAGES[view].p + 'Banner');
   if (!msg){ el.style.display = 'none'; return; }
   el.style.display = ''; el.textContent = '✘ ' + msg;
+}
+
+// ════ 龙虎榜页签（2026-10-29 三期：2112 预测 + 3004 实时 + HisBeOnTheLHB 历史）════
+// fail-visible：降级读口把 reason 透出到 banner；缺字段/无数据渲染 '--'，不伪装 0/空。
+// 资金字段=元原样（task-3 双源验证 docs/kpl-socket/lhb-scaling-verification.md），展示亿化。
+function kplLhbBanner(elId, msg){
+  const el = $(elId);
+  if (!msg){ el.style.display = 'none'; return; }
+  el.style.display = ''; el.textContent = msg;
+}
+function kplFmtYi(v){                     // 元 → 亿（只接受纯数值串，防「3.5亿」类预格式化串被前缀解析成错量级）
+  const s = String(v);
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return '--';
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? (n / 1e8).toFixed(2) + '亿' : '--';
+}
+function kplFmtVal(v, suf){
+  if (v === null || v === undefined || v === '') return '--';
+  return esc(String(v)) + (suf || '');
+}
+async function kplLhbEnter(){
+  kplLhbRefresh();
+  if (!KPL.lhbPoll){
+    KPL.lhbPoll = setInterval(() => {
+      if (STATE.view !== 'kpllhb'){ clearInterval(KPL.lhbPoll); KPL.lhbPoll = null; return; }
+      kplLhbFetchSnap();
+    }, 5000);
+  }
+}
+function kplLhbLeave(){
+  if (KPL.lhbPoll){ clearInterval(KPL.lhbPoll); KPL.lhbPoll = null; }   // 快照保留，回页即渲染
+}
+async function kplLhbRefresh(){ kplLhbFetchSnap(); kplLhbHisLoad(); }
+async function kplLhbFetchSnap(){
+  let msgs = [];
+  for (const [key, path] of [['fc', '/lhb-forecast'], ['rt', '/lhb-realtime']]){
+    try {
+      const resp = await fetch(KPL_API + path);
+      const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+      if (r.ok){
+        KPL.lhb[key] = r;
+        if (key === 'fc' && !(r.items || []).length && (r.total || 0) === 0)
+          msgs.push('2112：服务器返回空预测列表（09:35 前属正常时段态，total=0 非降级）');
+      } else {
+        msgs.push((key === 'fc' ? '2112 预测' : '3004 实时') + '：' + (r.reason || '读取失败') + (r.note ? '（' + r.note + '）' : ''));
+      }
+    } catch (e){
+      msgs.push((key === 'fc' ? '2112 预测' : '3004 实时') + '请求失败：' + (e.message || e));
+    }
+  }
+  kplLhbBanner('kplLhbBanner', msgs.join('；'));
+  kplLhbRender();
+}
+function kplLhbRender(){
+  const fc = KPL.lhb.fc, rt = KPL.lhb.rt;
+  $('kplLhbStats').textContent = '2112 预测 total=' + (fc ? (fc.total ?? '--') : '--')
+    + ' · 3004 total=' + (rt ? (rt.total ?? '--') : '--');
+  $('kplLhbFcMeta').textContent = fc ? ('latest_day=' + (fc.latest_day || '--') + ' items=' + (fc.items || []).length) : '无快照';
+  $('kplLhbRtMeta').textContent = rt ? ('days=' + ((rt.days || []).join(',') || '--')
+    + ' 区间=' + (rt.min_mtime ?? '--') + '-' + (rt.max_mtime ?? '--')) : '无快照';
+  // 2112 预测列表（reason/hot_val/main_net 全展示）
+  const fcRows = (fc && fc.items) || [];
+  $('kplLhbFcTable').innerHTML = fcRows.length
+    ? '<tr><th>代码</th><th>名称</th><th>概念</th><th>现价</th><th>涨幅%</th><th>主力净额</th><th>热度</th><th>上榜原因</th></tr>'
+      + fcRows.map(it => '<tr>'
+        + '<td>' + esc(it.stock_id || '--') + '</td><td>' + esc(it.stock_name || '--') + '</td>'
+        + '<td>' + esc(it.plate || '--') + '</td>'
+        + '<td class="num">' + kplFmtVal(it.price) + '</td><td class="num">' + kplFmtVal(it.zf) + '</td>'
+        + '<td class="num">' + kplFmtYi(it.main_net_amount) + '</td><td class="num">' + kplFmtVal(it.hot_val) + '</td>'
+        + '<td>' + esc(it.reason || '--') + '</td></tr>').join('')
+    : '<tr><td colspan="8" style="color:var(--muted)">' + (fc ? '--（本帧无 items；见 banner 说明）' : '--（无快照）') + '</td></tr>';
+  // 3004 实时选股（quotas 70 列原样，展示前 6 列；[0]=板块标签 [1]=现价 [2]=涨幅，
+  // 其余列语义推断标注，同板块行情个股列表约定）
+  const rtRows = (rt && rt.items) || [];
+  $('kplLhbRtTable').innerHTML = rtRows.length
+    ? '<tr><th>代码</th><th>名称</th><th>板块标签</th><th>现价</th><th>涨幅%</th><th>成交额</th></tr>'
+      + rtRows.map(it => {
+        const q = it.quotas || [];
+        return '<tr><td>' + esc(it.stock_id || '--') + '</td><td>' + esc(it.name || '--') + '</td>'
+          + '<td>' + esc(q[0] || '--') + '</td>'
+          + '<td class="num">' + kplFmtVal(q[1]) + '</td><td class="num">' + kplFmtVal(q[2]) + '</td>'
+          + '<td class="num">' + kplFmtYi(q[3]) + '</td></tr>';
+      }).join('')
+    : '<tr><td colspan="6" style="color:var(--muted)">' + (rt ? '--（本帧无 items）' : '--（无快照）') + '</td></tr>';
+}
+async function kplLhbHisLoad(){
+  const d = $('kplLhbHisDate').value;
+  if (!d){ kplLhbBanner('kplLhbHisBanner', '选择日期后查历史（无默认回看）'); return; }
+  KPL.lhb.hisDate = d;
+  try {
+    const resp = await fetch(KPL_API + '/lhb-history?date=' + d);
+    const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+    if (!r.ok){
+      KPL.lhb.his = null;
+      kplLhbBanner('kplLhbHisBanner', '历史读取失败：' + (r.reason || '') + (r.note ? '（' + r.note + '）' : ''));
+      kplLhbHisRender();
+      return;
+    }
+    KPL.lhb.his = r;
+    const gl = (r.list && r.list.groups || []).length;
+    const sr = (r.stocks && r.stocks.rows || []).length;
+    kplLhbBanner('kplLhbHisBanner', (!gl && !sr && r.list && r.list.order_sign && r.list.order_sign.length)
+      ? ('当日分组榜单为空（info=[]；上游 orderSign=' + r.list.order_sign.length + ' 组，当日未生成属结构化空态，非降级）') : '');
+    kplLhbHisRender();
+  } catch (e){
+    kplLhbBanner('kplLhbHisBanner', '历史请求失败：' + (e.message || e));
+  }
+}
+function kplLhbHisRender(){
+  const h = KPL.lhb.his;
+  if (!h){ $('kplLhbHisTable').innerHTML = '<tr><td style="color:var(--muted)">--（选择日期查询）</td></tr>'; return; }
+  const groups = (h.list && h.list.groups) || [];
+  const lines = [];
+  for (const g of groups){
+    lines.push('<tr><td colspan="7" style="background:#f8fafc;font-weight:600">'
+      + esc(g.reason || ('BID ' + (g.bid || '--'))) + '（' + (g.stocks || []).length + ' 只）</td></tr>');
+    for (const s of (g.stocks || [])){
+      // stockList 12 列：[0]=代码 [1]=名称 [2]=现价 [3]=偏离/涨幅 [4]=成交额 [5]=换手 …
+      // 列语义部分推断（同 3004 约定，raw 已在 :8000 读口保留）
+      lines.push('<tr><td>' + esc(s[0] || '--') + '</td><td>' + esc(s[1] || '--') + '</td>'
+        + '<td class="num">' + kplFmtVal(s[2]) + '</td><td class="num">' + kplFmtVal(s[3]) + '</td>'
+        + '<td class="num">' + kplFmtYi(s[4]) + '</td><td class="num">' + kplFmtVal(s[5]) + '</td>'
+        + '<td>' + esc((g.index_cols || []).join(' / ') || '--') + '</td></tr>');
+    }
+  }
+  const stocks = (h.stocks && h.stocks.rows) || [];
+  for (const r of stocks){
+    lines.push('<tr><td>' + esc(r.stock_id || '--') + '</td><td>' + esc(r.stock_name || '--') + '</td>'
+      + '<td class="num">' + kplFmtVal(r.price) + '</td><td class="num">' + kplFmtVal(r.zf) + '</td>'
+      + '<td class="num">' + kplFmtYi(r.main_net_amount) + '</td><td class="num">--</td>'
+      + '<td>' + esc(r.reason || '--') + '</td></tr>');
+  }
+  $('kplLhbHisTable').innerHTML = lines.length
+    ? '<tr><th>代码</th><th>名称</th><th>现价</th><th>偏离/涨幅</th><th>成交额</th><th>换手</th><th>上榜原因/排序列</th></tr>' + lines.join('')
+    : '<tr><td style="color:var(--muted)">--（当日无数据；见 banner 结构化空态说明）</td></tr>';
 }
 function kplDabanRows(view, all){
   const conf = DABAN_PAGES[view];

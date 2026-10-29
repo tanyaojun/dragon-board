@@ -29,6 +29,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.services import kpl_daban_protocol as daban
+from backend.services import kpl_lhb_protocol as lhb
 from backend.services import kpl_socket_protocol as proto
 
 # 与 .tmp_review/kpl_collector.py 一致的连接参数（实测有效组合）
@@ -163,6 +164,13 @@ class KplEvent(dict):
     """结构化事件：type ∈ auth/sub/push/error/status；全部可 JSON 序列化。"""
 
 
+# 3004/3101 RealtimeLHB 事件名（ServiceHqList 族，Resp 与 daban 同构但族属不同）
+LHB_EVENT_NAMES: Dict[int, str] = {
+    lhb.CMD_REALTIME_LHB_SUB: "realtime_lhb",
+    lhb.CMD_REALTIME_LHB_RANGE: "realtime_lhb",
+}
+
+
 DABAN_EVENT_NAMES: Dict[int, str] = {
     daban.CMD_ZD_STAT: "zd_stat",
     daban.CMD_MARKET_OVERVIEW: "market_overview",
@@ -174,6 +182,7 @@ DABAN_EVENT_NAMES: Dict[int, str] = {
     daban.CMD_WIND_VANE: "wind_vane",
     daban.CMD_DABAN_STOCK_LIST: "daban_stocks",
     daban.CMD_DABAN_HEAD: "daban_head",
+    daban.CMD_FORECAST_LHB: "lhb_forecast",
 }
 
 
@@ -201,6 +210,8 @@ class KplCollectorService:
         daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6),
         daban_list_page_size: int = 30,
         daban_list_pages: int = 7,
+        daban_lhb: bool = False,
+        lhb_realtime: bool = False,
     ):
         self._codec = codec
         self._host = host
@@ -224,6 +235,16 @@ class KplCollectorService:
         self._daban_list_pids = tuple(daban_list_pids or ())
         self._daban_list_page_size = daban_list_page_size
         self._daban_list_pages = daban_list_pages
+        # 2112 会不会上龙虎榜预测订阅（2026-10-29 逆向 LhbWillStockModel 基线：count=30/
+        # sortType=1/quotaType=0；0x40 通道同 daban 家族，默认关，开火验证后决定默认值）
+        self._daban_lhb = bool(daban_lhb)
+        # 3004/3101 RealtimeLHB 实时龙虎榜选股（ServiceHqList 族，App 基线 quotaType=6/
+        # sortType=1/limitType=4/bjsType=1；默认关，独立于 daban_subs/daban_lhb）
+        self._lhb_realtime = bool(lhb_realtime)
+        # 龙虎榜快照缓存（task-4 读口）：2112 全量帧**直覆盖（含空帧）**；3004 **空帧抑制**
+        # （全市场 30 项推流，同 2103 规：空 items 不覆盖非空快照，仅刷 ts + last_empty_seen）
+        self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
+        self._lhb_realtime_snap: Optional[Dict[str, Any]] = None
         self._daban_lists: Dict[int, Dict[int, Dict[str, Any]]] = {}   # pidType → {index: 页快照}
         # 板块(801044/885423) + 个股(000001 平安银行)：3001 同时承载板块与个股行情订阅
         self._stock_ids = stock_ids or ["801044", "885423", "000001"]
@@ -306,6 +327,31 @@ class KplCollectorService:
             "pages_missing": sorted(set(range(expected_pages)) - present),
             "ts": latest, "raw_len": sum(p.get("raw_len", 0) for p in ordered),
         }
+
+    def get_lhb_forecast(self) -> Dict[str, Any]:
+        """2112 会不会上龙虎榜预测快照读口（task-4）。
+
+        fail-visible：无快照（未开 daban_lhb/未收到帧）返回结构化降级载荷，
+        不伪装空列表。09:35 前服务器回 total=0 属正常时段态（非降级）。
+        """
+        snap = self._lhb_forecast_snap
+        if not snap:
+            return {"ok": False, "degraded": True, "reason": "no_lhb_forecast_snapshot",
+                    "note": f"尚无 2112 快照（daban_lhb={'on' if self._daban_lhb else 'off'}）",
+                    "running": self.is_running()}
+        return {"ok": True, **snap}
+
+    def get_lhb_realtime(self) -> Dict[str, Any]:
+        """3004/3101 RealtimeLHB 快照读口（task-4）：空帧抑制后最新非空帧。
+
+        fail-visible：无快照（未开 lhb_realtime/未收到帧）返回结构化降级载荷。
+        """
+        snap = self._lhb_realtime_snap
+        if not snap:
+            return {"ok": False, "degraded": True, "reason": "no_lhb_realtime_snapshot",
+                    "note": f"尚无 3004 快照（lhb_realtime={'on' if self._lhb_realtime else 'off'}）",
+                    "running": self.is_running()}
+        return {"ok": True, **snap}
 
     _CHUNK = 200  # 3001 单请求 id 上限（实测 241 可、784 → ErrResp 1106 连接错误）
 
@@ -715,7 +761,40 @@ class KplCollectorService:
                             time.sleep(0.3)
                         self._dbg("C", db_frame)
                         sock.sendall(db_frame)
-            self._status = "streaming"
+            # 6e) 2112 会不会上龙虎榜预测订阅（2026-10-29 逆向）：0x40 通道同 daban 家族，
+            #     ForecastLHBReq 基线 count=30/sortType=1/quotaType=0（LhbWillStockModel.k(2112)）；
+            #     开关独立于 daban_subs（与打板/情绪订阅解耦）
+            if self._daban_lhb:
+                req_lhb = daban.build_forecast_lhb_req_pb()
+                enc_lhb = self._codec.enc(req_lhb)
+                ext_lhb = bytes([0x02]) + struct.pack(">H", daban.CMD_FORECAST_LHB)
+                lhb_frame = proto.build_frame(daban.CMD_FORECAST_LHB, next_seq(),
+                                              enc_lhb or req_lhb, d=0, encrypted=bool(enc_lhb),
+                                              pkg=proto.PKG_ROUTE, ext=ext_lhb)
+                if self._human_delay:
+                    time.sleep(0.3)
+                self._dbg("C", lhb_frame)
+                sock.sendall(lhb_frame)
+            # 6f) 3004 RealtimeLHB 订阅 + 3101 当日区间单发（ServiceHqList 族，同 0x40 通道
+            #     ext 路由头；Req 基线见 kpl_lhb_protocol.REALTIME_LHB_BASELINE，App 原 UI
+            #     count=1，采集放宽 30；3101 无区间实测零应答（2026-10-29 开火），改带
+            #     当日区间 0925→当前 HHMM（同 App MainIndexQuotationInfoPresenter 用法））
+            if self._lhb_realtime:
+                req_sub = lhb.build_realtime_lhb_req_pb()
+                reqs_lhb = [(lhb.CMD_REALTIME_LHB_SUB, req_sub),
+                            (lhb.CMD_REALTIME_LHB_RANGE,
+                             lhb.build_realtime_lhb_req_pb(
+                                 start_time=925, end_time=int(time.strftime("%H%M"))))]
+                for lhb_cmd, req_rl in reqs_lhb:
+                    enc_rl = self._codec.enc(req_rl)
+                    ext_rl = bytes([0x02]) + struct.pack(">H", lhb_cmd)
+                    rl_frame = proto.build_frame(lhb_cmd, next_seq(),
+                                                 enc_rl or req_rl, d=0, encrypted=bool(enc_rl),
+                                                 pkg=proto.PKG_ROUTE, ext=ext_rl)
+                    if self._human_delay:
+                        time.sleep(0.3)
+                    self._dbg("C", rl_frame)
+                    sock.sendall(rl_frame)
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
             # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
@@ -833,8 +912,8 @@ class KplCollectorService:
             info = proto.parse_version_resp(dec)
             self._emit(KplEvent(type="version", ts=time.time(), cmd=cmd, **info))
             return
-        if cmd in daban.DABAN_RESP_PARSERS:
-            parser = daban.DABAN_RESP_PARSERS[cmd]
+        if cmd in daban.DABAN_RESP_PARSERS or cmd in lhb.LHB_RESP_PARSERS:
+            parser = daban.DABAN_RESP_PARSERS.get(cmd) or lhb.LHB_RESP_PARSERS[cmd]
             dec = self._codec.dec(payload.hex()) if payload else None
             if not dec:
                 self._err(f"{cmd} daban push decode failed ({len(payload)}B)")
@@ -869,7 +948,21 @@ class KplCollectorService:
                         self._daban_lists.setdefault(pid, {})[idx] = {**data, "ts": time.time()}
                 except (TypeError, ValueError):
                     pass
-            event_type = DABAN_EVENT_NAMES.get(cmd, "daban")
+            event_type = DABAN_EVENT_NAMES.get(cmd) or LHB_EVENT_NAMES.get(cmd, "daban")
+            if cmd == daban.CMD_FORECAST_LHB:
+                # 2112 全量帧直接覆盖快照（读口 get_lhb_forecast）
+                self._lhb_forecast_snap = {**data, "ts": time.time()}
+            elif cmd in (lhb.CMD_REALTIME_LHB_SUB, lhb.CMD_REALTIME_LHB_RANGE):
+                # 3004/3101 空帧抑制（同 2103 规）：空 items 不覆盖非空快照
+                new_items = data.get("items") or []
+                prev = self._lhb_realtime_snap
+                if not new_items and prev and (prev.get("items") or []):
+                    kept = dict(prev)
+                    kept["ts"] = time.time()
+                    kept["last_empty_seen"] = time.time()
+                    self._lhb_realtime_snap = kept
+                else:
+                    self._lhb_realtime_snap = {**data, "ts": time.time()}
             self._emit(KplEvent(type=event_type, ts=time.time(), cmd=cmd,
                                 source="push" if fr.get("fmt") == "push" else "resp", **data))
             return

@@ -380,3 +380,95 @@ class TestDabanHead2100:
     def test_registry_and_sub_cmds_have_2100(self):
         assert dp.DABAN_RESP_PARSERS[dp.CMD_DABAN_HEAD] is dp.parse_daban_head
         assert dp.CMD_DABAN_HEAD in dp.DABAN_SUB_CMDS
+
+
+class TestForecastLHB2112:
+    """2112 ForecastLHBReq/Resp（2026-10-29 逆向 LhbWillStockModel + service_hq_daban.proto）。"""
+
+    def test_req_builder_baseline(self):
+        # App 基线：quotaType=0/start=0/filterType=0 零值省略；sortType=1、count=30 始终编码
+        assert dp.build_forecast_lhb_req_pb() == b"\x10\x01\x20\x1e"
+        assert dp.build_forecast_lhb_req_pb(quota_type=2) == b"\x08\x02\x10\x01\x20\x1e"
+        assert dp.build_forecast_lhb_req_pb(start=30) == b"\x10\x01\x18\x1e\x20\x1e"
+
+    def _item(self, stock_id: bytes, name: bytes, *, price: float = 11.3,
+              main_net: int = 123, reason: bytes = b"") -> bytes:
+        body = pb_bytes(1, stock_id) + pb_bytes(2, name) + f32_field(4, price)
+        if main_net:
+            body += pb_varint_field(9, main_net)
+        if reason:
+            body += pb_bytes(20, reason)
+        return body
+
+    def test_parse_resp_with_items(self):
+        payload = (
+            pb_varint_field(6, 15)              # forecastTotal
+            + pb_varint_field(10, 12)           # total
+            + pb_varint_field(11, 1793033481)   # timestamp int64
+            + pb_bytes(12, b"2026-10-29")       # latestDay
+            + pb_varint_field(20, 3)            # indexes
+            + pb_bytes(21, self._item(b"000001", b"\xe5\xb9\xb3\xe5\xae\x89\xe9\x93\xb6\xe8\xa1\x8c",
+                                      reason=b"\xe9\xbe\x99\xe8\x99\x8e\xe6\xa6\x9c"))
+            + pb_bytes(21, self._item(b"600000", b"test2"))
+            + pb_varint_field(500, 9)           # msgId
+        )
+        out = dp.parse_forecast_lhb(payload)
+        assert out["forecast_total"] == 15 and out["total"] == 12
+        assert out["timestamp"] == 1793033481 and out["latest_day"] == "2026-10-29"
+        assert out["indexes"] == [3] and out["msg_id"] == 9
+        assert len(out["items"]) == 2
+        it0 = out["items"][0]
+        assert it0["stock_id"] == "000001"
+        assert it0["price"] == pytest.approx(11.3, abs=1e-4)
+        assert it0["main_net_amount"] == 123
+        assert it0["reason"] == "龙虎榜"
+        assert it0["rank_state"] == 0 and it0["is_new"] is False
+
+    def test_parse_resp_empty_garbage_fail_visible(self):
+        # 乱码不抛：宽容解析返回结构化空壳（raw_len 保留），不静默丢弃
+        out = dp.parse_forecast_lhb(b"\xff\xff\xff\xff\xff")
+        assert out["items"] == [] and "raw_len" in out
+
+    def test_registry_has_2112(self):
+        assert dp.DABAN_RESP_PARSERS[dp.CMD_FORECAST_LHB] is dp.parse_forecast_lhb
+
+
+class TestRealtimeLHBProto:
+    """kpl_lhb_protocol 3004/3101 Req 构造（service_hq_list.proto 合同手工字节）。"""
+
+    def test_req_builder_app_baseline(self):
+        from backend.services import kpl_lhb_protocol as lhb
+        # App 基线：quotaType=6(f1)/sortType=1(f2)/limitType=4(f4)/bjsType=1(f9)/count=30(f21)，零值省略
+        assert lhb.build_realtime_lhb_req_pb() == b"\x08\x06\x10\x01\x20\x04\x48\x01\xa8\x01\x1e"
+        # App 原 UI 帧：count=1
+        assert lhb.build_realtime_lhb_req_pb(count=1) == b"\x08\x06\x10\x01\x20\x04\x48\x01\xa8\x01\x01"
+        # 3101 带区间：startTime=930(f30) endTime=1500(f31)
+        assert lhb.build_realtime_lhb_req_pb(start_time=930, end_time=1500) == (
+            b"\x08\x06\x10\x01\x20\x04\x48\x01\xa8\x01\x1e"
+            b"\xf0\x01\xa2\x07\xf8\x01\xdc\x0b")
+
+    def test_parse_resp_garbage_fail_visible(self):
+        from backend.services import kpl_lhb_protocol as lhb
+        out = lhb.parse_realtime_lhb(b"\xff\xff\xff\xff\xff")
+        assert out["items"] == [] and "raw_len" in out
+
+
+class TestPackedVarintsIndexes:
+    """indexes packed varint 解码（2026-10-29 开火实测 bytes 型 f20/f40）。"""
+
+    def test_decode_packed_varints(self):
+        from backend.services.kpl_socket_protocol import decode_packed_varints
+        # 开火实测样本：bytes 每字节一个 uint（0..23 连续）
+        assert decode_packed_varints(b"\x00\x01\x02\x03") == [0, 1, 2, 3]
+        # 多字节 varint：300 = 0xAC 0x02
+        assert decode_packed_varints(b"\xac\x02") == [300]
+        # int 输入包 list；list 递归展开；其他类型返回空（fail-visible 不抛）
+        assert decode_packed_varints(7) == [7]
+        assert decode_packed_varints([b"\x01\x02", 5]) == [1, 2, 5]
+        assert decode_packed_varints(None) == []
+
+    def test_forecast_parse_indexes_decoded(self):
+        from backend.services.kpl_socket_protocol import pb_varint_field as _pvf
+        payload = _pvf(10, 0) + pb_bytes(20, b"\x00\x01\x02")
+        out = dp.parse_forecast_lhb(payload)
+        assert out["indexes"] == [0, 1, 2]

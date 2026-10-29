@@ -77,7 +77,15 @@
 1. 炸板归因打标（relay v3 自报「未覆盖 0/25」——需先补 relay 侧归因采集，方向线才能吃）
 2. THS 交叉完整覆盖（10-12 晋级按触板口径的降级日）
 3. 帧级 moneyFlow（当前空集合语义，待确认采集路径）
-4. 龙虎榜/大单（未采，方向线要不要吃需预登记论证）
+4. 龙虎榜/大单 —— **龙虎榜已接入（2026-10-29 预登记开火验证 + 三期落地）**：
+   实时链 2112 会不会上龙虎榜预测 + 3004 RealtimeLHB（kpl_lhb_protocol，
+   daban_lhb/lhb_realtime 开关）+ 历史 HisBeOnTheLHB HTTP（kpl_lhb_history，
+   a/c 与 D1 参数互换链）；资金字段元原样无缩放（task-3 双源交叉验证
+   docs/kpl-socket/lhb-scaling-verification.md）；事实段供给器
+   backend/analysis/hotlist/jev_lhb_ammo.py（纯事实组装，零引擎判断产物，
+   禁喂清单合规；pytest 全 mock 6 passed）；:8008 龙虎榜页签已上线。
+   证据：docs/kpl-socket/README.md 龙虎榜章节 + .tmp_review/lhb*_probe_events.jsonl。
+   大单监控线（market_proxy/longhu.py 个股大单）仍未采，另行预登记。
 
 ## 4. 黑名单与 relay 叙事拆段纪律（防循环=handoff「零引擎判断产物」的真正执行）
 

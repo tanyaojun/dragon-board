@@ -149,6 +149,47 @@ async def daban_list(pid_type: int = 8) -> JSONResponse:
     return await _proxy_get(f"/api/kpl/daban-list?pid_type={pid_type}")
 
 
+@router.get("/lhb-forecast")
+async def lhb_forecast() -> JSONResponse:
+    """2112 会不会上龙虎榜预测快照（task-4）：透传 :8002 collector 读口。
+
+    无快照（未开 daban_lhb/未收到帧）返回结构化降级载荷（fail-visible）。
+    """
+    return await _proxy_get("/api/kpl/lhb-forecast")
+
+
+@router.get("/lhb-realtime")
+async def lhb_realtime() -> JSONResponse:
+    """3004/3101 RealtimeLHB 快照（task-4）：透传 :8002 collector 读口（同上降级规则）。"""
+    return await _proxy_get("/api/kpl/lhb-realtime")
+
+
+@router.get("/lhb-history")
+def lhb_history(date: str = ""):
+    """HisBeOnTheLHB 历史龙虎榜读口（task-4）：a=OnTheLHBList 分组榜单 + 个股行。
+
+    同步 def（理由同 daban_list_history）：上游限频分钟级 1 发，30s TTL 缓存内直回。
+    必传 date（无默认回看，缺参返 422 结构化降级，fail-visible）。
+    """
+    from backend.services import kpl_lhb_history as lhb_his
+    if not date:
+        return JSONResponse(status_code=422, content={
+            "ok": False, "degraded": True, "reason": "missing_date",
+            "note": "必传 date=YYYY-MM-DD（历史榜单按日拉取，无默认回看）"})
+    try:
+        raw_list = lhb_his.fetch_his_lhb_list(date)
+        raw_stock = lhb_his.fetch_his_lhb_stock(date)
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "degraded": True, "reason": "upstream_error",
+            "note": str(exc)[:200]})
+    return JSONResponse(content={
+        "ok": True, "date": date,
+        "list": lhb_his.parse_his_lhb_list(raw_list),
+        "stocks": lhb_his.parse_his_lhb_stock(raw_stock),
+    })
+
+
 @router.get("/daban-list-history")
 async def daban_list_history(date: str = "", pid_type: int = 8) -> JSONResponse:
     """按日打板个股列表历史收盘帧（HisDaBanList HTTP，App 市场情绪·日期回看同款读口）。

@@ -259,6 +259,16 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   无法核对待抓包）。前端修复：会话 TTL 关闭时 server error 1106（cmd=110 紧邻 close，会话期数据
   全量到流）结构化白名单（ev.server.code===1106）+ msg 形态正则双保险，均只计统计不上横幅
   （lastError 经 /api/kpl/status 可查）。
+- **龙虎榜链路（2026-10-29 三期）**：2112 会不会上龙虎榜预测 + 3004 RealtimeLHB 双 socket
+  链 + HisBeOnTheLHB 历史回看全开火验证（预登记探针，证据 .tmp_review/lhb*_probe_*）。
+  关键坑：**HisBeOnTheLHB 的 a/c 与 D1 参数顺序互换**（mo0.d 第一参数→c 第二参数→a，
+  记反即 1020）；**龙虎榜 int64 资金字段=元原样无缩放**（双源交叉验证证伪 ×10000
+  假设，mainBuy+mainSell=mainNetAmount 卖出记负，口径=盘中主力大单非席位额，
+  docs/kpl-socket/lhb-scaling-verification.md）。collector 开关 daban_lhb/lhb_realtime
+  默认关、独立于 daban_subs；最小订阅面会话寿命极短（1002 循环），生产与 daban_subs
+  同开。读口 /api/kpl/lhb-forecast|lhb-realtime|lhb-history（fail-visible 降级）；
+  :8008 龙虎榜🏆页签（Playwright DOM 14/14）；JEV 事实段供给 jev_lhb_ammo.py
+  （纯事实组装，禁喂清单合规）。协议合同详见 kpl-socket 文档 §十三。
 - **KPI 两卡历史修复（2026-10-28）**：大盘指数（沪/深/创）/涨跌家数历史模式不再显 "--"——
   新增 `/api/market/index-history`（腾讯 ifzq 日 K）与 `/api/market/breadth-history`
   （东财 push2ex 涨跌分布仅最近交易日可得，本地 data/market_breadth_daily.json 逐日累积，

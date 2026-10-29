@@ -476,3 +476,65 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 - `tests/market/test_market_index_minute.py`（4 passed，全 mock httpx）：增量归一化、
   空行 fail-visible、非法代码、路由 502。
+
+## 十三、龙虎榜链路（2026-10-29 增补，全部开火实测）
+
+### 13.1 协议链（三条，全部预登记开火验证）
+
+- **2112 会不会上龙虎榜预测**（链 A 主链，`kpl_daban_protocol.CMD_FORECAST_LHB`）：
+  ServiceHqDaban 族 `SubForecastLHB(ForecastLHBReq)→ForecastLHBResp`，0x40 通道
+  （PKG_ROUTE + ext=`02 0840`）。Req 基线 count=30/sortType=1/quotaType=0
+  （LhbWillStockModel.k(2112)）；Resp 23 字段 Item（reason 上榜原因/plate/hot_val/
+  main_net_amount 等）。09:35 前回 total=0 属正常时段态；之后满帧 26 items push。
+- **3004/3101 RealtimeLHB**（链 B，`kpl_lhb_protocol.py` 新模块）：ServiceHqList 族
+  `SubRealtimeLHB / GetRealtimeLHBRangeData`，同 0x40 通道 ext=`02 0bbc/0c1d`。
+  Req 基线 quotaType=6/sortType=1/limitType=4/bjsType=1/count=30（App 原 UI count=1，
+  采集放宽；`kpl_lhb_protocol.REALTIME_LHB_BASELINE`）。Resp total≈5438（全市场实时
+  选股口径，非龙虎榜榜单专属）、minMT/maxMT=HHMM；items 复用 GroupStockQuotasResp.Item
+  （70 列 quotas：[0]=板块标签 [1]=现价（nn0.l 实锤），其余原样保留展示层标注）。
+  **已知边界**：3101 无区间/带当日区间均零应答（推断需 indexType 指数 id，非关键路径）。
+- **HisBeOnTheLHB 历史 HTTP**（`kpl_lhb_history.py`）：POST apphis
+  `a=OnTheLHBList|OnTheLHBStock&c=HisBeOnTheLHB&Date=YYYY-MM-DD`——**a/c 与 D1 参数
+  顺序互换是关键坑**（mo0.d 第一参数→c、第二参数→a；记反即 1020）。OnTheLHBList=
+  按上榜原因分组榜单（Reason/Index/stockList 12 列）；OnTheLHBStock=个股行 22 列
+  （字段族与 2112 Item 同源）。当日未生成 info=[] + orderSign（结构化空态）。
+
+### 13.2 开关与读口
+
+- collector 开关：`daban_lhb=True`（2112）、`lhb_realtime=True`（3004/3101），默认关、
+  独立于 `daban_subs`。**生产建议与 daban_subs 同开**：最小订阅面会话寿命极短
+  （16 sessions/100s error 1002 循环；全订阅面 2 sessions/100s）。
+- 快照读口（:8002 / :8000 透传 / :8008 页面消费）：`GET /api/kpl/lhb-forecast`、
+  `/api/kpl/lhb-realtime`（2112 直覆盖含空帧 / 3004 空帧不覆盖非空快照；无快照结构化降级 fail-visible）；
+  `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）。
+- :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签：预测/实时/历史三卡（缺字段 `--`、降级
+  banner、失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright mock 断言（全部通过），
+  脚本与截图只存本地 `.tmp_review/`，未入仓**（专项契约由 `tests/hotlist/test_relay_page_window.py`
+  与 :8000 透传 mock 测试覆盖）。
+
+### 13.3 资金字段口径（task-3 裁决，防误消费）
+
+- **×10000 缩放假设证伪：全部 int64 资金/市值/成交额字段 = 元原样**（2026-10-28
+  603696 双源比对：成交额/市值与东财公开值精确一致）。详见
+  [lhb-scaling-verification.md](lhb-scaling-verification.md)。
+- mainBuy+mainSell=mainNetAmount（**卖出记负**）；口径=盘中主力大单资金流（与东财
+  主力净流入同族差 ~0.2%），**非交易所龙虎榜席位额**，JE 语料消费须标注。
+
+### 13.4 JEV 语料供给（task-6）
+
+- `backend/analysis/hotlist/jev_lhb_ammo.py`：collect_lhb_facts（取数+归一）+
+  build_lhb_facts_lines（纯事实行）。零引擎判断产物（禁喂清单合规）；取数失败/
+  结构化空态显式 `--` 行不伪装。方向线消费入口与 driver/resonance ammo 同构。
+- audit 同步：docs/hotlist-jev/jev-direction-material-audit.md §3 C 级第 4 条
+  「龙虎榜未采」→ 已接入（大单监控线另行预登记）。
+
+### 13.5 测试与证据
+
+- pytest（全 mock 零真实调用）：`test_kpl_daban_protocol.py`（2112+packed varint）、
+  `test_kpl_collector_service.py`（快照/空帧抑制/JSON 序列化合同）、
+  `__tests__/test_kpl_lhb_history.py`（8）、`test_jev_lhb_ammo.py`（6）、
+  `tests/api/test_kpl_proxy_routes.py`（透传+降级）。
+- 开火证据（本地 .tmp_review/，不入仓）：`lhb2112_probe_events.jsonl`（39 帧）、
+  `lhb3004_probe_events.jsonl`（68 帧）、`lhbhis_probe_results.jsonl`、
+  `lhb_snapshot_probe_events.jsonl`、`lhb_page_screenshot.png`、侦察笔记
+  `d:\dragon-board\.tmp_review\lhb_recon_notes_20261028.md`。

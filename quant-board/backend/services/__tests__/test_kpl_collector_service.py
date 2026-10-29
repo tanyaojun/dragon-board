@@ -451,3 +451,166 @@ class TestDabanDispatch:
         snap3 = svc.get_daban_list(6)
         assert [it["stock_id"] for it in snap3["items"]] == ["002708"]
         assert "last_empty_seen" not in svc._daban_lists[6][0]
+
+
+class TestForecastLHB2112:
+    """2112 会不会上龙虎榜：订阅帧开关（默认关）+ 推送事件 lhb_forecast。"""
+
+    def test_session_sends_2112_only_when_enabled(self, monkeypatch):
+        from backend.services import kpl_daban_protocol as daban
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        svc = KplCollectorService(
+            FakeCodec(), device_id="test-dev", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            daban_subs=False, daban_lhb=True,
+        )
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent]
+        # daban_subs=False 时其余 21xx 不发，仅 2112 一帧
+        assert 2112 in cmds and not any(c in (2114, 2115, 2103) for c in cmds)
+        # body = 0xAA + ForecastLHBReq 基线（sortType=1/count=30）
+        f2112 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 2112)
+        assert f2112[16:] == daban.build_forecast_lhb_req_pb()  # FakeCodec.enc 的 0xAA 前缀在 [15]
+
+    def test_2112_push_emits_lhb_forecast(self, svc):
+        from backend.services import kpl_daban_protocol as daban
+        item = (proto.pb_bytes(1, b"000001") + proto.pb_bytes(2, "平安银行".encode())
+                + proto.pb_bytes(20, "龙虎榜".encode()))
+        payload = proto.pb_varint_field(10, 1) + proto.pb_bytes(21, item)
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_FORECAST_LHB, b"daban/", payload)))
+        evs = [dict(e) for e in list(q.queue)]
+        ev = next(e for e in evs if e["type"] == "lhb_forecast")
+        assert ev["items"][0]["stock_id"] == "000001"
+        assert ev["items"][0]["reason"] == "龙虎榜"
+        assert ev["total"] == 1
+
+
+class TestRealtimeLHB3004:
+    """3004/3101 RealtimeLHB（ServiceHqList 族）：订阅/单发开关 + 推送事件 realtime_lhb。"""
+
+    def test_session_sends_3004_3101_when_enabled(self, monkeypatch):
+        from backend.services import kpl_lhb_protocol as lhb
+        from backend.services import kpl_collector_service as cc
+        # 固定 3101 的动态 end_time（HHMM），锁完整请求体
+        monkeypatch.setattr(cc.time, "strftime", lambda fmt: "1035")
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        svc = KplCollectorService(
+            FakeCodec(), device_id="test-dev", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            daban_subs=False, lhb_realtime=True,
+        )
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent]
+        # daban_subs=False 时 21xx 不发，仅 3004 订阅 + 3101 单发两帧
+        assert 3004 in cmds and 3101 in cmds
+        assert not any(c in (2114, 2115, 2103, 2112) for c in cmds)
+        # body = FakeCodec.enc 前缀 0xAA + App 基线 Req（f2 sortType=1, f4 limitType=4,
+        # f9 bjsType=1, f21 count=30；零值省略）
+        f3004 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3004)
+        assert f3004[16:] == lhb.build_realtime_lhb_req_pb()
+        # 3101 带当日区间 0925→1035（end_time 由 strftime 决定，已固定）
+        f3101 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3101)
+        assert f3101[16:] == lhb.build_realtime_lhb_req_pb(start_time=925, end_time=1035)
+
+    def test_3004_push_emits_realtime_lhb(self, svc):
+        from backend.services import kpl_lhb_protocol as lhb
+        # Item 复用 GroupStockQuotasResp.Item 口径：f1 stockId, f2 name, f100 quotas[]
+        item = (proto.pb_bytes(1, b"600229") + proto.pb_bytes(2, "天津普林".encode())
+                + proto.pb_bytes(100, b"12.34") + proto.pb_bytes(100, "3.5亿".encode()))
+        payload = (proto.pb_varint_field(30, 5)          # total
+                   + proto.pb_bytes(33, b"2026-10-29")   # days
+                   + proto.pb_bytes(41, item))
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(lhb.CMD_REALTIME_LHB_SUB, b"lhb/", payload)))
+        evs = [dict(e) for e in list(q.queue)]
+        ev = next(e for e in evs if e["type"] == "realtime_lhb")
+        assert ev["total"] == 5
+        assert ev["days"] == ["2026-10-29"]
+        assert ev["items"][0]["stock_id"] == "600229"
+        assert ev["items"][0]["quotas"] == ["12.34", "3.5亿"]
+
+    def test_3101_same_parser_registered(self):
+        from backend.services import kpl_lhb_protocol as lhb
+        assert lhb.LHB_RESP_PARSERS[lhb.CMD_REALTIME_LHB_RANGE] is lhb.parse_realtime_lhb
+        assert lhb.LHB_RESP_PARSERS[lhb.CMD_REALTIME_LHB_SUB] is lhb.parse_realtime_lhb
+
+
+class TestLhbSnapshots:
+    """task-4：2112/3004 快照缓存 + 读口降级（fail-visible）。"""
+
+    def test_no_snapshot_degraded(self):
+        svc = KplCollectorService(
+            FakeCodec(), device_id="d", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            daban_subs=False, daban_lhb=True, lhb_realtime=True,
+        )
+        fc = svc.get_lhb_forecast()
+        rl = svc.get_lhb_realtime()
+        assert fc["ok"] is False and fc["degraded"] is True and fc["reason"] == "no_lhb_forecast_snapshot"
+        assert rl["ok"] is False and rl["degraded"] is True and rl["reason"] == "no_lhb_realtime_snapshot"
+        assert "running" in fc and "running" in rl
+
+    def test_2112_push_populates_forecast_snapshot(self, svc):
+        from backend.services import kpl_daban_protocol as daban
+        payload = proto.pb_varint_field(10, 2) + proto.pb_bytes(
+            21, proto.pb_bytes(1, b"600715") + proto.pb_bytes(20, "偏离-7%".encode()))
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_FORECAST_LHB, b"daban/", payload)))
+        snap = svc.get_lhb_forecast()
+        assert snap["ok"] is True
+        assert snap["total"] == 2 and snap["items"][0]["stock_id"] == "600715"
+        assert snap["items"][0]["reason"] == "偏离-7%"
+        assert "ts" in snap
+        # 覆盖语义：新帧直接替换
+        payload2 = proto.pb_varint_field(10, 1)
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_FORECAST_LHB, b"daban/", payload2)))
+        assert svc.get_lhb_forecast()["total"] == 1
+
+    def test_3004_push_populates_snapshot_with_empty_frame_suppression(self, svc):
+        from backend.services import kpl_lhb_protocol as lhb
+        item = proto.pb_bytes(1, b"600229") + proto.pb_bytes(2, "天津普林".encode())
+        full = proto.pb_varint_field(30, 5) + proto.pb_bytes(41, item)
+        svc._dispatch(proto.parse_incoming(_push(lhb.CMD_REALTIME_LHB_SUB, b"lhb/", full)))
+        snap = svc.get_lhb_realtime()
+        assert snap["ok"] is True and snap["total"] == 5
+        assert snap["items"][0]["stock_id"] == "600229"
+        # 空帧抑制：空 items 不覆盖非空快照（仅刷 ts + last_empty_seen）
+        empty = proto.pb_varint_field(30, 0)
+        svc._dispatch(proto.parse_incoming(_push(lhb.CMD_REALTIME_LHB_SUB, b"lhb/", empty)))
+        snap2 = svc.get_lhb_realtime()
+        assert snap2["total"] == 5 and snap2["items"][0]["stock_id"] == "600229"
+        assert "last_empty_seen" in snap2
+
+    def test_3004_snapshot_json_serializable(self, svc):
+        # 读口合同：快照必须可 JSON 序列化（packed varint indexes 修复回归）
+        import json as _json
+        from backend.services import kpl_lhb_protocol as lhb
+        item = proto.pb_bytes(1, b"600229") + proto.pb_bytes(2, "天津普林".encode())
+        payload = (proto.pb_varint_field(30, 1) + proto.pb_bytes(40, b"\x00\x01\x02")
+                   + proto.pb_bytes(41, item))
+        svc._dispatch(proto.parse_incoming(_push(lhb.CMD_REALTIME_LHB_SUB, b"lhb/", payload)))
+        snap = svc.get_lhb_realtime()
+        assert snap["indexes"] == [0, 1, 2]
+        _json.dumps(snap, ensure_ascii=False)  # 不抛即合格

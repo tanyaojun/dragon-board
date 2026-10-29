@@ -130,6 +130,38 @@ def parse_pb(data: bytes) -> Dict[int, List[Any]]:
     return out
 
 
+def decode_packed_varints(raw: Any) -> List[int]:
+    """packed repeated varint 字段 → int 列表（f20/f40 indexes 等）。
+
+    2026-10-29 开火实测：2112/3004 的 indexes 服务器按 packed varint 下发，
+    parse_pb 把 wire-type-2 的值收成 bytes——不解码就原样进快照导致读口不可
+    JSON 序列化（fail-visible 修复）。int 输入直接包 list，bytes 按 varint 流解码。
+    """
+    if isinstance(raw, (bytes, bytearray)):
+        out: List[int] = []
+        i = 0
+        while i < len(raw):
+            shift = 0
+            val = 0
+            while i < len(raw):   # 截断防护：continuation bit 未闭合时不越界（fail-visible）
+                b = raw[i]
+                i += 1
+                val |= (b & 0x7F) << shift
+                if not (b & 0x80):
+                    break
+                shift += 7
+            out.append(val)
+        return out
+    if isinstance(raw, int):
+        return [raw]
+    if isinstance(raw, list):
+        flat: List[int] = []
+        for x in raw:
+            flat.extend(decode_packed_varints(x))
+        return flat
+    return []
+
+
 def pb_first(pb: Dict[int, List[Any]], field: int, default: Any = None) -> Any:
     vals = pb.get(field)
     return vals[0] if vals else default

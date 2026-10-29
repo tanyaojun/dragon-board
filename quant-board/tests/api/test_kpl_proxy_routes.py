@@ -351,3 +351,51 @@ def test_daban_prev_day_basis_validation(client):
     assert r.status_code == 400
     r = client.get("/api/kpl/daban-prev-day-basis", params={"date": "2026-10-28"})
     assert r.status_code == 400 and r.json()["reason"] == "missing_codes"
+
+
+def test_lhb_passthrough_routes(client):
+    # lhb-forecast / lhb-realtime 纯透传 :8002（两条路由都断言）
+    _FakeAsyncClient.responses = [_FakeResponse({"ok": False, "degraded": True,
+                                                 "reason": "no_lhb_forecast_snapshot"}),
+                                  _FakeResponse({"ok": False, "degraded": True,
+                                                 "reason": "no_lhb_realtime_snapshot"})]
+    r = client.get("/api/kpl/lhb-forecast")
+    assert r.status_code == 200
+    assert r.json()["reason"] == "no_lhb_forecast_snapshot"
+    r = client.get("/api/kpl/lhb-realtime")
+    assert r.status_code == 200
+    assert r.json()["reason"] == "no_lhb_realtime_snapshot"
+
+
+def test_lhb_history_missing_date_structured_422(client):
+    r = client.get("/api/kpl/lhb-history")
+    assert r.status_code == 422
+    body = r.json()
+    assert body["ok"] is False and body["degraded"] is True
+    assert body["reason"] == "missing_date"
+
+
+def test_lhb_history_upstream_error_structured_502(client, monkeypatch):
+    from backend.services import kpl_lhb_history as lhb_his
+    def boom(date):
+        raise RuntimeError("upstream limit")
+    monkeypatch.setattr(lhb_his, "fetch_his_lhb_list", boom)
+    r = client.get("/api/kpl/lhb-history?date=2026-10-28")
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and body["reason"] == "upstream_error"
+
+
+def test_lhb_history_ok(client, monkeypatch):
+    from backend.services import kpl_lhb_history as lhb_his
+    monkeypatch.setattr(lhb_his, "fetch_his_lhb_list",
+                        lambda date: {"errcode": "0", "date": date, "YCnum": 1,
+                                      "orderSign": [], "info": []})
+    monkeypatch.setattr(lhb_his, "fetch_his_lhb_stock",
+                        lambda date: {"errcode": "0", "Count": 0, "info": []})
+    r = client.get("/api/kpl/lhb-history?date=2026-10-28")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["list"]["date"] == "2026-10-28"
+    assert body["list"]["order_sign"] == []      # 结构化空态保留
+    assert body["stocks"]["count"] == 0

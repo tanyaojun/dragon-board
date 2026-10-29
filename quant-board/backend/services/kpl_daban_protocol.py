@@ -20,6 +20,7 @@ import struct
 from typing import Any, Dict, List, Optional
 
 from backend.services.kpl_socket_protocol import (
+    decode_packed_varints,
     pb_first,
     pb_varint_field,
     _signed64,
@@ -42,6 +43,7 @@ CMD_ZT_STOCK_LIST = 2120     # ServiceHqDaban.QxZtSituationStockResp（涨停个
 CMD_ZT_STOCK_LIST_PB = 2121  # 同上（跌停方向，BsType 区分）
 CMD_WIND_VANE = 2126         # ServiceHqDaban.QxWindVaneResp（风向标）
 CMD_DABAN_STOCK_LIST = 2103  # Hq.DaBanStockListResp（打板个股列表：竞价/即将涨停等页签）
+CMD_FORECAST_LHB = 2112      # ServiceHqDaban.ForecastLHBResp（会不会上龙虎榜，2026-10-29 逆向）
 
 # 2103 pidType → 页签（APK 资源数组 PatternTabs × PatternTabsServerPidType，2026-10-27
 # androguard 解包 base_new.apk：['竞价','即将涨停','风向标','涨停','炸板','跌停',…]
@@ -75,6 +77,30 @@ def build_market_energy_req_pb(market_type: int = 1) -> bytes:
 def build_zt_situation_stock_req_pb(bs_type: int = 1, order_type: int = 0, sort_type: int = 0) -> bytes:
     """QxZtSituationStockReq{f1 bsType, f2 orderType, f3 sortType}：2120(涨停)/2121(跌停)。"""
     return pb_varint_field(1, bs_type) + pb_varint_field(2, order_type) + pb_varint_field(3, sort_type)
+
+
+def build_forecast_lhb_req_pb(
+    quota_type: int = 0, sort_type: int = 1, start: int = 0, count: int = 30,
+    filter_type: int = 0,
+) -> bytes:
+    """2112 ForecastLHBReq{f1 quotaType, f2 sortType, f3 start, f4 count, f5 filterType}。
+
+    参数基线 = LhbWillStockModel.k(2112)（2026-10-29 反汇编）：页大小 s=30（count=30）、
+    sortType 默认 1、quotaType=0（App 默认页签，动态列配置 serverType 另有 5/6/10/42）、
+    filterType=0。proto3 零值不编码（quota_type=0/start=0/filter_type=0 省略）。
+    """
+    body = b""
+    if quota_type:
+        body += pb_varint_field(1, quota_type)
+    if sort_type:
+        body += pb_varint_field(2, sort_type)
+    if start:
+        body += pb_varint_field(3, start)
+    if count:
+        body += pb_varint_field(4, count)
+    if filter_type:
+        body += pb_varint_field(5, filter_type)
+    return body
 
 
 def build_empty_req_pb() -> bytes:
@@ -484,6 +510,69 @@ def parse_daban_head(payload: bytes) -> Dict[str, Any]:
     }
 
 
+def parse_forecast_lhb(payload: bytes) -> Dict[str, Any]:
+    """2112 ForecastLHBResp：会不会上龙虎榜预测列表（2026-10-29 逆向 service_hq_daban.proto）。
+
+    顶层：f1 quotaType, f2 sortType, f3 start, f4 count, f5 filterType,
+    f6 forecastTotal, f10 total, f11 timestamp(int64), f12 latestDay(str),
+    f20 indexes(repeated uint32), f21 items(repeated Item), f500 msgId。
+    Item（23 字段）：f1 stockId, f2 stockName, f3 plate, f4 price(float), f5 zf(float 涨幅%),
+    f6 turRate(float), f7 tur(uint64), f8 incSpeed(float), f9 mainNetAmount(int64),
+    f10 mainBuy, f11 mainSell, f12 realTurRate(float), f13 cirMarket(uint64),
+    f14 ttlMarket, f15 realCirMarket, f16 amplitude(float), f17 incRateText(str),
+    f18 hotVal(int64), f19 hotChange(int64), f20 reason(str 上榜原因), f21 timestamp(int64),
+    f22 rankState(uint32), f23 isNew(bool)。int64 资金/股本字段=**元原样无缩放**
+    （2026-10-29 task-3 双源交叉验证证伪 ×10000 假设：OnTheLHBStock 603696 成交额/市值
+    与东财公开值精确一致、mainNetAmount 与东财主力净流入差 0.18%，详见
+    docs/kpl-socket/lhb-scaling-verification.md；mainBuy+mainSell=mainNetAmount，
+    卖出记负；口径为盘中主力大单资金流，非交易所席位额）。
+    """
+    pb = parse_pb_f32(payload)
+    items: List[Dict[str, Any]] = []
+    for raw in pb.get(21, []):
+        sub = parse_pb_f32(raw)
+        items.append({
+            "stock_id": _s(pb_first(sub, 1, b"")),
+            "stock_name": _s(pb_first(sub, 2, b"")),
+            "plate": _s(pb_first(sub, 3, b"")),
+            "price": pb_first(sub, 4),
+            "zf": pb_first(sub, 5),
+            "tur_rate": pb_first(sub, 6),
+            "tur": _signed64(pb_first(sub, 7, 0)),
+            "inc_speed": pb_first(sub, 8),
+            "main_net_amount": _signed64(pb_first(sub, 9, 0)),
+            "main_buy": _signed64(pb_first(sub, 10, 0)),
+            "main_sell": _signed64(pb_first(sub, 11, 0)),
+            "real_tur_rate": pb_first(sub, 12),
+            "cir_market": _signed64(pb_first(sub, 13, 0)),
+            "ttl_market": _signed64(pb_first(sub, 14, 0)),
+            "real_cir_market": _signed64(pb_first(sub, 15, 0)),
+            "amplitude": pb_first(sub, 16),
+            "inc_rate_text": _s(pb_first(sub, 17, b"")),
+            "hot_val": _signed64(pb_first(sub, 18, 0)),
+            "hot_change": _signed64(pb_first(sub, 19, 0)),
+            "reason": _s(pb_first(sub, 20, b"")),
+            "timestamp": _signed64(pb_first(sub, 21, 0)),
+            "rank_state": pb_first(sub, 22, 0),
+            "is_new": bool(pb_first(sub, 23, 0)),
+        })
+    return {
+        "quota_type": pb_first(pb, 1, 0),
+        "sort_type": pb_first(pb, 2, 0),
+        "start": pb_first(pb, 3, 0),
+        "count": pb_first(pb, 4, 0),
+        "filter_type": pb_first(pb, 5, 0),
+        "forecast_total": pb_first(pb, 6, 0),
+        "total": pb_first(pb, 10, 0),
+        "timestamp": _signed64(pb_first(pb, 11, 0)),
+        "latest_day": _s(pb_first(pb, 12, b"")),
+        "indexes": decode_packed_varints(pb.get(20, [])),
+        "items": items,
+        "msg_id": pb_first(pb, 500),
+        "raw_len": len(payload),
+    }
+
+
 DABAN_RESP_PARSERS: Dict[int, Any] = {
     CMD_ZD_STAT: parse_zd_stat,
     CMD_MARKET_OVERVIEW: parse_market_overview,
@@ -495,4 +584,5 @@ DABAN_RESP_PARSERS: Dict[int, Any] = {
     CMD_WIND_VANE: parse_wind_vane,
     CMD_DABAN_STOCK_LIST: parse_daban_stock_list,
     CMD_DABAN_HEAD: parse_daban_head,
+    CMD_FORECAST_LHB: parse_forecast_lhb,
 }

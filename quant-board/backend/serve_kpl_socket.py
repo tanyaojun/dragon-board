@@ -105,6 +105,18 @@ def plate_tree() -> JSONResponse:
     return JSONResponse(content=_get_service().get_plate_tree())
 
 
+@app.get("/api/kpl/lhb-forecast")
+def lhb_forecast() -> JSONResponse:
+    """2112 会不会上龙虎榜预测快照（task-4）：无快照返回结构化降级（fail-visible）。"""
+    return JSONResponse(content=_get_service().get_lhb_forecast())
+
+
+@app.get("/api/kpl/lhb-realtime")
+def lhb_realtime() -> JSONResponse:
+    """3004/3101 RealtimeLHB 快照（task-4）：无快照返回结构化降级（fail-visible）。"""
+    return JSONResponse(content=_get_service().get_lhb_realtime())
+
+
 @app.get("/api/kpl/daban-list")
 def daban_list(pid_type: int = 8) -> JSONResponse:
     """2103 打板个股列表快照（最近一次订阅推送缓存）：pid_type 8=集合竞价 / 0=即将涨停 / 6=风向标。
