@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v13"
     assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-30d"   # 语料精简换代（2026-10-30 用户裁决）；题集 hash 不变
+    assert doc["ammoVersion"] == "2026-10-30e"   # 15:00 总结行+后缀桥（2026-10-30e）；题集 hash 不变
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1238,3 +1238,65 @@ def test_series_line_zero_in_window_records_still_disclosed(env, monkeypatch):
     narrative = db[L.COLLECTION].docs["2026-10-19:603278"]["narrative"]
     assert "窗口6交易日仅0条记录" in narrative
     assert "窗口内无记录" in narrative
+
+
+def test_live_entries_board_suffix_bridge_bingxue(monkeypatch):
+    """2026-10-30e 后缀桥实证回归：韭研「冰雪经济」命中 KPL「冰雪产业」播报。
+
+    10-29 实测漏配：10:38 播报「冰雪产业-1.30% 冰雪产业异动拉升，冰山冷热直线涨停，
+    晶雪节能、雪人集团等跟涨」——修复后须命中（plate 桥 + 文本词干锚）。
+    """
+    import time as _time
+    day = "2026-10-29"
+    mk = lambda hh, mm: int(_time.mktime(_time.strptime(f"{day} {hh}:{mm:02d}", "%Y-%m-%d %H:%M")))
+    payload = {"ok": True, "items": [
+        {"ts": mk(10, 38), "time": "10:38", "plate_name": "冰雪产业", "plate_pct": "-1.30",
+         "comment": "冰雪产业异动拉升，冰山冷热直线涨停，晶雪节能、雪人集团等跟涨"},
+        {"ts": mk(11, 0), "time": "11:00", "plate_name": "机器人概念", "comment":
+         "机器人概念冲高回落"},
+    ]}
+    entries, meta = L.live_entries_for_board(payload, "冰雪经济", day)
+    assert [e["time"] for e in entries] == ["10:38"], "经济/产业后缀桥：漏配修复"
+    assert "冰雪产业异动拉升" in entries[0]["comment"]
+    assert meta["total"] == 2
+
+
+def test_market_summary_entry_and_narrative_placement(monkeypatch):
+    """15:00 收盘总结（AMMO 2026-10-30e）：提取/缺席/两级叙事紧跟盘面事实行。"""
+    import time as _time
+    day = "2026-10-29"
+    mk = lambda hh, mm: int(_time.mktime(_time.strptime(f"{day} {hh}:{mm:02d}", "%Y-%m-%d %H:%M")))
+    summary_txt = ("15:00三大指数低开低走，上证指数跌超-0.5%，创业板指跌超-4%，收盘沪深京三市"
+                   "全天成交不足1.6万亿，相较前一交易日缩量4%，下跌个股超4500家。市场震荡下行，"
+                   "题材弱势轮动。冰雪产业龙江交通、冰山冷热等首板涨停。"
+                   "（该内容由AI大模型根据行情自动生成）")
+    payload = {"ok": True, "items": [
+        {"ts": mk(15, 0), "time": "15:00", "plate_name": "", "comment": summary_txt},
+        {"ts": mk(10, 38), "time": "10:38", "plate_name": "冰雪产业", "comment": "冰雪产业异动拉升"},
+    ]}
+    entry = L.market_summary_entry(payload, day)
+    assert entry and entry["time"] == "15:00"
+    assert "AI大模型根据行情自动生成" not in entry["comment"], "AI 生成尾注剥离"
+    # 缺席/失败/非当日 → None（补充行缺席不伪装）
+    assert L.market_summary_entry(payload, "2026-10-28") is None
+    assert L.market_summary_entry({"ok": False, "reason": "x"}, day) is None
+    assert L.market_summary_entry({"ok": True, "items": [
+        {"ts": mk(10, 0), "time": "10:00", "plate_name": "机器人概念", "comment": "x"}]}, day) is None
+    line = L.market_summary_line(entry)
+    assert line.startswith("盘面总结（KPL 15:00）：15:00三大指数低开低走")
+    assert L.market_summary_line(None) is None
+    # 两级叙事：紧跟盘面事实行、在交易日轴前
+    from backend.analysis.hotlist.theme_leader_ammo import build_leader_narrative, build_sector_narrative
+    n = build_leader_narrative(date=day, market_line="涨停 46 家", forward_axis="交易日轴（前向）：X",
+                               market_summary=line, structure="结构行", baseline="基线行",
+                               evidence_block="【题材证据】", leader_name="X", leader_code="1")
+    assert n.index("涨停 46 家") < n.index("盘面总结（KPL 15:00）") < n.index("交易日轴")
+    n2 = build_leader_narrative(date=day, market_line="涨停 46 家", structure="结构行",
+                                baseline="基线行", evidence_block="【题材证据】",
+                                leader_name="X", leader_code="1")
+    assert "盘面总结" not in n2, "缺席不出行"
+    s = build_sector_narrative(date=day, board="冰雪经济", market_line="涨停 46 家",
+                               forward_axis="交易日轴（前向）：X",
+                               market_summary=line, structure="结构行", baseline="基线行",
+                               evidence_block="【题材证据】")
+    assert s.index("涨停 46 家") < s.index("盘面总结（KPL 15:00）") < s.index("交易日轴")

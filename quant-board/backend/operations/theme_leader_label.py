@@ -40,6 +40,7 @@ from backend.analysis.hotlist import theme_event_digest as digest
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
 from backend.analysis.hotlist.theme_leader_ammo import (
+    market_summary_line,
     AMMO_VERSION_THEME_LEADER,
     QUESTION_SET_HASH_THEME_LEADER,
     QUESTION_SET_VERSION_THEME_LEADER,
@@ -259,6 +260,11 @@ def live_entries_for_board(live_payload: dict, board: str,
                  if time.strftime("%Y-%m-%d", time.localtime(it["ts"])) == str(date)]
     if not day_items:
         return [], {"unavailable": "实时流不可回放（窗口内无标注日条目，历史日无直播归档）"}
+    # 2026-10-30e：15:00 收盘总结为全市场条目，已由「盘面总结」行单独承载（一次取数共用），
+    # 板块相关播报不再重复收录，防同一文本在叙事内双现
+    day_items = [it for it in day_items
+                 if not (str(it.get("time") or "") == "15:00"
+                         and not str(it.get("plate_name") or "").strip())]
     base = digest.normalize_name(board)
     keys = [k for k in digest.board_keywords(board)
             if len(k) >= 2 and digest._CJK_RE.search(k)]   # 纯拉丁/数字锚不得关联（digest 同规）
@@ -267,8 +273,10 @@ def live_entries_for_board(live_payload: dict, board: str,
         plate = digest.normalize_name(str(it.get("plate_name") or ""))
         comment = str(it.get("comment") or "").replace(_AI_GEN_NOTE, "").strip()
         norm_c = digest.normalize_name(comment)
-        plate_hit = bool(base and plate and len(plate) >= 2
-                         and (base in plate or plate in base))
+        # 2026-10-30e：plate 命中同步用 keys（后缀桥/别名含其中，如冰雪经济↔冰雪产业），
+        # 不再只双向包含 base
+        plate_hit = bool(plate and len(plate) >= 2
+                         and any(k in plate or plate in k for k in keys))
         text_hit = bool(norm_c and any(k in norm_c for k in keys))
         if plate_hit or text_hit:
             entries.append({"time": it.get("time"), "comment": comment})
@@ -276,6 +284,26 @@ def live_entries_for_board(live_payload: dict, board: str,
     tmin = min(it["time"] for it in day_items)
     tmax = max(it["time"] for it in day_items)
     return entries, {"total": len(day_items), "window": f"{tmin}~{tmax}"}
+
+
+def market_summary_entry(live_payload: dict, date: str) -> dict | None:
+    """直播流 → 当日 15:00 收盘总结条目（AMMO 2026-10-30e，用户指示）。
+
+    判定：标注日条目中 time=="15:00" 且 plate_name 空（收盘总结为全市场条目，
+    10-29 实测归档在场）；取时间最晚一条，剥离 AI 生成尾注。无归档/非当日/无该
+    条目 → None（盘面总结为补充行，缺席不出行，不伪装；直播可用性由 live_line 披露）。
+    """
+    if not live_payload.get("ok"):
+        return None
+    day_items = [it for it in live_payload.get("items") or []
+                 if time.strftime("%Y-%m-%d", time.localtime(it["ts"])) == str(date)]
+    cands = [it for it in day_items
+             if str(it.get("time") or "") == "15:00" and not str(it.get("plate_name") or "").strip()]
+    if not cands:
+        return None
+    it = max(cands, key=lambda x: x.get("ts") or 0)
+    comment = str(it.get("comment") or "").replace(_AI_GEN_NOTE, "").strip()
+    return {"time": it.get("time"), "comment": comment} if comment else None
 
 
 def fetch_lhb_facts(date: str) -> dict:
@@ -572,6 +600,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               series_line: str | None = None,
               segment: str | None = None,
               live_line: str | None = None,
+              market_summary: str | None = None,
               lhb_facts: dict | None = None) -> dict:
     """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。"""
     from backend.operations.jev_label_jiuyan import market_facts_line
@@ -608,6 +637,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         live_line=live_line,
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
+        market_summary=market_summary,
         driver_cross=driver_cross_line(driver_doc),
         reason_line=limitup_reason_line(reason_entries or []),
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
@@ -634,6 +664,7 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
                      reason_entries: list[tuple[str, str | None]] | None = None,
                      series_line: str | None = None,
                      live_line: str | None = None,
+                     market_summary: str | None = None,
                      lhb_facts: dict | None = None) -> dict:
     """组装一条**板块级**投喂（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3）。
 
@@ -672,6 +703,7 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         plate_strength=plate_strength_line(strength_match) if strength_match is not None else None,
         series_line=series_line,
         live_line=live_line,
+        market_summary=market_summary,
         baseline=baseline_line(rows_baseline, ref, BASELINE_MIN_SAMPLES),
         reason_line=limitup_reason_line(reason_entries or []),
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
@@ -880,6 +912,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     # + 涨停原因映射
     strength_payload = fetch_plate_strength(date)
     live_payload = get_live_for_label(db, date)
+    # 15:00 收盘总结（AMMO 2026-10-30e）：一次提取全板块/全个股共用（与直播同源）
+    market_summary = market_summary_line(market_summary_entry(live_payload, date))
     expounds = expound_map(db, date)
     # 龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用（与板块强度/直播同哲学）
     lhb_facts = fetch_lhb_facts(date)
@@ -964,6 +998,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             live_line=kpl_live_line(le, board=b, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),
+            market_summary=market_summary,
             lhb_facts=lhb_facts)
         built["rows"] = brows
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k] for k in SECTOR_QUESTIONS}
@@ -982,6 +1017,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             live_line=kpl_live_line(le, board=rb, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),
+            market_summary=market_summary,
             lhb_facts=lhb_facts)
         built["row"] = row
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k] for k in LEADER_QUESTIONS}

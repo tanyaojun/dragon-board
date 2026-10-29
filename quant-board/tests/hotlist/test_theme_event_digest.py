@@ -459,3 +459,18 @@ def test_generic_anchor_econ_p1_1():
     """P1-1（review）：「经济」入泛词黑名单——冰雪经济/低空经济/银发经济并存不互锚。"""
     assert D._shared_anchor("冰雪经济", "低空经济") is None
     assert D._shared_anchor("银发经济", "低空经济") is None
+
+
+def test_board_keywords_suffix_bridge_econ_industry():
+    """2026-10-30e 后缀桥：韭研「冰雪经济」↔ KPL「冰雪产业」命名差异确定性互认。
+
+    实证：10-29 龙江交通（冰雪经济龙一）10:38 播报「冰雪产业异动拉升，冰山冷热直线
+    涨停」漏配。桥规则：X经济/X产业 双向补词干+对侧变体；泛词词干不桥；非 X经济/产业
+    板块不受影响。
+    """
+    assert D.board_keywords("冰雪经济") == ["冰雪经济", "冰雪", "冰雪产业"]
+    assert D.board_keywords("冰雪产业") == ["冰雪产业", "冰雪", "冰雪经济"]
+    assert D.board_keywords("低空经济") == ["低空经济", "低空", "eVTOL", "低空产业"], \
+        "既有别名优先，桥补充对侧变体"
+    assert D.board_keywords("消费经济") == ["消费经济"], "词干=泛词（消费）不桥，防伪造关联"
+    assert D.board_keywords("机器人") == ["机器人"], "非后缀板块零变化"

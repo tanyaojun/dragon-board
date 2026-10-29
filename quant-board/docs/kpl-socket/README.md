@@ -563,6 +563,9 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   与工程注记（「无数据 ≠ 无催化」复述/fail-visible 行话/可推导语气/端点名/空间锚定义
   复述等），事实与防误读锚全保留；近 N 日家数序列 ≥3 日才出行；共享行（盘面事实/涨跌比）
   同步生效于打标链；题集 hash 不变，预登记 §23 补记。
+  **15:00 收盘总结 + 板块名后缀桥（AMMO 2026-10-30e）**：两级叙事新增「盘面总结
+  （KPL 15:00）」行（直播归档 15:00 空板块条目单载，缺席不出行；从板块播报排除防双现）；
+  `board_keywords` 经济/产业后缀确定性互认（冰雪经济↔冰雪产业 10-29 漏配实证）。
 - audit 同步：docs/hotlist-jev/jev-direction-material-audit.md §3 C 级第 4 条
   「龙虎榜未采」→ 已接入（大单监控线另行预登记）。
 

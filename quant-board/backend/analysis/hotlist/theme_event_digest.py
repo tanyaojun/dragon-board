@@ -90,13 +90,26 @@ def normalize_name(name: str | None) -> str:
 
 
 def board_keywords(board_name: str | None) -> list[str]:
-    """板块名 → 匹配关键词（归一后的自身 + 别名）。"""
+    """板块名 → 匹配关键词（归一后的自身 + 别名 + 经济/产业后缀桥）。
+
+    2026-10-30 后缀桥（用户报障实测：韭研「冰雪经济」↔ KPL「冰雪产业」，10:38 播报
+    「冰雪产业异动拉升，冰山冷热直线涨停」漏配）：韭研与 KPL 对同一题材的命名后缀
+    存在经济/产业差异，确定性互认——base 以「经济/产业」结尾时补词干与对侧后缀变体；
+    词干 ≥2 字且非泛词（GENERIC_ANCHORS，如「消费经济→消费」不桥）才展开。无语义
+    推断，只展开字面变体；适用于直播/事件同一条公共链。"""
     base = normalize_name(board_name)
     keys = [base] if base else []
     for alias in ALIASES.get(base, ()):
         a = normalize_name(alias)
         if a and a not in keys:
             keys.append(a)
+    for suf_a, suf_b in (("经济", "产业"), ("产业", "经济")):
+        if base.endswith(suf_a):
+            stem = base[: -len(suf_a)]
+            if len(stem) >= 2 and stem not in GENERIC_ANCHORS:
+                for cand in (stem, stem + suf_b):
+                    if cand not in keys:
+                        keys.append(cand)
     return [k for k in keys if len(k) >= 2]
 
 

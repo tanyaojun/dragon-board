@@ -135,7 +135,11 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 可推导语气、端点名（HisBeOnTheLHB/expound）、「匹配方式 exact」「另一条打标链…供交叉
 # 参考」注记、空间锚定义复述；近 1 日家数序列改为 ≥3 日才出行。事实与防误读锚全保留。
 # 共享行（盘面事实/池内涨跌比/触板未封在 jev_label_jiuyan，与打标链同源）同步生效。
-AMMO_VERSION_THEME_LEADER = "2026-10-30d"
+# 2026-10-30e（用户指示）：①新增 15:00 收盘总结行「盘面总结（KPL 15:00）」作当日盘面
+# 全市场介绍（紧跟盘面事实行后，两级叙事共用；取数单一源=直播归档，缺席不出行）；
+# ②韭研↔KPL 板块名经济/产业后缀桥（digest.board_keywords 公共函数，冰雪经济↔冰雪
+# 产业 10-29 播报漏配实证），直播 plate 命中同步用 keys。
+AMMO_VERSION_THEME_LEADER = "2026-10-30e"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1255,10 +1259,25 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     return head + "；".join(parts) + tail
 
 
+def market_summary_line(entry: dict | None) -> str | None:
+    """15:00 收盘总结行（AMMO 2026-10-30e，用户指示）：当日盘面全市场介绍。
+
+    `entry` = operations 层 `market_summary_entry(live_payload, date)` 产物（一次取数
+    全板块共用）；本函数零 IO 零模型。None（无归档/非当日/无该条目）→ None 不出行
+    （补充行缺席不伪装；直播可用性由 live_line 披露）。"""
+    if not entry or not str(entry.get("comment") or "").strip():
+        return None
+    comment = str(entry.get("comment") or "").strip()
+    if len(comment) > 600:
+        comment = comment[:600] + f"…[截断，原文 {len(comment)} 字]"
+    return f"盘面总结（KPL 15:00）：{comment}"
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
                            forward_axis: str | None = None,
+                           market_summary: str | None = None,
                            ladder_line: str | None = None,
                            zhaban_line: str | None = None,
                            driver_cross: str | None = None,
@@ -1288,6 +1307,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     lines = [
         f"{date} 交易日 · {market_line}",
     ]
+    if market_summary:
+        lines.append(market_summary)
     if forward_axis:
         lines.append(forward_axis)
     # P1-4（review）：轨别身位必须在叙事头部显式标注（题面规则⑥/空间题⑤的前提
@@ -1322,6 +1343,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
 def build_sector_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, board: str,
                            forward_axis: str | None = None,
+                           market_summary: str | None = None,
                            ladder_line: str | None = None,
                            zhaban_line: str | None = None,
                            plate_strength: str | None = None,
@@ -1339,6 +1361,8 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
     顺序固定，便于逐字复现与回归比对。
     """
     lines = [f"{date} 交易日 · {market_line}"]
+    if market_summary:
+        lines.append(market_summary)
     if forward_axis:
         lines.append(forward_axis)
     lines.append(f"待判板块：{board}（龙一分轨：主板/双创各按空间板优先、首封最早取龙一，并列见结构行）")
