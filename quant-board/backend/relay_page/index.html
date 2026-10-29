@@ -351,31 +351,31 @@
     border-radius:8px;padding:7px 12px;font-size:12px;line-height:1.5;margin-bottom:10px}
   .kpl-sub{font-size:11px;color:var(--muted2);line-height:1.5}
   .kpl-uni{font-variant-numeric:tabular-nums}
-  /* ---------- 底部状态栏（2026-10-29）：全站警告/错误系统日志，fail-visible ---------- */
+  /* ---------- 底部状态栏（2026-10-29）：全站警告/错误系统日志，fail-visible；2026-10-30 改白底黑字 ---------- */
   body{padding-bottom:30px}   /* 避免固定栏遮挡底部内容 */
-  #sbBar{position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#111827;color:#e5e7eb;
-    font-size:12px;border-top:1px solid #374151;user-select:none}
+  #sbBar{position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#fff;color:#111827;
+    font-size:12px;border-top:1px solid #d1d5db;user-select:none}
   #sbBarRow{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;cursor:pointer}
-  #sbBarRow:hover{background:#1f2937}
+  #sbBarRow:hover{background:#f3f4f6}
   #sbCounts{display:flex;gap:6px;flex-shrink:0}
   .sb-badge{padding:0 7px;border-radius:9px;font-weight:600;line-height:17px;font-size:11px}
-  .sb-badge.err{background:#7f1d1d;color:#fecaca}
-  .sb-badge.warn{background:#78350f;color:#fde68a}
-  .sb-badge.info{background:#1e3a8a;color:#bfdbfe}
-  #sbLast{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9ca3af}
+  .sb-badge.err{background:#fee2e2;color:#b91c1c}
+  .sb-badge.warn{background:#fef3c7;color:#b45309}
+  .sb-badge.info{background:#dbeafe;color:#1d4ed8}
+  #sbLast{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#374151}
   #sbLast.sb-flash{animation:sbflash 1.2s ease-out}
-  @keyframes sbflash{0%{background:#7f1d1d;color:#fff}100%{background:transparent}}
-  #sbToggle{flex-shrink:0;color:#9ca3af}
-  #sbPanel{display:none;max-height:38vh;overflow-y:auto;border-top:1px solid #374151}
+  @keyframes sbflash{0%{background:#fecaca;color:#7f1d1d}100%{background:transparent}}
+  #sbToggle{flex-shrink:0;color:#6b7280}
+  #sbPanel{display:none;max-height:38vh;overflow-y:auto;border-top:1px solid #e5e7eb;background:#fff}
   #sbBar.sb-open #sbPanel{display:block}
-  .sb-line{display:flex;gap:8px;padding:3px 10px;border-bottom:1px solid #1f2937;line-height:1.5}
-  .sb-line:hover{background:#1f2937}
-  .sb-t{color:#6b7280;flex-shrink:0;font-variant-numeric:tabular-nums}
+  .sb-line{display:flex;gap:8px;padding:3px 10px;border-bottom:1px solid #f3f4f6;line-height:1.5}
+  .sb-line:hover{background:#f9fafb}
+  .sb-t{color:#9ca3af;flex-shrink:0;font-variant-numeric:tabular-nums}
   .sb-lv{flex-shrink:0;font-weight:600;width:34px}
-  .sb-lv.error{color:#f87171}.sb-lv.warn{color:#fbbf24}.sb-lv.info{color:#60a5fa}.sb-lv.log{color:#9ca3af}
-  .sb-msg{flex:1;white-space:pre-wrap;word-break:break-all;color:#d1d5db}
+  .sb-lv.error{color:#dc2626}.sb-lv.warn{color:#d97706}.sb-lv.info{color:#2563eb}.sb-lv.log{color:#6b7280}
+  .sb-msg{flex:1;white-space:pre-wrap;word-break:break-all;color:#111827}
   #sbClear{margin-left:auto;flex-shrink:0;color:#9ca3af;cursor:pointer;padding:0 6px}
-  #sbClear:hover{color:#f87171}
+  #sbClear:hover{color:#dc2626}
 </style>
 </head>
 <body>
@@ -761,7 +761,7 @@
     <span id="sbToggle">▲ 日志</span>
   </div>
   <div id="sbPanel">
-    <div class="sb-line" style="background:#1f2937"><span id="sbPanelHead" style="color:#9ca3af">系统日志（错误/警告自动捕获，最新在上）</span><span id="sbClear" onclick="event.stopPropagation();sbClear()">清空</span></div>
+    <div class="sb-line" style="background:#f9fafb"><span id="sbPanelHead" style="color:#6b7280">系统日志（错误/警告自动捕获，最新在上）</span><span id="sbClear" onclick="event.stopPropagation();sbClear()">清空</span></div>
     <div id="sbList"></div>
   </div>
 </div>
