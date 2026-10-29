@@ -1071,14 +1071,18 @@ def test_match_board_strength_v2_suffix_alias_anchor():
     r1 = L.match_board_strength(payload, "机器人")
     assert r1["ok"] and r1["name"] == "机器人概念" and r1["rank"] == 1
     assert not r1["aliasUsed"]
-    # 别名（单一事实源 digest.AL IASES：AI硬件→算力），行内需可披露
+    # 别名（单一事实源 digest.ALIASES：AI硬件→算力），行内需可披露
     r2 = L.match_board_strength(payload, "AI硬件")
     assert r2["ok"] and r2["name"] == "算力" and r2["aliasUsed"]
     # 共享子串锚：算力租赁 ↔ 算力（≥2 字含汉字锚）
     r3 = L.match_board_strength(payload, "算力租赁")
     assert r3["ok"] and r3["name"] == "算力"
-    # 无文本锚（半导体 vs 芯片）→ unmatched，不猜语义
-    assert L.match_board_strength(payload, "半导体") == {"ok": False, "reason": "unmatched"}
+    # 别名（2026-10-30e 清点实证入表：KPL 一级 241 名无「半导体」，对应名
+    # 「芯片」，播报实证「芯片（存储）…长鑫科技」；韭研半导体 5 日全未匹配）
+    r4 = L.match_board_strength(payload, "半导体")
+    assert r4["ok"] and r4["name"] == "芯片" and r4["aliasUsed"]
+    # 真无对应 → unmatched 不猜语义（大消费/AI影视/数据要素/俄乌重建，KPL 一级无对应名）
+    assert L.match_board_strength(payload, "AI影视") == {"ok": False, "reason": "unmatched"}
     # 取数失败透传
     assert L.match_board_strength({"ok": False, "reason": "fetch_failed: x"},
                                   "机器人")["reason"] == "fetch_failed: x"

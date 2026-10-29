@@ -474,3 +474,4 @@ def test_board_keywords_suffix_bridge_econ_industry():
         "既有别名优先，桥补充对侧变体"
     assert D.board_keywords("消费经济") == ["消费经济"], "词干=泛词（消费）不桥，防伪造关联"
     assert D.board_keywords("机器人") == ["机器人"], "非后缀板块零变化"
+    assert D.board_keywords("半导体") == ["半导体", "芯片"], "2026-10-30e 清点实证别名"
