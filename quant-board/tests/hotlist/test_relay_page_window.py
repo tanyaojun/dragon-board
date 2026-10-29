@@ -1443,10 +1443,16 @@ def test_dieban_page_registered_like_limitup_review(html: str, js: str):
 
 
 def test_dieban_page_fail_visible_banner(js: str):
-    """读口不可用/降级/盘中口径/无数据都要在 banner 显式标注，不用空表冒充。"""
+    """读口不可用/降级/盘中口径/无数据都要显式标注，不用空表冒充。
+
+    2026-10-30 用户裁决：报错黄条页内删除，读口不可用只进底部状态栏
+    （dbRenderBanner 的 ok===false 分支改为 sbLog + 不渲染）；口径/降级说明条保留。
+    """
     banner = _fn(js, "dbRenderBanner")
-    for key in ("ok === false", "intraday", "D.degraded", "noData", "读口不可用"):
+    for key in ("ok === false", "intraday", "D.degraded", "noData"):
         assert key in banner, f"banner 缺 fail-visible 分支：{key}"
+    assert "sbLog('error', '[跌停复盘] " in banner, "读口不可用须进底部状态栏"
+    assert "banner amber" not in banner.split('const msgs')[0], "读口不可用不得再渲染页内黄条"
     render = _fn(js, "renderDieban")
     assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
     # 读口不可用 ≠ 当日无负反馈：两个空态文案必须分开（不得把读失败说成「无数据」）
@@ -1729,3 +1735,22 @@ def test_kpl_banner_only_errors_not_ok(js: str):
     """kplBanner 正常提示（kind='ok'）不上报，只上报 error/warn 路径。"""
     body = _fn(js, "kplBanner")
     assert "kind !== 'ok' && window.sbLog" in body, "ok 提示不得进错误状态栏"
+
+
+def test_error_banners_suppressed_page_side(js: str):
+    """2026-10-30 用户裁决：报错横幅页内删除，底部状态栏单一出口。
+
+    保留页内的只有：ok 正常提示、口径/降级说明条（dbRenderBanner msgs）、
+    无数据中性提示、带重试按钮的存档拉取失败卡。
+    """
+    kb = _fn(js, "kplBanner")
+    assert "if (kind !== 'ok'){ el.style.display = 'none'" in kb, "kplBanner 报错不得页内显示"
+    for fn_name, tag in (("lbBanner", "[连板行情]"), ("kplDabanBanner", "[涨停复盘]"),
+                         ("kplLhbBanner", "[龙虎榜]"), ("kplLiveBanner", "[直播]")):
+        body = _fn(js, fn_name)
+        assert "sbLog(" in body and tag in body, f"{fn_name} 须上报状态栏"
+        assert "lf-warn" not in body and "✘" not in body, f"{fn_name} 不得再渲染报错横幅"
+    tl = _fn(js, "tlRenderBanner")
+    assert "题材龙头读口异常：" not in tl and "后台刷新失败（" not in tl, "tl 黄条须删除"
+    pulse = _fn(js, "pulseRender")
+    assert "读口异常：" not in pulse and "读口降级：" not in pulse, "pulse 黄条须删除"

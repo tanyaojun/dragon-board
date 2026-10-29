@@ -2366,12 +2366,10 @@ function renderNodes(){
   const head = $('nodesHead'); if (!head) return;
   const d = STATE.nodesData || {};
   const doc = d.doc;
-  const bgErr = d.error && doc
-    ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据</div>' : '';
-  if (bgErr && window.sbLog) sbLog('warn', '[板块节点] 后台刷新失败：' + d.error);
+  if (d.error && doc && window.sbLog) sbLog('warn', '[板块节点] 后台刷新失败：' + d.error);
   if (d.error && !doc){
-    head.innerHTML = '<div class="lf-warn">⚠️ 板块节点读口异常：' + esc(d.error)  + '</div>';
     if (window.sbLog) sbLog('error', '[板块节点] ' + d.error);
+    head.innerHTML = '';   // 2026-10-30 用户裁决：报错横幅删除，读口异常只进底部状态栏
     $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
     return;
   }
@@ -2380,9 +2378,9 @@ function renderNodes(){
     $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
     return;
   }
-  const warns = [];
-  if (doc.status === 'degraded') warns.push('⚠️ 当日降级：' + esc((doc.degraded || []).join('；') || '原因未记录'));
-  head.innerHTML = bgErr + (warns.length ? '<div class="lf-warn">' + warns.join('<br>') + '</div>' : '');
+  if (doc.status === 'degraded' && window.sbLog)
+    sbLog('warn', '[板块节点] 当日降级：' + ((doc.degraded || []).join('；') || '原因未记录'));
+  head.innerHTML = '';   // 2026-10-30 用户裁决：报错/降级黄条删除，状态栏单一出口
   const f = STATE.nodesUi;
   let rows = (doc.rows || []).slice();
   const dist = {};
@@ -2574,11 +2572,13 @@ function pulseRender(){
     box.innerHTML = '<div class="hint">盘中红盘提示加载中…</div>'; return;
   }
   if (d.error && !d.api){
-    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口异常：' + esc(d.error)  + '</div>'; if (window.sbLog) sbLog('error', '[盘中红盘] ' + d.error); return;
+    if (window.sbLog) sbLog('error', '[盘中红盘] ' + d.error);
+    box.innerHTML = '<div class="hint">盘中红盘读口异常，详见底部状态栏</div>'; return;   // 2026-10-30：报错黄条删除，中性提示
   }
   const r = d.api || {};
   if (r.ok === false){
-    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口降级：' + esc(r.reason || '未知原因') + '</div>'; if (window.sbLog) sbLog('warn', '[盘中红盘] ' + (r.reason || '未知原因')); return;
+    if (window.sbLog) sbLog('warn', '[盘中红盘] ' + (r.reason || '未知原因'));
+    box.innerHTML = '<div class="hint">盘中红盘读口降级，详见底部状态栏</div>'; return;
   }
   const stage = r.evidenceStageCN || '';
   const meta = r.meta || {};
@@ -2590,10 +2590,10 @@ function pulseRender(){
     + '<span class="chip' + (STATE.pulse.view === 'all' ? ' on' : '') + '" onclick="pulseSetView(\'all\')">全板块</span>'
     + `<button onclick="pulseFetch()">刷新</button></div>`;
   const warn = [];
-  if (meta.reason) warn.push('⚠️ ' + esc(meta.reason) + '（读数可能不可考）');
-  if (d.error) warn.push('⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据');
+  if (meta.reason && window.sbLog) sbLog('warn', '[盘中红盘] ' + meta.reason + '（读数可能不可考）');
+  if (d.error && window.sbLog) sbLog('warn', '[盘中红盘] 后台刷新失败：' + d.error + '（展示上次成功数据）');
   if (r.source === 'stored'){
-    if (!r.doc){ warn.push('该日无收盘帧（15:05 后无请求 / 非交易日 / 早于 V2c 投产日）'); }
+    if (!r.doc){ warn.push('该日无收盘帧（15:05 后无请求 / 非交易日 / 早于 V2c 投产日）'); }   // 无数据中性提示保留页内
   }
   const note = '成员=昨日封窗 N10 并集，今日新涨停未含（16:20 正式判档归位）；'
     + '提示 chip=聚合涨幅>0 且红盘率≥50%（不进节点判定，收盘以 16:20 链为准）'
@@ -2645,23 +2645,20 @@ function tlRenderBanner(){
   const d = STATE.tlData;
   if (!d){ el.innerHTML = ''; return; }
   if (d.error && !(d.rows || []).length){
-    el.innerHTML = '<div class="lf-warn">⚠️ 题材龙头读口异常：' + esc(d.error)
-      + '（非「区间内无投喂」）</div>';
     if (window.sbLog) sbLog('error', '[题材龙头] ' + d.error);
+    el.innerHTML = '';   // 2026-10-30 用户裁决：报错横幅删除，读口异常只进底部状态栏
     return;
   }
-  // 后台静默刷新失败 + 旧数据仍可见（§4.0）：错误必须有出口，不得伪装成正常数据
-  const bgErr = d.error && (d.rows || []).length
-    ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error)
-      + '）——当前展示的是上次成功数据</div>' : '';
-  if (bgErr && window.sbLog) sbLog('warn', '[题材龙头] 后台刷新失败：' + d.error + '（展示上次成功数据）');
+  // 后台静默刷新失败 + 旧数据仍可见（§4.0）：出口=底部状态栏（页内黄条已删，2026-10-30）
+  if (d.error && (d.rows || []).length && window.sbLog)
+    sbLog('warn', '[题材龙头] 后台刷新失败：' + d.error + '（展示上次成功数据）');
   const doc = d.doc || {};
   if (doc.no_data){ el.innerHTML = '<div class="lf-warn">区间内无题材龙头投喂记录'
     + '（16:20 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
   // 多代际警示已结项（用户 2026-10-22 裁决）：v1/v2/v3 历史档不回改是设计内常态，
   // 行级版本徽章已可见，长期挂黄牌无增量信息。样本来源警示横幅同步下线
   //（2026-10-26 用户裁决：来源语义在「来源」筛选与明细卡页脚已可考，横幅常驻属视觉噪音）。
-  el.innerHTML = bgErr || '';
+  el.innerHTML = '';
 }
 
 // 板块分布 chips（.board-row .k + .chip；超 10 类折叠「其他 N 类」；同涨停复盘）
@@ -3417,8 +3414,8 @@ function dbRenderBanner(D){
   const host = $('diebanBanner');
   if (!host) return;
   if (!D || D.ok === false){
-    host.innerHTML = `<div class="banner amber"><span>⚠️</span><span>跌停复盘读口不可用：${esc((D && D.reason) || '未知原因')}（不展示空页冒充无数据）</span></div>`;
     if (window.sbLog) sbLog('error', '[跌停复盘] ' + ((D && D.reason) || '未知原因'));
+    host.innerHTML = '';   // 2026-10-30 用户裁决：读口不可用横幅删除，状态栏单一出口
     return;
   }
   const msgs = [];
@@ -3939,8 +3936,8 @@ function lbPill(txt, cls){ const p = $('lbPill'); if (!p) return;
   p.innerHTML = '<span class="dot"></span>' + esc(txt); }
 function lbBanner(msg){ const b = $('lbBanner'); if (!b) return;
   if (!msg){ b.style.display = 'none'; return; }
-  b.style.display = ''; b.textContent = msg;
-  if (window.sbLog) sbLog('error', '[连板行情] ' + msg); }
+  if (window.sbLog) sbLog('error', '[连板行情] ' + msg);
+  b.style.display = 'none'; }   // 2026-10-30 用户裁决：报错横幅删除，只进状态栏
 async function lbLoad(){
   if (LB.loading) return;
   LB.loading = true;
@@ -4769,12 +4766,13 @@ function kplBanner(msg, kind, sticky){
   if (msg && sticky) KPL.sticky = msg;              // sticky：引导失败等必须存续到解除为止
   if (!msg && KPL.sticky){ msg = KPL.sticky; kind = ''; }
   if (!msg){ el.style.display = 'none'; el.dataset.msg = ''; return; }
+  if (kind !== 'ok' && window.sbLog) sbLog('error', '[板块行情] ' + msg);   // 连接/服务端报错进底部状态栏
+  if (kind !== 'ok'){ el.style.display = 'none'; el.dataset.msg = ''; return; }   // 2026-10-30 用户裁决：报错横幅删除，状态栏单一出口（ok 提示仍页内显示）
   el.style.display = ''; el.dataset.msg = msg;
-  el.textContent = (kind === 'ok' ? '✔ ' : '✘ ') + msg;
-  el.style.background = kind === 'ok' ? 'var(--green-bg)' : 'var(--amber-bg)';
-  el.style.color = kind === 'ok' ? 'var(--green)' : 'var(--amber)';
-  el.style.borderColor = kind === 'ok' ? '#bbf7d0' : '#fde68a';
-  if (kind !== 'ok' && window.sbLog) sbLog('error', '[板块行情] ' + msg);   // 连接/服务端报错进底部状态栏（2026-10-30）
+  el.textContent = '✔ ' + msg;
+  el.style.background = 'var(--green-bg)';
+  el.style.color = 'var(--green)';
+  el.style.borderColor = '#bbf7d0';
 }
 function kplSetWsPill(state){
   const p = $('kplWsPill');
@@ -5277,8 +5275,8 @@ const LIVE_SRCS = {
 function kplLiveBanner(msg){
   const el = $('kplLiveBanner');
   if (!msg){ el.style.display = 'none'; el.textContent = ''; return; }
-  el.style.display = ''; el.textContent = msg;
   if (window.sbLog) sbLog('warn', '[直播] ' + msg);   // meta 读取失败/VoiceWorker 未运行等可用性警告
+  el.style.display = 'none'; el.textContent = '';   // 2026-10-30 用户裁决：报错横幅删除，只进状态栏
 }
 function kplLiveEnter(){
   const host = $('kplLiveStream');
@@ -5774,8 +5772,9 @@ function kplDabanBackToLive(view){
 function kplDabanBanner(view, msg){
   const el = $(DABAN_PAGES[view].p + 'Banner');
   if (!msg){ el.style.display = 'none'; return; }
-  el.style.display = ''; el.textContent = '✘ ' + msg;
-  if (window.sbLog) sbLog('error', '[涨停复盘] ' + msg); }
+  if (window.sbLog) sbLog('error', '[涨停复盘] ' + msg);
+  el.style.display = 'none';   // 2026-10-30 用户裁决：报错横幅删除，只进状态栏
+}
 
 // ════ 龙虎榜页签（2026-10-29 三期：2112 预测 + 3004 实时 + HisBeOnTheLHB 历史）════
 // fail-visible：降级读口把 reason 透出到 banner；缺字段/无数据渲染 '--'，不伪装 0/空。
@@ -5783,8 +5782,8 @@ function kplDabanBanner(view, msg){
 function kplLhbBanner(elId, msg){
   const el = $(elId);
   if (!msg){ el.style.display = 'none'; return; }
-  el.style.display = ''; el.textContent = msg;
-  if (window.sbLog) sbLog('warn', '[龙虎榜] ' + msg);   // 降级 reason 透出同步进状态栏
+  if (window.sbLog) sbLog('warn', '[龙虎榜] ' + msg);   // 降级 reason 透出（页内横幅已删，状态栏单一出口）
+  el.style.display = 'none';
 }
 function kplFmtYi(v){                     // 元 → 亿（只接受纯数值串，防「3.5亿」类预格式化串被前缀解析成错量级）
   const s = String(v);
