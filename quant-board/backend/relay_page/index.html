@@ -597,8 +597,7 @@
       <div class="flex" style="margin-bottom:10px">
         <span class="pill" id="kplWsPill"><span class="dot"></span>WS 未连接</span>
         <span class="pill" id="kplColPill"><span class="dot"></span>采集未运行</span>
-        <button onclick="kplStartCollect()">启动采集</button>
-        <button onclick="kplStopCollect()">停止采集</button>
+        <button onclick="kplToggleCollect()" id="kplColBtn">启动采集</button>
         <span class="kpl-sub kpl-uni" id="kplStats"></span>
         <span style="flex:1"></span>
         <input type="date" id="kplDate" onchange="kplDateChange()">
@@ -4815,6 +4814,9 @@ function kplUpdateColPill(){
   const run = KPL.status.running;
   p.className = 'pill ' + (run ? 'ok' : run === false ? 'bad' : '');
   p.innerHTML = `<span class="dot"></span>采集${run === true ? '运行中' : run === false ? '未运行' : '状态未知'}`;
+  // 2026-10-30：启动/停止合并为单切换按钮，标签永远指向下一步动作
+  const btn = $('kplColBtn');
+  if (btn) btn.textContent = run === true ? '停止采集' : '启动采集';
 }
 function kplUpdateStats(){
   $('kplStats').textContent =
@@ -5654,6 +5656,10 @@ async function kplStopCollect(){
   try { const r = await jpost(KPL_API + '/stop', {}); KPL.status.running = !!r.running; }
   catch (e){ kplBanner('停止采集失败：' + (e.message || e)); }
   kplUpdateColPill();
+}
+async function kplToggleCollect(){   // 2026-10-30：启动/停止合并为单按钮，点击切换
+  if (KPL.status.running) await kplStopCollect();
+  else await kplStartCollect();
 }
 function kplViewEnter(){
   const d = new Date();
