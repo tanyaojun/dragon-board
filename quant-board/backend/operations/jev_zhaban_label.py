@@ -205,9 +205,9 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
         ths_txt = (f"昨日身位（THS 连板梯队）：{core}"
                    f"（梯队 {ths_prev.get('ladder') or '?'} · 首封 {ths_prev.get('firstSeal') or '?'}）")
     elif prev_dates:
-        ths_txt = "昨日身位（THS 连板梯队）：未收录（昨日未涨停或 THS 池缺口，fail-visible）"
+        ths_txt = "昨日身位（THS 连板梯队）：未收录"
     else:
-        ths_txt = "昨日身位（THS 连板梯队）：上一交易日不可考（fail-visible）"
+        ths_txt = "昨日身位（THS 连板梯队）：上一交易日不可考"
     # 板序（①近 10 日 ○● 涨停轨迹，TDX 同源）
     try:
         seq_txt = _limitup_sequence_line(date, code, name, 10)
@@ -222,10 +222,10 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
                    f"其中今日炸板 {board_zhaban} 家、板块内最高板 {sec['board_max']} 板；"
                    f"全市场今日触板 {sec['pool_total']} 家、炸板 {len(zhaban_items)} 家")
     else:
-        sec_txt = (f"板块语境：韭研触板池未收录该股（板块不可考）；"
+        sec_txt = (f"板块语境：该股板块不可考；"
                    f"全市场今日触板 {sec['pool_total']} 家、炸板 {len(zhaban_items)} 家")
     # 大盘（③15:00 帧 indices 现成；帧缺 → 指数日线重算，见 _sh_index_change_pct）
-    idx_txt = "大盘：不可考（15:00 帧与指数日线皆缺，fail-visible）"
+    idx_txt = "大盘：不可考"
     fr = db["snapshot_frames"].find_one(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
         {"indices.sh": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
@@ -233,18 +233,18 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
     pct = sh.get("changePct")
     change = sh.get("change")
     if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-        idx_txt = f"大盘：上证今日 {pct:+.2f}%（15:00 帧）"
+        idx_txt = f"大盘：上证今日 {pct:+.2f}%"
     elif isinstance(change, (int, float)) and not isinstance(change, bool):
         # 存量帧只落 change=涨跌额（点位）：按 % 呈现即伪造暴跌（2026-10-16 单位错位排查，
         # 10-12 两只 label 因「上证 -19.19%」假暴跌误判 broad_market，真实约 -0.5%）。
         # fail-visible：点位是真实可观测数据不丢弃，带单位呈现（对齐情绪链证据行「点」口径），
         # 缺的涨跌幅明示缺失，由模型按 conditional 判据自行裁量
-        idx_txt = f"大盘：上证今日 {change:+.2f} 点（涨跌幅缺失，点位口径）"
+        idx_txt = f"大盘：上证今日 {change:+.2f} 点"
     else:
         # 帧无 indices：用指数日线重算（2026-10-20 补数，历史 84.5% 的「不可考」由此可修）
         pct2, src = _sh_index_change_pct(db, date, dataset_id)
         if isinstance(pct2, (int, float)) and not isinstance(pct2, bool):
-            idx_txt = f"大盘：上证今日 {pct2:+.2f}%（{src}）"
+            idx_txt = f"大盘：上证今日 {pct2:+.2f}%"
 
     return (f"{date} 交易日 · 炸板股归因（个股单题）\n"
             f"个股：{name}({code})\n{traj_txt}\n{pos_txt_full}\n{ths_txt}\n{seq_txt}\n{sec_txt}\n{idx_txt}")

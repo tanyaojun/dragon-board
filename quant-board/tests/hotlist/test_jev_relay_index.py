@@ -227,7 +227,7 @@ def test_three_day_chain_line_promo_comparison_no_fake_zero():
                                   _final(_D0, _STOCKS[_D0])]),
     })
     line = three_day_chain_line(db, _D0)
-    assert "边际对比：不可算（昨日涨停池为空）" in line
+    assert "边际对比：不可算" in line, "2026-10-30g+：括号删"
     assert "昨日池今日晋级率 0.0%" not in line  # 伪 0 红线
 
 
@@ -249,7 +249,7 @@ def test_relay_flow_line_with_tdx(monkeypatch):
     assert "大面(≤-5%) 1 只" not in line and "-10.0%" not in line
     assert "隔日溢价样本 2 只：样本不足" in line
     # 昨日断板（600002/600003）无 TDX 日线 → 对比写不可算，不得伪 0（fail-visible）
-    assert "较昨日断板：不可算（昨日 TDX 日线缺失）" in line
+    assert "较昨日断板：不可算" in line, "2026-10-30g+：括号删"
 
 
 def test_relay_flow_line_broken_yesterday_comparison(monkeypatch):
@@ -293,7 +293,7 @@ def test_relay_flow_line_broken_yesterday_no_prev_day(monkeypatch):
         "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
     })
     line = relay_flow_line(db, _D0)
-    assert "较昨日断板：不可算（无前日交易日）" in line
+    assert "较昨日断板：不可算" in line, "2026-10-30g+：括号删"
 
 
 def test_zhaban_face_prev_pool_missing_no_fake_zero():
@@ -304,7 +304,7 @@ def test_zhaban_face_prev_pool_missing_no_fake_zero():
     })
     line = zhaban_face_line(db, _D0)
     assert "今日炸板面：炸板 1 家" in line
-    assert "昨日池股炸板：不可算（昨日韭研池缺失）" in line
+    assert "昨日池股炸板：不可算" in line, "2026-10-30g+：括号删"
     assert "昨日池股今日炸 0 家" not in line  # 伪 0 红线
 
 
@@ -331,10 +331,10 @@ def test_zhaban_face_line_yesterday_frame_missing_no_fake():
         "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
     })
     line = zhaban_face_line(db, _D0)
-    assert "较昨日：不可算（昨日 THS 炸板池缺失/降级）" in line
+    assert "较昨日：不可算" in line, "2026-10-30g+：括号删"
     assert "较昨日：炸板 0→" not in line  # 伪 0 红线
     # 历史不足 5 日 → 反复开板分位同写不可算，不伪 P0
-    assert "（历史反复开板数据不足 5 日，无分位参照）" in line
+    assert "（样本不足）" in line, "2026-10-30g+：括号精简"
 
 
 def _frame_full(date, failed=None, rushing=None, seal_quality=None):
@@ -387,7 +387,7 @@ def test_zhaban_face_rushing_pool_missing_no_fake_zero():
         "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
     })
     line = zhaban_face_line(db, _D0)
-    assert "冲刺未封 不可算（THS 冲刺池缺失/降级）" in line
+    assert "冲刺未封 不可算" in line, "2026-10-30g+：括号删"
     assert "冲刺未封 0 家" not in line  # 伪 0 红线
 
 
@@ -397,7 +397,7 @@ def test_zhaban_face_rotten_missing_no_fake_zero():
     db = FakeDb({"snapshot_frames": FakeCol([frame]),
                  "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])])})
     line = zhaban_face_line(db, _D0)
-    assert "涨停池烂板 不可算（sealQuality 缺失）" in line
+    assert "涨停池烂板 不可算" in line, "2026-10-30g+：括号删"
     assert "烂板（开板≥2次回封）0 家" not in line
 
 
@@ -432,7 +432,7 @@ def test_relay_flow_line_sealed_bisect(monkeypatch):
         "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, d0_touch)]),
     })
     line = relay_flow_line(db, _D0)
-    assert "昨日 2 只涨停（触板二分口径） → 今日仍涨停 1 只（晋级率 50.0%）" in line
+    assert "昨日 2 只涨停 → 今日仍涨停 1 只（晋级率 50.0%）" in line, "2026-10-30g+：口径注删"
     # v5（F4 门槛）：断板覆盖 1/1 < 5 只 → 写样本不足，不输出 -10.0% 伪精度中位
     assert "断板 1 只：样本不足（TDX 覆盖 1/1，门槛 ≥5 只且 ≥20%），不可作钱效依据" in line
     assert "触板口径降级" not in line  # 两日 THS 池齐备，无降级注记
@@ -578,29 +578,15 @@ def test_ths_sealed_codes_requires_every_pool_ok():
     assert relay._ths_sealed_codes(bad, _D0, "dragonboard_live") is None
 
 
-def test_zt_caliber_note_names_both_directions():
-    """「两口径一致」只在双向差集皆空时成立；反向差集（THS 有、二分无）也要点名。
-
-    旧实现只查 `bisect - ths`：韭研 final 漏收日会输出「同花顺涨停池 40 只，两口径一致」
-    紧跟一个 36 的家数——同一句里自相矛盾。
-    """
+def test_zt_caliber_note_removed_20261030g():
+    """2026-10-30g+（用户裁决）：口径对账注整行删，叙事只留行情数字。"""
     pool = {"600001": {"name": "A"}, "600003": {"name": "C"}}
     db = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(_D0, {"one": ["600001"]})])})
-    # 二分多出 600003：点名 + 不代断成因（实证那批是 THS 剔除 ST/北交所，非触板未封）
-    note = relay._zt_caliber_note(db, _D0, "dragonboard_live", {"600001", "600003"}, pool)
-    assert "二分多出 1 只（C，触板未封/新股/THS池剔除需个股核）" in note
-    assert "触板未封/新股：" not in note      # 不写死单一成因
-    assert "两口径一致" not in note
-    # THS 多出 600002：韭研 final 漏收，必须披露而不是宣称一致
+    assert relay._zt_caliber_note(db, _D0, "dragonboard_live", {"600001", "600003"}, pool) == ""
     db2 = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(
         _D0, {"one": ["600001"], "two": ["600002"]})])})
-    note2 = relay._zt_caliber_note(db2, _D0, "dragonboard_live", {"600001"}, pool)
-    assert "THS 多出 1 只（韭研 final 漏收，二分口径漏计）" in note2
-    assert "两口径一致" not in note2
-    # 双向皆空才叫一致
-    db3 = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(_D0, {"one": ["600001"]})])})
-    assert "两口径一致" in relay._zt_caliber_note(db3, _D0, "dragonboard_live",
-                                                  {"600001"}, pool)
+    assert relay._zt_caliber_note(db2, _D0, "dragonboard_live", {"600001"}, pool) == ""
+
 
 
 def test_theme_evolution_line_carries_true_streak():
@@ -656,7 +642,7 @@ def test_zhaban_face_rotten_share_none_does_not_crash():
     db = FakeDb({"snapshot_frames": FakeCol([_frame_full(_D0, failed=["600001"], seal_quality=sq)]),
                  "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])])})
     line = zhaban_face_line(db, _D0)
-    assert "涨停池烂板（开板≥2次回封）0 家（占比不可算：sealQuality 样本为空，fail-visible）" in line
+    assert "涨停池烂板（开板≥2次回封）0 家（占比不可算）" in line, "2026-10-30g+：括号删"
 
 
 def test_relay_flow_unlayered_streaks_disclosed():
@@ -686,7 +672,7 @@ def test_narrative_context_anchor_maxboard_uncomputable():
     db = FakeDb({"snapshot_frames": _frames(dates, ths_missing=set(dates)),
                  "jiuyan_action": FakeCol([_final(dates[-1], _STOCKS[_D0])])})
     lines = relay.anchor_lines(db, dates[-1])
-    assert any("最高板峰值 不可算（窗口内无真连板高度，fail-visible）" in x for x in lines)
+    assert any("最高板峰值 不可算" in x for x in lines), "2026-10-30g+：括号删"
     assert any("涨停峰值" in x for x in lines)
 
 
@@ -825,7 +811,7 @@ def test_high_position_trajectory_lines_tdx_unavailable(monkeypatch):
                  "jiuyan_action": FakeCol([_final(_D0, [{"code": "600001", "name": "高标",
                                                           "num": "5天5板"}])])})
     lines = high_position_trajectory_lines(db, _D0)
-    assert lines == ["高位股多日轨迹：TDX 日线不可用（fail-visible）"]
+    assert lines == ["高位股多日轨迹：日线不可用"], "2026-10-30g+：源名删"
 
 
 # ── v5 IE 读口径修复（预注册 jev-relay-ie-fix-preregistration.md）────────────────
@@ -859,11 +845,12 @@ def test_zhaban_face_old_schema_count_fallback():
     """
     db = FakeDb({"snapshot_frames": FakeCol([_old_schema_frame(_D0)])})
     line = zhaban_face_line(db, _D0)
-    assert "家数口径·旧采集 schema" in line
+    assert "今日炸板面：炸板 17 家" in line, "2026-10-30g+：schema 注删"
     assert "炸板 17 家" in line and "冲刺未封 14 家" in line and "涨停股回撤榜 9 家" in line
     assert "最大回撤 -15.59%" in line and "均值 -11.41%" in line
-    assert "个股级子项不可算" in line and "不可算（无昨日交易日）" in line
-    assert "分位不可算" in line
+    assert "反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算" in line
+    assert "较昨日：不可算" in line and "分位 不可算" in line, "2026-10-30g+：照渲染文本"
+    pass
 
 
 def test_zhaban_face_old_schema_prev_new_schema_count_delta():
@@ -874,7 +861,7 @@ def test_zhaban_face_old_schema_prev_new_schema_count_delta():
     ])})
     line = zhaban_face_line(db, _D0)
     assert "较昨日：炸板 22→17 家（-5）" in line
-    assert "反复开板 不可算（个股级缺）" in line
+    assert "反复开板 不可算" in line, "2026-10-30g+：括号删"
 
 
 def test_zhaban_face_old_schema_prev_old_schema_count_delta():
@@ -890,7 +877,7 @@ def test_zhaban_face_old_schema_prev_old_schema_count_delta():
 def test_zhaban_face_no_frame_still_fail_visible():
     """无 15:00 帧（连家数都没有）→ 仍如实写不可算，不得伪造家数。"""
     db = FakeDb({"snapshot_frames": FakeCol([])})
-    assert zhaban_face_line(db, _D0) == "今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）"
+    assert zhaban_face_line(db, _D0) == "今日炸板面：不可算", "2026-10-30g+：括号删"
 
 
 def test_ladder_line_falls_back_to_jiuyan_without_frame():
@@ -910,7 +897,7 @@ def test_ladder_line_falls_back_to_jiuyan_without_frame():
     line = ladder_structure_line(db, _D0)
     assert "梯队数据缺失" not in line
     assert "首板占比" in line and "二板 1 只" in line and "三板+ 1 只" in line
-    assert "THS炸板池缺失，梯队按触板口径" in line
+    assert "THS炸板池缺失" not in line, "2026-10-30g+：口径注删"
 
 
 def test_tdx_sample_gate_thresholds():
@@ -935,14 +922,14 @@ def test_relay_flow_drops_pseudo_precision_median(monkeypatch):
 
 @pytest.mark.parametrize("text,expected", [
     ("", []),
-    ("今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）", ["炸板面"]),
-    ("今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）：炸板 17 家；较昨日：不可算（无昨日交易日）",
+    ("今日炸板面：不可算", ["炸板面"]),
+    ("今日炸板面：炸板 17 家；较昨日：不可算；反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算；分位 不可算",
      []),                                  # 家数级降级：主锚在（家数可算）→ 不进主锚清单
     ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", []),
-    ("梯队结构量化：梯队数据缺失（fail-visible）", ["梯队"]),
-    ("题材梯队表：韭研 final 缺失（fail-visible）", ["题材梯队表"]),
+    ("梯队结构量化：梯队数据缺失", ["梯队"]),
+    ("题材梯队表：韭研 final 缺失", ["题材梯队表"]),
     ("2026-05-06 交易日\n题材梯队表（top5）：· 板块A：龙一 X｜昨日 1 只", []),
-    ("盘面事实：2026-07-06 盘面指标缺失（fail-visible）", ["盘面事实"]),
+    ("盘面事实：2026-07-06 盘面指标缺失", ["盘面事实"]),
 ])
 def test_anchor_gaps_marks_only_whole_anchor_loss(text, expected):
     """F2 主锚层（2026-10-18 分层）：只标「整根锚不可用」，派生项一律不入主锚清单。"""
@@ -951,13 +938,13 @@ def test_anchor_gaps_marks_only_whole_anchor_loss(text, expected):
 
 @pytest.mark.parametrize("text,expected", [
     ("", []),
-    ("今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）", []),      # 整段缺 → 归主锚
-    ("今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）：炸板 17 家；较昨日：不可算（无昨日交易日）",
+    ("今日炸板面：不可算", []),      # 整段缺 → 归主锚
+    ("今日炸板面：炸板 17 家；较昨日：不可算；反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算；分位 不可算",
      ["炸板面个股级", "炸板面对比"]),
     ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", ["断板钱效"]),
-    ("断板 24 只：今日表现不可算（TDX 日线缺失）", ["断板钱效"]),
-    ("三日晋级链：2026-04-29/2026-04-30 韭研 final 缺失（fail-visible）", ["晋级链前池"]),
-    ("题材梯队表：韭研 final 缺失（fail-visible）", []),      # 整表缺 → 主锚，不在子项
+    ("断板 24 只：今日表现不可算", ["断板钱效"]),
+    ("三日晋级链：2026-04-29/2026-04-30 韭研 final 缺失", ["晋级链前池"]),
+    ("题材梯队表：韭研 final 缺失", []),      # 整表缺 → 主锚，不在子项
     ("盘面事实：2026-07-06 盘面指标缺失（fail-visible）", []),
 ])
 def test_anchor_gaps_derived_marks_subitem_loss(text, expected):
@@ -1029,7 +1016,7 @@ def test_relay_flow_line_today_bars_missing_not_fake_coverage(monkeypatch):
                                   _final(_D0, _STOCKS[_D0])]),
     })
     line = relay_flow_line(db, _D0)
-    assert "今日 TDX 日线缺失" in line, f"未如实归因：{line}"
+    assert "今日表现不可算" in line, f"未如实归因（2026-10-30g+ 归因括号删）：{line}"
     assert "覆盖 0/" not in line, f"把「无日线」渲染成「覆盖 0/N」（伪 0）：{line}"
 
 
@@ -1148,8 +1135,7 @@ def test_relay_structure_mainline_degrades_when_no_survivor():
     struct = relay.relay_structure(db, _D0)
     assert struct["mainline"]["name"] == "乙板块"
     assert struct["mainline"]["basis"] == "d0_count"
-    assert any("今日板块涨停家数" in x and x.startswith("主线板块：")
-               for x in relay.sector_relay_lines(struct))
+    assert any(x.startswith("主线板块：乙板块") for x in relay.sector_relay_lines(struct)),         "2026-10-30g+：依据注删，basis 字段仍为 d0_count"
 
 
 def test_relay_structure_missing_history_is_fail_visible():
@@ -1174,7 +1160,7 @@ def test_relay_structure_missing_history_is_fail_visible():
     # 依据文案不得声称「均为零」（那是把缺料读成事实）
     assert "chain_na" == struct["mainline"]["basis"]
     main_line = next(x for x in lines if x.startswith("主线板块："))
-    assert "三日链不可算" in main_line and "均为真零" not in main_line
+    assert main_line.startswith("主线板块：乙板块") and "三日链不可算" not in main_line, "2026-10-30g+：依据注删"
     assert struct["mainline"]["survivors"] is None
     assert anchor_gaps_derived("\n".join(lines)) == ["板块接力链"]
 
@@ -1197,8 +1183,7 @@ def test_relay_structure_mainline_degrades_when_chain_ok_and_truly_zero():
     assert struct["mainline"]["basis"] == "d0_count"
     row = next(x for x in relay.sector_relay_lines(struct) if x.startswith("· 甲板块"))
     assert "三日存活 0 只" in row and "今日晋级 0 只" in row
-    assert any("均为真零" in x and x.startswith("主线板块：")
-               for x in relay.sector_relay_lines(struct))
+    assert any(x.startswith("主线板块：甲板块") for x in relay.sector_relay_lines(struct)),         "2026-10-30g+：依据注删，basis 字段仍为 d0_count"
 
 
 def test_relay_structure_leader_same_stock():
@@ -1309,7 +1294,7 @@ def test_leader_genesis_before_pool_history_blames_raw_material(monkeypatch):
     })
     gen = relay.relay_structure(db, _D0)["genesis"]
     assert gen["firstBoardDate"] == d4 and gen["tradingDaysAgo"] == 4
-    assert "早于韭研池史起点" in gen["degraded"] and d1 in gen["degraded"]
+    assert "早于韭研池史起点" in gen["degraded"], "2026-10-30g+：edge 日期注删"
     assert "口径不一致" not in gen["degraded"]
     assert "不在韭研池" not in gen["degraded"]
 
@@ -1329,7 +1314,7 @@ def test_leader_genesis_absent_within_pool_history(monkeypatch):
     })
     gen = relay.relay_structure(db, _D0)["genesis"]
     assert gen["firstBoardDate"] == d4
-    assert "不在韭研池" in gen["degraded"] and "停牌" in gen["degraded"]
+    assert "不在韭研池" in gen["degraded"], "2026-10-30g+：成因注删"
     assert "早于韭研池史起点" not in gen["degraded"]
     assert "口径不一致" not in gen["degraded"]
 
@@ -1396,7 +1381,7 @@ def test_relay_structure_pseudo_board_never_becomes_mainline():
     assert struct["mainline"]["name"] == "半导体"
     assert struct["mainline"]["pseudoExcluded"] == "其他"
     text = "\n".join(relay.sector_relay_lines(struct))
-    assert "泛板块「其他」" in text and "已排除" in text
+    assert struct["mainline"]["pseudoExcluded"] == "其他", "2026-10-30g+：排除注删，字段保留"
     assert "（泛板块）" in text
 
 
@@ -1540,7 +1525,7 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     struct = doc["relayStructure"]
     assert struct["mainline"]["name"] == "甲板块"
     narrative = doc["narrative"]
-    assert "板块接力链（三日" in narrative and "龙头结构（" in narrative
+    assert "板块接力链（三日" in narrative and "龙头结构：" in narrative, "2026-10-30g+：定义注删"
     assert f"主线板块：{struct['mainline']['name']}" in narrative
     assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
     assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
@@ -1586,7 +1571,7 @@ def test_market_index_line_old_frame_degrades_to_four():
     db = FakeDb({"snapshot_frames": FakeCol([_frame_indices(_D0, idx)])})
     line = relay.market_index_line(db, _D0)
     assert "上证 -0.35%" in line and "沪深300 -0.21%" in line
-    assert "深证成指/创业板指/科创50 该日未采集" in line
+    assert "该日未采集" in line, "2026-10-30g+：括号精简"
     assert "-0.38%" not in line and "-1.56%" not in line
 
 
@@ -1596,7 +1581,7 @@ def test_market_index_line_point_only_degrades():
            "indexExtra": {"szcz": {"change": -40.2}}}
     db = FakeDb({"snapshot_frames": FakeCol([_frame_indices(_D0, idx)])})
     line = relay.market_index_line(db, _D0)
-    assert "上证 -12.30点（点位口径）" in line and "深证成指 -40.20点（点位口径）" in line
+    assert "上证 -12.30点" in line and "深证成指 -40.20点" in line, "2026-10-30g+：口径注删"
     assert "% ｜" not in line
 
 
@@ -1733,7 +1718,7 @@ def test_theme_evidence_lines_top3_boards():
     })
     lines = relay.theme_evidence_lines(db, _D0)
     text = "\n".join(lines)
-    assert "题材证据（韭研产业树+开盘啦事件层" in lines[0] and "top3" in lines[0]
+    assert "题材证据（top3 板块" in lines[0], "2026-10-30g+：源名删"
     assert "取数日 2026-09-30" in lines[0]
     assert "板块级催化原文（「机器人」" in text, "2026-10-30f：来源名删（与 theme-leader 链同源）"
     assert "当日题材事件：" in text and "英伟达GTC大会" in text, "2026-10-30g：括号注删"
@@ -1769,7 +1754,7 @@ def test_sector_lines_sustain_baseline_streak_unknown():
     struct["mainline"]["sustain"]["streak"] = None
     lines = relay.sector_relay_lines(struct)
     line = next(l for l in lines if "同桶隔日连板基线" in l)
-    assert "桶不可定位（真连板不可算）" in line and "总体 34.3%" in line
+    assert "桶不可定位" in line and "总体 34.3%" in line, "2026-10-30g+：括号删"
     assert "62.5%" not in line
 
 

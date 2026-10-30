@@ -214,8 +214,8 @@ def test_midday_position_uses_t1_close_caliber(monkeypatch):
     monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
     monkeypatch.setattr(runner, "_intraday_bars", lambda code: [])
     text = build_midday_narrative(db, DATE, "603278", stock, "机器人", None, jiuyan_doc=jy_doc)
-    assert "个股位置：上一交易日（2026-10-19）收盘口径" in text
-    assert "板序：上一交易日（2026-10-19）收盘口径 · 近 " in text
+    assert "个股位置：上一交易日（2026-10-19）·" in text, "2026-10-30g+：口径词删"
+    assert "板序：上一交易日（2026-10-19）· 近 " in text, "2026-10-30g+：口径词删"
     assert "末位=2026-10-19" in text and "末位今日" not in text   # T-1 口径下不得写「末位今日」
     assert "现价" in text and "当前连板" in text      # T-1 真实可算的数字直供
     assert "午盘涨停价 10.0" in text                # 当日韭研事实不受影响

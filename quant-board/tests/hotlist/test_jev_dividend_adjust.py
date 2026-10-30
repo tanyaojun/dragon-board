@@ -34,7 +34,7 @@ def test_sequence_line_detects_exdiv_limit_up():
     """板序假阴根治：除权日真实涨停（10.45 vs 参考价 9.50）必须判 ●，原口径=假阴。"""
     bars, adj_prev = _cash_div_case()
     fixed = sequence_line_from_bars("2026-06-02", "600000", None, 2, bars, adj_prev)
-    assert "近 1 日 ●" in fixed and "除权修正已应用" in fixed
+    assert "近 1 日 ●" in fixed, "2026-10-30g+：除权注删（处理元数据不进语料）"
     assert "当前连板 1" in fixed
     raw = sequence_line_from_bars("2026-06-02", "600000", None, 2, bars, None)
     assert "近 1 日 ○" in raw and "当前连板 0" in raw  # 原口径假阴（旧已知边缘）
@@ -45,8 +45,7 @@ def test_position_line_exdiv_no_fake_crash():
     """位置轴：除权前一日归一至今日基准=9.50，窗口涨幅不被除权伪装成暴跌。"""
     bars, adj_prev = _cash_div_case()
     line = position_line_from_bars("2026-06-02", "600000", bars, adj_prev)
-    assert "除权修正已应用" in line
-    assert "最低收盘 9.50" in line and "+10.0%" in line
+    assert "最低收盘 9.50" in line and "+10.0%" in line, "2026-10-30g+：除权注删"
     raw = position_line_from_bars("2026-06-02", "600000", bars, None)
     assert "除权修正" not in raw  # 无参考价=原口径不注记
 
@@ -154,10 +153,9 @@ def test_shell_wiring_adj_series_hit(monkeypatch):
     monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
     monkeypatch.setattr(runner, "_adj_prev_series", lambda date, code, bars_: adj_prev)
     line = runner.limitup_sequence_line("2026-06-02", "600000", None, n=2)
-    assert "●" in line and "除权修正已应用" in line
+    assert "●" in line, "2026-10-30g+：除权注删"
     pos = runner.stock_position_line("2026-06-02", "600000")
-    assert "除权修正已应用" in pos
-    assert abs(runner._prev_close_of_date("2026-06-02", "600000") - 9.50) < 1e-9
+    assert abs(runner._prev_close_of_date("2026-06-02", "600000") - 9.50) < 1e-9, "2026-10-30g+：除权注删（数值仍逐链修正）"
 
 
 def test_shell_wiring_adj_series_miss_falls_back(monkeypatch):
@@ -279,7 +277,7 @@ def test_zhaban_narrative_ths_prev_miss_fail_visible(monkeypatch):
     db = _ZhabanDb([_ths_frame("2026-09-17", [{"stock_code": "000001", "continue_day": 1}]),
                     _ths_frame("2026-09-18", [])])
     line = zb.build_zhaban_narrative(db, "2026-09-18", _zhaban_item(), {}, [])
-    assert "未收录（昨日未涨停或 THS 池缺口，fail-visible）" in line
+    assert "昨日身位（THS 连板梯队）：未收录" in line, "2026-10-30g+：括号删"
 
 
 def test_zhaban_narrative_index_pct_preferred(monkeypatch):
@@ -308,7 +306,7 @@ def test_zhaban_narrative_index_points_only_not_fake_pct(monkeypatch):
     frames[0]["indices"] = {"sh": {"change": -19.19}}   # 存量帧口径：纯点位
     db = _ZhabanDb(frames)
     line = zb.build_zhaban_narrative(db, "2026-09-18", _zhaban_item(), {}, [])
-    assert "大盘：上证今日 -19.19 点（涨跌幅缺失，点位口径）" in line
+    assert "大盘：上证今日 -19.19 点" in line, "2026-10-30g+：口径注删"
     assert "-19.19%" not in line  # 伪造暴跌红线
 
 

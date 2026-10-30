@@ -264,13 +264,13 @@ def test_board_ladder_line_shape_and_second_streak():
     row = {"streak": 5, "secondStreak": 3,
            "ladderShape": {"first": 4, "two": 1, "threePlus": 2, "unknown": 1}}
     line = A.board_ladder_line(row)
-    assert line == ("板块梯队形态：首板 4 家 / 2板 1 家 / 3板+ 2 家（另有 1 只连板高度不可算）；"
-                    "龙头 5 板，次高 3 板（领先 +2）")
+    assert line == ("板块梯队形态：首板 4 家 / 2板 1 家 / 3板+ 2 家；另有 1 只连板高度不可算；"
+                    "龙头 5 板，次高 3 板（领先 +2）"), "2026-10-30g+：括号删"
     # 孤军：板内无其它可算真连板 → 次高如实不可考
     solo = A.board_ladder_line({"streak": 3, "secondStreak": None,
                                 "ladderShape": {"first": 2, "two": 0, "threePlus": 1,
                                                 "unknown": 0}})
-    assert "次高 不可考（板内无其它可算真连板）" in solo
+    assert "次高 不可算" in solo, "2026-10-30g+：括号删"
     # 龙头高度不可算 / 旧代行（无 ladderShape）→ 各自如实
     assert "龙头连板高度不可算" in A.board_ladder_line(
         {"streak": None, "secondStreak": None,
@@ -296,7 +296,7 @@ def test_structure_line_renders_board_count_history():
                             followers_ge_ladder=0, prev_board_n=1, prev_peers=0,
                             history=[("2026-10-16", 9), ("2026-10-17", 13),
                                      ("2026-10-20", 12), ("2026-10-21", 1), ("2026-10-22", 1)])
-    assert "近 5 日该板块封板家数（旧→新，缺口日不列）：10-16 9 · 10-17 13 · 10-20 12 · 10-21 1 · 10-22 1" in line
+    assert "近 5 日该板块封板家数：10-16 9 · 10-17 13 · 10-20 12 · 10-21 1 · 10-22 1" in line, "2026-10-30g+：口径注删"
 
     empty = A.structure_line(board="机器人", board_n=3,
                              leader={"name": "X", "code": "1", "streak": 1, "time": "10:00:00"},
@@ -475,7 +475,7 @@ def test_driver_cross_line_variants():
     assert "买盘逻辑" not in carried.split("·")[-1], "未承接的轴不进承接披露"
     # 缺席 = fail-visible 固定行，不带任何方向性语义
     assert A.driver_cross_line(None) == A.DRIVER_CROSS_NONE_LINE
-    assert "不构成任何方向证据" in A.DRIVER_CROSS_NONE_LINE
+    assert A.DRIVER_CROSS_NONE_LINE == "个股打标交叉：无当日个股打标记录", "2026-10-30g+：注删"
     # 概率全缺 → 回落已选枚举值中文；全缺+槽位缺失 → 不可考如实
     bare = A.driver_cross_line({"label": "policy", "labelSlot": "final",
                                 "questionSetVersion": "v3.1", "freshness": "continuing",
@@ -632,8 +632,8 @@ def test_structure_line_unsealed_leader_explicit():
                             followers_ge_ladder=None, prev_board_n=13, prev_peers=2,
                             prev_total=13, prev_still=9,
                             leader_sealed_today=False, gain10=77.7)
-    assert "今日未封板（断板反包候选，10 日涨幅 +77.7%（轨内未封候选首位））" in line
-    assert "跟风梯队不可算（龙一未封板" in line and "跟风 None 家" not in line
+    assert "今日未封板（断板反包候选，10 日涨幅 +77.7%）" in line, "2026-10-30g+：选择口径注删"
+    assert "跟风梯队不可算" in line and "跟风 None 家" not in line, "2026-10-30g+：括号删"
     assert "昨日该板块封板 13 只，今日仍封 9 只" in line
     # 未传 gain10 → 身位段如实省略，不伪造
     line2 = A.structure_line(board="机器人", board_n=17,
@@ -729,7 +729,7 @@ def test_sector_narrative_order_is_fixed():
     assert lines[0] == "2026-10-28 交易日 · M"
     assert lines[1] == "AXIS"
     assert lines[2].startswith("待判板块：AI硬件")
-    assert "龙一分轨" in lines[2] and "首封最早" in lines[2]
+    assert lines[2] == "待判板块：AI硬件", "2026-10-30g+：分轨口径注删"
     idx = {name: i for i, name in enumerate(
         ["STRUCT", "LADDER", "ZHABAN", "STRENGTH", "BASE", "REASON", "EVID"])}
     assert [idx[k] for k in ("STRUCT", "LADDER", "ZHABAN", "STRENGTH",
@@ -913,7 +913,7 @@ def test_lhb_line_fetch_failure_fail_visible():
     line = A.lhb_line({"ok": False, "reason": "lhb_list_fetch_failed: boom"},
                       codes=["603278"])
     assert line.startswith("龙虎榜："), "2026-10-30g：口径头删（用户裁决）"
-    assert "--，lhb_list_fetch_failed: boom" in line, "2026-10-30g：降级原因不带括号"
+    assert "--，榜单拉取失败 boom" in line, "2026-10-30g+：工程词中文化"
     assert A.lhb_line(None, codes=["603278"]) == \
         A.lhb_line({"ok": False, "reason": "no_data"}, codes=["603278"])
 
@@ -921,8 +921,8 @@ def test_lhb_line_fetch_failure_fail_visible():
 def test_lhb_line_empty_structured_discloses_ordersign():
     line = A.lhb_line({"ok": False, "empty_structured": True, "order_sign_count": 3,
                        "stocks": []}, codes=["603278"])
-    assert "当日分组榜单未生成" in line and "orderSign=3 组" in line
-    assert "榜约盘后生成，缺当日事实≠无上榜" in line, "不把未生成伪装成无上榜"
+    assert "--，当日分组榜单未生成，缺当日事实≠无上榜" in line, "2026-10-30g+：orderSign 注删"
+    assert "缺当日事实≠无上榜" in line, "不把未生成伪装成无上榜"
 
 
 def test_lhb_line_matches_leader_first_and_roles():

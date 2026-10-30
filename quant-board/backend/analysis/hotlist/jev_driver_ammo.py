@@ -303,13 +303,13 @@ def position_line_from_bars(date: str, code: str, bars: list[dict],
     """弹药 6 行：价格位置轴原始可数锚（不给档位标签防预判，阈值锚在判据里）。
     fail-visible：TDX 不可用/缺今日棒/数据不足如实标注，不伪造数字。"""
     if not bars:
-        return "个股位置：TDX 日线不可用（fail-visible，价格位置轴缺失）"
+        return "个股位置：日线不可用"
     window = [b for b in bars if b["date"] <= date]
     today = next((b for b in window if b["date"] == date), None)
     if today is None:
-        return f"个股位置：{date} 无当日日线棒（停牌或数据缺口，fail-visible）"
+        return f"个股位置：{date} 无当日日线棒"
     if len(window) < 2:
-        return "个股位置：上市数据不足 2 根日线（fail-visible）"
+        return "个股位置：上市数据不足 2 根日线"
     # P1-1 除权修正：窗口价格归一至今日基准（逐日除权参考价递推），未提供=原口径（字节不变）
     if adj_prev:
         scale = _div_scale_map(window, adj_prev)
@@ -317,7 +317,7 @@ def position_line_from_bars(date: str, code: str, bars: list[dict],
         high20 = max(b["high"] * scale.get(b["date"], 1.0) for b in last20)
         closes20 = [b["close"] * scale.get(b["date"], 1.0) for b in last20]
         today_close = today["close"] * scale.get(date, 1.0)
-        adj_note = " · 除权修正已应用"
+        adj_note = ""
     else:
         last20 = window[-20:]
         high20 = max(b["high"] for b in last20)
@@ -343,7 +343,7 @@ def position_line_from_bars(date: str, code: str, bars: list[dict],
         base_txt = "前 3 日均量" if len(avail) == 3 else f"前 {len(avail)} 日均量（缺 {3 - len(avail)} 日）"
         vol_txt = f"今日为{base_txt}的 {ratio:.2f} 倍（{tag}）"
     else:
-        vol_txt = "前 3 日量能缺失（fail-visible）"
+        vol_txt = "前 3 日量能缺失"
     note = "" if len(last20) >= 20 else f"（上市窗口仅 {len(last20)} 根）"
     return (f"个股位置：现价 {today_close:.2f} · 距 20 日最高 {high20:.2f} 差 {gap_pct:.1f}%"
             f" · 20 日窗口涨幅 {chg_pct:+.1f}%（最低收盘 {low_close:.2f}，距今 {low_ago} 个交易日）"
@@ -365,8 +365,8 @@ def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
     """
     window = [b for b in bars if b["date"] <= date]
     if not window or window[-1]["date"] != date:
-        return "板序：当日日线棒缺失（fail-visible）"
-    adj_note = " · 除权修正已应用" if adj_prev else ""
+        return "板序：当日日线棒缺失"
+    adj_note = ""
 
     def _up(idx: int) -> bool:
         prev_close = (adj_prev or {}).get(window[idx]["date"]) or window[idx - 1]["close"]
@@ -378,7 +378,7 @@ def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
         seq.append(1 if _up(i) else 0)
         i -= 1
     if not seq:
-        return "板序：窗口不足无法判定（fail-visible）"
+        return "板序：窗口不足无法判定"
     seq.reverse()
     marks = "".join("●" if v else "○" for v in seq)
     streak = 0
@@ -407,10 +407,10 @@ def board_shape_line_from_bars(date: str, code: str, name: str | None,
     fail-visible：昨收缺失/5 分钟棒缺失/未触板（与涨停人口矛盾=数据缺口）如实标注。
     intraday = 未按日过滤的 5 分钟棒（本函数内过滤，保持纯函数语义）。"""
     if not prev_close or prev_close <= 0:
-        return "板型：昨收缺失无法判定涨停价（fail-visible）"
+        return "板型：昨收缺失无法判定涨停价"
     bars = [b for b in intraday if b["date"] == date]
     if not bars:
-        return "板型：当日 5 分钟棒缺失（fail-visible）"
+        return "板型：当日 5 分钟棒缺失"
     # 涨停价唯一实现 = `_limit_price`（Decimal ROUND_HALF_UP）。2026-10-20 修正：本函数
     # 曾用内置 `round(prev_close*(1+ratio), 2)`——银行家舍入且作用于二进制浮点，前收分位为
     # 5 时会低取一分（实测 10-16 三只：001319 铭科精技 21.39 vs 21.40、001358 欣兴新材、
@@ -419,7 +419,7 @@ def board_shape_line_from_bars(date: str, code: str, name: str | None,
     tol = 1e-6
     touches = [b for b in bars if b["high"] >= lp - tol]
     if not touches:
-        return "板型：当日未触板（与涨停人口矛盾，数据缺口 fail-visible）"
+        return "板型：当日未触板"
     first_touch = touches[0]["hm"]
     sealed_flags = [b["close"] >= lp - tol for b in bars]
     waves = 0

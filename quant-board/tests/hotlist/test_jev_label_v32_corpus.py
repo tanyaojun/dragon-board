@@ -237,7 +237,7 @@ def test_narrative_does_not_call_zhaban_when_pool_missing(no_tdx):
     text = runner.build_pilot_narrative(db, DATE, "600001", jy["fields"][0]["stocks"][0],
                                         "机器人", 1, jiuyan_doc=jy)
     assert "THS 封板梯队未采集" in text
-    assert "非「触板未封」" in text
+    assert "非「触板未封」" not in text, "2026-10-30g+：口径注删"
     assert "今日触板未封/炸板口径" not in text
 
 
@@ -259,7 +259,7 @@ def test_narrative_bj_stock_not_misread_as_touch_unsealed(no_tdx):
                                         "公告", 1, jiuyan_doc=jy)
     assert "THS 池不覆盖北交所" in text, "应显式声明覆盖边界（非触板未封口径推断）"
     assert "可能触板未封/炸板口径" not in text
-    assert "身位证据改用韭研口径 3天3板" in text, "身位改韭研 N天M板 直供（同 D2 回退）"
+    assert "身位 3天3板" in text, "2026-10-30g+：身位直供"
     # 对照：主板股池-ok 未入池仍走原「未入池」分支（语义未被误改）
     jy2 = _jy(DATE, [("公告", [_stock("600601", "乙", num="2天2板", day="2")])])
     text2 = runner.build_pilot_narrative(db, DATE, "600601", jy2["fields"][0]["stocks"][0],
@@ -580,8 +580,8 @@ def test_board_position_labels_t2_fallback(monkeypatch):
         _jy(MID_T2, [("机器人", [_stock("600001", "甲"), _stock("600002", "乙")])]),
     ])})
     line = runner.board_position(_time_doc(), "600002", db=db, date=MID_DATE)
-    assert f"前 2 交易日（{MID_T2}）同板块涨停 2 家" in line
-    assert "T-1 无同名板块" in line
+    assert f"前 2 交易日 {MID_T2} 同板块涨停 2 家" in line, "2026-10-30g+：口径注删"
+    assert "T-1" not in line, "2026-10-30g+：口径注删"
 
 
 def test_board_prev_info_board_absent_in_both_days(monkeypatch):

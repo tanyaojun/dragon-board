@@ -152,8 +152,8 @@ def test_relay_line_labels_backfill_not_native():
            "indexExtra": {"szcz": {"changePct": 0.2, "src": SRC}}}
     db = _Db({"snapshot_frames": _FrameCol([_relay_frame(idx)])})
     line = market_index_line(db, DATE)
-    assert "上证 +0.50%" in line and "沪深300 -0.30%（日线回填）" in line
-    assert "深证成指 +0.20%（日线回填）" in line
+    assert "上证 +0.50%" in line and "沪深300 -0.30%" in line, "2026-10-30g+：来源注删"
+    assert "深证成指 +0.20%" in line, "2026-10-30g+：来源注删"
     assert "该日未采集" not in line  # indexExtra 已存在（含回填）→ 注消失
 
 
@@ -163,5 +163,5 @@ def test_relay_line_native_only_no_label():
     db = _Db({"snapshot_frames": _FrameCol([_relay_frame(idx)])})
     line = market_index_line(db, DATE)
     assert "上证 +0.50%" in line
-    assert "沪深300 -12.00点（点位口径）" in line
+    assert "沪深300 -12.00点" in line, "2026-10-30g+：口径注删"
     assert "（日线回填）" not in line and "该日未采集" in line

@@ -204,7 +204,7 @@ def test_weak_to_strong_line_prev_missing_fail_visible(monkeypatch):
                  "market_daily_limit_down": FakeCol([]),
                  "snapshot_frames": FakeCol([])})
     line = R.weak_to_strong_line(db, "2026-03-04")
-    assert "昨日 relayIndex 缺失" in line and "fail-visible" in line
+    assert "昨日 relayIndex 缺失，形态不可判" in line, "2026-10-30g+：括号删"
 
 
 def test_weak_to_strong_line_idx_below_but_structural_confirm_wording():

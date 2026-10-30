@@ -390,7 +390,7 @@ def test_board_prev_t2_fallback_t1_doc_missing_label(monkeypatch):
     doc = {"_id": f"2026-10-21:midday", "fields": [{"name": "板块A",
             "stocks": [_st("600002", "乙", time="10:30:00")]}]}
     line = runner.board_position(doc, "600002", db=db, date="2026-10-21")
-    assert "T-1 名单缺失" in line and "T-1 无同名板块" not in line
+    assert "前 2 交易日" in line and "昨日同板块" not in line, "2026-10-30g+：口径注删（不冒充昨日）"
 
 
 # ── MF2：R1/R2 承诺测试（叙事行三态 + 插入位置 + 读口合同） ─────────────────
@@ -406,7 +406,7 @@ def test_rewrap_face_line_states():
     db2 = FakeDb({"jiuyan_action": FakeCol([
         _final(D1, [_st("600003", "甲", "2天2板")]),
         _final(D0, [_st("600003", "甲", "3天3板")])]), "snapshot_frames": FakeCol([])})
-    assert "不可算（交易日轴不足" in rewrap_face_line(db2, D0)
+    assert rewrap_face_line(db2, D0) == "反包修复：不可算", "2026-10-30g+：括号删"
     # 昨日炸板池缺失
     db3 = FakeDb({"jiuyan_action": FakeCol(_db_days()["jiuyan_action"].rows),
                   "snapshot_frames": FakeCol(
@@ -416,7 +416,7 @@ def test_rewrap_face_line_states():
     rows = [r for r in _db_days()["jiuyan_action"].rows if r["_id"] != f"{D1}:final"]
     db4 = FakeDb({"jiuyan_action": FakeCol(rows),
                   "snapshot_frames": FakeCol([_frame(d) for d in (D5, D4, D3, D2, D1)])})
-    assert "昨日名单缺失" in rewrap_face_line(db4, D0)
+    assert rewrap_face_line(db4, D0) == "反包修复：不可算", "2026-10-30g+：括号删"
 
 
 def test_relay_narrative_rewrap_line_position(monkeypatch):

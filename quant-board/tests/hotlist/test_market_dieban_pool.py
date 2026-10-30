@@ -635,15 +635,15 @@ def test_trajectory_line_labels_mixed_full_market_sources(monkeypatch):
     monkeypatch.setattr(jj, "market_metrics", lambda db, d, dataset_id=None: {})
     monkeypatch.setattr(jj, "advdec_ratio", lambda db, d, dataset_id=None: None)
     line = jj.trajectory_line(_Db(), "2026-09-17")
-    assert "全市场·东财跌停池＋全市场·本地日线重算" in line
+    assert "全市场" not in line, "2026-10-30g+：来源头注删（用户裁决）"
     assert "|跌停32|" in line                 # TDX 读数照出，不回退采集池
     assert "采集池降级格" not in line
     # P2-2：跨源格逐格标 ^ + 区间式说明（源间实测 +1.65 系统差，不能只靠整列头注）。
     # 本夹具 TDX 8 格 vs EM 2 格 → 列内主要源 = TDX，非主要源的 EM 格标 ^。
-    assert "4^" in line and "2^" in line, f"非主要源（EM）格未标 ^：{line}"
-    assert "32^" not in line, f"主要源（TDX）格不应标 ^：{line}"
-    assert "^ 09-16~09-17" in line, f"缺跨源区间说明：{line}"
-    assert "勿读作情绪摆动" in line
+    assert "4^" not in line and "2^" not in line, "2026-10-30g+：跨源标记删（用户裁决）"
+    assert "|跌停32|" in line, "TDX 读数照出"
+    assert "勿读作情绪摆动" not in line, "2026-10-30g+：头注删"
+    pass
 
 
 def test_backfill_em_upgrades_tdx_rows(monkeypatch, capsys):
@@ -747,13 +747,13 @@ def test_trajectory_line_marks_today_pool_fallback(monkeypatch):
 
     line = jj.trajectory_line(_Db(), "2026-10-16")
     assert "跌停" in line
-    assert line.rstrip().endswith("）") or "（" in line
+    assert "采集池" not in line, "2026-10-30g+：头注删后无尾注"
     # 轴必须含当日（review P1-2 回归点）：旧版 $lt 严格早于 → 当日永不入列，
     # 本测试在“不认 $lt”的旧假库里靠脏匹配假绿。现在两处都钉死。
     assert "10-16|" in line, f"序列未含当日（轴少了 date）：{line}"
     assert re.findall(r"\d{2}-\d{2}\|", line)[-1] == "10-16|", f"末格不是当日：{line}"
-    assert "采集池口径" in line, f"当日口径未点名：{line}"
-    assert "6*" in line, f"当日格未打降级星号：{line}"
+    assert "采集池口径" not in line, "2026-10-30g+：口径头注删（用户裁决）"
+    assert "*" not in line, "2026-10-30g+：降级星号删（用户裁决）"
 
 
 def test_limit_down_count_doc_lists_all_returnable_sources():

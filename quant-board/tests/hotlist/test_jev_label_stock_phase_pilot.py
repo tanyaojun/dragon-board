@@ -56,7 +56,7 @@ def test_position_line_counts_from_daily_bars(monkeypatch):
 
 def test_position_line_fail_visible(monkeypatch):
     monkeypatch.setattr(runner, "_daily_bars", lambda code: [])
-    assert "fail-visible" in runner.stock_position_line("2026-09-30", "605577")
+    assert not runner.stock_position_line("2026-09-30", "605577").startswith("个股位置：现价"), "2026-10-30g+：fail-visible 词删"
     # 缺今日棒（停牌/数据缺口）
     bars = [{"date": "2026-09-29", "high": 17.0, "close": 15.0, "vol": 1000.0},
             {"date": "2026-09-28", "high": 16.0, "close": 14.0, "vol": 900.0}]
@@ -96,7 +96,7 @@ def test_limitup_sequence_streak_and_rewrap(monkeypatch):
 
 def test_limitup_sequence_fail_visible(monkeypatch):
     monkeypatch.setattr(runner, "_daily_bars", lambda code: [])
-    assert "fail-visible" in runner.limitup_sequence_line("2026-09-30", "605577", None)
+    assert not runner.limitup_sequence_line("2026-09-30", "605577", None).startswith("板序：近"), "2026-10-30g+：fail-visible 词删"
     bars = [{"date": "2026-09-29", "high": 15.0, "close": 15.0, "vol": 1.0}]
     monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
     assert "当日日线棒缺失" in runner.limitup_sequence_line("2026-09-30", "605577", None)
@@ -133,7 +133,7 @@ def test_board_shape_rotten_reseal_and_one_word(monkeypatch):
 
 def test_board_shape_fail_visible(monkeypatch):
     monkeypatch.setattr(runner, "_intraday_bars", lambda code: [])
-    assert "fail-visible" in runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0)
+    assert "不可算" in runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0) or "缺失" in runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0), "2026-10-30g+：fail-visible 词删"
     assert "昨收缺失" in runner.stock_board_shape_line("2026-09-30", "605577", None, None)
 
 

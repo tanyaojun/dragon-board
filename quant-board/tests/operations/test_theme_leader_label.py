@@ -372,7 +372,7 @@ def test_build_one_and_sector_wire_lhb_line():
     built_f = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
                           market_line="涨停 46 家",
                           lhb_facts={"ok": False, "reason": "fetch_failed: x"})
-    assert "--，fetch_failed: x" in built_f["narrative"], "2026-10-30g：降级不带括号"
+    assert "--，榜单拉取失败 x" in built_f["narrative"], "2026-10-30g+：工程词中文化"
 
 
 def test_build_one_wires_history_and_headroom_anchor():
@@ -394,7 +394,7 @@ def test_build_one_wires_history_and_headroom_anchor():
                         board_history={"机器人": [("2026-10-15", 4), ("2026-10-16", 3),
                                                 ("2026-10-17", 5)]})
     n = built["narrative"]
-    assert "近 3 日该板块封板家数（旧→新，缺口日不列）：10-15 4 · 10-16 3 · 10-17 5" in n, \
+    assert "近 3 日该板块封板家数：10-15 4 · 10-16 3 · 10-17 5" in n, \
         "2026-10-30d：序列 ≥3 日才出行（fixture 由 2 日扩为 3 日）"
     assert "空间锚" in n and "总体 再走≥1板率" in n   # 2026-10-26a 每档基率化
     # 2026-10-24c 三行：前向轴紧跟盘面行、梯队/炸板面紧跟结构行；昨日口径=总数−仍封出断板
@@ -453,8 +453,7 @@ def test_build_one_driver_cross_join_and_fail_visible():
     # 无任何打标行 → fail-visible 缺席行（不伪装方向性结论）
     built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
-    assert "个股打标交叉：无当日个股打标记录（该股不在打标名单或槽位未落，" \
-        "仅指此行缺席，不构成任何方向证据）" in built3["narrative"]
+    assert "个股打标交叉：无当日个股打标记录" in built3["narrative"], "2026-10-30g+：注删"
     assert built3["driverCross"] == {"found": False, "labelSlot": None,
                                      "questionSetVersion": None}
 

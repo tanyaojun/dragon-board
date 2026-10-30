@@ -140,7 +140,7 @@ def test_market_line_uses_frame_pct(monkeypatch):
     monkeypatch.setattr(lab, "ths_positions", lambda *a, **k: {})
     db = _Db({"snapshot_frames": _Col([_frame({"sh": {"changePct": -0.62}})])})
     text = _narrative(db)
-    assert "大盘：上证今日 -0.62%（15:00 帧）" in text
+    assert "大盘：上证今日 -0.62%" in text, "2026-10-30g+：来源注删"
 
 
 def test_market_line_keeps_point_caliber(monkeypatch):
@@ -149,7 +149,7 @@ def test_market_line_keeps_point_caliber(monkeypatch):
     monkeypatch.setattr(lab, "ths_positions", lambda *a, **k: {})
     db = _Db({"snapshot_frames": _Col([_frame({"sh": {"change": -19.19}})])})
     text = _narrative(db)
-    assert "大盘：上证今日 -19.19 点（涨跌幅缺失，点位口径）" in text
+    assert "大盘：上证今日 -19.19 点" in text, "2026-10-30g+：口径注删"
     assert "-19.19%" not in text
 
 
@@ -163,7 +163,7 @@ def test_market_line_falls_back_to_daily_recalc(monkeypatch):
     monkeypatch.setattr("backend.operations.market_dieban_tdx.read_lday",
                         lambda path, take=400: recs)
     text = _narrative(_Db({"snapshot_frames": _Col([_frame({})])}))
-    assert "（本地日线重算）" in text and "不可考" not in text.splitlines()[-1]
+    assert "本地日线重算" not in text, "2026-10-30g+：来源注删"
 
 
 def test_market_line_fail_visible_when_everything_missing(monkeypatch):
@@ -173,5 +173,5 @@ def test_market_line_fail_visible_when_everything_missing(monkeypatch):
                         lambda *a, **k: (None, None))
     monkeypatch.setattr(lab, "_tdx_daily_client", lambda: None)
     text = _narrative(_Db())
-    assert "大盘：不可考（15:00 帧与指数日线皆缺，fail-visible）" in text
+    assert "大盘：不可考" in text, "2026-10-30g+：括号删"
     assert "0.00%" not in text

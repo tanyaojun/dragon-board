@@ -152,9 +152,10 @@ _PRIMARY_ANCHOR_GAPS: tuple[_MARKER, ...] = (
 # 108 天里 67 天非空、其中 45 天只命中「断板钱效」（早期 TDX 60 棒窗够不到钱效样本）——
 # 主锚其实齐备，徽标却漫天飞，例外标记退化成背景噪声。
 _DERIVED_ANCHOR_GAPS: tuple[_MARKER, ...] = (
-    ("炸板面个股级", "今日炸板面", ("个股级子项不可算", "反复开板/昨日池股炸板/炸板股收盘涨幅 不可算")),
+    ("炸板面个股级", "今日炸板面", ("反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算",)),
     ("炸板面对比", "今日炸板面", ("较昨日：不可算",)),
-    ("断板钱效", None, ("TDX 日线缺失", "样本不足（TDX 覆盖")),
+    ("断板钱效", None, ("样本不足（TDX 覆盖", "今日表现不可算",
+     "较昨日断板：不可算", "隔日溢价不可算")),
     ("晋级链前池", "三日晋级链", ("韭研 final 缺失",)),
     # v6（2026-10-19）：板块接力链/龙头结构是主锚（梯队/题材/晋级链）的同源派生段，
     # 缺位归子项层——不得再抬主锚徽标（108 天噪声教训，预注册 §五）。
@@ -343,11 +344,11 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     """
     prev_dates = trading_dates_before(db, date, 1)
     if not prev_dates:
-        return "晋级与断板：无昨日交易日（fail-visible）"
+        return "晋级与断板：无昨日交易日"
     prev_date = prev_dates[-1]
     stats = _promotion_stats(db, prev_date, date, dataset_id)
     if not stats.get("ok"):
-        return f"晋级与断板：{stats['reason']}（fail-visible）"
+        return f"晋级与断板：{stats['reason']}"
     base, rate = stats["base"], stats["rate"]
     promoted, broken = stats["promoted"], stats["broken"]
     suspended, unknown = stats["suspended"], stats["unknown"]
@@ -360,8 +361,8 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     if unknown:
         skip_parts.append(f"状态不可验 {len(unknown)} 只")
     skip_txt = f"（{'、'.join(skip_parts)}，不计入晋级率）" if skip_parts else ""
-    calib = "" if (stats["prev_found"] and stats["cur_found"]) else "（THS炸板池缺失日按日线补证/触板口径）"
-    rate_txt = f"{rate}%" if rate is not None else "不可算（分母为空）"
+    calib = ""   # 2026-10-30g+：口径注删（用户裁决）
+    rate_txt = f"{rate}%" if rate is not None else "不可算"
     # 分层晋级：昨日各板层今日连板成功率。板层=昨日真连板；顶层 cap=_LAYER_CAP（6板+）。
     prev_streaks = jiuyan_streak_map(db, prev_date, dataset_id)
     layers: dict[int, list[bool]] = {}
@@ -394,27 +395,27 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         elif cur_stats:
             broken_txt = _sample_short_txt("断板", len(broken), cur_stats["covered"])
         else:
-            broken_txt = f"断板 {len(broken)} 只：今日表现不可算（TDX 日线缺失）"
+            broken_txt = f"断板 {len(broken)} 只：今日表现不可算"
     else:
         broken_txt = "断板 0 只"
     # 较昨日断板：前日池昨日断板（同 _promotion_stats 停牌口径，剔停牌/不可验）。判据「断板
     # 亏钱扩散（中位转负或大面增多）」需要昨日可比数，此前只给今日绝对值（2026-10-16 补供）。
     window2 = trading_dates_before(db, date, 2)
     if len(window2) < 2:
-        prev_broken_txt = "较昨日断板：不可算（无前日交易日）"
+        prev_broken_txt = "较昨日断板：不可算"
     else:
         d2 = window2[-2]
         stats2 = _promotion_stats(db, d2, prev_date, dataset_id)
         if not stats2.get("ok"):
-            prev_broken_txt = f"较昨日断板：不可算（{stats2.get('reason', d2 + ' 数据缺失')}）"
+            prev_broken_txt = "较昨日断板：不可算"
         else:
             pb = set(stats2["broken"])
             ps = _broken_stats(pb, d2, prev_date)
-            calib2 = "" if stats2["prev_found"] else "（前日触板口径）"
+            calib2 = ""   # 2026-10-30g+：口径注删
             if not pb:
                 prev_broken_txt = "较昨日断板：昨日 0 只"
             elif ps is None:
-                prev_broken_txt = "较昨日断板：不可算（昨日 TDX 日线缺失）"
+                prev_broken_txt = "较昨日断板：不可算"
             elif not _tdx_sample_ok(ps["covered"], len(pb)):
                 prev_broken_txt = ("较昨日断板：" + _sample_short_txt("昨日断板", len(pb), ps["covered"]))
             elif not broken:
@@ -426,7 +427,7 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 # 渲染成「TDX 覆盖 0/N」这个并不存在的读数（伪 0，§4.0），且归因词也从
                 # 「日线缺失」误成「样本不足」——同函数今日段（broken_txt）早就写作
                 # 「不可算（TDX 日线缺失）」，此处与之对齐。
-                prev_broken_txt = "较昨日断板：不可算（今日 TDX 日线缺失）"
+                prev_broken_txt = "较昨日断板：不可算"
             elif not cur_stats_ok:
                 prev_broken_txt = ("较昨日断板：今日断板样本不足"
                                    f"（TDX 覆盖 {cur_stats['covered']}/{len(broken)}），不可比")
@@ -437,7 +438,7 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     elig = sorted(promoted_set | broken_set)
     prem = [p for p in (_close_pct(c, prev_date, date) for c in elig) if p is not None]
     if not prem:
-        prem_txt = "隔日溢价不可算（TDX 日线缺失）"
+        prem_txt = "隔日溢价不可算"
     elif _tdx_sample_ok(len(prem), len(elig)):
         prem_txt = f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(elig)}）"
     else:
@@ -460,7 +461,7 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         pct_items.append(f"隔日溢价 P{round(p * 100)}" if p is not None else "隔日溢价 分位不可算")
     pct_txt = (f" · 钱效近20日分位（{len(money_hist)} 日）：{' · '.join(pct_items)}"
                if pct_items else "")
-    return (f"晋级与断板：昨日 {len(base)} 只涨停（触板二分口径）{calib}{caliber} → "
+    return (f"晋级与断板：昨日 {len(base)} 只涨停 → "
             f"今日仍涨停 {len(promoted)} 只"
             f"（晋级率 {rate_txt}）{skip_txt}[{layer_txt}] · {broken_txt} · {prev_broken_txt} · {prem_txt}"
             f"{pct_txt}")
@@ -496,7 +497,7 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
     three_plus = (lad.get("three") or 0) + (lad.get("four") or 0) + (lad.get("high") or 0)
     total = one + two + three_plus
     if not total:
-        return "梯队结构量化：梯队数据缺失（fail-visible）"
+        return "梯队结构量化：梯队数据缺失"
     ratio = round(two / three_plus, 2) if three_plus else None
     prev_dates = trading_dates_before(db, date, 1)
     prev_lad = _ladder_of(prev_dates[-1])[0] if prev_dates else {}
@@ -513,9 +514,9 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
         (f"（昨日 {round(prev_one/prev_total*100)}%）" if prev_total else "")
     src_txt = ""
     if src == "jiuyan_touch":
-        src_txt = "（THS炸板池缺失，梯队按触板口径）"  # 旧口径回退日显式披露
+        src_txt = ""   # 2026-10-30g+：口径注删
     elif src and src != "jiuyan":
-        src_txt = f"（梯队来源 {src}）"  # THS 回退日叙事披露来源（review M4）
+        src_txt = ""   # 2026-10-30g+：来源注删
     else:
         src_txt = ""
     # v7 D6：昨日分层家数入语料——ladder fracture 判据「二板较昨日腰斩」自此可验
@@ -535,11 +536,11 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
     """
     window = trading_dates_before(db, date, 2)
     if len(window) < 2:
-        return "三日晋级链：历史不足（fail-visible）"
+        return "三日晋级链：历史不足"
     d2, d1 = window[-2], window[-1]
     p2, p1, p0 = _pool_of(db, d2), _pool_of(db, d1), _pool_of(db, date)
     if not p2 or not p1:
-        return f"三日晋级链：{d2}/{d1} 韭研 final 缺失（fail-visible）"
+        return f"三日晋级链：{d2}/{d1} 韭研 final 缺失"
     # 逐日状态（覆盖 p2 全体：既供存活链也供高位股 fate）；池权威 + 日线补洞（唯一入口）
     st1, f1 = _status_map(db, d1, p1, set(p2), dataset_id)
     st0, f0 = _status_map(db, date, p0, set(p2), dataset_id)
@@ -553,7 +554,7 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
     s0 = {c for c in s1 if st0.get(c) == "sealed"}
     r0 = round(len(s0) / den_a * 100, 1) if den_a else None
     r_step = round(len(s0) / len(s1) * 100, 1) if s1 else None
-    calib = "" if (stats_a.get("prev_found") and f1 and f0) else "（THS炸板池缺失日按日线补证/触板口径）"
+    calib = ""   # 2026-10-30g+：口径注删
     # 高位股逐日点名：D-2 按区间高度降序 top3（连板/断板/停牌按 day_status_of 判定）
     tops = sorted(p2.items(), key=lambda kv: (-_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[:3]
     streaks0 = jiuyan_streak_map(db, date, dataset_id)
@@ -579,7 +580,7 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
         elif t == "suspended":
             fate.append(f"{name} {rng}→今日停牌跳过")
         elif t == "unknown":
-            fate.append(f"{name} {rng}→今日状态不可验（TDX 数据洞）")
+            fate.append(f"{name} {rng}→今日状态不可验")
         else:  # 今日断板
             if y == "sealed":
                 # 区间高度 M 必须带跨度写成「N天M板」：裸「昨日10板」会被读成昨日 10 连板，
@@ -599,16 +600,16 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
     # 同源同式 _promotion_stats，两行数字必然一致，消除模型跨段心算）
     d1_rate = stats_b["rate"] if stats_b.get("ok") else None
     if stats_b.get("ok") and not stats_b["base"]:
-        cmp_txt = "边际对比：不可算（昨日涨停池为空）"
+        cmp_txt = "边际对比：不可算"
     elif d1_rate is None or r1 is None:
-        cmp_txt = "边际对比：不可算（分母为空）"
+        cmp_txt = "边际对比：不可算"
     else:
         cmp_txt = (f"边际对比：昨日池今日晋级率 {d1_rate}%"
                    f"（{stats_b['denom']}→{len(stats_b['promoted'])}）"
                    f" vs 前日池昨日 {r1}%（{den_a}→{len(s1)}），{round(d1_rate - r1, 1):+.1f}pct")
     # 涨停家数口径对账（2026-10-16，同 relay_flow_line）：D-2 家数给同花顺池参照+差集
     d2_caliber = _zt_caliber_note(db, d2, dataset_id, base2, p2)
-    return (f"三日晋级链：{d2} 涨停 {len(base2)} 只（触板二分口径）{d2_caliber} → "
+    return (f"三日晋级链：{d2} 涨停 {len(base2)} 只 → "
             f"{d1} 仍涨停 {len(s1)} 只（{r1_txt}）"
             f"{step_txt} · 高位股轨迹：{'；'.join(fate) if fate else '无'}{calib} · {cmp_txt}")
 
@@ -657,10 +658,10 @@ def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
     """昨日 top3 题材今日地位 + 近5日题材榜（主线持续天数证据，theme_pulse 主锚）。"""
     prev_dates = trading_dates_before(db, date, 1)
     if not prev_dates:
-        return "题材演化：无昨日交易日（fail-visible）"
+        return "题材演化：无昨日交易日"
     cur_b, prev_b = _boards_of(db, date), _boards_of(db, prev_dates[-1])
     if not cur_b or not prev_b:
-        return "题材演化：韭研 final 缺失（fail-visible）"
+        return "题材演化：韭研 final 缺失"
     cur_top = sorted(cur_b, key=lambda k: -len(cur_b[k]))[:3]
     prev_top = sorted(prev_b, key=lambda k: -len(prev_b[k]))[:3]
     overlap = len(set(cur_top) & set(prev_top))
@@ -712,18 +713,17 @@ def theme_evidence_lines(db: Any, date: str, top: int = 3) -> list[str]:
     """
     cur_b = _boards_of(db, date)
     if not cur_b:
-        return ["题材证据：韭研 final 缺失（fail-visible）"]
+        return ["题材证据：韭研 final 缺失"]
     state = corpus_state(db, date=date)
     if not state.get("ok"):
-        return ["题材证据：语料未采集（fail-visible：无数据 ≠ 无催化，请勿据此判断催化有无）"]
+        return ["题材证据：语料未采集，无数据 ≠ 无催化"]
     stale_txt = (f"，语料最近采集日 {state.get('latestFetchDate')}，非当日"
                  if state.get("stale") else "")
     # v4 换源（2026-10-23）：事件层唯一权威源=开盘啦；题材证据行为派生锚（非主锚），
     # 来源标签随换源更新，已登记不重放（theme-corpus-extra-sources-survey-20261023.md §8）。
-    lines = [f"题材证据（韭研产业树+开盘啦事件层，top3 板块；取数日 {date}，"
+    lines = [f"题材证据（top3 板块；取数日 {date}，"
              f"产业树 {state.get('industry')} 节点 / 事件 {state.get('topic')} · "
-             f"新闻 {state.get('news')} · 日历 {state.get('calendar')} 条"
-             f"{stale_txt}；确定性事实，非模型结论）："]
+             f"新闻 {state.get('news')} · 日历 {state.get('calendar')} 条{stale_txt}）："]
     names = sorted(cur_b, key=lambda k: -len(cur_b[k]))[:top]
     for name in names:
         block = build_theme_evidence_block(db, board_name=name, date=date,
@@ -752,7 +752,7 @@ def high_position_trajectory_lines(db: Any, date: str, dataset_id: str = DEFAULT
     """
     pool = _pool_of(db, date)
     if not pool:
-        return ["高位股多日轨迹：韭研 final 缺失（fail-visible）"]
+        return ["高位股多日轨迹：韭研 final 缺失"]
     streaks = jiuyan_streak_map(db, date, dataset_id)
     high = [(c, e) for c, e in pool.items()
             if isinstance(streaks.get(c), int) and streaks[c] >= 4]
@@ -769,10 +769,10 @@ def high_position_trajectory_lines(db: Any, date: str, dataset_id: str = DEFAULT
     sealed_found = {d: _sealed_codes(db, d, set(pools[d]), dataset_id) for d in axis}
     bars_map = {c: _daily_bars(c) for c, _ in high}
     if all(not b for b in bars_map.values()):
-        return ["高位股多日轨迹：TDX 日线不可用（fail-visible）"]
+        return ["高位股多日轨迹：日线不可用"]
     marks_of = {"sealed": "●", "broken": "○", "suspended": "·", "unknown": "?"}
-    lines = [f"高位股多日轨迹（真连板≥4 top{top}，近 {len(axis)} 个交易日逐日；"
-             f"●封板/○断板/·停牌跳过/?不可验；有帽，非打分依据）："]
+    lines = [f"高位股多日轨迹（近 {len(axis)} 个交易日逐日；"
+             f"●封板/○断板/·停牌跳过/?不可验）："]
     today_cnt = {"sealed": 0, "broken": 0, "suspended": 0, "unknown": 0}
     for code, entry in high:
         bars = bars_map[code]
@@ -822,14 +822,14 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5,
     prev_dates = trading_dates_before(db, date, 1)
     cur_b = _boards_of(db, date)
     if not cur_b:
-        return ["题材梯队表：韭研 final 缺失（fail-visible）"]
+        return ["题材梯队表：韭研 final 缺失"]
     prev_b = _boards_of(db, prev_dates[-1]) if prev_dates else {}
     label_docs = {str(d.get("code") or "")[-6:]: d for d in db["hotlist_jev_driver_labels"].find(
         {"tradingDate": date, "status": "ok"}, {"code": 1, "label": 1, "freshness": 1})}
     streaks = jiuyan_streak_map(db, date)
     failed_items, failed_found = _ths_failed_items(db, date, DEFAULT_DATASET_ID)
     zhaban_codes = set(failed_items) if failed_found else set()
-    lines = ["题材梯队表（top5，龙序=高度优先/封板时间次之）："]
+    lines = ["题材梯队表："]
     ranked_names = sorted(cur_b, key=lambda k: -len(cur_b[k]))
     # 主线板块强制纳入 top5（家数多≠主线；用户 2026-10-19 裁决口径）
     if mainline and mainline in cur_b and mainline not in ranked_names[:top]:
@@ -899,7 +899,7 @@ def leader_profile_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
     """
     pool = _pool_of(db, date)
     if not pool:
-        return ["龙头档案：韭研 final 缺失（fail-visible）"]
+        return ["龙头档案：韭研 final 缺失"]
     if total_leader is None:
         code0, entry0 = sorted(pool.items(), key=lambda kv: (
             -_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[0]
@@ -1005,10 +1005,9 @@ def _leader_genesis(db: Any, date: str, code: str, entry: dict[str, Any],
             if code in _pool_of(db, d):
                 out.update(firstBoardDate=d, tradingDaysAgo=len(hist) - i)
                 edge = "；首板日已在 60 日窗沿，实际可能更早" if i == 0 else ""
-                out["degraded"] = ("韭研区间天数缺失，首板日由 60 日池史回溯、"
-                                   f"断板次数不可算{edge}")
+                out["degraded"] = (f"韭研区间天数缺失，断板次数不可算{edge}")
                 return out
-        out["degraded"] = "首板日超出 60 日回溯窗（fail-visible）"
+        out["degraded"] = "首板日超出 60 日回溯窗"
         return out
     # 韭研「N天M板」的 N 是**区间跨度（含今日）**，故首板日 = N-1 个交易日前（
     # 2026-10-19 review P1：旧写 N 与同时打印的日期相差一天，段内自相矛盾）。
@@ -1026,13 +1025,11 @@ def _leader_genesis(db: Any, date: str, code: str, entry: dict[str, Any],
     # 归因顺序（§1.2.6）：①原料边界（早于韭研池史起点 / 该日池缺失）→ ②题目/口径（首板日推算）。
     edge = _pool_history_first_date(db)
     if edge and first < edge:
-        out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 早于韭研池史起点"
-                           f"（{edge} 起），无法校验")
+        out["degraded"] = f"首板日 {first} 早于韭研池史起点"
     elif not pool:
-        out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 韭研池缺失，无法校验")
+        out["degraded"] = f"首板日 {first} 韭研池缺失"
     else:
-        out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 不在韭研池"
-                           f"（首板日仅为推算；或该股当日停牌）")
+        out["degraded"] = f"首板日 {first} 不在韭研池"
     return out
 
 
@@ -1111,15 +1108,15 @@ def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
             survivors = set(stats_a["promoted"]) & set(stats_b["promoted"])
             promoted_today = set(stats_b["promoted"])
         else:
-            chain_reason = f"{dates['d2']}/{dates['d1']} 晋级率不可算（池缺失）"
+            chain_reason = f"{dates['d2']}/{dates['d1']} 晋级率不可算"
     chain_ok = chain_reason is None
     out["chain"] = {"ok": chain_ok, "reason": chain_reason}
     if chain_reason:
-        out["degraded"].append(f"三日链不可算（{chain_reason}），主线降级为今日家数口径")
+        out["degraded"].append(f"三日链不可算（{chain_reason}）")
     else:
         for c in sorted(survivors | promoted_today):
             if c not in pool:
-                out["degraded"].append(f"{c} 不在今日韭研池（日线补证封板/口径不一致）")
+                out["degraded"].append(f"{c} 不在今日韭研池")
 
     names: list[str] = []
     for d in axis:
@@ -1215,7 +1212,7 @@ def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
                                 key=lambda r: order.get(r["name"], 99))
     else:
         out["sectors"] = ranked[:5]
-        out["degraded"].append("主线板块不可算（三日链与今日板块结构均无有效股）")
+        out["degraded"].append("主线板块不可算")
 
     # ── 龙头结构（总/情绪/板块龙一）
     total_code, total_entry = sorted(pool.items(), key=lambda kv: (
@@ -1246,7 +1243,7 @@ def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
         }
         out["sameStock"] = sent_code == total_code
     else:
-        out["degraded"].append("情绪龙头不可算（池内无真连板可验）")
+        out["degraded"].append("情绪龙头不可算")
 
     if main_row:
         dragons = dragon_rows(boards[date].get(main_row["name"]) or [],
@@ -1280,7 +1277,7 @@ def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
             succ["degraded"] = f"{prev_date} 韭研 final 缺失"
         out["succession"] = succ
     else:
-        out["degraded"].append("龙头更替不可算（无上一交易日）")
+        out["degraded"].append("龙头更替不可算")
     return out
 
 
@@ -1290,13 +1287,12 @@ def sector_relay_lines(struct: dict[str, Any]) -> list[str]:
     sectors = struct.get("sectors") or []
     if not sectors:
         reason = "；".join(struct.get("degraded") or []) or "韭研 final 缺失"
-        return [f"板块接力链（三日）：不可算（{reason}，fail-visible）"]
+        return ["板块接力链（三日）：不可算"]
     main = struct.get("mainline") or {}
     chain = struct.get("chain") or {}
     chain_ok = bool(chain.get("ok"))
     chain_reason = chain.get("reason") or "链日数据缺失"
-    lines = ["板块接力链（三日 D-2→D0；主线=存活股优先，存活为零或不可算时逐级降级，依据见结论行；"
-             "个股归属取韭研首个板块，家数按全部归属不去重）："]
+    lines = ["板块接力链（三日 D-2→D0）："]
     for s in sectors:
         cols = []
         for key in ("d2", "d1"):
@@ -1346,18 +1342,13 @@ def sector_relay_lines(struct: dict[str, Any]) -> list[str]:
         fallback_txt = ("；真题材全无证据，泛板块傅底"
                         if main.get("name") in _PSEUDO_BOARDS else "")
         lines.append(
-            f"主线板块：{main.get('name')}"
-            f"（依据 {_SECTOR_BASIS_CN.get(main.get('basis'), main.get('basis'))}"
-            + (f"；三日链不可算：{chain_reason}"
-               if not chain_ok and main.get("basis") == "chain_na" else "")
-            + f"；{surv_txt}{hold_txt}、"
-            f"今日 {main.get('d0Count') or 0} 只·最高{main.get('d0MaxBoardText') or '?'}）"
-            + (f"；泛板块「{main['pseudoExcluded']}」家数/存活更多但非题材口径，已排除"
-               if main.get("pseudoExcluded") else "")
+            f"主线板块：{main.get('name')}："
+            + f"{surv_txt}{hold_txt}、"
+            f"今日 {main.get('d0Count') or 0} 只·最高{main.get('d0MaxBoardText') or '?'}"
             + fallback_txt
             + f"；总龙头在本板块：{in_main}")
     else:
-        lines.append(f"主线板块：不可算（{'；'.join(struct.get('degraded') or []) or '无有效板块'}）")
+        lines.append("主线板块：不可算")
     # v7 D5：同桶隔日连板基线（结构基线零模型查表，单一事实源 theme_leader_baseline；
     # 主线板块龙一的「高度×家数×封板时段」桶对应历史隔日连板率——任何题材判定必须
     # 先超的基准。桶键取 mainline.sustain（封板二分+真连板序，与表同口径；评审修复
@@ -1368,24 +1359,23 @@ def sector_relay_lines(struct: dict[str, Any]) -> list[str]:
         if sus:
             bl = sustain_baseline_for(sus.get("streak"), sus.get("boardN"),
                                       sus.get("time"))
-            calib = "（THS 池缺失，桶键按触板口径）" if sus.get("touchCaliber") else ""
+            calib = ""   # 2026-10-30g+：口径注删
             if bl.get("bucketTxt"):
                 combo = bl.get("combo")
                 combo_txt = (f"同桶历史率 {combo[0]}%（{combo[1]} 样本）" if combo
                              else f"同桶样本不足，按高度档 {bl['byStreak'][0]}%"
                              f"（{bl['byStreak'][1]} 样本）")
-                lines.append(f"同桶隔日连板基线（主线板块龙一（封板口径）"
+                lines.append(f"同桶隔日连板基线："
                              f"{sus.get('name') or sus.get('code')}："
-                             f"{bl['bucketTxt']}{calib}）：{combo_txt}｜总体 {bl['overall'][0]}%"
-                             f"（{bl['overall'][1]} 样本，窗口 {bl['window']}；"
-                             f"结构基线零模型，题材证据见题材段）")
+                             f"{bl['bucketTxt']}：{combo_txt}｜总体 {bl['overall'][0]}%"
+                             f"（{bl['overall'][1]} 样本，窗口 {bl['window']}）")
             else:
-                lines.append(f"同桶隔日连板基线：桶不可定位（真连板不可算）｜总体 {bl['overall'][0]}%"
-                             f"（{bl['overall'][1]} 样本，窗口 {bl['window']}；结构基线零模型）")
+                lines.append(f"同桶隔日连板基线：桶不可定位｜总体 {bl['overall'][0]}%"
+                             f"（{bl['overall'][1]} 样本，窗口 {bl['window']}）")
         else:
-            lines.append(f"同桶隔日连板基线：桶不可定位（主线板块无封板股）｜"
+            lines.append(f"同桶隔日连板基线：桶不可定位｜"
                          f"总体 {SUSTAIN_OVERALL[0]}%（{SUSTAIN_OVERALL[1]} 样本，"
-                         f"窗口 {SUSTAIN_WINDOW}；结构基线零模型）")
+                         f"窗口 {SUSTAIN_WINDOW}）")
     return lines
 
 
@@ -1394,9 +1384,8 @@ def leader_structure_lines(struct: dict[str, Any]) -> list[str]:
     total = struct.get("totalLeader")
     if not total:
         reason = "；".join(struct.get("degraded") or []) or "韭研 final 缺失"
-        return [f"龙头结构：不可算（{reason}，fail-visible）"]
-    lines = ["龙头结构（总龙头=区间高度M最高；情绪龙头=当前真连板最高；"
-             "板块龙头=dragon_rows 龙一）："]
+        return [f"龙头结构：不可算（{reason}）"]
+    lines = ["龙头结构："]
     lines.append(
         f"· 总龙头 {total.get('name')}({total.get('code')}) {total.get('rangeText')}"
         f"·真连板{_streak_txt(total.get('streak'))}·{total.get('sector') or '?'}板块"
@@ -1411,10 +1400,10 @@ def leader_structure_lines(struct: dict[str, Any]) -> list[str]:
         if struct.get("sameStock"):
             lines.append("· 一致性：总龙头与情绪龙头为同一只")
         else:
-            lines.append("· 一致性：总龙头与情绪龙头不同（总龙头区间高度最高、情绪龙头真连板最高）")
+            lines.append("· 一致性：总龙头与情绪龙头不同")
     else:
-        lines.append("· 情绪龙头 不可算（池内无真连板可验：今日 THS 炸板池缺失或全池无连板）")
-        lines.append("· 一致性：不可判（情绪龙头不可算）")
+        lines.append("· 情绪龙头 不可算")
+        lines.append("· 一致性：不可判")
     main = struct.get("mainline") or {}
     if main:
         if struct.get("leaderIsMainlineDragon"):
@@ -1439,7 +1428,7 @@ def leader_structure_lines(struct: dict[str, Any]) -> list[str]:
         if genesis.get("degraded"):
             lines.append(f"  （{genesis['degraded']}）")
     else:
-        lines.append(f"· 诞生轨迹：不可算（{genesis.get('degraded') or '首板日不可得'}）")
+        lines.append("· 诞生轨迹：不可算")
     succ = struct.get("succession") or {}
     prev_leader = succ.get("prevLeader")
     if prev_leader:
@@ -1454,7 +1443,7 @@ def leader_structure_lines(struct: dict[str, Any]) -> list[str]:
             lines.append(f"· 更替：{succ.get('prevDate', '')[5:]} 总龙头 {prev_leader.get('name')}"
                          f" → 今日延续")
     else:
-        lines.append(f"· 更替：不可算（{succ.get('degraded') or '无上一交易日/韭研 final 缺失'}）")
+        lines.append("· 更替：不可算")
     return lines
 
 
@@ -1488,7 +1477,7 @@ def relay_trajectory_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
         zt = m.get("ztCount") if isinstance(m.get("ztCount"), (int, float)) else "?"
         mb = m.get("maxBoard") if isinstance(m.get("maxBoard"), (int, float)) else "?"
         rows.append(f"{d[5:]}|涨停{zt}|最高{mb}板|晋级{promo}")
-    calib = "（THS炸板池缺失日晋级按触板口径）" if degrade else ""
+    calib = ""   # 2026-10-30g+：口径注删
     return (f"近{len(rows)}日连板轨迹（含今日；日期|涨停|最高板|晋级率）："
             f"{' ； '.join(rows)}{calib}\n"
             + swing_summary_line(db, date, n - 1, dataset_id=dataset_id))
@@ -1551,21 +1540,7 @@ def _zt_caliber_note(db: Any, date: str, dataset_id: str,
     不是「触板未封」，旧文案把单一成因写死会教给模型假状态。THS 池缺失日不附注
     （不伪造差值 0，fail-visible）。
     """
-    ths = _ths_sealed_codes(db, date, dataset_id)
-    if ths is None:
-        return ""
-    extra = sorted(set(bisect_codes) - ths)   # 二分有、THS 无
-    lack = sorted(ths - set(bisect_codes))    # THS 有、二分无（韭研 final 漏收/名不匹配）
-    if not extra and not lack:
-        return f"（同花顺涨停池 {len(ths)} 只，两口径一致）"
-    parts = [f"同花顺涨停池 {len(ths)} 只"]
-    if extra:
-        names = "、".join(f"{(pool.get(c) or {}).get('name') or c}" for c in extra[:3])
-        more = f" 等{len(extra)}只" if len(extra) > 3 else ""
-        parts.append(f"二分多出 {len(extra)} 只（{names}{more}，触板未封/新股/THS池剔除需个股核）")
-    if lack:
-        parts.append(f"THS 多出 {len(lack)} 只（韭研 final 漏收，二分口径漏计）")
-    return f"（{'；'.join(parts)}）"
+    return ""   # 2026-10-30g+：口径对账注整行删（用户裁决，叙事只留行情数字）
 
 
 def _ths_pool_items(db: Any, date: str, dataset_id: str, key: str) -> tuple[list[dict], bool]:
@@ -1606,7 +1581,7 @@ def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
     """
     counts, found = _ths_pool_counts(db, date, dataset_id)
     if not found or not isinstance(counts, dict):
-        return "今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）"
+        return "今日炸板面：不可算"
     n = counts.get("failed")
     r = counts.get("rushing")
     d = counts.get("drawdown")
@@ -1632,10 +1607,8 @@ def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
             cmp_txt = (f"炸板 {p_n}→{n} 家（{n - p_n:+d}）· 反复开板 不可算（个股级缺）")
         else:
             cmp_txt = "不可算（昨日 THS 炸板池家数缺失）"
-    return (f"今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）："
-            f"{zb_txt}；{rush_txt}；{dd_txt}；较昨日：{cmp_txt}；"
-            f"反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算（个股级缺失）；"
-            f"分位不可算（历史序列含旧 schema 日）")
+    return (f"今日炸板面：{zb_txt}；{rush_txt}；{dd_txt}；较昨日：{cmp_txt}；"
+            f"反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算；分位 不可算")
 
 
 def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
@@ -1667,20 +1640,20 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             hi2 = sum(1 for i in by2.values()
                       if isinstance(i.get("open_num"), (int, float)) and i.get("open_num") >= 2)
             hist.append((len(by2), hi2))
-    pct_txt = "（历史炸板数据不足 5 日，无分位参照）"
+    pct_txt = "（样本不足）"
     if len(hist) >= 5:
         pct = round(sum(1 for x in hist if x[0] < n) / len(hist) * 100)
         pct_txt = f"（近{len(hist)}日分位 P{pct}，均值 {_median([x[0] for x in hist]) or 0:.0f} 家）"
     # 反复开板
     hi = [i for i in by_code.values() if isinstance(i.get("open_num"), (int, float)) and i.get("open_num") >= 2]
-    hi_pct_txt = "（历史反复开板数据不足 5 日，无分位参照）"
+    hi_pct_txt = "（样本不足）"
     if len(hist) >= 5:
         hpct = round(sum(1 for x in hist if x[1] < len(hi)) / len(hist) * 100)
         hi_pct_txt = f"（近{len(hist)}日分位 P{hpct}）"
     hi_txt = f"反复开板(≥2次) {len(hi)} 家（占 {round(len(hi) / n * 100) if n else 0}%）{hi_pct_txt}"
     # 昨日池分层：昨日池股今日炸 = 连板断层前导
     prev_dates = trading_dates_before(db, date, 1)
-    layer_txt = "昨日池股炸板：不可算（昨日韭研池缺失）"
+    layer_txt = "昨日池股炸板：不可算"
     if prev_dates:
         prev_pool = _pool_of(db, prev_dates[-1])
         if not prev_pool:  # review C1：_pool_of 缺档返回 {} 永非 None，原 is None 判断是死分支（伪 0）
@@ -1699,7 +1672,7 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
         big = sum(1 for r in rates if r <= -5)
         rate_txt = f"炸板股收盘涨幅中位 {_median(rates):+.1f}%、大面(≤-5%) {big} 家"
     else:
-        rate_txt = "炸板股收盘表现不可算（change_rate 缺失）"
+        rate_txt = "炸板股收盘表现不可算"
     # 代表股（开板次数降序前 3）
     reps = sorted(by_code.values(), key=lambda i: (i.get("open_num") or 0), reverse=True)[:3]
     rep_txt = "、".join(
@@ -1711,7 +1684,7 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     # 全库叙事此前从未组装昨日炸板家数，模型无从判方向，是 insufficient_evidence 逃生的
     # 结构性口子（10-15 P0/09-21 P62 两日均缺此锚）。昨日帧数据现成（分位回溯同源）。
     if not prev_dates:
-        cmp_txt = "较昨日：不可算（无昨日交易日）"
+        cmp_txt = "较昨日：不可算"
     else:
         prev_items, prev_found = _ths_failed_items(db, prev_dates[-1], dataset_id)
         prev_items = list(prev_items.values())
@@ -1719,9 +1692,9 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             # F1 兼容：昨日是旧 schema 日（只有家数）→ 家数级对比（同源同义字段，带标注；预注册 D1）
             prev_counts, prev_cfound = _ths_pool_counts(db, prev_dates[-1], dataset_id)
             prev_n2 = (prev_counts or {}).get("failed") if prev_cfound else None
-            cmp_txt = (f"较昨日：炸板 {prev_n2}→{n} 家（{n - prev_n2:+d}）· 反复开板 不可算（个股级缺）"
+            cmp_txt = (f"较昨日：炸板 {prev_n2}→{n} 家（{n - prev_n2:+d}）· 反复开板 不可算"
                        if isinstance(prev_n2, int) and isinstance(n, int) else
-                       "较昨日：不可算（昨日 THS 炸板池缺失/降级）")
+                       "较昨日：不可算")
         else:
             prev_by = {str(i.get("code") or "")[-6:]: i for i in prev_items if i.get("code")}
             p_n = len(prev_by)
@@ -1742,7 +1715,7 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
                     + f"、板块退潮 {dist.get('sector_collapse', 0)} 家、追高被砸 {dist.get('chase_fail', 0)} 家、"
                     f"大盘拖累 {dist.get('broad_market', 0)} 家")
     else:
-        dist_txt = f"炸板归因打标：未覆盖（0/{n}，归因证据缺失）"
+        dist_txt = f"炸板归因打标：未覆盖（0/{n}）"
     # 冲刺未封（2026-10-16 补供）：THS 冲刺池=盘中冲板未封，代表股按收盘涨幅降序
     rush_items, rush_found = _ths_pool_items(db, date, dataset_id, "rushing")
     if rush_found:
@@ -1752,7 +1725,7 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
                               for i in rush_sorted[:3] if i.get("name"))
         rush_txt = f"冲刺未封 {len(rush_items)} 家" + (f"（{rush_names}）" if rush_names else "")
     else:
-        rush_txt = "冲刺未封 不可算（THS 冲刺池缺失/降级）"
+        rush_txt = "冲刺未封 不可算"
     # 烂板（涨停池里开板≥2 次又回封）：帧 sealQuality 现成，语料此前不消费。
     # rottenShare 在 quality_n==0（info_items 空）时由上游置 None，而 rottenCount 仍给 0——
     # 不判型就 round(None*100) 会 TypeError 炸掉整个 relay 日（fail-visible 变崩溃）
@@ -1761,10 +1734,9 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     if isinstance(rotten, int) and isinstance(share, (int, float)) and not isinstance(share, bool):
         rotten_txt = f"涨停池烂板（开板≥2次回封）{rotten} 家（占 {round(share * 100)}%）"
     elif isinstance(rotten, int):
-        rotten_txt = (f"涨停池烂板（开板≥2次回封）{rotten} 家"
-                      f"（占比不可算：sealQuality 样本为空，fail-visible）")
+        rotten_txt = f"涨停池烂板（开板≥2次回封）{rotten} 家（占比不可算）"
     else:
-        rotten_txt = "涨停池烂板 不可算（sealQuality 缺失）"
+        rotten_txt = "涨停池烂板 不可算"
     return (f"今日炸板面：炸板 {n} 家{pct_txt}；{hi_txt}；{layer_txt}；{rate_txt}；"
             f"反复开板代表：{rep_txt or '无'}；{dist_txt}；{cmp_txt}；{rush_txt}；{rotten_txt}")
 
@@ -1799,7 +1771,7 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
             cls = dict(cls, prevIdx=_p)
     first_run = db[COLLECTION].find_one({"_id": f"{date}:RELAY"}) is None
     if cls.get("prevIdx") is None or prev_date is None:
-        parts.append("昨日 relayIndex 缺失（形态不可判，fail-visible）")
+        parts.append("昨日 relayIndex 缺失，形态不可判")
     else:
         prev_i = cls["prevIdx"]
         zone_txt = "弱势区" if prev_i <= WEAK_IDX_MAX else (
@@ -1820,7 +1792,7 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
         weak_zone = prev_i <= WEAK_IDX_MAX
         if slot != "15:00":
             # 午盘档：形态不落地，只给预检参照（分类器确认基于收盘序列，不伪判）
-            parts.append(f"午盘预检：{'、'.join(conf) if conf else '原料缺失'}（形态盘后定档）")
+            parts.append(f"午盘预检：{'、'.join(conf) if conf else '无确认项'}（形态盘后定档）")
         elif first_run:
             # 首判（审查 MF-1）：今日评分未落库，形态不可判，只给结构预检；不冒充未命中
             parts.append(f"今日 relayIndex 待落库（形态随收盘评分定档）"
@@ -1831,14 +1803,15 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
             elif cls.get("reason") in ("idx_below_strong", "delta_below_threshold"):
                 # 未达标的是指数侧（idx/Δ），结构侧状态单独表述（2026-10-22 措辞修复：
                 # 10-20 重跑后 idx 47.8<50 但 dt↓+zt↑ 均确认，旧文案误写「结构确认未命中」自相矛盾）
-                parts.append(f"指数未达强势区（{cls.get('idx')}，判据需≥{STRONG_IDX_MIN:g} 且 Δ≥{MIN_IDX_DELTA:g}）"
+                parts.append(f"指数未达强势区（{cls.get('idx')}）"
                              + (f" · 结构确认已满足：{'、'.join(conf)}" if conf else " · 结构确认未满足")
                              + "，不贴形态标")
             else:
-                parts.append(f"结构确认未命中（{'、'.join(conf) if conf else '原料缺失'}），不贴形态标")
+                parts.append(f"结构确认未命中（{'、'.join(conf)}），不贴形态标" if conf
+                         else "结构确认未命中，不贴形态标")
         else:
-            parts.append(f"今日结构：{'、'.join(conf) if conf else '原料缺失'}"
-                         f"（昨日非弱势区，不贴形态标）")
+            parts.append(f"今日结构：{'、'.join(conf)}，昨日非弱势区，不贴形态标"
+                         if conf else "今日结构：无确认项，不贴形态标")
     # 定格 vs 重评分歧注记（fail-visible，不静默）：重跑改了评分但节点已定格
     if slot == "15:00" and cls.get("idx") is not None:
         _d = (db[COLLECTION].find_one({"_id": f"{date}:RELAY"}) or {}).get("relayIndex")
@@ -1888,10 +1861,9 @@ def rewrap_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     pool = build_rewrap_pool(db, date, "final", dataset_id)
     miss = pool.get("missing") or {}
     if miss.get("axis_short") or miss.get("today_list_empty"):
-        return (f"反包修复：不可算（{'交易日轴不足' if miss.get('axis_short') else '当日名单为空'}，"
-                f"fail-visible）")
+        return "反包修复：不可算"
     if miss.get("prev_final_missing"):
-        return "反包修复：不可算（昨日名单缺失，候选池不可验，fail-visible）"
+        return "反包修复：不可算"
     # 近 20 日分位：优先读池快照已算好的 ratePct20d（relay 链在打标步之后，快照已落库），
     # 缺失再现算序列（审查 nit13：避免每次叙事构建 20 日 × 全池重算）
     rate_pct = None
@@ -1909,7 +1881,7 @@ def rewrap_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     if pool.get("prevFailedFound"):
         head += f" · 昨日炸板回封 {pool['resealN']}/{pool['prevFailedN']}（{_pct_txt(pool.get('resealRate'))}）"
     else:
-        head += " · 昨日炸板池缺失（回封率不可算，fail-visible）"
+        head += " · 昨日炸板池缺失，回封率不可算"
     reps = pool.get("stocks") or []
     if reps:
         rep_txt = "、".join(
@@ -1946,7 +1918,7 @@ def market_index_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) 
         {"indices": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
     idx = (f or {}).get("indices")
     if not isinstance(idx, dict) or not idx:
-        return "大盘指数：不可算（15:00 帧缺失/indices 空，fail-visible）"
+        return "大盘指数：不可算"
     extra = idx.get("indexExtra")
     extra = extra if isinstance(extra, dict) else {}
 
@@ -1956,16 +1928,16 @@ def market_index_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) 
         pct = entry.get("changePct")
         if isinstance(pct, (int, float)) and not isinstance(pct, bool):
             # 历史回填口径标注（backfill_frame_indices）：回填值非 15:00 实采，不伪装成帧值
-            tag = "（日线回填）" if entry.get("src") == "tdx_daily_backfill" else ""
+            tag = ""   # 2026-10-30g+：来源注删
             return f"{name} {pct:+.2f}%{tag}"
         ch = entry.get("change")
         if isinstance(ch, (int, float)) and not isinstance(ch, bool):
-            return f"{name} {ch:+.2f}点（点位口径）"
+            return f"{name} {ch:+.2f}点"
         return f"{name} 缺失"
 
     parts = ([_one(name, idx.get(key)) for key, name in _INDEX_MAIN_DISPLAY]
              + [_one(name, extra.get(key)) for key, name in _INDEX_EXTRA_DISPLAY])
-    note = "" if extra else "（深证成指/创业板指/科创50 该日未采集）"
+    note = "" if extra else "（该日未采集）"
     return f"大盘指数：{' · '.join(parts)}{note}"
 
 
@@ -1988,7 +1960,7 @@ def _percentile_scale_line(money_hist: list[dict[str, Any]]) -> str:
     各轴独立披露有效样本数（TDX 覆盖不足日不入样本，不补 0）。
     """
     if not money_hist:
-        return "近20日分位刻度：不可算（无历史样本，fail-visible）"
+        return "近20日分位刻度：不可算"
     total = len(money_hist)
     axes = (("晋级率", "promo", False), ("炸板家数", "zhaban", False),
             ("断板中位", "broken_median", True), ("隔日溢价", "premium_median", True))
@@ -2003,8 +1975,7 @@ def _percentile_scale_line(money_hist: list[dict[str, Any]]) -> str:
         fmt = (lambda v: f"{v:+.1f}%") if signed else (lambda v: f"{round(v)}")
         parts.append(f"{label} P20/P50/P80={fmt(q20)}/{fmt(q50)}/{fmt(q80)}"
                      f"（有效 {len(valid)}/{total} 日）")
-    return ("近20日分位刻度（样本=严格早于当日的近20个交易日，打分参照带）："
-            + " · ".join(parts))
+    return ("近20日分位刻度：" + " · ".join(parts))
 
 
 def anchor_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
@@ -2017,7 +1988,7 @@ def anchor_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     保留近20日极值锚（relay_index/phase/ladder 三题显式引用的坐标系）。
     v7 D4：补分位刻度行（`money_hist` 由叙事组装一次算齐传入，缺省自算）。
     """
-    lines = ["【近20日参照锚（客观事实，打分坐标系；非模型结论）】"]
+    lines = ["【近20日参照锚】"]
     # 近20日极值锚（涨停家数/最高板）；market_metrics None（帧缺失日）跳过——数据不足由下方分支兜底。
     # 含今日：trading_dates_before 严格早于 date，今日创新高时锚会显示旧峰值，与事实行
     # 「最高 11 板（100 分位）」自相矛盾（2026-10-16 600825 停牌复牌实证）。
@@ -2034,11 +2005,11 @@ def anchor_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             m_peak = max(mb, key=lambda x: x[1])
             board_anchor = f"；最高板峰值 {m_peak[1]} 板（{m_peak[0][5:]}）"
         else:
-            board_anchor = "；最高板峰值 不可算（窗口内无真连板高度，fail-visible）"
+            board_anchor = "；最高板峰值 不可算"
         lines.append(f"近20日锚：涨停峰值 {z_peak[1]} 家（{z_peak[0][5:]}）/谷值 {z_low[1]} 家"
                      f"（{z_low[0][5:]}）{board_anchor}")
     else:
-        lines.append("近20日锚：历史数据不足（fail-visible）")
+        lines.append("近20日锚：历史数据不足")
     lines.append(_percentile_scale_line(
         money_hist if money_hist is not None else _money_hist_series(db, date, dataset_id)))
     return lines
@@ -2062,7 +2033,7 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     struct = struct if struct is not None else relay_structure(db, date, dataset_id)
     # v7 D3/D4：钱效/晋级 20 日历史序列一次算齐（钱效分位行与锚段刻度行共用，防双算）
     money_hist = _money_hist_series(db, date, dataset_id)
-    lines: list[str] = [f"{date} 交易日 · 连板情绪指数判定（叙事）"]
+    lines: list[str] = [f"{date} 交易日 · 连板情绪指数判定"]
     # 段1 总账（market_facts_line 已含双源梯队/分位）+ 大盘指数（v7 D2）+ 今日炸板面（2026-10-11 StepB）
     lines.append(market_facts_line(db, date, dataset_id))
     lines.append(market_index_line(db, date, dataset_id))

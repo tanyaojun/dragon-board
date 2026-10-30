@@ -733,9 +733,9 @@ def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
     # 2026-10-30d 语料精简：序列 <3 日时与昨日承接行几乎全重叠，不出行（≥3 日才列）
     if history and len(history) >= 3:
         seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
-        hist_txt = f"；近 {len(history)} 日该板块封板家数（旧→新，缺口日不列）：{seq}"
+        hist_txt = f"；近 {len(history)} 日该板块封板家数：{seq}"
     elif history is not None and not history:
-        hist_txt = "；近数日家数序列不可考（历史日该板块名无收录或 THS 池缺失）"
+        hist_txt = "；近数日家数序列不可考"
     return prev_txt, hist_txt
 
 
@@ -747,7 +747,7 @@ def _leader_brief(leader: dict, seg: str | None = None) -> str:
                 else "，10 日涨幅不可考")
     if leader.get("leaderSealedToday") is False:
         return (f"{seg_cn} {leader.get('name')}（{leader.get('code')}）今日未封板"
-                f"（断板反包候选{gain_txt}，轨内未封候选按 10 日涨幅取首位）")
+                f"（断板反包候选{gain_txt}）")
     streak = leader.get("streak")
     streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
     time_txt = str(leader.get("time") or "时间不可考")
@@ -991,7 +991,7 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     if unsealed:
         leader_txt = f"待判龙一 {leader.get('name')}（{leader.get('code')}）今日未封板（断板反包候选"
         if gain10 is not None:
-            leader_txt += f"，10 日涨幅 {gain10:+.1f}%（轨内未封候选首位）"
+            leader_txt += f"，10 日涨幅 {gain10:+.1f}%"
         leader_txt += "）"
     else:
         streak = leader.get("streak")
@@ -1004,7 +1004,7 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     follow_txt = (f"板块内真连板≥{max(1, ((leader.get('streak') or 1)) - 1)} 的跟风 "
                   f"{followers_ge_ladder} 家"
                   if isinstance(followers_ge_ladder, int)
-                  else "跟风梯队不可算（龙一未封板，梯队见板块梯队形态行）")
+                  else "跟风梯队不可算")
     return (f"板块「{board}」今日封板 {board_n} 家；{leader_txt}；{follow_txt}；"
             f"{prev_txt}{hist_txt}")
 
@@ -1023,13 +1023,13 @@ def board_ladder_line(row: dict) -> str | None:
            f"3板+ {shape.get('threePlus', 0)} 家")
     unk = shape.get("unknown", 0)
     if unk:
-        seg += f"（另有 {unk} 只连板高度不可算）"
+        seg += f"；另有 {unk} 只连板高度不可算"
     leader_streak = row.get("streak")
     second = row.get("secondStreak")
     if isinstance(leader_streak, int) and isinstance(second, int):
         seg += f"；龙头 {leader_streak} 板，次高 {second} 板（领先 +{leader_streak - second}）"
     elif isinstance(leader_streak, int):
-        seg += f"；龙头 {leader_streak} 板，次高 不可考（板内无其它可算真连板）"
+        seg += f"；龙头 {leader_streak} 板，次高 不可算"
     else:
         seg += "；龙头连板高度不可算"
     return seg
@@ -1074,10 +1074,7 @@ DRIVER_BUYSIDE_CN = {
     "high_board_relay": "高位卡位/情绪接力", "pure_sentiment": "纯情绪修复",
     "insufficient": "信息不足",
 }
-DRIVER_CROSS_NONE_LINE = (
-    "个股打标交叉：无当日个股打标记录（该股不在打标名单或槽位未落，"
-    "仅指此行缺席，不构成任何方向证据）"
-)
+DRIVER_CROSS_NONE_LINE = "个股打标交叉：无当日个股打标记录"
 # 承接披露映射（打标链 carriedQuestionKeys 题键 → 交叉行轴名）：
 # 解析正文与前一日逐字相同时打标链不重问（carriedFrom=前一日），交叉行必须如实标注
 # 「承接判定」——新鲜度等轴是昨日判断，不是当日重问（防模型把承接值当当日新鲜证据）。
@@ -1228,10 +1225,16 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     stocks = [s for s in (facts or {}).get("stocks") or [] if isinstance(s, dict)]
     if not stocks:
         if (facts or {}).get("empty_structured"):
-            return (head + f"--（当日分组榜单未生成，上游 orderSign="
-                    f"{facts.get('order_sign_count', 0)} 组；榜约盘后生成，缺当日事实≠无上榜）")
-        reason = (facts or {}).get("reason") or ("当日无上榜个股行" if (facts or {}).get("ok")
-                                                 else "no_data")
+            return head + "--，当日分组榜单未生成，缺当日事实≠无上榜"
+        reason = str((facts or {}).get("reason")
+                     or ("当日无上榜个股行" if (facts or {}).get("ok") else "无数据"))
+        # 2026-10-30g+：工程词中文化（用户裁决），降级原因不带括号
+        if reason == "no_data":
+            reason = "无数据"
+        elif reason.startswith("lhb_list_fetch_failed"):
+            reason = "榜单拉取失败 " + reason.split(":", 1)[-1].strip()
+        elif reason.startswith("fetch_failed"):
+            reason = "榜单拉取失败 " + reason.split(":", 1)[-1].strip()
         return f"{head}--，{reason}"
     by_code = {str(s.get("code") or "")[-6:]: s for s in stocks if str(s.get("code") or "")[-6:]}
     ordered: list[str] = []
@@ -1374,7 +1377,7 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(market_summary)
     if forward_axis:
         lines.append(forward_axis)
-    lines.append(f"待判板块：{board}（龙一分轨：主板/双创各按空间板优先、首封最早取龙一，并列见结构行）")
+    lines.append(f"待判板块：{board}")
     lines.append(structure)
     if ladder_line:
         lines.append(ladder_line)

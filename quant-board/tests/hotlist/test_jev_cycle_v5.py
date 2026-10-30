@@ -93,7 +93,7 @@ def test_energy_line_flat_and_bool_guard():
 def test_energy_line_missing_fail_visible():
     rows = _amount_rows(("2026-09-01", 1.0e12))
     out = runner._cycle_energy_line(_Db({"market_daily_amount": _Col(rows)}), "2026-09-03")
-    assert "数据缺口（fail-visible）" in out  # 当日缺失
+    assert "数据缺口" in out  # 当日缺失；2026-10-30g+：fail-visible 词删
 
 
 def test_breadth_line_hit_and_gap():
@@ -105,13 +105,13 @@ def test_breadth_line_hit_and_gap():
     assert "上涨 1491 家／下跌 3948 家" in out and "跌停 16 家" in out
     db2 = _Db({"snapshot_frames": _Col([{"_id": "f", "tradingDate": "2026-10-09",
                                          "slotTime": "15:00", "timestamp": 2}])})
-    assert "marketStats 缺口（fail-visible）" in runner._cycle_breadth_line(db2, "2026-10-09", "x")
+    assert "全市场涨跌：不可算" in runner._cycle_breadth_line(db2, "2026-10-09", "x"), "2026-10-30g+：括号删"
     # 0 值与缺字段区分注记（7-9 月碎裂帧存 0 非缺字段，review A-P3）
     db3 = _Db({"snapshot_frames": _Col([{"_id": "f", "datasetId": "x", "type": "half_hour",
                                          "tradingDate": "2026-10-09",
                                          "slotTime": "15:00", "timestamp": 2,
                                          "marketStats": {"upCount": 0, "downCount": 0}}])})
-    assert "读数为 0（历史碎裂，fail-visible）" in runner._cycle_breadth_line(db3, "2026-10-09", "x")
+    assert "读数为 0" in runner._cycle_breadth_line(db3, "2026-10-09", "x"), "2026-10-30g+：括号删"
 
 
 def test_drawdown_line_hit_and_gap():
@@ -122,7 +122,7 @@ def test_drawdown_line_hit_and_gap():
     db = _Db({"snapshot_frames": _Col([frame_ok])})
     out = runner._cycle_drawdown_line(db, "2026-09-17", "dragonboard_live")
     assert "回撤池 8 家" in out and "平均回撤 12.6%" in out and "最深 18.1%" in out  # 18.15 浮点实际 18.149…→:.1f=18.1
-    assert "drawdown 缺口（fail-visible）" in runner._cycle_drawdown_line(
+    assert "大面规模：数据缺口" in runner._cycle_drawdown_line(
         _Db({}), "2026-09-17", "x")
 
 
