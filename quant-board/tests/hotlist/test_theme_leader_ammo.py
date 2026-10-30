@@ -70,7 +70,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v13"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30f"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30g"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "5d50645e5dc8"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -351,7 +351,7 @@ def test_headroom_anchor_line_fallbacks_and_disclosure():
     """
     row = {"streak": 4, "boardN": 9, "time": "09:20:00"}
     line = A.headroom_anchor_line(_cycle_rows(), row, min_combo_n=2)
-    assert line.startswith("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）："), \
+    assert line.startswith("空间锚："), \
         "2026-10-30d：再走≥1板率定义在题面已给，叙事侧不重复"
     assert "剔右删失样本 5 个" in line and "总体 再走≥1板率 33.3%" in line
     # 同桶（streak4+|n>=8|early）内 A10-15 与 E10-14 两样本（剩余均 0）→ 组合桶成立出锚
@@ -371,8 +371,8 @@ def test_headroom_anchor_line_fallbacks_and_disclosure():
 
 
 def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
-    ev = ("【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n"
-          "题材语料（韭研产业树 + 开盘啦事件层）未采集（fail-visible：无数据 ≠ 无催化）。\n"
+    ev = ("【题材证据】\n"
+          "题材语料未采集（无数据 ≠ 无催化）。\n"
           "板块级催化：未映射（不代表无催化）")
     text = A.build_leader_narrative(
         date="2026-10-19", market_line="涨停 46 家", structure="板块「X」今日封板 2 家",
@@ -389,7 +389,7 @@ def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
 
 def test_narrative_order_with_2026_10_24c_lines():
     """2026-10-24c 三行固定序：前向轴紧跟盘面行，梯队/炸板面紧跟结构行，均 None 不出行。"""
-    ev = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n取数日 2026-10-23"
+    ev = "【题材证据】\n取数日 2026-10-23"
     text = A.build_leader_narrative(
         date="2026-10-23", market_line="涨停 81 家",
         forward_axis="交易日轴（前向）：下一交易日 2026-10-26（周一）",
@@ -414,7 +414,7 @@ def test_narrative_order_with_2026_10_24c_lines():
 
 def test_narrative_places_headroom_anchor_between_baseline_and_evidence():
     """Q1（2026-10-24b）：空间锚行排在基线后、证据块前（固定行序，便于逐字复现）。"""
-    ev = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n取数日 2026-10-23"
+    ev = "【题材证据】\n取数日 2026-10-23"
     anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同桶[x] 0.0 板"
     text = A.build_leader_narrative(
         date="2026-10-23", market_line="涨停 81 家", structure="板块「X」今日封板 3 家",
@@ -427,7 +427,7 @@ def test_narrative_places_headroom_anchor_between_baseline_and_evidence():
 
 def test_narrative_places_driver_cross_between_headroom_and_evidence():
     """打标交叉行（2026-10-27b）：排在空间锚后、证据块前；缺席走 fail-visible 行非 None。"""
-    ev = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n取数日 2026-10-27"
+    ev = "【题材证据】\n取数日 2026-10-27"
     anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同桶[x] 再走≥1板率 54.5%"
     cross = A.driver_cross_line({"labelSlot": "midday", "questionSetVersion": "v4.0",
                                  "label": "capital_flow", "catalystDepth": "core_main_business",
@@ -679,8 +679,8 @@ def test_limitup_reason_line_fail_visible():
     assert line.startswith("涨停原因："), "2026-10-30d：工程注记删"
     assert "韭研板内解析" not in line
     assert "主板龙一 菲林格尔=PCB设备+木地板" in line
-    assert "斯迪克=不可考" in line and "fail-visible" in line
-    assert "不可考 1" in line
+    assert "斯迪克=不可考" in line, "2026-10-30g：工程行话删"
+    assert "斯迪克=不可考" in line and "（" not in line.split("；")[-1], "2026-10-30g：尾部注删"
     # 全缺 → 全部不可考
     all_missing = A.limitup_reason_line([("文投控股", None)])
     assert "全部不可考" in all_missing or "不可考" in all_missing
@@ -694,10 +694,10 @@ def test_plate_strength_line_matches_and_fail_visible():
                                 "name": "AI硬件", "strength": 890.1, "pct": 5.2})
     assert "排名 #12/240" in ok and "强度 890.1" in ok and "板块涨幅 5.2%" in ok
     unmatched = A.plate_strength_line({"ok": False, "reason": "unmatched"})
-    assert "不可用（unmatched）" in unmatched and "不冒充" not in unmatched, \
+    assert "不可用，未匹配到 KPL 板块" in unmatched and "不冒充" not in unmatched, \
         "2026-10-30d：工程行话删"
     fetch_fail = A.plate_strength_line({"ok": False, "reason": "fetch_failed: timeout"})
-    assert "fetch_failed: timeout" in fetch_fail
+    assert "接口异常 timeout" in fetch_fail, "2026-10-30g：工程词中文化，括号删"
 
 
 def test_evidence_gate_subset_keys_for_a2_split():
@@ -765,7 +765,7 @@ def test_plate_series_line_recent_record_day_not_today_p1_3():
                 "lz_info": "603528,多伦科技,4连板"}]
     line = A.plate_series_line([{"date": "2026-10-28", "strength": 100}],
                                zt_rows, plate_name="X", label_date="2026-10-28")
-    assert "10-27（最近记录日，非当日）梯队串" in line
+    assert "10-27 最近记录日 梯队串" in line, "2026-10-30g：括号删"
     assert "当日梯队串" not in line
     zt_rows2 = [{"date": "2026-10-28", "zt_num": 24,
                  "lz_info": "603278,大业股份,2连板"}]
@@ -799,12 +799,12 @@ def test_plate_series_line_two_segment_disclosure():
                 "lz_info": "603278,大业股份,2连板;688836,宇树科技,"}]
     line = A.plate_series_line(rank_rows, zt_rows, plate_name="机器人概念",
                                label_date="2026-10-28")
-    assert "板块序列（「机器人概念」）" in line
-    assert "近3交易日强度/净额（层1·净额已同屏定档 2026-10-29）" in line
+    assert "板块序列 机器人概念：" in line, "2026-10-30g：括号删"
+    assert "近3交易日强度/净额：" in line and "同屏定档" not in line
     assert "10-28 强度31837 净额-482.2亿" in line and "10-24 强度7252 净额?" in line
-    assert "板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）" in line
+    assert "板块涨停家：" in line, "2026-10-30g：括号注释全删（用户裁决）"
     assert "10-23 家44" in line and "10-28 家24" in line
-    assert "大业股份(2连板)" in line and "交叉披露，不替换自算口径" in line
+    assert "大业股份(2连板)" in line and "梯队串：" in line and "不替换自算" not in line
     # 双空 → None（匹配状态由强度行披露，不重复）
     assert A.plate_series_line([], [], plate_name="x", label_date="2026-10-28") is None
 
@@ -816,10 +816,10 @@ def test_sector_l2_lead_label_not_leader_p2_2():
     # 直接测行渲染：走 digest 内部函数较重，改测 lead_label 判定语义等价路径
     text = A.build_leader_narrative(
         date="2026-10-28", market_line="M", structure="STRUCT", baseline="BASE",
-        evidence_block="板内解析（韭研异动「机器人」5 只）：板内成员（韭研分组序，非推导龙一）"
+        evidence_block="板内解析（韭研异动「机器人」5 只）：板内成员（非龙一）"
                        " X（600001）驱动标签「t」｜解析摘录：…",
         leader_name="大业", leader_code="603278", segment="main")
-    assert "板内成员（韭研分组序，非推导龙一）" in text
+    assert "板内成员（非龙一）" in text
 
 
 def test_plate_series_line_zt_fetch_error_p2_11():
@@ -876,7 +876,7 @@ def test_plate_series_line_sentinel_appended():
                   "main_net": -48221868016, "pct": 1.0, "amount": 1e9}]
     line = A.plate_series_line(rank_rows, None, plate_name="机器人概念",
                                label_date="2026-10-28")
-    assert "口径哨兵告警（raw[8] 推断口径自检·fail-visible）" in line
+    assert "口径哨兵告警：" in line and "raw[8]" not in line, "2026-10-30g：工程行话删"
     assert "净额>成交额 ×1" in line and "强度31837" in line
 
 
@@ -886,9 +886,9 @@ def test_plate_series_line_gap_rate_quantified():
                {"date": "2026-10-28", "zt_num": 24, "lz_info": ""}]
     line = A.plate_series_line([], zt_rows, plate_name="X", label_date="2026-10-28",
                                trading_days=6)
-    assert "窗口6交易日仅2条记录，记录间缺口≠零涨停" in line
+    assert "板块涨停家：10-23 家44" in line, "2026-10-30g：窗口缺口注删（用户裁决）"
     line2 = A.plate_series_line([], zt_rows, plate_name="X", label_date="2026-10-28")
-    assert "板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）" in line2
+    assert "板块涨停家：" in line2, "2026-10-30g：括号注释全删（用户裁决）"
 
 
 # ── 龙虎榜事实行（AMMO 2026-10-30a，预登记 §23） ──
@@ -912,9 +912,8 @@ LHB_FACTS = {
 def test_lhb_line_fetch_failure_fail_visible():
     line = A.lhb_line({"ok": False, "reason": "lhb_list_fetch_failed: boom"},
                       codes=["603278"])
-    assert line.startswith("龙虎榜（主力净额=盘中主力大单资金流口径"), "2026-10-30d：端点名删"
-    assert "主力净额=盘中主力大单资金流口径，非交易所席位额" in line, "口径标注防误消费"
-    assert "--（lhb_list_fetch_failed: boom）" in line
+    assert line.startswith("龙虎榜："), "2026-10-30g：口径头删（用户裁决）"
+    assert "--，lhb_list_fetch_failed: boom" in line, "2026-10-30g：降级原因不带括号"
     assert A.lhb_line(None, codes=["603278"]) == \
         A.lhb_line({"ok": False, "reason": "no_data"}, codes=["603278"])
 
@@ -987,7 +986,7 @@ def test_lhb_line_cap_discloses_overflow():
     facts = {"ok": True, "stocks": stocks}
     codes = [s["code"] for s in stocks]
     line = A.lhb_line(facts, codes=codes)
-    assert line.count("相关个股") == 6 and "另 2 只相关上榜略，fail-visible 披露" in line
+    assert line.count("相关个股") == 6 and "另 2 只相关上榜略" in line
 
 
 def test_narrative_lhb_line_placement_after_reason_line():
@@ -997,9 +996,9 @@ def test_narrative_lhb_line_placement_after_reason_line():
     lhb = A.lhb_line(LHB_FACTS, codes=["603278"], roles={"603278": "待判龙一"})
     n = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278",
                                  reason_line="涨停原因行", lhb_facts_line=lhb)
-    assert n.index("涨停原因行") < n.index("龙虎榜（主力净额") < n.index("【题材证据】")
+    assert n.index("涨停原因行") < n.index("龙虎榜：") < n.index("【题材证据】")
     n2 = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278")
     assert "龙虎榜" not in n2
     s = A.build_sector_narrative(**base, board="机器人", reason_line="涨停原因行",
                                  lhb_facts_line=lhb)
-    assert s.index("涨停原因行") < s.index("龙虎榜（主力净额") < s.index("【题材证据】")
+    assert s.index("涨停原因行") < s.index("龙虎榜：") < s.index("【题材证据】")

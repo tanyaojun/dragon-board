@@ -451,7 +451,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
 
     lines = [BLOCK_HEADER]
     if not state.get("ok"):
-        lines.append("题材语料未采集（无数据 ≠ 无催化）。"
+        lines.append("题材语料未采集。无数据 ≠ 无催化，"
                      "请勿据此判断催化有无。")
     else:
         stale = "" if not state.get("stale") else f"（注意：语料最近采集日 {state.get('latestFetchDate')}，非当日）"
@@ -464,7 +464,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     if not state.get("ok"):
         pass                                   # 未采集行已在前面给出，不再伪造 L3 明细
     elif not match.get("matched"):
-        coarse = "（该板块属粗分桶，非题材分类）" if normalize_name(board_name) in NOT_A_THEME else ""
+        coarse = ""   # 2026-10-30g：粗分桶口径注删（用户指示，括号注释清理）
         lines.append(f"板块级催化：未映射{coarse}（「{board_name}」在产业树无同名/包含节点；"
                      f"不代表无催化）")
     elif not (node or {}).get("content"):
@@ -526,7 +526,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         if not ev_hits:
             lines.append("当日题材事件：无匹配")
         else:
-            lines.append("当日题材事件（仅标题+热度+日期）：")
+            lines.append("当日题材事件：")
             for ev in ev_hits:
                 src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
                 hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
@@ -550,7 +550,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             if news_no_match:
                 lines.append("近两日题材新闻：无匹配")
             else:
-                lines.append("近两日题材新闻（Kword 标签关联）：")
+                lines.append("近两日题材新闻：")
                 for it in news_hits:
                     stocks = it.get("stocks") or []
                     top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
@@ -580,8 +580,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     if not include_l2:
         pass
     elif snap is None:
-        lines.append(f"板内解析：当日无「{board_name}」板块分组（如实标注；"
-                     f"非题材桶或当日未收录）")
+        lines.append(f"板内解析：当日无「{board_name}」板块分组")
     else:
         board_stocks_n = snap["count"]
         stocks = snap["stocks"]
@@ -593,15 +592,16 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         body = "\n".join(exp.splitlines()[1:]).strip()
         # P2-2（review）：板块级 doc（leader_code 空）回退取韭研分组首只成员——
         # 不得冒称「龙头」（与双龙一结构行可能互相矛盾），显式标注身位
-        lead_label = "龙头" if str(leader_code or "") else "板内成员（韭研分组序，非推导龙一）"
+        # （2026-10-30g：「韭研分组序，非推导龙一」精简为「非龙一」，防误读保留）
+        lead_label = "龙头" if str(leader_code or "") else "板内成员（非龙一）"
         if lead is not None and exp:
             board_resolved = True
-            caliber = "" if snap.get("sealedFilter") else "（含触板未封）"
+            caliber = ""   # 2026-10-30g：口径注删
             lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{caliber}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
                          f"解析摘录：{_clip(body or exp, content_chars)}")
         elif lead is not None:
-            caliber = "" if snap.get("sealedFilter") else "（含触板未封）"
+            caliber = ""   # 2026-10-30g：口径注删
             lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{caliber}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析（如实标注）")
         peer_tags = []

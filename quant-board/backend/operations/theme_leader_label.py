@@ -264,7 +264,7 @@ def live_entries_for_board(live_payload: dict, board: str,
     day_items = [it for it in items
                  if time.strftime("%Y-%m-%d", time.localtime(it["ts"])) == str(date)]
     if not day_items:
-        return [], {"unavailable": "实时流不可回放（窗口内无标注日条目，历史日无直播归档）"}
+        return [], {"unavailable": "实时流不可回放，历史日无直播归档"}
     # 2026-10-30f（用户指示）：只收板块相关的时间点语料。大盘综述（空板块名 + 指数/成交
     # 综述词）不进板块播报——这类条目（09:15 开盘/11:30 午盘/15:00 收盘/盘中综述）覆盖
     # 全市场，文本含板块词只是顺带提及，且盘面/总结已由 market_line 与盘面总结行承载；

@@ -139,6 +139,10 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 全市场介绍（紧跟盘面事实行后，两级叙事共用；取数单一源=直播归档，缺席不出行）；
 # ②韭研↔KPL 板块名经济/产业后缀桥（digest.board_keywords 公共函数，冰雪经济↔冰雪
 # 产业 10-29 播报漏配实证），直播 plate 命中同步用 keys。
+# 2026-10-30g（用户裁决，括号注释全清理）：叙事内括号只留数据——基线/空间锚/龙虎榜/
+# 强度行头部口径注、层2 缺口注、最近记录日注、原因行尾部注、降级原因括号全删（工程词
+# unmatched/fetch_failed 中文化）；样本数/排名/买卖额等数据括号与「不代表无催化」类
+# 语义锚保留。
 # 2026-10-30f（用户指示）：①直播只收板块相关时间点语料——空板块名条目命中指数/成交
 # 综述词（三大指数/上证指数/创业板指/沪深京三市/全市场等，近 5 日归档实测判别有效）
 # 不进板块播报（大盘综述已由盘面事实行与盘面总结行承载）；②来源注记删（纯数据源头
@@ -147,7 +151,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 直播头「实时流·仅标注时点可得」、打标交叉行「打标链+题集版本」、证据块头部与
 # 催化/事件/新闻/日历/板内解析行的「韭研产业树/开盘啦/韭研异动」字样；口径与降级
 # 披露（真连板口径、采集池回退、右删失、龙虎榜主力净额口径）全保留。
-AMMO_VERSION_THEME_LEADER = "2026-10-30f"
+AMMO_VERSION_THEME_LEADER = "2026-10-30g"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -620,7 +624,7 @@ def baseline_line(rows: list[dict], row: dict, min_combo_n: int = 5) -> str:
     cont, n, rate = _rate(rows)
     if n:
         parts.append(f"总体 {rate:.1%}（{n} 样本）")
-    return "结构基线（口径=触板−THS炸板二分 + 真连板；历史窗口内板块龙头样本）：" + "；".join(parts)
+    return "结构基线：" + "；".join(parts)
 
 
 # ── 空间题历史锚（Q1，2026-10-24b 置信度归因后加）────────────────────────────
@@ -704,7 +708,7 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
         parts.append(f"按连板高度[{sk}] {_stat(streak_pairs)}")
     cen = (f"；剔右删失样本 {censored} 个" if censored else "")
     # 2026-10-30d 语料精简：再走≥1板率定义在题面 ③ 已给，叙事侧不重复
-    return ("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）："
+    return ("空间锚："
             + "；".join(parts) + f"；总体 {_stat(kept)}{cen}")
 
 
@@ -889,9 +893,9 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
         return None
     if not rank_rows and not zt_rows and not window_declared:
         # P2-11（review）：层2 拉取失败不得静默缺席（§4.0）——失败行显式披露
-        return (f"板块序列（「{plate_name}」）："
-                f"层1/层2 均无记录；层2 涨停梯队历史拉取失败：{zt_fetch_error}（fail-visible）")
-    head = f"板块序列（「{plate_name}」）："
+        return (f"板块序列 {plate_name}："
+                f"层1/层2 均无记录；层2 涨停梯队历史拉取失败：{zt_fetch_error}")
+    head = f"板块序列 {plate_name}："
     parts: list[str] = []
     if rank_rows:
         segs = []
@@ -904,25 +908,20 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
             else:
                 seg += " 净额?"
             segs.append(seg)
-        parts.append(f"近{len(segs)}交易日强度/净额（层1·净额已同屏定档 2026-10-29）：" + "；".join(segs))
+        parts.append(f"近{len(segs)}交易日强度/净额：" + "；".join(segs))
         sentinel = rank_sentinel_warnings(rank_rows, zt_rows)
         if sentinel:
             # §9.6 处置：raw[8] 口径哨兵越界 → 行内显式告警（fail-visible），不静默
-            parts.append("口径哨兵告警（raw[8] 推断口径自检·fail-visible）：" + "；".join(sentinel))
+            parts.append("口径哨兵告警：" + "；".join(sentinel))
     if zt_rows or window_declared:
         segs = [f"{str(r['date'])[5:]} 家{r['zt_num'] if r.get('zt_num') is not None else '?'}"
                 for r in zt_rows]
-        head_txt = "板块涨停家（层2·仅记录有涨停家/爆发日"
-        if isinstance(trading_days, int) and trading_days > 0:
-            # §9.7 处置：窗口缺口率量化——计数对象=窗口过滤后的记录（review P1-1 修复：
-            # 不得把展示切片数当窗口记录数，两个方向都不得虚报）
-            head_txt += f"，窗口{trading_days}交易日仅{len(zt_rows)}条记录"
-        head_txt += "，记录间缺口≠零涨停）"
+        head_txt = "板块涨停家："
         if not zt_rows:
             # 窗口声明后 0 条记录：缺席本身是强缺口信号，显式出段（§4.0），不静默无层2
-            parts.append(head_txt + "：窗口内无记录（上游未记录该窗口任何涨停家，缺口≠零涨停）")
+            parts.append(head_txt + "窗口内无记录")
         else:
-            parts.append(head_txt + "：" + "；".join(segs))
+            parts.append(head_txt + "；".join(segs))
     if zt_rows:
         last = zt_rows[-1]
         lz = _lz_brief(last.get("lz_info") or "")
@@ -930,8 +929,8 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
             # P1-3（review）：层2 仅记录有涨停家日，最新记录日≠标注日常见——
             # 不得把昨日/更早的梯队串标成「当日」
             day_txt = ("当日" if str(last.get("date")) == str(label_date)
-                       else f"{str(last.get('date'))[5:]}（最近记录日，非当日）")
-            parts.append(f"{day_txt}梯队串（交叉披露，不替换自算口径）：{lz}")
+                       else f"{str(last.get('date'))[5:]} 最近记录日 ")
+            parts.append(f"{day_txt}梯队串：{lz}")
     return head + "；".join(parts)
 
 
@@ -951,7 +950,7 @@ def kpl_live_line(entries: list[dict] | None, *, board: str, total: int = 0,
         head += f"窗口 {window}"
     head += f"{'，' if window else ''}全窗 {total} 条）"
     if unavailable:
-        return f"{head}：不可用（{unavailable}）"
+        return f"KPL直播播报：不可用，{unavailable}"
     if not entries:
         return f"{head}：当日无「{board}」相关播报"
     parts = []
@@ -961,7 +960,7 @@ def kpl_live_line(entries: list[dict] | None, *, board: str, total: int = 0,
             c = c[:clip_chars] + f"…[截断，原文 {len(c)} 字]"
         parts.append(f"{e.get('time') or '时间不可考'} {c}")
     more = len(entries) - max_items
-    tail = f"（另 {more} 条略，fail-visible 披露）" if more > 0 else ""
+    tail = f"（另 {more} 条略）" if more > 0 else ""
     return head + "：" + "；".join(parts) + tail
 
 
@@ -1164,10 +1163,7 @@ def limitup_reason_line(entries: list[tuple[str, str | None]]) -> str | None:
         return None
     parts = [f"{label}={reason}" if str(reason or '').strip()
              else f"{label}=不可考" for label, reason in entries]
-    missing = sum(1 for _, r in entries if not str(r or '').strip())
-    tail = f"（{missing}/{len(entries)} 不可考，fail-visible）" if missing == len(entries) \
-        else (f"（不可考 {missing}，fail-visible）" if missing else "")
-    return "涨停原因：" + "；".join(parts) + tail
+    return "涨停原因：" + "；".join(parts)
 
 
 def plate_strength_line(match: dict) -> str:
@@ -1180,8 +1176,15 @@ def plate_strength_line(match: dict) -> str:
     - 缺字段行如实「不可考」，不掩盖。v1 为当日单点（序列扩展另行立项，预登记 §9）。
     """
     if not isinstance(match, dict) or not match.get("ok"):
-        reason = (match or {}).get("reason") or "unknown"
-        return f"板块强度：不可用（{reason}）"
+        reason = str((match or {}).get("reason") or "unknown")
+        # 2026-10-30g：工程词中文化（unmatched/fetch_failed），降级原因不带括号
+        if reason == "unmatched":
+            reason = "未匹配到 KPL 板块"
+        elif reason.startswith("fetch_failed"):
+            reason = "接口异常 " + reason.split(":", 1)[-1].strip()
+        elif reason.startswith("payload_not_ok"):
+            reason = "上游返回异常 " + reason.split(":", 1)[-1].strip()
+        return f"板块强度：不可用，{reason}"
     rank, total = match.get("rank"), match.get("total")
     rank_txt = (f"#{rank}/{total}" if isinstance(rank, int) and isinstance(total, int)
                 else "排名不可考")
@@ -1191,11 +1194,9 @@ def plate_strength_line(match: dict) -> str:
     pct = match.get("pct")
     pct_txt = f"板块涨幅 {pct}%" if isinstance(pct, (int, float)) else "涨幅不可考"
     name = str(match.get("name") or "")
-    alias_txt = "，别名表" if match.get("aliasUsed") else ""
-    name_txt = (f"（匹配「{name}」{alias_txt}）" if name
-                else "（名称桥匹配信息缺失）")
-    return (f"板块强度{'' if name else '·未匹配'}"
-            f"{name_txt}：当日排名 {rank_txt}，{strength_txt}，{pct_txt}")
+    head_txt = f"板块强度「{name}」：" if name else "板块强度：匹配信息缺失，"
+    return (f"{head_txt}"
+            f"当日排名 {rank_txt}，{strength_txt}，{pct_txt}")
 
 
 # ── 龙虎榜事实行（AMMO 2026-10-30a，2026-10-30 用户指示；预登记 §23） ──
@@ -1223,7 +1224,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     """
     from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
 
-    head = "龙虎榜（主力净额=盘中主力大单资金流口径，非交易所席位额）："
+    head = "龙虎榜："
     stocks = [s for s in (facts or {}).get("stocks") or [] if isinstance(s, dict)]
     if not stocks:
         if (facts or {}).get("empty_structured"):
@@ -1231,7 +1232,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
                     f"{facts.get('order_sign_count', 0)} 组；榜约盘后生成，缺当日事实≠无上榜）")
         reason = (facts or {}).get("reason") or ("当日无上榜个股行" if (facts or {}).get("ok")
                                                  else "no_data")
-        return f"{head}--（{reason}）"
+        return f"{head}--，{reason}"
     by_code = {str(s.get("code") or "")[-6:]: s for s in stocks if str(s.get("code") or "")[-6:]}
     ordered: list[str] = []
     for c in (codes or []):
@@ -1263,7 +1264,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
 
     parts = [_seg(k) for k in ordered[:max_items]]
     more = len(ordered) - max_items
-    tail = f"（另 {more} 只相关上榜略，fail-visible 披露）" if more > 0 else ""
+    tail = f"（另 {more} 只相关上榜略）" if more > 0 else ""
     return head + "；".join(parts) + tail
 
 

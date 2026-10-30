@@ -923,7 +923,7 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         return _FACTS_CACHE[cache_key]
     cur = market_metrics(db, date, dataset_id)
     if not cur:
-        return f"盘面事实：{date} 盘面指标缺失（fail-visible）"
+        return f"盘面事实：{date} 盘面指标缺失"
     prev = trading_dates_before(db, date, dataset_id=dataset_id)
     hist = [m for m in (market_metrics(db, d, dataset_id) for d in prev) if m]
 
@@ -949,7 +949,7 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         if die_src in FULL_MARKET_SOURCES:
             die_txt = f'跌停 {cur_die} 家（{_pct_txt(hist_die, cur_die)}）'
         elif die_scope:
-            die_txt = f'跌停 {cur_die} 家（采集池口径，全市场源缺失，{_pct_txt(hist_die, cur_die)}）'
+            die_txt = f'跌停 {cur_die} 家 采集池口径（{_pct_txt(hist_die, cur_die)}）'
         else:
             die_txt = "跌停 不可算"
     else:
@@ -976,18 +976,18 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         un_note = f'，{un_prev}只连板未标高度未计入' if un_prev else ''
         hu = cur.get("ladderHeightUnknown")
         hu_note = f'，{hu}只高度不可算未入桶' if isinstance(hu, int) and hu else ''
-        ladder_seg = f'连板梯队（{cur.get("ladderPoolTotal")}只封板，真连板口径{un_note}{hu_note}）{ladder_txt}'
+        ladder_seg = f'连板梯队 {cur.get("ladderPoolTotal")}只封板 {ladder_txt}'
         ths = cur.get("thsLadder")
         if ths:
             ladder_seg += (f'（交叉 {ths.get("one")}/{ths.get("two")}/{ths.get("three")}'
                            f'/{ths.get("four")}/{ths.get("high")}）')
     elif src == "jiuyan_touch":
         # THS 炸板池缺失日：回退触板池按 M 分桶（旧口径，炸板股会混入），显式披露
-        ladder_seg = f'连板梯队（THS炸板池缺失，按触板口径，炸板股混入）{ladder_txt}'
+        ladder_seg = f'连板梯队 触板口径 {ladder_txt}'
     elif src == "ths":
-        ladder_seg = f'连板梯队（THS回退）{ladder_txt}'
+        ladder_seg = f'连板梯队 {ladder_txt}'
     else:
-        ladder_seg = '连板梯队 不可算（韭研 final 与 THS 双源皆缺）'
+        ladder_seg = '连板梯队 不可算'
     # 最高板=真连板；区间最高（N天M板 的 M 最大股）作标注，两者不同才附（10-15：5 板 vs 澳弘 19天11板）
     mb, mb_range, mb_stock = cur.get("maxBoard"), cur.get("maxBoardRange"), cur.get("maxBoardStock")
     if isinstance(mb, int):
@@ -1064,7 +1064,7 @@ def market_coordinate_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) 
         return _MKT_COORD_CACHE[key]
     cur = market_metrics(db, date, dataset_id)
     if not cur:
-        line = f"市场坐标：{date} 盘面指标缺失（fail-visible）"
+        line = f"市场坐标：{date} 盘面指标缺失"
     else:
         zt, mb = cur.get("ztCount"), cur.get("maxBoard")
         parts = [f"涨停 {zt} 家" if isinstance(zt, int) and not isinstance(zt, bool)

@@ -104,7 +104,7 @@ def test_market_coordinate_line_has_three_numbers_and_no_percentile(monkeypatch)
 def test_market_coordinate_line_fail_visible(monkeypatch):
     monkeypatch.setattr(runner, "market_metrics", lambda db, d, ds=None: None)
     line = runner.market_coordinate_line(_Db(), DATE)
-    assert "盘面指标缺失" in line and "fail-visible" in line
+    assert "盘面指标缺失" in line and "fail-visible" not in line, "2026-10-30g：工程行话删"
 
 
 # ── D6 交易日轴 ─────────────────────────────────────────────────────────────

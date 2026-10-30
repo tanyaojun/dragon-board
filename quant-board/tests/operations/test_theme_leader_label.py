@@ -181,7 +181,7 @@ def test_dry_run_makes_no_call_and_writes_nothing(env, capsys):
     printed = capsys.readouterr().out
     assert "零 jev 调用（未花 token）" in printed
     assert "待判龙头：大业股份（603278）" in printed
-    assert "结构基线（口径=触板−THS炸板二分 + 真连板" in printed
+    assert "结构基线：" in printed, "2026-10-30g：口径头删（用户裁决）"
     assert "【题材证据】" in printed
 
 
@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v13"
     assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-30f"   # 直播收窄+来源注记删（2026-10-30f）；题集 hash 不变
+    assert doc["ammoVersion"] == "2026-10-30g"   # 直播收窄+来源注记删（2026-10-30f）；题集 hash 不变
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -355,7 +355,7 @@ def test_build_one_and_sector_wire_lhb_line():
     n = built["narrative"]
     assert "待判龙一 大业股份（603278）：主力净额 0.52亿" in n
     assert "相关个股 雪人股份（002639）：主力净额 --" in n
-    assert n.index("个股打标交叉") < n.index("龙虎榜（主力净额") < n.index("【题材证据")
+    assert n.index("个股打标交叉") < n.index("龙虎榜：") < n.index("【题材证据")
     # 未传入（旧行为）→ 不出行
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
@@ -372,7 +372,7 @@ def test_build_one_and_sector_wire_lhb_line():
     built_f = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
                           market_line="涨停 46 家",
                           lhb_facts={"ok": False, "reason": "fetch_failed: x"})
-    assert "--（fetch_failed: x）" in built_f["narrative"]
+    assert "--，fetch_failed: x" in built_f["narrative"], "2026-10-30g：降级不带括号"
 
 
 def test_build_one_wires_history_and_headroom_anchor():
@@ -1128,8 +1128,8 @@ def test_kpl_live_line_rendering():
     none = kpl_live_line([], board="AI影视", total=60, window="09:15~15:00")
     assert "当日无「AI影视」相关播报" in none and "无数据 ≠ 无催化" not in none, "2026-10-30d：重复自我解释删"
     un = kpl_live_line([], board="AI影视",
-                       unavailable="实时流不可回放（窗口内无标注日条目，历史日无直播归档）")
-    assert "不可用（实时流不可回放" in un and "不冒充" not in un
+                       unavailable="实时流不可回放，历史日无直播归档")
+    assert "不可用，实时流不可回放，历史日无直播归档" in un, "2026-10-30g：降级不带括号"
 
 
 # ── P1-2 直播日归档 / P1-1 序列 / P2-2 reason 透传（2026-10-28 用户裁决） ──
@@ -1215,10 +1215,10 @@ def test_series_line_wiring_sentinel_and_window_in_narrative(env, monkeypatch):
     out = L.run("2026-10-19", confirm_budget=True)
     assert out["ok"] == 4
     narrative = db[L.COLLECTION].docs["2026-10-19:603278"]["narrative"]
-    assert "口径哨兵告警（raw[8] 推断口径自检·fail-visible）" in narrative
+    assert "口径哨兵告警：" in narrative
     assert "净额>成交额 ×5" in narrative, "pct/amount 必须从强度行透传到哨兵（夹具 5 个交易日同一条越界行）"
     # 窗口 6 交易日（5 前日 + 当日），窗内仅 2 条记录；窗外 10-09 不得入行
-    assert "窗口6交易日仅2条记录" in narrative
+    assert "板块涨停家：" in narrative, "2026-10-30g：窗口缺口注删（用户裁决）"
     assert "10-09" not in narrative, "窗外记录不得被算作窗口内在场（review P1-1）"
     assert "10-15 家3" in narrative and "10-16 家4" in narrative
 
@@ -1240,7 +1240,7 @@ def test_series_line_zero_in_window_records_still_disclosed(env, monkeypatch):
                             {"date": "2026-10-09", "zt_num": 9, "lz_info": ""}]})
     L.run("2026-10-19", confirm_budget=True)
     narrative = db[L.COLLECTION].docs["2026-10-19:603278"]["narrative"]
-    assert "窗口6交易日仅0条记录" in narrative
+    assert "板块涨停家：窗口内无记录" in narrative, "2026-10-30g：缺口注删，缺席照披露"
     assert "窗口内无记录" in narrative
 
 

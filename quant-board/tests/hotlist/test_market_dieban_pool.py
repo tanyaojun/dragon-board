@@ -517,7 +517,7 @@ def test_market_facts_line_dieban_fallback_labels_pool_scope(monkeypatch):
     monkeypatch.setattr(mdp, "full_market_dieban_from_quotes", lambda: None)
     db = _facts_db()   # 无参考集合行 → 懒加载 EM/快照皆败
     line = market_facts_line(db, "2026-10-16")
-    assert "跌停 1 家（采集池口径，全市场源缺失" in line   # 池内仅 600002 一只跌停
+    assert "跌停 1 家 采集池口径" in line   # 池内仅 600002 一只跌停；2026-10-30g 降级信息出括号
     assert "全市场·" not in line
 
 

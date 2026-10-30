@@ -1736,7 +1736,7 @@ def test_theme_evidence_lines_top3_boards():
     assert "题材证据（韭研产业树+开盘啦事件层" in lines[0] and "top3" in lines[0]
     assert "取数日 2026-09-30" in lines[0]
     assert "板块级催化原文（「机器人」" in text, "2026-10-30f：来源名删（与 theme-leader 链同源）"
-    assert "当日题材事件（仅标题+热度+日期）" in text and "英伟达GTC大会" in text, "2026-10-30f：来源名删"
+    assert "当日题材事件：" in text and "英伟达GTC大会" in text, "2026-10-30g：括号注删"
     # 公告=粗分桶（NOT_A_THEME）→ 未映射如实标注
     assert "未映射" in text and "不代表无催化" in text
 
