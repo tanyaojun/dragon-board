@@ -216,6 +216,10 @@ async def lhb_sale(date: str = "", type_: int = 0) -> JSONResponse:
     return JSONResponse(content=parsed)
 
 
+# /lhb-stock-board、/lhb-agency 聚合读口已随席位前五上线删除（2026-10-30 code review）：
+# 前端无调用方；GetStockList/GetAgencyListV2 服务层 fetch/parse 保留（jev_lhb_ammo 直用）。
+
+
 @router.get("/daban-list-history")
 async def daban_list_history(date: str = "", pid_type: int = 8) -> JSONResponse:
     """按日打板个股列表历史收盘帧（HisDaBanList HTTP，App 市场情绪·日期回看同款读口）。

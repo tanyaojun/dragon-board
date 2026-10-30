@@ -440,3 +440,4 @@ def test_lhb_sale_ok_with_empty_note(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["rows"][0]["name"] == "华泰证券总部" and "note" not in body
+

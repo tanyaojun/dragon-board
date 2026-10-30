@@ -339,6 +339,15 @@
   .lv-chip .n{color:#333;font-weight:600}
   .kpl-layout{display:grid;grid-template-columns:420px 1fr;gap:14px;align-items:start}
   @media (max-width:1100px){.kpl-layout{grid-template-columns:1fr}}
+  /* 龙虎榜改版（2026-10-30）：左股票列表略宽于右席位明细；两栏等高对齐底部 */
+  .kpl-lhb-split{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);align-items:stretch;height:calc(100vh - 210px)}
+  .kpl-lhb-split>.card{display:flex;flex-direction:column;min-height:0}
+  .kpl-lhb-split>.card>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
+  .kpl-lhb-split .lhb-flex{flex:1 1 0;min-height:100px;max-height:none}
+  #kplLhbStockTable th,#kplLhbStockTable td{white-space:nowrap}
+  #kplLhbStockTable tbody tr{cursor:pointer}
+  #kplLhbStockTable tbody tr.on td{background:var(--blue-bg)}
+  #kplLhbStockTable tbody tr.on td:first-child{box-shadow:inset 3px 0 0 var(--cf-blue)}
   .kpl-wrap{max-height:640px;overflow:auto;border:1px solid var(--border);border-radius:8px}
   .kpl-wrap table{margin:0}
   .kpl-wrap th{position:sticky;top:0;background:#fff;z-index:2;box-shadow:0 1px 0 var(--border)}
@@ -725,28 +734,49 @@
     <div class="ph-line" style="margin-bottom:14px"></div>
     <div class="card">
       <div class="flex" style="margin-bottom:10px">
-        <span class="kpl-sub kpl-uni" id="kplLhbStats"></span>
         <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：龙虎榜预测 + 订阅快照 + 历史</span>
         <button onclick="kplLhbRefresh()">刷新</button>
       </div>
       <div id="kplLhbBanner" class="kpl-note" style="display:none"></div>
-      <div class="kpl-layout">
+      <!-- 2026-10-30 二次改版（用户需求）：左=龙虎榜控件（个股/营业部页签切换，板块行情同款）；
+           右=席位前五（东财 datacenter-web，用户解禁东财源；买卖前5席位明细，按选中个股联动） -->
+      <div class="kpl-layout kpl-lhb-split">
         <div class="card" style="padding:10px 12px">
-          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span>龙虎预测</span>
-            <span class="kpl-sub" id="kplLhbFcMeta" style="margin-left:auto"></span></h3>
-          <div class="kpl-wrap" style="max-height:calc(100vh - 480px)"><table id="kplLhbFcTable"></table></div>
+          <div class="kpl-tabs" style="margin-bottom:8px">
+            <button id="kplLhbTabStock" class="on" onclick="kplLhbSetTab('stock')">个股</button>
+            <button id="kplLhbTabSale" onclick="kplLhbSetTab('sale')">营业部</button>
+          </div>
+          <h3 style="margin-bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+            <span id="kplLhbTabTitle">个股</span>
+            <input type="date" id="kplLhbRtDate" style="margin-left:auto" onchange="kplLhbDateChange()" title="个股：默认当日 2112 预测实时/选日期回看实际上榜；营业部：按日榜（约 17:00 盘后生成）">
+            <button onclick="kplLhbTodayBtn()">今日</button></h3>
+          <div class="lf-bar" id="kplLhbSFilter" style="margin:0 0 8px">
+            <input class="lf-q" id="kplLhbSq" placeholder="搜名称 / 代码 / 概念 / 原因…" oninput="kplLhbSSet('q', this.value)">
+            <select title="市场筛选" onchange="kplLhbSSet('mkt', this.value)">
+              <option value="">市场 · 全部</option><option value="sh">沪主板</option>
+              <option value="cy">创业板</option><option value="kc">科创板</option>
+              <option value="bj">北交所</option><option value="sz">深主板</option>
+            </select>
+            <select title="席位过滤" onchange="kplLhbSSet('seat', this.value)">
+              <option value="on" selected>席位 · 仅上榜</option>
+              <option value="all">席位 · 全部</option>
+              <option value="off">席位 · 仅未上榜</option>
+            </select>
+            <button onclick="kplLhbSClear()">清除筛选</button>
+            <span class="cnt" id="kplLhbSCnt"></span>
+          </div>
+          <div class="kpl-wrap" id="kplLhbStockWrap"><table id="kplLhbStockTable"></table></div>
+          <div class="kpl-wrap" id="kplLhbSaleWrap" style="display:none"><table id="kplLhbSaleTable"></table></div>
         </div>
-        <div class="card" style="padding:10px 12px">
-          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span>龙虎榜</span>
-            <span class="kpl-tabs" style="margin:0 0 0 10px">
-              <button id="kplLhbViewStock" class="on" onclick="kplLhbSetView('stock')">选股</button>
-              <button id="kplLhbViewSale" onclick="kplLhbSetView('sale')">营业部</button>
-            </span>
-            <input type="date" id="kplLhbRtDate" style="margin-left:auto" onchange="kplLhbDateChange()" title="选股：默认当日实时/选日期回看；营业部：按日榜（约 17:00 盘后生成）">
-            <button onclick="kplLhbTodayBtn()">今日</button>
-            <span class="kpl-sub" id="kplLhbRtMeta" style="margin-left:8px"></span></h3>
-          <div class="kpl-wrap" style="max-height:calc(100vh - 480px)"><table id="kplLhbRtTable"></table></div>
+        <div class="card" style="padding:10px 12px" id="kplLhbSeatPane">
+          <h3 style="margin-bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+            <span>席位前五</span>
+            <span class="kpl-sub" id="kplLhbSeatMeta" style="margin-left:auto"></span>
+            <span class="kpl-sub" id="kplLhbSeatStock" style="flex-basis:100%"></span></h3>
+          <div class="kpl-sub" style="font-weight:600;color:var(--text)" id="kplLhbSeatBuyTitle">买入金额最大前5名</div>
+          <div class="kpl-wrap lhb-flex"><table id="kplLhbSeatBuyTable"></table></div>
+          <div class="kpl-sub" style="font-weight:600;color:var(--text);margin-top:10px" id="kplLhbSeatSellTitle">卖出金额最大前5名</div>
+          <div class="kpl-wrap lhb-flex"><table id="kplLhbSeatSellTable"></table></div>
         </div>
       </div>
     </div>
@@ -4735,8 +4765,16 @@ const KPL = {
   dabanMode: {},        // view → 'live' | 'history'（精选板块同款：日期切换+回实时）
   dabanDate: {},        // view → 历史模式日期
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
-  lhb: {fc: null, rt: null, his: null, hisDate: '', view: 'rt', rtMsgs: [], hisMsg: '',
-        sale: null, saleDate: '', saleMsg: ''},   // view：rt=当日实时 | his=历史回看 | sale=营业部榜
+  lhb: {fc: null, rt: null, his: null, hisDate: '', view: 'rt', tab: 'stock', rtMsgs: [], hisMsg: '',
+        sale: null, saleDate: '', saleMsg: '', saleLoading: false,   // view：rt=当日实时 | his=历史回看；tab：stock=个股 | sale=营业部（板块行情同款页签）
+        selCode: '', seat: null, seatCode: '', seatDate: '', seatMsg: '', seatLatest: '',
+        seatMode: 'stock', branch: null, branchName: '', branchDate: '', branchMsg: '',
+        day: null, dayDate: '', dayMsg: '',          // 东财全日席位：stocks 过滤集 / branches 名集
+        sFilter: {q: '', mkt: '', seat: 'on'}, sSort: {key: 'zf', dir: -1}},
+  // selCode=个股页签选中股；seat=席位前五快照（个股模式）；seatMode=stock|branch（营业部页签反查）；
+  // day=东财全日席位按股聚合（左列表过滤集）；sFilter/sSort=个股列表搜索/筛选/排序（涨停复盘同款）
+  // selCode=左列表选中个股；seat=席位前五快照（东财 lhb-seat-detail）；seatDate=席位已加载日期；
+  // seatLatest=该股最近上榜日（空态提示用）
   lhbPoll: null,
 };
 // quotas 语义索引：[2]涨幅% [3]成交额 [7]/[8]/[9]主力买/卖/净（东财独立源核实）；
@@ -5832,6 +5870,8 @@ function kplFmtVal(v, suf){
 }
 async function kplLhbEnter(){
   kplLhbRefresh();
+  if (!KPL.lhb.sale) kplLhbSaleLoad(kplLhbLhbDate());   // 营业部页签数据（首次进页即取）
+  kplLhbDayLoad(kplLhbLhbDate());          // 东财当日席位过滤集（个股页签默认仅上榜）
   if (!KPL.lhbPoll){
     KPL.lhbPoll = setInterval(() => {
       if (STATE.view !== 'kpllhb'){ clearInterval(KPL.lhbPoll); KPL.lhbPoll = null; return; }
@@ -5867,44 +5907,229 @@ function kplLhbBannerUpdate(){
   const msgs = [];
   if (KPL.lhb.view === 'rt' && (KPL.lhb.rtMsgs || []).length) msgs.push(...KPL.lhb.rtMsgs);
   if (KPL.lhb.view === 'his' && KPL.lhb.hisMsg) msgs.push(KPL.lhb.hisMsg);
-  if (KPL.lhb.view === 'sale' && KPL.lhb.saleMsg) msgs.push(KPL.lhb.saleMsg);
   kplLhbBanner('kplLhbBanner', msgs.join('；'));
 }
+// ── 2026-10-30 改版：左股票列表 / 右营业部成交明细联动（对照同花顺截图；数据纯 KPL，
+// 个股→逐营业部席位明细无源，见 README §13 开火阴性结论）──
+function kplLhbMktLabel(code){
+  const c = String(code || '');
+  if (/^68/.test(c)) return '科';
+  if (/^30/.test(c)) return '创';
+  if (/^(43|83|87|92)/.test(c)) return '北';
+  if (/^60/.test(c)) return '沪';
+  if (/^00/.test(c)) return '深';
+  return '--';
+}
+function kplFmtAmt(v){                    // 元 → 亿/万自适应（对照截图口径；非数显 '--' 不伪装）
+  const s = String(v ?? '');
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return '--';
+  const n = parseFloat(s);
+  if (!Number.isFinite(n)) return '--';
+  const a = Math.abs(n);
+  if (a >= 1e8) return (n / 1e8).toFixed(2) + '亿';
+  if (a >= 1e4) return (n / 1e4).toFixed(2) + '万';
+  return String(n);
+}
+function kplLhbMktFilter(code){
+  const c = String(code || '');
+  if (/^60/.test(c)) return 'sh';
+  if (/^00/.test(c)) return 'sz';
+  if (/^30/.test(c)) return 'cy';
+  if (/^68/.test(c)) return 'kc';
+  if (/^(43|83|87|92)/.test(c)) return 'bj';
+  return '';
+}
+function kplNum2(v, suffix){              // 数值固定 2 位小数（2026-10-30 用户需求）；非数 '--'
+  const s = String(v ?? '');
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return '--';
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n.toFixed(2) + (suffix || '') : '--';
+}
+function kplFmtPct(v){
+  const s = String(v ?? '');
+  return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s).toFixed(2) + '%' : '--';
+}
+function kplTone(v){
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? (n > 0 ? 'kpl-up' : n < 0 ? 'kpl-down' : '') : '';
+}
+function kplLhbLhbDate(){ return KPL.lhb.view === 'his' ? KPL.lhb.hisDate : kplLhbToday(); }
+// 左列表行归一：实时=2112 预测 items；历史=OnTheLHBStock 22 列 raw
+// （[5]换手率/[6]成交额 task-3 双源核对；[8]净 [9]买 [10]卖，卖出记负）
+function kplLhbStockRows(){
+  if (KPL.lhb.view === 'his'){
+    return (((KPL.lhb.his || {}).stocks || {}).rows || []).map(r => {
+      const raw = Array.isArray(r.raw) ? r.raw : [];
+      return { code: r.stock_id, name: r.stock_name, plate: r.plate,
+        price: raw[3] ?? r.price, zf: raw[4] ?? r.zf,
+        tur: raw[5], amount: raw[6],
+        net: r.main_net_amount, buy: r.main_buy, sell: r.main_sell, reason: r.reason || '' };
+    });
+  }
+  return ((KPL.lhb.fc || {}).items || []).map(it => ({
+    code: it.stock_id, name: it.stock_name, plate: it.plate,
+    price: it.price, zf: it.zf, tur: it.tur_rate, amount: it.tur,
+    net: it.main_net_amount, buy: it.main_buy, sell: it.main_sell, reason: it.reason || '' }));
+}
 function kplLhbRender(){
-  const fc = KPL.lhb.fc, rt = KPL.lhb.rt;
-  $('kplLhbStats').textContent = '2112 预测 total=' + (fc ? (fc.total ?? '--') : '--')
-    + ' · 3004 total=' + (rt ? (rt.total ?? '--') : '--');
-  $('kplLhbFcMeta').textContent = fc ? ('latest_day=' + (fc.latest_day || '--') + ' items=' + (fc.items || []).length) : '无快照';
-  // 合并表（同板块行情个股列表形态）：默认当日=3004 实时；选历史日期=HisBeOnTheLHB 回看
-  if (KPL.lhb.view === 'his'){ kplLhbHisTableRender(); kplLhbBannerUpdate(); return; }
-  if (KPL.lhb.view === 'sale'){ kplLhbSaleTableRender(); kplLhbBannerUpdate(); return; }
-  $('kplLhbRtMeta').textContent = '当日实时 · ' + (rt ? ('days=' + ((rt.days || []).join(',') || '--')
-    + ' 区间=' + (rt.min_mtime ?? '--') + '-' + (rt.max_mtime ?? '--')) : '无快照');
-  // 2112 预测列表（reason/hot_val/main_net 全展示）
-  const fcRows = (fc && fc.items) || [];
-  $('kplLhbFcTable').innerHTML = fcRows.length
-    ? '<tr><th>代码</th><th>名称</th><th>概念</th><th>现价</th><th>涨幅%</th><th>主力净额</th><th>热度</th><th>上榜原因</th></tr>'
-      + fcRows.map(it => '<tr>'
-        + '<td>' + esc(it.stock_id || '--') + '</td><td>' + esc(it.stock_name || '--') + '</td>'
-        + '<td>' + esc(it.plate || '--') + '</td>'
-        + '<td class="num">' + kplFmtVal(it.price) + '</td><td class="num">' + kplFmtVal(it.zf) + '</td>'
-        + '<td class="num">' + kplFmtYi(it.main_net_amount) + '</td><td class="num">' + kplFmtVal(it.hot_val) + '</td>'
-        + '<td>' + esc(it.reason || '--') + '</td></tr>').join('')
-    : '<tr><td colspan="8" style="color:var(--muted)">' + (fc ? '--（本帧无 items；见 banner 说明）' : '--（无快照）') + '</td></tr>';
-  // 3004 实时选股（quotas 70 列原样，展示前 6 列；[0]=板块标签 [1]=现价 [2]=涨幅，
-  // 其余列语义推断标注，同板块行情个股列表约定）
-  const rtRows = (rt && rt.items) || [];
-  $('kplLhbRtTable').innerHTML = rtRows.length
-    ? '<tr><th>代码</th><th>名称</th><th>板块标签</th><th>现价</th><th>涨幅%</th><th>成交额</th></tr>'
-      + rtRows.map(it => {
-        const q = it.quotas || [];
-        return '<tr><td>' + esc(it.stock_id || '--') + '</td><td>' + esc(it.name || '--') + '</td>'
-          + '<td>' + esc(q[0] || '--') + '</td>'
-          + '<td class="num">' + kplFmtVal(q[1]) + '</td><td class="num">' + kplFmtVal(q[2]) + '</td>'
-          + '<td class="num">' + kplFmtYi(q[3]) + '</td></tr>';
-      }).join('')
-    : '<tr><td colspan="6" style="color:var(--muted)">' + (rt ? '--（本帧无 items）' : '--（无快照）') + '</td></tr>';
+  if (KPL.lhb.tab === 'sale') kplLhbSaleTableRender();
+  else kplLhbStockListRender();
   kplLhbBannerUpdate();
+}
+function kplLhbSetTab(t){
+  if (KPL.lhb.tab === t) return;
+  KPL.lhb.tab = t;
+  $('kplLhbTabStock').classList.toggle('on', t === 'stock');
+  $('kplLhbTabSale').classList.toggle('on', t === 'sale');
+  $('kplLhbTabTitle').textContent = t === 'sale' ? '营业部成交榜' : '龙虎榜 · 个股';
+  $('kplLhbStockWrap').style.display = t === 'stock' ? '' : 'none';
+  $('kplLhbSaleWrap').style.display = t === 'sale' ? '' : 'none';
+  if (t === 'sale' && !KPL.lhb.sale) kplLhbSaleLoad(kplLhbLhbDate());   // 首次进营业部页签即取
+  kplLhbRender();
+  if (t === 'stock' && KPL.lhb.selCode) kplLhbSelectStock(KPL.lhb.selCode);   // 切回个股：席位前五回个股模式
+}
+function kplLhbStockListRender(){
+  const all = kplLhbStockRows();
+  const day = KPL.lhb.day, dayCodes = day ? new Set((day.stocks || []).map(s => String(s.code))) : null;
+  const f = KPL.lhb.sFilter;
+  // 席位过滤（2026-10-30 用户需求：默认仅显有营业部上榜的股票）；席位数据缺/空不硬门禁，
+  // 显注记显全部（fail-visible）
+  let rows = all;
+  let seatNote = '';
+  if (f.seat !== 'all'){
+    if (dayCodes && dayCodes.size){
+      rows = rows.filter(r => dayCodes.has(String(r.code)) === (f.seat === 'on'));
+    } else {
+      // on/off 都不可判定（席位数据缺）：不硬门禁显全部 + 注记（fail-visible，review #4）
+      seatNote = KPL.lhb.dayMsg ? '当日席位数据不可用（' + KPL.lhb.dayMsg + '），暂显全部' : '当日席位数据加载中，暂显全部';
+    }
+  }
+  if (f.q) rows = rows.filter(r =>
+    (r.name || '').toLowerCase().includes(f.q) || String(r.code || '').includes(f.q)
+    || (r.plate || '').toLowerCase().includes(f.q) || (r.reason || '').toLowerCase().includes(f.q));
+  if (f.mkt) rows = rows.filter(r => kplLhbMktFilter(r.code) === f.mkt);
+  const s = KPL.lhb.sSort;
+  const kv = { zf: r => parseFloat(r.zf), price: r => parseFloat(r.price), tur: r => parseFloat(r.tur),
+    amount: r => parseFloat(r.amount), net: r => parseFloat(r.net), buy: r => parseFloat(r.buy),
+    sell: r => parseFloat(r.sell) };
+  if (kv[s.key]){
+    rows = rows.slice().sort((a, b) => {
+      const na = kv[s.key](a), nb = kv[s.key](b);
+      const okA = Number.isFinite(na), okB = Number.isFinite(nb);
+      return (okA && okB ? na - nb : okA ? -1 : okB ? 1 : 0) * s.dir;
+    });
+  }
+  const codes = new Set(rows.map(r => String(r.code)));
+  const changed = !codes.has(KPL.lhb.selCode);
+  if (changed) KPL.lhb.selCode = rows.length ? String(rows[0].code) : '';
+  const th = (label, key, title) => '<th' + (key ? ' class="sortable" onclick="kplLhbSSort(\'' + key + '\')"' : '')
+    + (title ? ' title="' + title + '"' : '') + '>' + label + (key ? sortMark(s, key) : '') + '</th>';
+  const head = '<tr><th>#</th><th>市场</th><th>代码</th><th>名称</th>'
+    + th('涨幅', 'zf') + th('价格', 'price') + th('换手率%', 'tur') + th('金额', 'amount')
+    + th('净买入', 'net')
+    + th('总买入', 'buy', 'KPL 口径：卖出记负，mainBuy+mainSell=mainNetAmount')
+    + th('总卖出', 'sell', 'KPL 口径：卖出记负（负值原样展示）')
+    + '<th>所属概念</th><th>上榜原因</th></tr>';
+  $('kplLhbStockTable').innerHTML = rows.length
+    ? head + rows.map((r, i) => {
+        const on = String(r.code) === KPL.lhb.selCode ? ' class="on"' : '';
+        return '<tr data-code="' + esc(String(r.code)) + '"' + on
+          + ' onclick="kplLhbSelectStock(\'' + esc(String(r.code)) + '\')">'
+          + '<td class="num">' + (i + 1) + '</td>'
+          + '<td>' + kplLhbMktLabel(r.code) + '</td>'
+          + '<td>' + esc(String(r.code || '--')) + '</td><td>' + esc(r.name || '--') + '</td>'
+          + '<td class="num ' + kplTone(r.zf) + '">' + kplNum2(r.zf, '%') + '</td>'
+          + '<td class="num">' + kplNum2(r.price) + '</td>'
+          + '<td class="num">' + kplNum2(r.tur, '%') + '</td>'
+          + '<td class="num">' + kplFmtAmt(r.amount) + '</td>'
+          + '<td class="num ' + kplTone(r.net) + '">' + kplFmtAmt(r.net) + '</td>'
+          + '<td class="num">' + kplFmtAmt(r.buy) + '</td>'
+          + '<td class="num ' + kplTone(r.sell) + '">' + kplFmtAmt(r.sell) + '</td>'
+          + '<td>' + esc(r.plate || '--') + '</td>'
+          + '<td>' + esc(r.reason || '--') + '</td></tr>';
+      }).join('')
+    : '<tr><td colspan="13" style="color:var(--muted)">--（当前筛选无匹配；可放宽席位/市场筛选或清筛选）</td></tr>';
+  const cnt = $('kplLhbSCnt');
+  if (cnt) cnt.textContent = rows.length + ' / ' + all.length + ' 只'
+    + (dayCodes && dayCodes.size ? ' · 席位榜 ' + dayCodes.size + ' 只' : '')
+    + (seatNote ? ' · ' + seatNote : '');
+  if (changed && KPL.lhb.selCode) kplLhbSelectStock(KPL.lhb.selCode);   // 自动选首行 → 触发席位前五加载
+}
+function kplLhbSelectStock(code){
+  KPL.lhb.selCode = String(code);
+  KPL.lhb.seatMode = 'stock';                       // 个股页签选中 → 席位前五个股模式
+  for (const tr of $('kplLhbStockTable').querySelectorAll('tr[data-code]'))
+    tr.classList.toggle('on', tr.getAttribute('data-code') === KPL.lhb.selCode);
+  kplLhbSeatLoad(KPL.lhb.selCode, kplLhbLhbDate());   // 右栏席位前五跟选中股+当前榜日期
+}
+function kplLhbSelectBranch(name){
+  KPL.lhb.branchName = String(name);
+  KPL.lhb.seatMode = 'branch';                      // 营业部页签选中 → 右栏反查该营业部当日买卖个股
+  for (const tr of $('kplLhbSaleTable').querySelectorAll('tr[data-name]'))
+    tr.classList.toggle('on', tr.getAttribute('data-name') === KPL.lhb.branchName);
+  kplLhbBranchLoad(kplLhbLhbDate(), KPL.lhb.branchName);
+}
+async function kplLhbBranchLoad(d, name){
+  KPL.lhb.branchDate = d; KPL.lhb.branchMsg = '';
+  kplLhbSeatRender();
+  try {
+    const resp = await fetch('/api/market/lhb-branch-detail?date=' + encodeURIComponent(d)
+      + '&name=' + encodeURIComponent(name));
+    const r = await resp.json().catch(() => ({ok: false, message: 'HTTP ' + resp.status}));
+    if (KPL.lhb.branchDate !== d || KPL.lhb.branchName !== name) return;   // 已切换，过期帧丢弃
+    if (!r.ok){
+      KPL.lhb.branchMsg = r.message || r.reason || '读取失败';
+      if (window.sbLog) sbLog('warn', '[营业部反查] ' + name + ' ' + d + ' ' + KPL.lhb.branchMsg);
+    } else {
+      KPL.lhb.branch = r;
+    }
+    kplLhbSeatRender();
+  } catch (e){
+    if (KPL.lhb.branchName !== name) return;
+    KPL.lhb.branchMsg = '请求失败：' + (e.message || e);
+    kplLhbSeatRender();
+  }
+}
+function kplLhbSSet(k, v){
+  if (k === 'q') KPL.lhb.sFilter.q = (v || '').trim().toLowerCase();
+  else KPL.lhb.sFilter[k] = v || '';
+  kplLhbStockListRender();
+}
+function kplLhbSClear(){
+  KPL.lhb.sFilter = {q: '', mkt: '', seat: 'on'};
+  $('kplLhbSq').value = '';
+  const sels = $('kplLhbSFilter').querySelectorAll('select');
+  if (sels[0]) sels[0].value = '';
+  if (sels[1]) sels[1].value = 'on';
+  kplLhbStockListRender();
+}
+function kplLhbSSort(key){
+  const s = KPL.lhb.sSort;
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = -1; }
+  kplLhbStockListRender();
+}
+function kplLhbDayLoad(d){
+  // 东财全日席位按股聚合：左列表「仅上榜」过滤集；空态/失败不硬门禁（显注记显全部，fail-visible）
+  if (KPL.lhb.dayDate === d && (KPL.lhb.day || KPL.lhb.dayMsg)){ kplLhbStockListRender(); return; }
+  KPL.lhb.day = null; KPL.lhb.dayDate = d; KPL.lhb.dayMsg = '';
+  fetch('/api/market/lhb-day-detail?date=' + encodeURIComponent(d))
+    .then(r => r.json().catch(() => ({ok: false, message: 'HTTP ' + r.status})))
+    .then(r => {
+      if (KPL.lhb.dayDate !== d) return;                 // 日期已切，过期帧丢弃
+      if (r.ok){
+        KPL.lhb.day = r;
+        if (!(r.stocks || []).length) KPL.lhb.dayMsg = '当日席位榜为空（~17:30 盘后生成/非交易日，非降级）';
+      } else {
+        KPL.lhb.dayMsg = r.message || r.reason || '读取失败';
+        if (window.sbLog) sbLog('warn', '[龙虎榜] 当日席位 ' + d + ' ' + KPL.lhb.dayMsg);
+      }
+      kplLhbStockListRender();
+    })
+    .catch(e => {
+      if (KPL.lhb.dayDate !== d) return;
+      KPL.lhb.dayMsg = '请求失败：' + (e.message || e);
+      kplLhbStockListRender();
+    });
 }
 function kplLhbToday(){
   // KPL.today 仅在主行情页 kplViewEnter 赋值；直达龙虎榜页签时空 → 懒初始化兑底
@@ -5915,64 +6140,198 @@ function kplLhbToday(){
   }
   return KPL.today;
 }
-function kplLhbSetView(v){
-  if (v === 'sale'){
-    KPL.lhb.view = 'sale';
-    kplLhbSaleLoad(KPL.lhb.saleDate || kplLhbToday());   // 默认当日（盘前/盘中空态显式提示）
-  } else {
-    kplLhbBackToRt();                                // 选股：清日期回实时
-  }
-  $('kplLhbViewStock').classList.toggle('on', v !== 'sale');
-  $('kplLhbViewSale').classList.toggle('on', v === 'sale');
-}
 function kplLhbDateChange(){
   const d = $('kplLhbRtDate').value;
-  if (KPL.lhb.view === 'sale'){ kplLhbSaleLoad(d || kplLhbToday()); return; }
-  if (!d || d === kplLhbToday()){ kplLhbBackToRt(); return; }   // 清空/当日 → 实时视图
-  KPL.lhb.view = 'his';
-  kplLhbHisLoad(d);
+  if (!d || d === kplLhbToday()){
+    $('kplLhbRtDate').value = '';
+    KPL.lhb.view = 'rt'; KPL.lhb.his = null; KPL.lhb.hisMsg = '';
+  } else {
+    KPL.lhb.view = 'his';
+    kplLhbHisLoad(d);
+  }
+  KPL.lhb.selCode = '';                    // 日期切换重置选中（stockListRender 回落首行）
+  const date = kplLhbLhbDate();
+  kplLhbSaleLoad(date);                    // 营业部页签跟日期
+  kplLhbDayLoad(date);                     // 东财当日席位过滤集跟日期
+  if (KPL.lhb.seatMode === 'branch' && KPL.lhb.branchName)
+    kplLhbBranchLoad(date, KPL.lhb.branchName);   // 营业部反查跟日期
+  kplLhbRender();                          // 席位前五由 stockListRender 自动选首行触发重载
 }
-function kplLhbTodayBtn(){
-  if (KPL.lhb.view === 'sale'){ $('kplLhbRtDate').value = ''; KPL.lhb.saleDate = ''; kplLhbSaleLoad(kplLhbToday()); return; }
-  kplLhbBackToRt();
-}
-function kplLhbBackToRt(){
-  $('kplLhbRtDate').value = '';
-  KPL.lhb.view = 'rt'; KPL.lhb.his = null; KPL.lhb.hisMsg = '';
-  kplLhbRender();
-}
+function kplLhbTodayBtn(){ $('kplLhbRtDate').value = ''; kplLhbDateChange(); }
 async function kplLhbSaleLoad(d){
   KPL.lhb.saleDate = d;
-  if (!$('kplLhbRtDate').value) $('kplLhbRtDate').value = d;
+  KPL.lhb.saleLoading = true;
+  kplLhbSaleTableRender();                 // 首次进页签先显「加载中」（review #5）
   try {
-    const resp = await fetch(KPL_API + '/lhb-sale?date=' + d);
+    const resp = await fetch(KPL_API + '/lhb-sale?date=' + encodeURIComponent(d));
     const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
     if (!r.ok){
       KPL.lhb.sale = null;
       KPL.lhb.saleMsg = '营业部 ' + d + ' 读取失败：' + (r.reason || '') + (r.note ? '（' + r.note + '）' : '');
-      kplLhbRender();
+      if (window.sbLog) sbLog('warn', '[龙虎榜] ' + KPL.lhb.saleMsg);
+      KPL.lhb.saleLoading = false;
+      kplLhbSaleTableRender();
       return;
     }
     KPL.lhb.sale = r;
     KPL.lhb.saleMsg = r.note || '';
-    kplLhbRender();
+    KPL.lhb.saleLoading = false;
+    kplLhbSaleTableRender();
   } catch (e){
     KPL.lhb.saleMsg = '营业部 ' + d + ' 请求失败：' + (e.message || e);
-    kplLhbRender();
+    if (window.sbLog) sbLog('warn', '[龙虎榜] ' + KPL.lhb.saleMsg);
+    KPL.lhb.saleLoading = false;
+    kplLhbSaleTableRender();
   }
 }
 function kplLhbSaleTableRender(){
   const s = KPL.lhb.sale, d = KPL.lhb.saleDate;
   const rows = (s && s.rows) || [];
-  $('kplLhbRtMeta').textContent = '营业部 ' + d + ' · ' + (s ? (s.total ?? rows.length) + ' 家' : '无数据');
-  if (!s){ $('kplLhbRtTable').innerHTML = '<tr><td style="color:var(--muted)">--（读取失败；见 banner 说明）</td></tr>'; return; }
-  $('kplLhbRtTable').innerHTML = rows.length
-    ? '<tr><th>#</th><th>营业部</th><th>买入额</th><th>卖出额</th><th>参与次数</th></tr>'
-      + rows.map((r, i) => '<tr><td class="num">' + (i + 1) + '</td><td>' + esc(r.name || '--') + '</td>'
-        + '<td class="num">' + kplFmtYi(r.buy) + '</td><td class="num">' + kplFmtYi(r.sell) + '</td>'
-        + '<td class="num">' + kplFmtVal(r.join_num) + '</td></tr>').join('')
-    : '<tr><td colspan="5" style="color:var(--muted)">--（该日无数据；见 banner 说明）</td></tr>';
+  if (rows.length && rows[0].name && !rows.some(r => r.name && r.name === KPL.lhb.branchName)){
+    kplLhbSelectBranch(rows[0].name);                // 默认选首行（review #6：空名不反查，免 422 重触发）
+    return;
+  }
+  if ((!rows.length || !rows.some(r => r.name)) && KPL.lhb.branchName){
+    KPL.lhb.branchName = ''; KPL.lhb.branch = null;   // 空榜/无名清选中
+    kplLhbSeatRender();
+  }
+  $('kplLhbSaleTable').innerHTML = !s
+    ? '<tr><td style="color:var(--muted)">--（' + (KPL.lhb.saleLoading ? '加载中…' : '读取失败；见状态栏说明') + '）</td></tr>'
+    : rows.length
+      ? '<tr><th>#</th><th>营业部</th><th>买入</th><th>卖出</th><th title="派生口径：买入-卖出">净额</th><th>参与次数</th></tr>'
+        + rows.map((r, i) => {
+            const nb = parseFloat(r.buy), ns = parseFloat(r.sell);
+            const net = (Number.isFinite(nb) && Number.isFinite(ns)) ? nb - ns : null;
+            return '<tr data-name="' + esc(r.name || '') + '"'
+              + (r.name && r.name === KPL.lhb.branchName ? ' class="on"' : '')
+              + ' onclick="kplLhbSelectBranch(this.getAttribute(\'data-name\'))" title="点击查看该营业部当日买卖个股明细">'
+              + '<td class="num">' + (i + 1) + '</td><td>' + esc(r.name || '--') + '</td>'
+              + '<td class="num">' + kplFmtAmt(r.buy) + '</td>'
+              + '<td class="num">' + kplFmtAmt(r.sell) + '</td>'
+              + '<td class="num ' + kplTone(net) + '">' + kplFmtAmt(net) + '</td>'
+              + '<td class="num">' + kplFmtVal(r.join_num) + '</td></tr>';
+          }).join('')
+      : '<tr><td colspan="6" style="color:var(--muted)">--（该日无数据；榜约 17:00 盘后生成，非降级）</td></tr>';
 }
+async function kplLhbSeatLoad(code, d){
+  // 右栏席位前五（东财 datacenter-web，2026-10-30 用户解禁东财源）
+  code = String(code || '');
+  if (!code){ KPL.lhb.seat = null; KPL.lhb.seatCode = ''; KPL.lhb.seatMsg = ''; kplLhbSeatRender(); return; }
+  KPL.lhb.seatCode = code; KPL.lhb.seatDate = d; KPL.lhb.seatLatest = '';
+  KPL.lhb.seat = null; KPL.lhb.seatMsg = '';
+  kplLhbSeatRender();
+  try {
+    const resp = await fetch('/api/market/lhb-seat-detail?code=' + encodeURIComponent(code)
+      + '&date=' + encodeURIComponent(d));
+    const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
+    if (KPL.lhb.seatCode !== code || KPL.lhb.seatDate !== d) return;   // 已切股/切日，过期帧丢弃
+    if (!r.ok){
+      KPL.lhb.seatMsg = (r.message || r.reason || '读取失败');
+      if (window.sbLog) sbLog('warn', '[席位前五] ' + code + ' ' + d + ' ' + KPL.lhb.seatMsg);
+      kplLhbSeatRender();
+      return;
+    }
+    KPL.lhb.seat = r;
+    if (!(r.buy || []).length && !(r.sell || []).length){
+      // 结构化空态：该股该日不在榜 → 查最近上榜日提示（可选查看）
+      kplLhbSeatDatesLoad(code);
+    }
+    kplLhbSeatRender();
+  } catch (e){
+    if (KPL.lhb.seatCode !== code) return;
+    KPL.lhb.seatMsg = '请求失败：' + (e.message || e);
+    if (window.sbLog) sbLog('warn', '[席位前五] ' + code + ' ' + KPL.lhb.seatMsg);
+    kplLhbSeatRender();
+  }
+}
+async function kplLhbSeatDatesLoad(code){
+  try {
+    const resp = await fetch('/api/market/lhb-seat-dates?code=' + encodeURIComponent(code));
+    const r = await resp.json().catch(() => ({ok: false}));
+    if (KPL.lhb.seatCode === code && r.ok && (r.dates || []).length){
+      KPL.lhb.seatLatest = r.dates[0];
+      kplLhbSeatRender();
+    }
+  } catch (e){ /* 空态提示失败仅注记 */ }
+}
+function kplLhbSeatGoto(d){
+  if (KPL.lhb.seatCode) kplLhbSeatLoad(KPL.lhb.seatCode, d);   // 查看最近上榜日席位（不影响左列表日期）
+}
+function kplLhbSeatRender(){
+  const rows = kplLhbStockRows();
+  const nameOf = code => { const r = rows.find(x => String(x.code) === String(code)); return r ? r.name : ''; };
+  if (KPL.lhb.seatMode === 'branch'){
+    const br = KPL.lhb.branch;
+    const noMatch = br && !br.matched && (br.candidates || []).length
+      ? ' · 未匹配东财（候选：' + br.candidates.slice(0, 2).join('；') + '）' : '';
+    $('kplLhbSeatStock').textContent = KPL.lhb.branchName
+      ? ('营业部：' + KPL.lhb.branchName + ' · ' + (KPL.lhb.branchDate || '') + ' 当日席位明细' + noMatch)
+      : '';
+    $('kplLhbSeatMeta').textContent = br
+      ? ('买 ' + (br.buy || []).length + ' 股 / 卖 ' + (br.sell || []).length + ' 股'
+         + (br.matched ? ' · 东财匹配：' + br.matched : ''))
+      : '';
+    $('kplLhbSeatBuyTitle').textContent = '该营业部买入个股';
+    $('kplLhbSeatSellTitle').textContent = '该营业部卖出个股';
+    const brRow = (x, side) => '<tr><td class="num">' + (x.code || '--') + '</td>'
+      + '<td>' + esc(x.name || nameOf(x.code) || '--') + '</td>'
+      + '<td class="num">' + kplFmtAmt(side === 'buy' ? x.buy : x.sell) + '</td>'
+      + '<td class="num ' + kplTone(x.net) + '">' + kplFmtAmt(x.net) + '</td></tr>';
+    const brTable = (list, side) => (list || []).length
+      ? '<tr><th>代码</th><th>名称</th><th>' + (side === 'buy' ? '买入' : '卖出') + '</th>'
+        + '<th>净额</th></tr>' + list.map(x => brRow(x, side)).join('')
+      : '<tr><td colspan="4" style="color:var(--muted)">--（无数据）</td></tr>';
+    $('kplLhbSeatBuyTable').innerHTML = br ? brTable(br.buy, 'buy')
+      : '<tr><td colspan="4" style="color:var(--muted)">--（' + esc(KPL.lhb.branchMsg || '点击左侧营业部行…') + '）</td></tr>';
+    $('kplLhbSeatSellTable').innerHTML = br ? brTable(br.sell, 'sell')
+      : '<tr><td colspan="4" style="color:var(--muted)">--</td></tr>';
+    return;
+  }
+  const seat = KPL.lhb.seat, code = KPL.lhb.seatCode;
+  const srow = rows.find(r => String(r.code) === code);
+  const reasons = seat ? [...new Set([].concat(seat.buy || [], seat.sell || []).map(r => r.reason).filter(Boolean))] : [];
+  $('kplLhbSeatStock').textContent = code
+    ? ((srow && srow.name ? srow.name + '（' + code + '）' : code)
+       + (seat ? ' · ' + seat.date + ' 上榜明细' : ' · ' + (KPL.lhb.seatDate || ''))
+       + (reasons.length ? ' · ' + reasons.join('；') : ''))
+    : '';
+  $('kplLhbSeatMeta').textContent = seat
+    ? ('买 ' + (seat.buy || []).length + ' / 卖 ' + (seat.sell || []).length + ' 席')
+    : '';
+  $('kplLhbSeatBuyTitle').textContent = '买入金额最大前5名';
+  $('kplLhbSeatSellTitle').textContent = '卖出金额最大前5名';
+  const seatRow = (r, side) => {
+    const amt = side === 'buy' ? r.buy : r.sell;
+    const ratio = side === 'buy' ? r.buy_ratio : r.sell_ratio;
+    return '<tr><td class="num">' + (r.rank ?? '--') + '</td>'
+      + '<td>' + esc(r.name || '--') + '</td>'
+      + '<td class="num">' + kplFmtAmt(amt) + '</td>'
+      + '<td class="num">' + (ratio == null ? '--' : kplFmtPct(ratio)) + '</td></tr>';
+  };
+  const seatTable = (list, side) => (list || []).length
+    ? '<tr><th>#</th><th>营业部名称</th><th>' + (side === 'buy' ? '买入金额' : '卖出金额') + '</th>'
+      + '<th title="占该股当日总成交额比例">占总成交比例</th></tr>'
+      + list.map(r => seatRow(r, side)).join('')
+    : '<tr><td colspan="4" style="color:var(--muted)">--（无数据）</td></tr>';
+  // 空态（不在榜）+ 最近上榜日快捷入口并入表格行（口径注记已按用户要求移除）
+  const emptyRow = !seat ? null
+    : (!seat.buy.length && !seat.sell.length
+        ? '<tr><td colspan="4" style="color:var(--muted)">该股 ' + esc(seat.date)
+          + ' 不在龙虎榜（结构化空态）'
+          + (KPL.lhb.seatLatest && KPL.lhb.seatLatest !== seat.date
+             ? '；最近上榜 <a href="javascript:void(0)" onclick="kplLhbSeatGoto(\'' + esc(KPL.lhb.seatLatest) + '\')"><b>' + esc(KPL.lhb.seatLatest) + '</b></a>（点击查看）'
+             : '') + '</td></tr>'
+        : null);
+  $('kplLhbSeatBuyTable').innerHTML = seat
+    ? ((seat.buy.length ? seatTable(seat.buy, 'buy') : emptyRow)
+       || '<tr><td colspan="4" style="color:var(--muted)">--（无数据）</td></tr>')
+    : '<tr><td colspan="4" style="color:var(--muted)">--（' + esc(KPL.lhb.seatMsg || '等待选中个股…') + '）</td></tr>';
+  $('kplLhbSeatSellTable').innerHTML = seat
+    ? ((seat.sell.length ? seatTable(seat.sell, 'sell')
+        : (emptyRow || '<tr><td colspan="4" style="color:var(--muted)">--（无数据）</td></tr>')))
+    : '<tr><td colspan="4" style="color:var(--muted)">--</td></tr>';
+}
+
 async function kplLhbHisLoad(d){
   KPL.lhb.hisDate = d;
   try {
@@ -5995,35 +6354,6 @@ async function kplLhbHisLoad(d){
     KPL.lhb.hisMsg = '回看 ' + d + ' 请求失败：' + (e.message || e);
     kplLhbRender();
   }
-}
-function kplLhbHisTableRender(){
-  const h = KPL.lhb.his, d = KPL.lhb.hisDate;
-  const gl = (h && h.list && h.list.groups) || [];
-  const sr = (h && h.stocks && h.stocks.rows) || [];
-  $('kplLhbRtMeta').textContent = '回看 ' + d + ' · 分组 ' + gl.length + ' · 个股行 ' + sr.length;
-  if (!h){ $('kplLhbRtTable').innerHTML = '<tr><td style="color:var(--muted)">--（该日期无数据；见 banner 说明）</td></tr>'; return; }
-  const lines = [];
-  for (const g of gl){
-    lines.push('<tr><td colspan="7" style="background:#f8fafc;font-weight:600">'
-      + esc(g.reason || ('BID ' + (g.bid || '--'))) + '（' + (g.stocks || []).length + ' 只）</td></tr>');
-    for (const s of (g.stocks || [])){
-      // stockList 12 列：[0]=代码 [1]=名称 [2]=现价 [3]=偏离/涨幅 [4]=成交额 [5]=换手 …
-      // 列语义部分推断（同 3004 约定，raw 已在 :8000 读口保留）
-      lines.push('<tr><td>' + esc(s[0] || '--') + '</td><td>' + esc(s[1] || '--') + '</td>'
-        + '<td class="num">' + kplFmtVal(s[2]) + '</td><td class="num">' + kplFmtVal(s[3]) + '</td>'
-        + '<td class="num">' + kplFmtYi(s[4]) + '</td><td class="num">' + kplFmtVal(s[5]) + '</td>'
-        + '<td>' + esc((g.index_cols || []).join(' / ') || '--') + '</td></tr>');
-    }
-  }
-  for (const r of sr){
-    lines.push('<tr><td>' + esc(r.stock_id || '--') + '</td><td>' + esc(r.stock_name || '--') + '</td>'
-      + '<td class="num">' + kplFmtVal(r.price) + '</td><td class="num">' + kplFmtVal(r.zf) + '</td>'
-      + '<td class="num">' + kplFmtYi(r.main_net_amount) + '</td><td class="num">--</td>'
-      + '<td>' + esc(r.reason || '--') + '</td></tr>');
-  }
-  $('kplLhbRtTable').innerHTML = lines.length
-    ? '<tr><th>代码</th><th>名称</th><th>现价</th><th>偏离/涨幅</th><th>成交额</th><th>换手</th><th>上榜原因/排序列</th></tr>' + lines.join('')
-    : '<tr><td style="color:var(--muted)">--（当日无数据；见 banner 结构化空态说明）</td></tr>';
 }
 function kplDabanRows(view, all){
   const conf = DABAN_PAGES[view];

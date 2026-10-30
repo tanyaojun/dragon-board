@@ -266,8 +266,15 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   假设，mainBuy+mainSell=mainNetAmount 卖出记负，口径=盘中主力大单非席位额，
   docs/kpl-socket/lhb-scaling-verification.md）。collector 开关 daban_lhb/lhb_realtime
   默认关、独立于 daban_subs；最小订阅面会话寿命极短（1002 循环），生产与 daban_subs
-  同开。读口 /api/kpl/lhb-forecast|lhb-realtime|lhb-history（fail-visible 降级）；
-  :8008 龙虎榜🏆页签（Playwright DOM 14/14）；JEV 事实段供给 jev_lhb_ammo.py
+  同开。读口 /api/kpl/lhb-forecast|lhb-realtime|lhb-history|lhb-sale +
+  /api/market/lhb-seat-dates|lhb-seat-detail|lhb-day-detail|lhb-branch-detail（东财
+  datacenter-web，2026-10-30 用户解禁：个股席位明细 KPL 无源——同日开火阴性
+  GetBusinessList/GetStockList 加 StockID 被静默忽略，dex 全枚举 LongHuBang 域 5 端点无
+  StockID；akshare 库仍不用，httpx 直连）；:8008 龙虎榜🏆页签 **2026-10-30 二次改版**：
+  左=个股/营业部页签切换（板块行情同款），右=席位前五（个股模式=选中股买卖前 5 席位；
+  营业部反查模式=选中营业部当日买卖个股，名称归一+相似度匹配）；个股列表列名
+  涨幅/价格/换手率%（2 位小数）+ 默认仅显有席位上榜股（可切全部）+ 搜索/市场筛选/
+  表头排序（涨停复盘同款）；JEV 事实段供给 jev_lhb_ammo.py
   （纯事实组装，禁喂清单合规）；题材龙头语料同源接入（AMMO 2026-10-30a，
   theme_leader_ammo.lhb_line 按龙一+板内成员过滤，预登记 §23；2026-10-30b 分页修复
   st=300、2026-10-30c 席位/机构扩维、2026-10-30d 语料精简（AMMO 换代，共享行同步

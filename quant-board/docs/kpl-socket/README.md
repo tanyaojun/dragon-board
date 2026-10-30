@@ -516,6 +516,23 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   list=[] 属结构化空态（榜约 17:00 盘后生成）**。同族 GetAgencyListV2（机构榜）/
   GetStockList（个股榜）未接，边界显式。证据 `.tmp_review/lhbsale_probe_results.jsonl`
   （本地，不入仓）。
+- **个股席位明细 KPL 无源（2026-10-30 开火阴性结论，预登记探针
+  `.tmp_review/lhbsale_linkage_probe_20261030.py`，2 发）**：`GetBusinessList`/
+  `GetStockList` 加 `StockID` 参数均被上游**静默忽略**（回包与全市场样本逐条一致/未过滤）；
+  dex 全枚举 LongHuBang 域仅 5 端点（GetBusinessList/GetStockList/GetAgencyListV2/
+  GetYiXianByDay/UpdateList），均无 StockID。**KPL 合同内做不出「个股→买卖前 5 席位」**
+  （同花顺截图右栏那种个股席位明细；KPL 个股级仅 GetStockList 聚合 BuyIn/JoinNum）。
+  **同日用户解禁东财源**：席位明细改接东财 datacenter-web（下节），KPL 仍负责左列表
+  （2112 预测/HisBeOnTheLHB）与营业部成交榜；akshare 库仍不用（httpx 直连，无新依赖）。
+- **东财 datacenter-web 个股席位明细（2026-10-30 用户解禁接入，合同见
+  `market_proxy/lhb_seat_detail.py` 模块注释）**：
+  `GET datacenter-web.eastmoney.com/api/data/v1/get`，必带 `source=WEB&client=WEB`
+  + Referer=data.eastmoney.com；个股上榜日期列表 reportName=RPT_DAILYBILLBOARD_DETAILSNEW；
+  买卖前 5 席位 reportName=RPT_BILLBOARD_DAILYDETAILSBUY / RPT_BILLBOARD_DAILYDETAILSSELL
+  （sortColumns=BUY/SELL；SDK stock-sdk 源码里的 BUY_AMT_REAL 列名已失效，勿照抄）。
+  返回 OPERATEDEPT_NAME/BUY/SELL/NET（元）+ TOTAL_BUYRIO/TOTAL_SELLRIO（0-1 小数，
+  归一为百分数）+ EXPLANATION/TRADE_ID；**同股同日多上榜原因按 TRADE_ID 多组重复返回，
+  parse 层按营业部名去重，买卖榜各最多 5 行**；金额元原样；盘后 ~17:30 更新。
 
 ### 13.2 开关与读口
 
@@ -528,16 +545,37 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `/api/kpl/lhb-realtime`（2112/3004 均空帧抑制同 2103 规——2112 以 total=0 为语义清空，
   午间休市推流 total>0/items=[] 不覆盖非空快照；无快照结构化降级 fail-visible）；
   `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）；
-  `GET /api/kpl/lhb-sale?date=&type_=0`（:8000 本地处理 kpl_lhb_sale 营业部榜，30s TTL；
-  缺 date 422，空榜带结构化空态 note）。
-- :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签：预测卡 + 龙虎榜合并表卡（同板块行情
-  个股列表形态；头部「选股/营业部」分段切换 + 日期选择：选股=默认当日 3004 实时
-  5s 轮询、选历史日期同表切换 HisBeOnTheLHB 分组回看；营业部=GetBusinessList 按日榜
-  （# / 营业部 / 买入额亿 / 卖出额亿 / 参与次数）；「今日」按钮回当日；回看/营业部模式
-  轮询照跑仅停渲染，banner 按 view 分流互不顶掉；缺字段 `--`、降级 banner、
-  失败保留旧快照不伪装）。DOM 验证：**人工执行 Playwright 断言（实时/回看/营业部
-  三视图切换全过），脚本与截图只存本地 `.tmp_review/`，未入仓**
-  （专项契约由 `tests/hotlist/test_relay_page_window.py` 与 :8000 透传 mock 测试覆盖）。
+  `GET /api/kpl/lhb-sale?date=&type_=0`（:8000 本地处理 kpl_lhb_sale，30s TTL；缺 date 422，
+  上游异常 502 结构化降级）。曾接入的 `/api/kpl/lhb-stock-board`、`/api/kpl/lhb-agency`
+  （GetStockList/GetAgencyListV2 聚合联动）随席位前五上线已删路由（服务层 fetch/parse
+  保留，jev_lhb_ammo 在用）；
+  `GET /api/market/lhb-seat-dates?code=`、`GET /api/market/lhb-seat-detail?code=&date=`
+  （:8000 本地处理 market_proxy/lhb_seat_detail，东财 datacenter-web，日期 10min/明细
+  30min TTL；参数非法 422，上游异常 200+ok:false 结构化降级同 surge 模式）；
+  `GET /api/market/lhb-day-detail?date=`（全市场当日席位行按股聚合，左列表「仅上榜」
+  过滤集 + 营业部名集 + 证券名称表（RPT_DAILYBILLBOARD_DETAILSNEW 当日名单，
+  席位报表不带证券名），分页拉全 ≤10 页）；`GET /api/market/lhb-branch-detail?date=&name=`
+  （营业部反查：KPL 营业部名归一去公司后缀 + difflib≥0.6 模糊匹配东财席位行，
+  按股聚合买卖明细，未命中返候选名）。
+- :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签（**2026-10-30 二次改版**，用户需求）：
+  **左=龙虎榜控件（个股/营业部页签切换，板块行情精选/行业同款）/
+  右=席位前五（东财）**——个股页签：当日实时=2112 预测 items、选历史日期=HisBeOnTheLHB
+  个股行（列：序号/市场/代码/名称/当日涨幅/当日价格/换手率/金额/净买入/总买入/总卖出
+  （卖出记负原样展示）/所属概念/上榜原因；[5]换手/[6]成交额 task-3 已核对）；
+  营业部页签：GetBusinessList 成交榜（#/营业部/买入/卖出/净额（派生=买-卖）/参与次数）；
+  右栏席位前五（双模式）：个股页签点行（默认首行）加载该股当日买卖前 5 席位
+  （# / 营业部名称 / 买入（卖出）金额 / 占总成交比例；上榜原因注记；预估成本价无源）；
+  **营业部页签点行 → 右栏切营业部反查模式**（该营业部当日买卖个股明细，
+  归一+相似度匹配东财席位行，未命中显候选名）；该股当日不在榜显结构化空态并给
+  最近上榜日（点击查看，不影响左列表日期）；日期切换左右同步；
+  轮询照跑仅刷左列表；缺字段 `--`、降级进状态栏、失败保留旧快照不伪装。
+  **个股列表 2026-10-30 三项修订（用户需求）**：列名改「涨幅/价格/换手率%」且三列
+  统一 2 位小数；默认过滤仅显有营业部上榜的股票（东财当日席位过滤集；数据缺/空
+  不硬门禁显注记回全部，可切「全部/仅未上榜」）；搜索/市场筛选/表头排序
+  （涨幅/价格/换手率/金额/净买入/总买入/总卖出，涨停复盘 lf-bar+sortable 同款）。
+  DOM 验证：**人工执行 Playwright 断言，脚本与截图只存本地 `.tmp_review/`，未入仓**
+  （专项契约由 `tests/api/test_kpl_proxy_routes.py`、`tests/market/test_lhb_seat_detail.py`
+  mock 测试与 kpl_lhb_sale 服务层测试覆盖）.
 
 ### 13.3 资金字段口径（task-3 裁决，防误消费）
 

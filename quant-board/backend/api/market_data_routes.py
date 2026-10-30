@@ -13,6 +13,10 @@ from backend.market_proxy.hotlists import (
 )
 from backend.market_proxy.indices import get_market_overview_service
 from backend.market_proxy.limitup import get_limitup_service
+from backend.market_proxy.lhb_seat_detail import (
+    LhbSeatParamError,
+    get_lhb_seat_service,
+)
 from backend.market_proxy.longhu import get_longhu_service
 from backend.market_proxy.quotes import get_market_quotes_cache, normalize_stock_code
 from backend.market_proxy.sentiment import get_sentiment_service
@@ -259,6 +263,74 @@ async def surge_stock_performance():
                 "message": str(exc)[:200],
                 "data": [],
             },
+        )
+    return JSONResponse(content=payload)
+
+
+@router.get("/api/market/lhb-seat-dates", response_model=None)
+async def lhb_seat_dates(code: str = ""):
+    """东财龙虎榜：个股历史上榜日期列表（倒序，供前端席位明细选日/空态提示）。"""
+    try:
+        payload = await get_lhb_seat_service().get_seat_dates(code)
+    except LhbSeatParamError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "reason": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={"ok": False, "degraded": True, "source": "lhb-seat-dates",
+                     "errorCode": "upstream_unavailable", "message": str(exc)[:200],
+                     "code": code, "dates": []},
+        )
+    return JSONResponse(content={"ok": True, **payload})
+
+
+@router.get("/api/market/lhb-seat-detail", response_model=None)
+async def lhb_seat_detail(code: str = "", date: str = ""):
+    """东财龙虎榜：个股某日买卖前 5 席位明细（东财 datacenter-web，2026-10-30 用户解禁）。"""
+    try:
+        payload = await get_lhb_seat_service().get_seat_detail(code, date)
+    except LhbSeatParamError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "reason": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={"ok": False, "degraded": True, "source": "lhb-seat-detail",
+                     "errorCode": "upstream_unavailable", "message": str(exc)[:200],
+                     "code": code, "date": date, "buy": [], "sell": []},
+        )
+    return JSONResponse(content=payload)
+
+
+@router.get("/api/market/lhb-day-detail", response_model=None)
+async def lhb_day_detail(date: str = ""):
+    """东财龙虎榜：全市场当日席位行按股聚合（左列表「有席位上榜」过滤集）。"""
+    try:
+        payload = await get_lhb_seat_service().get_day_seats(date)
+    except LhbSeatParamError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "reason": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={"ok": False, "degraded": True, "source": "lhb-day-detail",
+                     "errorCode": "upstream_unavailable", "message": str(exc)[:200],
+                     "date": date, "stocks": []},
+        )
+    return JSONResponse(content=payload)
+
+
+@router.get("/api/market/lhb-branch-detail", response_model=None)
+async def lhb_branch_detail(date: str = "", name: str = ""):
+    """东财龙虎榜：营业部反查（按名称模糊匹配，返回该营业部当日买卖个股明细）。"""
+    try:
+        payload = await get_lhb_seat_service().get_branch_seats(date, name)
+    except LhbSeatParamError as exc:
+        return JSONResponse(status_code=422, content={"ok": False, "reason": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={"ok": False, "degraded": True, "source": "lhb-branch-detail",
+                     "errorCode": "upstream_unavailable", "message": str(exc)[:200],
+                     "date": date, "name": name, "buy": [], "sell": []},
         )
     return JSONResponse(content=payload)
 
