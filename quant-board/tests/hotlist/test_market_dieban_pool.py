@@ -470,7 +470,7 @@ def _facts_db(die_refs=None, hist_dates=()):
 
 
 def test_market_facts_line_dieban_em_scope_and_same_source_history(monkeypatch):
-    """EM 源：口径标「全市场·东财跌停池」，历史分位只采同源行（percentile 需 ≥10 样本）。
+    """EM 源：全市场口径不标来源名（2026-10-30f 来源注记删），历史分位只采同源行（percentile 需 ≥10 样本）。
 
     10-13 是快照源（异源）——若混入会改变分位；此处只验证它不进样本：
     11 个 EM 同源日 → 分位可算；把 10-13 也算进去仍是 12 样本、同样可算，
@@ -489,20 +489,20 @@ def test_market_facts_line_dieban_em_scope_and_same_source_history(monkeypatch):
     refs.append({"_id": "2026-10-13", "count": 999, "source": mdp.SOURCE_SNAPSHOT})  # 异源
     db = _facts_db(refs, hist_dates=em_days + ["2026-10-13"])
     line = market_facts_line(db, "2026-10-16")
-    assert "跌停 26 家（全市场·东财跌停池，" in line
+    assert "跌停 26 家（" in line and "全市场·东财跌停池" not in line, "2026-10-30f：来源名删，分位照出"
     assert "采集池口径" not in line and "行情快照" not in line
     assert "分位不可算" not in line.split(" · ")[1]     # 11 个同源样本 → 分位可算
 
 
 def test_market_facts_line_dieban_snapshot_scope_label(monkeypatch):
-    """快照源：口径标「全市场·行情快照」。"""
+    """快照源：全市场口径不标来源名（2026-10-30f）。"""
     from backend.operations.jev_label_jiuyan import market_facts_line
 
     monkeypatch.setattr(mdp, "today_str", lambda: "2026-10-16")
     monkeypatch.setattr(mdp, "_snapshot_is_closing", lambda: True)
     db = _facts_db([{"_id": "2026-10-16", "count": 19, "source": mdp.SOURCE_SNAPSHOT}])
     line = market_facts_line(db, "2026-10-16")
-    assert "跌停 19 家（全市场·行情快照" in line
+    assert "跌停 19 家（" in line and "全市场·行情快照" not in line
     assert "采集池口径" not in line
 
 
@@ -546,7 +546,7 @@ def test_market_facts_line_no_empty_history_percentile_artifact(monkeypatch):
     db = _facts_db([{"_id": "2026-10-16", "count": 56, "source": mdp.SOURCE_EM}])
     line = market_facts_line(db, "2026-10-16")
     assert "分位不可算 分位" not in line
-    assert "跌停 56 家（全市场·东财跌停池，分位不可算）" in line
+    assert "跌停 56 家（分位不可算）" in line
 
 
 def test_backfill_failure_counter_resets_on_success(monkeypatch, capsys):
@@ -584,7 +584,7 @@ def test_backfill_failure_counter_resets_on_success(monkeypatch, capsys):
 
 
 def test_market_facts_line_dieban_tdx_scope_label_and_same_source_history(monkeypatch):
-    """F7（2026-10-17）：本地日线重算源口径标「全市场·本地日线重算」，历史分位只采同源。
+    """F7（2026-10-17）：本地日线重算源=全市场口径（2026-10-30f 不标来源名），历史分位只采同源。
 
     东财池窗口外（09-16 之前）曾回退采集池口径（池内 6 vs 全市场 26，08-19 池内 53
     vs 全市场 128）；回填本地日线读数后，口径仍是「全市场」，但与 EM 不同源 → 分位
@@ -603,7 +603,7 @@ def test_market_facts_line_dieban_tdx_scope_label_and_same_source_history(monkey
     refs.append({"_id": "2026-09-23", "count": 13, "source": mdp.SOURCE_EM})   # 异源，不参与分位
     db = _facts_db(refs, hist_dates=tdx_days + ["2026-09-23"])
     line = market_facts_line(db, "2026-10-16")
-    assert "跌停 11 家（全市场·本地日线重算，" in line
+    assert "跌停 11 家（" in line and "全市场·本地日线重算" not in line
     assert "采集池口径" not in line and "东财跌停池" not in line
     assert "分位不可算" not in line.split(" · ")[1]      # 11 个同源样本 → 分位可算
 

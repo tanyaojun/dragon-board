@@ -943,8 +943,15 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
                     if isinstance(v, int) and not isinstance(v, bool)]
         die_scope = (source_label(SOURCE_POOL) + "，全市场源缺失"
                      if die_src == SOURCE_POOL else None)
-    if isinstance(cur_die, int) and not isinstance(cur_die, bool) and die_scope:
-        die_txt = f'跌停 {cur_die} 家（{die_scope}，{_pct_txt(hist_die, cur_die)}）'
+    # 2026-10-30f（用户指示）：全市场源的「全市场·东财跌停池」来源名删（分位号照出）；
+    # 采集池回退的降级注记保留（防止池口径被误读成全市场）
+    if isinstance(cur_die, int) and not isinstance(cur_die, bool):
+        if die_src in FULL_MARKET_SOURCES:
+            die_txt = f'跌停 {cur_die} 家（{_pct_txt(hist_die, cur_die)}）'
+        elif die_scope:
+            die_txt = f'跌停 {cur_die} 家（采集池口径，全市场源缺失，{_pct_txt(hist_die, cur_die)}）'
+        else:
+            die_txt = "跌停 不可算"
     else:
         die_txt = "跌停 不可算"
     rate = f'{cur["zhabanRate"]:.1f}%' if isinstance(cur["zhabanRate"], (int, float)) else "缺"
@@ -969,10 +976,10 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         un_note = f'，{un_prev}只连板未标高度未计入' if un_prev else ''
         hu = cur.get("ladderHeightUnknown")
         hu_note = f'，{hu}只高度不可算未入桶' if isinstance(hu, int) and hu else ''
-        ladder_seg = f'连板梯队（韭研{cur.get("ladderPoolTotal")}只封板，真连板口径{un_note}{hu_note}）{ladder_txt}'
+        ladder_seg = f'连板梯队（{cur.get("ladderPoolTotal")}只封板，真连板口径{un_note}{hu_note}）{ladder_txt}'
         ths = cur.get("thsLadder")
         if ths:
-            ladder_seg += (f'（THS交叉 {ths.get("one")}/{ths.get("two")}/{ths.get("three")}'
+            ladder_seg += (f'（交叉 {ths.get("one")}/{ths.get("two")}/{ths.get("three")}'
                            f'/{ths.get("four")}/{ths.get("high")}）')
     elif src == "jiuyan_touch":
         # THS 炸板池缺失日：回退触板池按 M 分桶（旧口径，炸板股会混入），显式披露

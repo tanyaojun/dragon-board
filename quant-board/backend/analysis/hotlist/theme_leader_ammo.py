@@ -139,7 +139,15 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 全市场介绍（紧跟盘面事实行后，两级叙事共用；取数单一源=直播归档，缺席不出行）；
 # ②韭研↔KPL 板块名经济/产业后缀桥（digest.board_keywords 公共函数，冰雪经济↔冰雪
 # 产业 10-29 播报漏配实证），直播 plate 命中同步用 keys。
-AMMO_VERSION_THEME_LEADER = "2026-10-30e"
+# 2026-10-30f（用户指示）：①直播只收板块相关时间点语料——空板块名条目命中指数/成交
+# 综述词（三大指数/上证指数/创业板指/沪深京三市/全市场等，近 5 日归档实测判别有效）
+# 不进板块播报（大盘综述已由盘面事实行与盘面总结行承载）；②来源注记删（纯数据源头
+# 说明，不影响读数语义）：跌停行「全市场·东财跌停池」、连板梯队「韭研」/「THS交叉」→
+# 「交叉」、板块强度「KPL 801xxx 指数·按日查史」、板块序列「KPL·801xxx 稳定 ID 锚」、
+# 直播头「实时流·仅标注时点可得」、打标交叉行「打标链+题集版本」、证据块头部与
+# 催化/事件/新闻/日历/板内解析行的「韭研产业树/开盘啦/韭研异动」字样；口径与降级
+# 披露（真连板口径、采集池回退、右删失、龙虎榜主力净额口径）全保留。
+AMMO_VERSION_THEME_LEADER = "2026-10-30f"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -515,7 +523,7 @@ CONTINUE_BUCKET_MIDPOINTS = {
 GATE_REASON_LABELS = {
     "corpus_not_collected": "题材语料未采集",
     # v2 历史档（10-08~10-22 落库）沿用旧名，保留标签供前端/审计回读：
-    "board_unmapped": "板块未映射（韭研产业树无同名/包含节点，不代表无催化）",
+    "board_unmapped": "板块未映射（产业树无同名/包含节点，不代表无催化）",
     "industry_tree_unmapped": "产业树未映射且题材事件/板内解析均无可用证据",
     "no_content_no_event": "已映射但正文为空且无可用事件",
 }
@@ -881,9 +889,9 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
         return None
     if not rank_rows and not zt_rows and not window_declared:
         # P2-11（review）：层2 拉取失败不得静默缺席（§4.0）——失败行显式披露
-        return (f"板块序列（KPL「{plate_name}」·801xxx 稳定 ID 锚）："
+        return (f"板块序列（「{plate_name}」）："
                 f"层1/层2 均无记录；层2 涨停梯队历史拉取失败：{zt_fetch_error}（fail-visible）")
-    head = f"板块序列（KPL「{plate_name}」·801xxx 稳定 ID 锚）："
+    head = f"板块序列（「{plate_name}」）："
     parts: list[str] = []
     if rank_rows:
         segs = []
@@ -923,7 +931,7 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
             # 不得把昨日/更早的梯队串标成「当日」
             day_txt = ("当日" if str(last.get("date")) == str(label_date)
                        else f"{str(last.get('date'))[5:]}（最近记录日，非当日）")
-            parts.append(f"{day_txt}梯队串（KPL 预计算·交叉披露不替换自算口径）：{lz}")
+            parts.append(f"{day_txt}梯队串（交叉披露，不替换自算口径）：{lz}")
     return head + "；".join(parts)
 
 
@@ -938,10 +946,10 @@ def kpl_live_line(entries: list[dict] | None, *, board: str, total: int = 0,
     大模型自动生成尾注由调用方剥离；本行只渲染，不做匹配（匹配在 operations 层，
     复用 digest 关键词口径）。
     """
-    head = f"KPL直播播报（实时流·仅标注时点可得"
+    head = f"KPL直播播报（"
     if window:
-        head += f"，窗口 {window}"
-    head += f"，全窗 {total} 条）"
+        head += f"窗口 {window}"
+    head += f"{'，' if window else ''}全窗 {total} 条）"
     if unavailable:
         return f"{head}：不可用（{unavailable}）"
     if not entries:
@@ -1117,7 +1125,7 @@ def driver_cross_line(label_doc: dict | None) -> str:
     slot = str(label_doc.get("labelSlot") or "")
     slot_cn = {"final": "收盘槽", "midday": "午盘槽"}.get(slot, slot or "槽位不可考")
     qs = str(label_doc.get("questionSetVersion") or "版本不可考")
-    head = f"个股打标交叉（打标链 {qs}·{slot_cn}）："
+    head = f"个股打标交叉（{slot_cn}）："
     # 驱动类别概率真身=driverProbabilities（labelProbabilities 为 API 层旧别名，兜底旧档）
     label_seg = _top2(label_doc.get("driverProbabilities")
                       or label_doc.get("labelProbabilities"), DRIVER_LABEL_CN) \
@@ -1173,7 +1181,7 @@ def plate_strength_line(match: dict) -> str:
     """
     if not isinstance(match, dict) or not match.get("ok"):
         reason = (match or {}).get("reason") or "unknown"
-        return f"板块强度（KPL 801xxx 指数·按日查史）：不可用（{reason}）"
+        return f"板块强度：不可用（{reason}）"
     rank, total = match.get("rank"), match.get("total")
     rank_txt = (f"#{rank}/{total}" if isinstance(rank, int) and isinstance(total, int)
                 else "排名不可考")
@@ -1184,9 +1192,9 @@ def plate_strength_line(match: dict) -> str:
     pct_txt = f"板块涨幅 {pct}%" if isinstance(pct, (int, float)) else "涨幅不可考"
     name = str(match.get("name") or "")
     alias_txt = "，别名表" if match.get("aliasUsed") else ""
-    name_txt = (f"（匹配 KPL 板块「{name}」{alias_txt}）" if name
+    name_txt = (f"（匹配「{name}」{alias_txt}）" if name
                 else "（名称桥匹配信息缺失）")
-    return (f"板块强度（KPL 801xxx 指数·按日查史{'' if name else '·未匹配'}）"
+    return (f"板块强度{'' if name else '·未匹配'}"
             f"{name_txt}：当日排名 {rank_txt}，{strength_txt}，{pct_txt}")
 
 

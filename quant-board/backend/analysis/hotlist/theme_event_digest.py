@@ -26,7 +26,7 @@ import re
 from backend.operations import jiuyan_theme_store as S
 from backend.operations import kpl_theme_store as KS
 
-BLOCK_HEADER = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】"
+BLOCK_HEADER = "【题材证据】"
 CONTENT_CHARS = 260
 MAX_EVENTS = 3
 EVENT_WINDOW_PAST_DAYS = 3      # 事件/新闻回看窗口（发酵中）
@@ -451,7 +451,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
 
     lines = [BLOCK_HEADER]
     if not state.get("ok"):
-        lines.append("题材语料（韭研产业树 + 开盘啦事件层）未采集（无数据 ≠ 无催化）。"
+        lines.append("题材语料未采集（无数据 ≠ 无催化）。"
                      "请勿据此判断催化有无。")
     else:
         stale = "" if not state.get("stale") else f"（注意：语料最近采集日 {state.get('latestFetchDate')}，非当日）"
@@ -465,7 +465,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         pass                                   # 未采集行已在前面给出，不再伪造 L3 明细
     elif not match.get("matched"):
         coarse = "（该板块属粗分桶，非题材分类）" if normalize_name(board_name) in NOT_A_THEME else ""
-        lines.append(f"板块级催化：未映射{coarse}（「{board_name}」在韭研产业树无同名/包含节点；"
+        lines.append(f"板块级催化：未映射{coarse}（「{board_name}」在产业树无同名/包含节点；"
                      f"不代表无催化）")
     elif not (node or {}).get("content"):
         lines.append(f"板块级催化：产业树节点「{node.get('name')}」无催化正文（原文为空，如实标注）")
@@ -486,7 +486,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         _m = str(match.get('method') or '')
         _m_txt = f"，匹配方式 {_m}" if _m and _m != "exact" else ""
         lines.append(
-            f"板块级催化原文（韭研产业树「{node.get('name')}」{_m_txt}，"
+            f"板块级催化原文（「{node.get('name')}」{_m_txt}，"
             f"热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
             f"{_clip(node.get('content'), content_chars)}")
 
@@ -526,7 +526,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         if not ev_hits:
             lines.append("当日题材事件：无匹配")
         else:
-            lines.append("当日题材事件（开盘啦题材事件，仅标题+热度+日期，2026-10-28 用户裁决）")
+            lines.append("当日题材事件（仅标题+热度+日期）：")
             for ev in ev_hits:
                 src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
                 hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
@@ -550,7 +550,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             if news_no_match:
                 lines.append("近两日题材新闻：无匹配")
             else:
-                lines.append("近两日题材新闻（开盘啦题材新闻，Kword 题材标签关联）：")
+                lines.append("近两日题材新闻（Kword 标签关联）：")
                 for it in news_hits:
                     stocks = it.get("stocks") or []
                     top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
@@ -565,7 +565,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             if cal_no_match:
                 lines.append(f"未来 {window_days} 日既定事件：无匹配")
             else:
-                lines.append(f"未来 {window_days} 日既定事件（开盘啦题材日历）：")
+                lines.append(f"未来 {window_days} 日既定事件：")
                 for ev in cal_hits:
                     fd = _days_between(date, ev.get("date"))
                     when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
@@ -580,7 +580,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     if not include_l2:
         pass
     elif snap is None:
-        lines.append(f"板内解析：当日韭研异动无「{board_name}」板块分组（如实标注；"
+        lines.append(f"板内解析：当日无「{board_name}」板块分组（如实标注；"
                      f"非题材桶或当日未收录）")
     else:
         board_stocks_n = snap["count"]
@@ -596,13 +596,13 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         lead_label = "龙头" if str(leader_code or "") else "板内成员（韭研分组序，非推导龙一）"
         if lead is not None and exp:
             board_resolved = True
-            caliber = "" if snap.get("sealedFilter") else "（韭研异动口径，含触板未封）"
-            lines.append(f"板内解析（韭研异动「{board_name}」{board_stocks_n} 只{caliber}）："
+            caliber = "" if snap.get("sealedFilter") else "（含触板未封）"
+            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{caliber}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
                          f"解析摘录：{_clip(body or exp, content_chars)}")
         elif lead is not None:
-            caliber = "" if snap.get("sealedFilter") else "（韭研异动口径，含触板未封）"
-            lines.append(f"板内解析（韭研异动「{board_name}」{board_stocks_n} 只{caliber}）："
+            caliber = "" if snap.get("sealedFilter") else "（含触板未封）"
+            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{caliber}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析（如实标注）")
         peer_tags = []
         for p in [s for s in stocks if s is not lead][:5]:

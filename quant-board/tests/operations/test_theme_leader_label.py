@@ -182,7 +182,7 @@ def test_dry_run_makes_no_call_and_writes_nothing(env, capsys):
     assert "零 jev 调用（未花 token）" in printed
     assert "待判龙头：大业股份（603278）" in printed
     assert "结构基线（口径=触板−THS炸板二分 + 真连板" in printed
-    assert "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】" in printed
+    assert "【题材证据】" in printed
 
 
 def test_run_without_confirm_budget_is_blocked(env):
@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v13"
     assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-30e"   # 15:00 总结行+后缀桥（2026-10-30e）；题集 hash 不变
+    assert doc["ammoVersion"] == "2026-10-30f"   # 直播收窄+来源注记删（2026-10-30f）；题集 hash 不变
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -433,7 +433,7 @@ def test_build_one_driver_cross_join_and_fail_visible():
                        "freshness": "fresh_catalyst", "buySideLogic": "high_board_relay",
                        "computedAt": "2026-10-27T12:35:14"}
     built = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
-    assert "个股打标交叉（打标链 v4.0·午盘槽）：" in built["narrative"], \
+    assert "个股打标交叉（午盘槽）：" in built["narrative"], \
         "2026-10-30d：工程注记删，版本+槽位保留"
     assert built["driverCross"] == {"found": True, "labelSlot": "midday",
                                     "questionSetVersion": "v4.0"}
@@ -449,7 +449,7 @@ def test_build_one_driver_cross_join_and_fail_visible():
                        "label": "policy", "computedAt": "2026-10-27T17:00:00"}
     built2b = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
     assert built2b["driverCross"]["labelSlot"] == "final" \
-        and "打标链 v3.1" in built2b["narrative"]
+        and "个股打标交叉（收盘槽）" in built2b["narrative"], "2026-10-30f：题集版本披露删，槽位区分保留"
     # 无任何打标行 → fail-visible 缺席行（不伪装方向性结论）
     built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
@@ -1123,7 +1123,7 @@ def test_kpl_live_line_rendering():
     from backend.analysis.hotlist.theme_leader_ammo import kpl_live_line
     hit = kpl_live_line([{"time": "14:35", "comment": "AI硬件（光通信）持续异动"}],
                         board="AI硬件", total=60, window="09:15~15:00")
-    assert "KPL直播播报（实时流·仅标注时点可得，窗口 09:15~15:00，全窗 60 条）" in hit
+    assert "KPL直播播报（窗口 09:15~15:00，全窗 60 条）" in hit
     assert "14:35 AI硬件（光通信）持续异动" in hit
     none = kpl_live_line([], board="AI影视", total=60, window="09:15~15:00")
     assert "当日无「AI影视」相关播报" in none and "无数据 ≠ 无催化" not in none, "2026-10-30d：重复自我解释删"

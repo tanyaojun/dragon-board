@@ -169,6 +169,9 @@ def _strength_hit(rank: int, items: list, it: dict, alias_used: bool = False) ->
 
 # ── KPL 直播播报（G1，2026-10-28 用户裁决接入） ──
 _AI_GEN_NOTE = "（该内容由AI大模型根据行情自动生成）"
+# 2026-10-30f：大盘综述判别词（空板块名条目命中即不进板块播报；近 5 日归档实测全命中为指数综述）
+_MARKET_WRAP_RE = re.compile(
+    r"三大指数|上证指数|深证成指|创业板指|沪深京三市|沪深两市|北证50|两市成交|全市场")
 
 
 def fetch_live_commentary(st: int = 60) -> dict:
@@ -247,7 +250,9 @@ def live_entries_for_board(live_payload: dict, board: str,
 
     - **实时流仅标注时点可得**：窗口内无标注日条目（回填历史日）→ meta.unavailable
       结构化降级（不把今天的播报冒充历史日语料，防 look-ahead 泄漏）；
-    - 匹配：条目日=标注日 且 plate_name 双向包含 或 comment 归一后含关键词；
+    - 匹配：条目日=标注日；有板块名条目按 plate 双向包含或正文含关键词；空板块名条目
+      仅当正文含关键词且**非大盘综述**（_MARKET_WRAP_RE，2026-10-30f 用户指示：
+      整个交易日的全市场播报不贴进板块语料）；
     - 剥离「（该内容由AI大模型根据行情自动生成）」尾注（非播报内容）。
     返回 (entries 升序, meta={total, window 或 unavailable})。
     """
@@ -260,11 +265,18 @@ def live_entries_for_board(live_payload: dict, board: str,
                  if time.strftime("%Y-%m-%d", time.localtime(it["ts"])) == str(date)]
     if not day_items:
         return [], {"unavailable": "实时流不可回放（窗口内无标注日条目，历史日无直播归档）"}
-    # 2026-10-30e：15:00 收盘总结为全市场条目，已由「盘面总结」行单独承载（一次取数共用），
-    # 板块相关播报不再重复收录，防同一文本在叙事内双现
+    # 2026-10-30f（用户指示）：只收板块相关的时间点语料。大盘综述（空板块名 + 指数/成交
+    # 综述词）不进板块播报——这类条目（09:15 开盘/11:30 午盘/15:00 收盘/盘中综述）覆盖
+    # 全市场，文本含板块词只是顺带提及，且盘面/总结已由 market_line 与盘面总结行承载；
+    # 判别词表由近 5 日归档实测（空板块 71 条中命中 21 条，全部为指数综述；未命中者
+    # 均为真实板块/个股播报，如「羊年概念…」「竞价看龙头：…」）。meta 统计（全窗
+    # 条数/窗口）用过滤前全量，口径不变
+    tmin = min(it["time"] for it in day_items)
+    tmax = max(it["time"] for it in day_items)
+    meta = {"total": len(day_items), "window": f"{tmin}~{tmax}"}
     day_items = [it for it in day_items
-                 if not (str(it.get("time") or "") == "15:00"
-                         and not str(it.get("plate_name") or "").strip())]
+                 if str(it.get("plate_name") or "").strip()
+                 or not _MARKET_WRAP_RE.search(str(it.get("comment") or ""))]
     base = digest.normalize_name(board)
     keys = [k for k in digest.board_keywords(board)
             if len(k) >= 2 and digest._CJK_RE.search(k)]   # 纯拉丁/数字锚不得关联（digest 同规）
@@ -281,9 +293,7 @@ def live_entries_for_board(live_payload: dict, board: str,
         if plate_hit or text_hit:
             entries.append({"time": it.get("time"), "comment": comment})
     entries.reverse()   # ts 降序 → 升序（旧→新，与家数序列同向）
-    tmin = min(it["time"] for it in day_items)
-    tmax = max(it["time"] for it in day_items)
-    return entries, {"total": len(day_items), "window": f"{tmin}~{tmax}"}
+    return entries, meta
 
 
 def market_summary_entry(live_payload: dict, date: str) -> dict | None:

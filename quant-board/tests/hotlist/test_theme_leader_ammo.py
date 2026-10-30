@@ -70,7 +70,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v13"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30e"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30f"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "5d50645e5dc8"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -456,7 +456,7 @@ def test_driver_cross_line_variants():
            "buySideLogic": "high_board_relay",
            "buySideProbabilities": {"high_board_relay": 0.97, "independent_catalyst": 0.02}}
     line = A.driver_cross_line(doc)
-    assert line.startswith("个股打标交叉（打标链 v4.0·午盘槽）："), \
+    assert line.startswith("个股打标交叉（午盘槽）："), \
         "2026-10-30d：工程注记删，版本+槽位保留"
     assert "另一条打标链" not in line
     assert "驱动类别=资金接力43%/政策42%（近并列）" in line, "近并列必须显式披露（判定不稳=信息）"
@@ -799,12 +799,12 @@ def test_plate_series_line_two_segment_disclosure():
                 "lz_info": "603278,大业股份,2连板;688836,宇树科技,"}]
     line = A.plate_series_line(rank_rows, zt_rows, plate_name="机器人概念",
                                label_date="2026-10-28")
-    assert "KPL「机器人概念」·801xxx 稳定 ID 锚" in line
+    assert "板块序列（「机器人概念」）" in line
     assert "近3交易日强度/净额（层1·净额已同屏定档 2026-10-29）" in line
     assert "10-28 强度31837 净额-482.2亿" in line and "10-24 强度7252 净额?" in line
     assert "板块涨停家（层2·仅记录有涨停家/爆发日，记录间缺口≠零涨停）" in line
     assert "10-23 家44" in line and "10-28 家24" in line
-    assert "大业股份(2连板)" in line and "交叉披露不替换自算口径" in line
+    assert "大业股份(2连板)" in line and "交叉披露，不替换自算口径" in line
     # 双空 → None（匹配状态由强度行披露，不重复）
     assert A.plate_series_line([], [], plate_name="x", label_date="2026-10-28") is None
 

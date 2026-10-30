@@ -178,15 +178,15 @@ def test_block_contains_industry_and_kpl_sections():
     out = D.build_theme_evidence_block(_db(), board_name="机器人", date="2026-10-22")
     text = out["text"]
     assert text.startswith(D.BLOCK_HEADER)
-    assert "板块级催化原文（韭研产业树「国产机器人」，匹配方式 contains" in text
+    assert "板块级催化原文（「国产机器人」，匹配方式 contains" in text
     # 开盘啦题材事件：仅标题+热度+日期（2026-10-28 用户裁决，正文不出）；
     # GTC 为正文级命中（标题未含机器人）→ 弱匹配降级标注
-    assert "当日题材事件（开盘啦题材事件" in text
+    assert "当日题材事件（仅标题+热度+日期）" in text
     assert "- 2026-10-21 英伟达GTC大会来了！黃仁勋重磅演讲" in text
     assert "黄仁勋将在21日发表主题演讲" not in text, "事件正文不再进叙事（仅标题+热度+日期）"
     assert "弱匹配（标题未命中，仅正文级关联）" in text
     # 前瞻日历（开盘啦）
-    assert "未来 3 日既定事件（开盘啦题材日历）" in text
+    assert "未来 3 日既定事件：" in text
     assert "国产机器人产业大会" in text
     assert out["state"]["ok"] is True
     assert out["evidenceMissing"] is False
@@ -200,13 +200,13 @@ def test_news_kword_tag_takes_priority():
                                        leader_code="001360")
     text = out["text"]
     # 新闻流：Kword 标签命中 + 关联股披露
-    assert "近两日题材新闻（开盘啦题材新闻，Kword 题材标签关联）" in text
+    assert "近两日题材新闻（Kword 标签关联）" in text
     assert "- 2026-10-22 [俄乌重建] 泽连斯基表态推动和平协议预期" in text
     assert "南矿集团" in text and "matchHow" not in text
     assert out["kwordTags"] == ["俄乌重建"]
     # 产业树无俄乌重建节点，但 L2 板内解析在 → 不判缺失
     assert "板块级催化：未映射" in text
-    assert "板内解析（韭研异动「俄乌重建」" in text
+    assert "板内解析（「俄乌重建」" in text
     assert "俄罗斯市场" in text
     assert out["boardResolved"] is True
     assert out["evidenceMissing"] is False and out["evidenceMissingReason"] is None
@@ -289,7 +289,7 @@ def test_relay_compat_shape_has_no_l2_or_news_sections():
     assert "板内解析" not in text
     assert "近两日题材新闻" not in text
     assert "当日题材事件" in text and "既定事件" in text, "relay 保留当日+未来事件层（来源=开盘啦）"
-    assert "开盘啦题材日历" in text
+    assert "既定事件" in text
 
 
 # ── v5：题材热度序列（炒作深度/延续性判据的核心原料） ─────────────────────
@@ -375,7 +375,7 @@ def test_news_calendar_merge_only_when_both_empty():
     db.cols["jiuyan_action"] = FakeCol(RUSSIA_ACTION)
     out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
                                        leader_code="001360")
-    assert "近两日题材新闻（开盘啦题材新闻" in out["text"]
+    assert "近两日题材新闻（Kword 标签关联）" in out["text"]
     assert "未来 3 日既定事件：无匹配" in out["text"]
     assert "题材新闻/前瞻日历：均无匹配" not in out["text"]
     # relay 兼容形状（无新闻节）：日历空仍出独立无匹配行，不得被合并逻辑吞掉
@@ -413,7 +413,7 @@ def test_driver_tag_channel_supplements_mismatched_first_match():
     out = D.build_theme_evidence_block(db, board_name="半导体", date="2026-10-22",
                                        leader_code="603733")
     text = out["text"]
-    assert "板块级催化原文（韭研产业树「半导体」" in text, "首通道保留不替换（2026-10-30d：exact 常态不标注）"
+    assert "板块级催化原文（「半导体」" in text, "首通道保留不替换（2026-10-30d：exact 常态不标注）"
     assert "驱动标签补充映射" in text
     assert "词「存储芯片」" in text and "命中产业树「存储芯片」" in text
     assert "现货价续涨" in text, "补的是对口催化正文"
