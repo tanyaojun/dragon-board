@@ -545,10 +545,12 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `/api/kpl/lhb-realtime`（2112/3004 均空帧抑制同 2103 规——2112 以 total=0 为语义清空，
   午间休市推流 total>0/items=[] 不覆盖非空快照；无快照结构化降级 fail-visible）；
   `GET /api/kpl/lhb-history?date=`（:8000 本地处理 kpl_lhb_history，上游限频 30s TTL）；
-  `GET /api/kpl/lhb-sale?date=&type_=0`（:8000 本地处理 kpl_lhb_sale，30s TTL；缺 date 422，
-  上游异常 502 结构化降级）。曾接入的 `/api/kpl/lhb-stock-board`、`/api/kpl/lhb-agency`
-  （GetStockList/GetAgencyListV2 聚合联动）随席位前五上线已删路由（服务层 fetch/parse
-  保留，jev_lhb_ammo 在用）；
+  `GET /api/kpl/lhb-sale?date=&type_=0`、`GET /api/kpl/lhb-stock-board?date=`
+  （GetStockList 实际上榜名单，**当日左列表主源**：2026-10-30 用户指误——原用 2112
+  预测池 30 只被席位过滤剩 17 属读数入口错误，App 同源应为 83 只；BuyIn 实测为
+  净买入与 App 净买入列逐分一致，非席位买入额；:8000 本地处理 kpl_lhb_sale，30s TTL；
+  缺 date 422，上游异常 502 结构化降级）。曾接入的 `/api/kpl/lhb-agency`
+  （GetAgencyListV2）已删路由（服务层保留，jev_lhb_ammo 在用）；
   `GET /api/market/lhb-seat-dates?code=`、`GET /api/market/lhb-seat-detail?code=&date=`
   （:8000 本地处理 market_proxy/lhb_seat_detail，东财 datacenter-web，日期 10min/明细
   30min TTL；参数非法 422，上游异常 200+ok:false 结构化降级同 surge 模式）；
@@ -559,9 +561,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   按股聚合买卖明细，未命中返候选名）。
 - :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签（**2026-10-30 二次改版**，用户需求）：
   **左=龙虎榜控件（个股/营业部页签切换，板块行情精选/行业同款）/
-  右=席位前五（东财）**——个股页签：当日实时=2112 预测 items、选历史日期=HisBeOnTheLHB
-  个股行（列：序号/市场/代码/名称/当日涨幅/当日价格/换手率/金额/净买入/总买入/总卖出
-  （卖出记负原样展示）/所属概念/上榜原因；[5]换手/[6]成交额 task-3 已核对）；
+  右=席位前五（东财）**——个股页签：当日实时=**GetStockList 实际上榜名单**（2112 预测
+  仅作概念/价格/换手增补，失败回退预测池+注记）、选历史日期=HisBeOnTheLHB
+  个股行（列：序号/市场/代码/名称/涨幅/价格/换手率%三列 2 位小数/金额/净买入/
+  总买入/总卖出（实时=东财席位聚合，回看=KPL 卖出记负）/所属概念/上榜原因；
+  [5]换手/[6]成交额 task-3 已核对）；
   营业部页签：GetBusinessList 成交榜（#/营业部/买入/卖出/净额（派生=买-卖）/参与次数）；
   右栏席位前五（双模式）：个股页签点行（默认首行）加载该股当日买卖前 5 席位
   （# / 营业部名称 / 买入（卖出）金额 / 占总成交比例；上榜原因注记；预估成本价无源）；

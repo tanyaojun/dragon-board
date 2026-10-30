@@ -4770,6 +4770,7 @@ const KPL = {
         selCode: '', seat: null, seatCode: '', seatDate: '', seatMsg: '', seatLatest: '',
         seatMode: 'stock', branch: null, branchName: '', branchDate: '', branchMsg: '',
         day: null, dayDate: '', dayMsg: '',          // 东财全日席位：stocks 过滤集 / branches 名集
+        board: null, boardDate: '', boardMsg: '',     // KPL GetStockList 实际上榜名单（当日左列表主源）
         sFilter: {q: '', mkt: '', seat: 'on'}, sSort: {key: 'zf', dir: -1}},
   // selCode=个股页签选中股；seat=席位前五快照（个股模式）；seatMode=stock|branch（营业部页签反查）；
   // day=东财全日席位按股聚合（左列表过滤集）；sFilter/sSort=个股列表搜索/筛选/排序（涨停复盘同款）
@@ -5872,6 +5873,7 @@ async function kplLhbEnter(){
   kplLhbRefresh();
   if (!KPL.lhb.sale) kplLhbSaleLoad(kplLhbLhbDate());   // 营业部页签数据（首次进页即取）
   kplLhbDayLoad(kplLhbLhbDate());          // 东财当日席位过滤集（个股页签默认仅上榜）
+  kplLhbBoardLoad(kplLhbLhbDate());        // KPL 实际上榜名单（当日左列表主源）
   if (!KPL.lhbPoll){
     KPL.lhbPoll = setInterval(() => {
       if (STATE.view !== 'kpllhb'){ clearInterval(KPL.lhbPoll); KPL.lhbPoll = null; return; }
@@ -5966,6 +5968,26 @@ function kplLhbStockRows(){
         net: r.main_net_amount, buy: r.main_buy, sell: r.main_sell, reason: r.reason || '' };
     });
   }
+  // 当日实时（2026-10-30 用户指误修正）：主源=GetStockList 实际上榜名单（KPL App 同源，
+  // 今日 83 只）；2112 预测仅作概念/价格/换手/原因增补，东财 day 供净买入/总卖出；
+  // 名单读取失败回退 2112 预测池（fail-visible，席位过滤注记提示）
+  const brows = ((KPL.lhb.board || {}).rows) || [];
+  const fcMap = {};
+  for (const it of ((KPL.lhb.fc || {}).items || [])) fcMap[String(it.stock_id)] = it;
+  const dayMap = {};
+  for (const s of (((KPL.lhb.day || {}).stocks) || [])) dayMap[String(s.code)] = s;
+  if (brows.length){
+    return brows.map(r => {
+      const fc = fcMap[String(r.code)] || {};
+      const ds = dayMap[String(r.code)] || {};
+      return { code: r.code, name: r.name, plate: fc.plate || '',
+        price: fc.price ?? '', zf: r.increase_amount ?? fc.zf ?? '',
+        tur: fc.tur_rate ?? '', amount: r.turnover ?? '',
+        net: r.buy_in ?? ds.net ?? '',            // BuyIn=净买入（与 App 逐分一致，2026-10-30 实测）
+        buy: ds.buy ?? '', sell: ds.sell ?? '',   // 总买入/总卖出来自东财席位聚合（东财口径）
+        reason: fc.reason || '' };
+    });
+  }
   return ((KPL.lhb.fc || {}).items || []).map(it => ({
     code: it.stock_id, name: it.stock_name, plate: it.plate,
     price: it.price, zf: it.zf, tur: it.tur_rate, amount: it.tur,
@@ -6027,8 +6049,8 @@ function kplLhbStockListRender(){
   const head = '<tr><th>#</th><th>市场</th><th>代码</th><th>名称</th>'
     + th('涨幅', 'zf') + th('价格', 'price') + th('换手率%', 'tur') + th('金额', 'amount')
     + th('净买入', 'net')
-    + th('总买入', 'buy', 'KPL 口径：卖出记负，mainBuy+mainSell=mainNetAmount')
-    + th('总卖出', 'sell', 'KPL 口径：卖出记负（负值原样展示）')
+    + th('总买入', 'buy', '当日实时=东财席位聚合（正值）；回看=KPL 口径卖出记负')
+    + th('总卖出', 'sell', '当日实时=东财席位聚合（正值）；回看=KPL 口径卖出记负（负值原样展示）')
     + '<th>所属概念</th><th>上榜原因</th></tr>';
   $('kplLhbStockTable').innerHTML = rows.length
     ? head + rows.map((r, i) => {
@@ -6108,6 +6130,29 @@ function kplLhbSSort(key){
   if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = -1; }
   kplLhbStockListRender();
 }
+function kplLhbBoardLoad(d){
+  // KPL GetStockList 实际上榜名单（当日左列表主源；读数入口修正 2026-10-30 用户指误）
+  if (KPL.lhb.boardDate === d && (KPL.lhb.board || KPL.lhb.boardMsg)){ kplLhbStockListRender(); return; }
+  KPL.lhb.board = null; KPL.lhb.boardDate = d; KPL.lhb.boardMsg = '';
+  fetch(KPL_API + '/lhb-stock-board?date=' + encodeURIComponent(d))
+    .then(r => r.json().catch(() => ({ok: false, note: 'HTTP ' + r.status})))
+    .then(r => {
+      if (KPL.lhb.boardDate !== d) return;               // 日期已切，过期帧丢弃
+      if (r.ok){
+        KPL.lhb.board = r;
+        if (!(r.rows || []).length) KPL.lhb.boardMsg = '当日上榜名单为空（~17:00 盘后生成/非交易日，非降级）';
+      } else {
+        KPL.lhb.boardMsg = r.note || '读取失败';
+        if (window.sbLog) sbLog('warn', '[龙虎榜] 实际上榜名单 ' + d + ' ' + KPL.lhb.boardMsg);
+      }
+      kplLhbStockListRender();
+    })
+    .catch(e => {
+      if (KPL.lhb.boardDate !== d) return;
+      KPL.lhb.boardMsg = '请求失败：' + (e.message || e);
+      kplLhbStockListRender();
+    });
+}
 function kplLhbDayLoad(d){
   // 东财全日席位按股聚合：左列表「仅上榜」过滤集；空态/失败不硬门禁（显注记显全部，fail-visible）
   if (KPL.lhb.dayDate === d && (KPL.lhb.day || KPL.lhb.dayMsg)){ kplLhbStockListRender(); return; }
@@ -6153,6 +6198,7 @@ function kplLhbDateChange(){
   const date = kplLhbLhbDate();
   kplLhbSaleLoad(date);                    // 营业部页签跟日期
   kplLhbDayLoad(date);                     // 东财当日席位过滤集跟日期
+  kplLhbBoardLoad(date);                   // KPL 实际上榜名单跟日期
   if (KPL.lhb.seatMode === 'branch' && KPL.lhb.branchName)
     kplLhbBranchLoad(date, KPL.lhb.branchName);   // 营业部反查跟日期
   kplLhbRender();                          // 席位前五由 stockListRender 自动选首行触发重载

@@ -441,3 +441,28 @@ def test_lhb_sale_ok_with_empty_note(client, monkeypatch):
     body = r.json()
     assert body["rows"][0]["name"] == "华泰证券总部" and "note" not in body
 
+
+
+def test_lhb_stock_board_restored_routes(client, monkeypatch):
+    """/lhb-stock-board 恢复（2026-10-30 读数入口修正）：当日左列表主源=实际上榜名单。"""
+    from backend.services import kpl_lhb_sale as sale_svc
+    r = client.get("/api/kpl/lhb-stock-board")
+    assert r.status_code == 422 and r.json()["reason"] == "missing_date"
+
+    def boom(date):
+        raise RuntimeError("upstream limit")
+
+    monkeypatch.setattr(sale_svc, "fetch_lhb_stock_list", boom)
+    r = client.get("/api/kpl/lhb-stock-board?date=2026-10-30")
+    assert r.status_code == 502 and r.json()["reason"] == "upstream_error"
+
+    monkeypatch.setattr(sale_svc, "fetch_lhb_stock_list",
+                        lambda date: {"errcode": "0", "Time": date, "Total": 1, "list": [
+                            {"ID": "603696", "Name": "安记食品", "BuyIn": "121003701.36",
+                             "JoinNum": 4, "Turnover": "562678136", "IncreaseAmount": "10.01%"}]})
+    r = client.get("/api/kpl/lhb-stock-board?date=2026-10-30")
+    body = r.json()
+    assert r.status_code == 200 and body["ok"] is True and body["total"] == 1
+    assert body["rows"][0]["code"] == "603696"
+    assert body["rows"][0]["buy_in"] == "121003701.36"       # 元原样不缩放
+    assert body["rows"][0]["increase_amount"] == "10.01%"

@@ -70,7 +70,8 @@ def parse_lhb_stock_list(data: Dict[str, Any]) -> Dict[str, Any]:
         rows.append({
             "code": str(r.get("ID", "")),
             "name": str(r.get("Name", "")),
-            "buy_in": r.get("BuyIn"),        # 席位买入额，元原样
+            "buy_in": r.get("BuyIn"),        # 净买入（2026-10-30 实测与 App 净买入列逐分一致，
+                                             # 非席位买入额；元原样）
             "join_num": r.get("JoinNum"),    # 疑席位家数，语义待证不渲染
             "turnover": r.get("Turnover"),   # 成交额，元原样
             "increase_amount": r.get("IncreaseAmount"),

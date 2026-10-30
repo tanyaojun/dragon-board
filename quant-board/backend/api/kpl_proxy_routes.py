@@ -216,8 +216,30 @@ async def lhb_sale(date: str = "", type_: int = 0) -> JSONResponse:
     return JSONResponse(content=parsed)
 
 
-# /lhb-stock-board、/lhb-agency 聚合读口已随席位前五上线删除（2026-10-30 code review）：
-# 前端无调用方；GetStockList/GetAgencyListV2 服务层 fetch/parse 保留（jev_lhb_ammo 直用）。
+# /lhb-stock-board、/lhb-agency 聚合读口曾随席位前五上线删除；2026-10-30 晚恢复
+# /lhb-stock-board（code review 后用户实测：当日左列表应显实际上榜 83 只=KPL App 同源，
+# 原先用 2112 预测池 30 只被席位过滤剩 17 属读数入口错误）；/lhb-agency 保持删除
+# （服务层 GetStockList/GetAgencyListV2 fetch/parse 保留，jev_lhb_ammo 直用）。
+@router.get("/lhb-stock-board")
+def lhb_stock_board(date: str = "") -> JSONResponse:
+    """营业部个股榜读口（GetStockList，applhb 域）：当日实际上榜名单（KPL App 龙虎榜同源）。
+
+    合同同 lhb_sale（README §13）：同步 def + 上游 30s TTL；缺 date 422；
+    上游异常 502 结构化降级。消费 code/name/buy_in/turnover/increase_amount；
+    JoinNum 语义待证不渲染。
+    """
+    from backend.services import kpl_lhb_sale as lhb_sale_svc
+    if not date:
+        return JSONResponse(status_code=422, content={
+            "ok": False, "degraded": True, "reason": "missing_date",
+            "note": "必传 date=YYYY-MM-DD（个股榜按日拉取，无默认回看）"})
+    try:
+        raw = lhb_sale_svc.fetch_lhb_stock_list(date)
+    except Exception as exc:
+        return JSONResponse(status_code=502, content={
+            "ok": False, "degraded": True, "reason": "upstream_error",
+            "note": str(exc)[:200]})
+    return JSONResponse(content=lhb_sale_svc.parse_lhb_stock_list(raw))
 
 
 @router.get("/daban-list-history")
