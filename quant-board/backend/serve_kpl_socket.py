@@ -54,6 +54,9 @@ def _env_flag(name: str) -> bool:
 
 _DABAN_LHB = _env_flag("KPL_DABAN_LHB")
 _LHB_REALTIME = _env_flag("KPL_LHB_REALTIME")
+# 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
+# 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
+_LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
 # 身份凭据只从环境变量读（不入仓；正式值在 quant-board/.env.local，游客 userId=0 可收
 # 行情但会话寿命较短；进程环境已设同名变量时以环境变量优先——settings 加载器不覆盖）
 _USER_ID = os.environ.get("KPL_USER_ID", "0")
@@ -74,7 +77,8 @@ _service_lock = asyncio.Lock()
 _service = KplCollectorService(
     _codec,
     device_id=_DEVICE_ID, user_id=_USER_ID, token=_TOKEN,
-    daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME)
+    daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME,
+    lhb_realtime_count=_LHB_REALTIME_COUNT)
 
 
 def _get_service() -> KplCollectorService:

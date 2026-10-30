@@ -518,7 +518,7 @@ class TestRealtimeLHB3004:
         svc = KplCollectorService(
             FakeCodec(), device_id="test-dev", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
-            daban_subs=False, lhb_realtime=True,
+            daban_subs=False, lhb_realtime=True, lhb_realtime_count=120,
         )
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
@@ -527,13 +527,13 @@ class TestRealtimeLHB3004:
         # daban_subs=False 时 21xx 不发，仅 3004 订阅 + 3101 单发两帧
         assert 3004 in cmds and 3101 in cmds
         assert not any(c in (2114, 2115, 2103, 2112) for c in cmds)
-        # body = FakeCodec.enc 前缀 0xAA + App 基线 Req（f2 sortType=1, f4 limitType=4,
-        # f9 bjsType=1, f21 count=30；零值省略）
+        # body = FakeCodec.enc 前缀 0xAA + Req（f2 sortType=1, f4 limitType=4,
+        # f9 bjsType=1, f21 count=120 采集放宽 2026-10-30；零值省略）
         f3004 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3004)
-        assert f3004[16:] == lhb.build_realtime_lhb_req_pb()
-        # 3101 带当日区间 0925→1035（end_time 由 strftime 决定，已固定）
+        assert f3004[16:] == lhb.build_realtime_lhb_req_pb(count=120)
+        # 3101 带当日区间 0925→1035（end_time 由 strftime 决定，已固定）+ 同 count
         f3101 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3101)
-        assert f3101[16:] == lhb.build_realtime_lhb_req_pb(start_time=925, end_time=1035)
+        assert f3101[16:] == lhb.build_realtime_lhb_req_pb(count=120, start_time=925, end_time=1035)
 
     def test_3004_push_emits_realtime_lhb(self, svc):
         from backend.services import kpl_lhb_protocol as lhb

@@ -212,6 +212,7 @@ class KplCollectorService:
         daban_list_pages: int = 7,
         daban_lhb: bool = False,
         lhb_realtime: bool = False,
+        lhb_realtime_count: int = 120,
     ):
         self._codec = codec
         self._host = host
@@ -240,7 +241,10 @@ class KplCollectorService:
         self._daban_lhb = bool(daban_lhb)
         # 3004/3101 RealtimeLHB 实时龙虎榜选股（ServiceHqList 族，App 基线 quotaType=6/
         # sortType=1/limitType=4/bjsType=1；默认关，独立于 daban_subs/daban_lhb）
+        # count 采集放宽：App 原 UI count=1 → 2026-10-29 放宽 30 → 2026-10-30 用户裁决
+        # 放宽 120（实际上榜全名单 ~83 只需一次拉全；服务器若设上限会在开火验证中暴露）
         self._lhb_realtime = bool(lhb_realtime)
+        self._lhb_realtime_count = max(1, int(lhb_realtime_count))
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
@@ -780,10 +784,11 @@ class KplCollectorService:
             #     count=1，采集放宽 30；3101 无区间实测零应答（2026-10-29 开火），改带
             #     当日区间 0925→当前 HHMM（同 App MainIndexQuotationInfoPresenter 用法））
             if self._lhb_realtime:
-                req_sub = lhb.build_realtime_lhb_req_pb()
+                req_sub = lhb.build_realtime_lhb_req_pb(count=self._lhb_realtime_count)
                 reqs_lhb = [(lhb.CMD_REALTIME_LHB_SUB, req_sub),
                             (lhb.CMD_REALTIME_LHB_RANGE,
                              lhb.build_realtime_lhb_req_pb(
+                                 count=self._lhb_realtime_count,
                                  start_time=925, end_time=int(time.strftime("%H%M"))))]
                 for lhb_cmd, req_rl in reqs_lhb:
                     enc_rl = self._codec.enc(req_rl)

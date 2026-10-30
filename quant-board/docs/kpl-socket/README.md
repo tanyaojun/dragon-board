@@ -489,7 +489,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - **3004/3101 RealtimeLHB**（链 B，`kpl_lhb_protocol.py` 新模块）：ServiceHqList 族
   `SubRealtimeLHB / GetRealtimeLHBRangeData`，同 0x40 通道 ext=`02 0bbc/0c1d`。
   Req 基线 quotaType=6/sortType=1/limitType=4/bjsType=1/count=30（App 原 UI count=1，
-  采集放宽；`kpl_lhb_protocol.REALTIME_LHB_BASELINE`）。Resp total≈5438（全市场实时
+  采集放宽；`kpl_lhb_protocol.REALTIME_LHB_BASELINE`）。**count 放宽 30→120
+  （2026-10-30 用户裁决，开火验证通过）**：120 条全回、概念 [0] 120/120、连板原因
+  [18] 49/120；但选股帧有涨幅≥~5% 实质下限（zf_min=5.0），与当日 83 只实际名单交
+  仅 32，不作为全覆盖源（全覆盖走东财名单报表 day_quotes）；采集条数可
+  KPL_LHB_REALTIME_COUNT 覆盖（需重启 :8002）。Resp total≈5438（全市场实时
   选股口径，非龙虎榜榜单专属）、minMT/maxMT=HHMM；items 复用 GroupStockQuotasResp.Item
   （70 列 quotas：[0]=板块标签 [1]=现价（nn0.l 实锤），其余原样保留展示层标注）。
   **已知边界**：3101 无区间/带当日区间均零应答（推断需 indexType 指数 id，非关键路径）。
@@ -549,8 +553,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   （GetStockList 实际上榜名单，**当日左列表主源**：2026-10-30 用户指误——原用 2112
   预测池 30 只被席位过滤剩 17 属读数入口错误，App 同源应为 83 只；BuyIn 实测为
   净买入与 App 净买入列逐分一致，非席位买入额；TurnoverRatio 换手率字段一并透出；
-  概念/价格/上榜原因增补源优先级：3004 实时帧（涨幅 Top30，quotas[0]概念/[1]价/[18]
-  连板原因/[19]换手率）→ 2112 预测池 → 显 --（覆盖说明见列表头 tooltip）；
+  概念增补源=3004 实时帧 quotas[0] ∪ 2112 预测池（东财无概念源，3004 选股帧实测
+  涨幅≥~5% 下限、count=120 也只覆盖 83 中 32 只，其余显 --，表头 tooltip 载明）；
+  价格/涨幅/换手率/上榜原因兑底=东财名单报表 day_quotes（CLOSE_PRICE/CHANGE_RATE/
+  TURNOVERRATE/EXPLANATION 四列 2026-10-30 加入，83 只全覆盖，原因=交易所口径）；
   :8000 本地处理 kpl_lhb_sale，30s TTL；
   缺 date 422，上游异常 502 结构化降级）。曾接入的 `/api/kpl/lhb-agency`
   （GetAgencyListV2）已删路由（服务层保留，jev_lhb_ammo 在用）；

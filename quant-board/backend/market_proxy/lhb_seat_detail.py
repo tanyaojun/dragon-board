@@ -304,20 +304,35 @@ class LhbSeatDetailService:
                 {"reportName": REPORT_SELL, "sortColumns": "SELL", "sortTypes": "-1", "filter": flt}
             ),
             self._dc_list_all(
-                {"reportName": REPORT_LIST, "columns": "SECURITY_CODE,SECURITY_NAME_ABBR,TRADE_DATE",
+                {"reportName": REPORT_LIST,
+                 # 名单报表自带行情/原因列（2026-10-30 用户裁决补全字段）：收盘价/涨跌幅/
+                 # 换手率/上榜原因（交易所口径），当日左列表 83 只全覆盖（3004 选股帧
+                 # 只覆盖涨幅≥~5%，概念仍需 KPL 3004/2112）
+                 "columns": "SECURITY_CODE,SECURITY_NAME_ABBR,TRADE_DATE,CLOSE_PRICE,"
+                            "CHANGE_RATE,TURNOVERRATE,EXPLANATION",
                  "sortColumns": "SECURITY_CODE", "sortTypes": "1", "filter": flt}
             ),
         )
         buy_rows = parse_seat_rows(buy_items, "buy")
         sell_rows = parse_seat_rows(sell_items, "sell")
         raw_rows = buy_rows + sell_rows
-        # 证券名称来自当日上榜名单报表（席位报表本身不带名称）；同名多行去重
+        # 证券名称来自当日上榜名单报表（席位报表本身不带名称）；同名多行去重；
+        # 行情/原因字典同步提取（原样字符串不缩放，缺字段不键入——fail-visible）
         names: dict[str, str] = {}
+        day_quotes: dict[str, dict[str, str]] = {}
         for it in list_items:
             code = str(it.get("SECURITY_CODE") or "").strip()
             nm = str(it.get("SECURITY_NAME_ABBR") or "").strip()
             if code and nm:
                 names[code] = nm
+            dq: dict[str, str] = {}
+            for key, col in (("price", "CLOSE_PRICE"), ("zf", "CHANGE_RATE"),
+                             ("tur", "TURNOVERRATE"), ("reason", "EXPLANATION")):
+                v = it.get(col)
+                if v not in (None, ""):
+                    dq[key] = str(v)
+            if code and dq:
+                day_quotes[code] = dq
         stocks = aggregate_by_stock(raw_rows)
         for s in stocks:
             s["name"] = names.get(s["code"])
@@ -326,6 +341,7 @@ class LhbSeatDetailService:
             "date": day,
             "stocks": stocks,
             "names": names,
+            "day_quotes": day_quotes,
             "branches": sorted({r["name"] for r in raw_rows if r.get("name")}),
             "upstream_counts": {"buy": len(buy_items), "sell": len(sell_items)},
         }

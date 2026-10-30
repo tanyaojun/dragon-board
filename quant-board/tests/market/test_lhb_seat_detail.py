@@ -200,8 +200,10 @@ async def test_day_seats_and_branch_lookup():
     client = _FakeClient([
         _detail_payload(_day_rows()),   # day: buy
         _detail_payload([]),            # day: sell
-        _detail_payload([               # day: 上榜名单（供证券名称）
-            {"SECURITY_CODE": "600519", "SECURITY_NAME_ABBR": "贵州茅台"},
+        _detail_payload([               # day: 上榜名单（供证券名称/行情/原因）
+            {"SECURITY_CODE": "600519", "SECURITY_NAME_ABBR": "贵州茅台",
+             "CLOSE_PRICE": "1411.0", "CHANGE_RATE": "1.23", "TURNOVERRATE": "0.55",
+             "EXPLANATION": "日振幅值达15%的证券"},
             {"SECURITY_CODE": "000788", "SECURITY_NAME_ABBR": "北大荒"},
         ]),
     ])
@@ -210,6 +212,9 @@ async def test_day_seats_and_branch_lookup():
     assert day["ok"] is True
     assert {s["code"]: s["buy"] for s in day["stocks"]} == {"600519": 100.0, "000788": 50.0}
     assert day["names"] == {"600519": "贵州茅台", "000788": "北大荒"}
+    # day_quotes（2026-10-30 左列表字段补全）：行情/原因原样字符串，缺字段不键入
+    assert day["day_quotes"] == {"600519": {"price": "1411.0", "zf": "1.23",
+                                            "tur": "0.55", "reason": "日振幅值达15%的证券"}}
     assert day["stocks"][0]["name"] == "贵州茅台"
     assert set(day["branches"]) == {"华泰证券股份有限公司总部", "中信证券股份有限公司上海分公司"}
     # 回归（2026-10-30 线上「query too long」）：filter 必须是短日期串，不得混入 dict 序列化；
