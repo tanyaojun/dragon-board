@@ -5943,7 +5943,7 @@ function kplLhbMktFilter(code){
 }
 function kplNum2(v, suffix){              // 数值固定 2 位小数（2026-10-30 用户需求）；非数 '--'
   const s = String(v ?? '');
-  if (!/^-?\d+(\.\d+)?$/.test(s)) return '--';
+  if (!/^-?\d+(\.\d+)?%?$/.test(s)) return '--';   // 容忍 KPL 名单自带的百分号尾缀（涨幅列）
   const n = parseFloat(s);
   return Number.isFinite(n) ? n.toFixed(2) + (suffix || '') : '--';
 }
@@ -5971,21 +5971,30 @@ function kplLhbStockRows(){
   // 当日实时（2026-10-30 用户指误修正）：主源=GetStockList 实际上榜名单（KPL App 同源，
   // 今日 83 只）；2112 预测仅作概念/价格/换手/原因增补，东财 day 供净买入/总卖出；
   // 名单读取失败回退 2112 预测池（fail-visible，席位过滤注记提示）
+  // 字段增补优先级：3004 实时帧（涨幅 Top30，quotas[0]概念[1]价[2]涨幅[3]额[18]连板原因
+  // [19]换手率）→ 2112 预测池 → GetStockList 自带（涨幅/换手/成交额全覆盖 83）
   const brows = ((KPL.lhb.board || {}).rows) || [];
+  const rtMap = {};
+  for (const it of ((KPL.lhb.rt || {}).items || [])) rtMap[String(it.stock_id)] = it.quotas || [];
   const fcMap = {};
   for (const it of ((KPL.lhb.fc || {}).items || [])) fcMap[String(it.stock_id)] = it;
   const dayMap = {};
   for (const s of (((KPL.lhb.day || {}).stocks) || [])) dayMap[String(s.code)] = s;
   if (brows.length){
     return brows.map(r => {
+      const rtq = rtMap[String(r.code)] || [];
+      const gq = i => (rtq.length > i && rtq[i] !== '') ? rtq[i] : null;
       const fc = fcMap[String(r.code)] || {};
       const ds = dayMap[String(r.code)] || {};
-      return { code: r.code, name: r.name, plate: fc.plate || '',
-        price: fc.price ?? '', zf: r.increase_amount ?? fc.zf ?? '',
-        tur: fc.tur_rate ?? '', amount: r.turnover ?? '',
+      return { code: r.code, name: r.name,
+        plate: gq(0) || fc.plate || '',
+        price: gq(1) ?? fc.price ?? '',
+        zf: r.increase_amount ?? gq(2) ?? fc.zf ?? '',
+        tur: r.turnover_ratio ?? gq(19) ?? fc.tur_rate ?? '',
+        amount: r.turnover ?? gq(3) ?? fc.tur ?? '',
         net: r.buy_in ?? ds.net ?? '',            // BuyIn=净买入（与 App 逐分一致，2026-10-30 实测）
         buy: ds.buy ?? '', sell: ds.sell ?? '',   // 总买入/总卖出来自东财席位聚合（东财口径）
-        reason: fc.reason || '' };
+        reason: gq(18) || fc.reason || '' };
     });
   }
   return ((KPL.lhb.fc || {}).items || []).map(it => ({
@@ -6051,7 +6060,8 @@ function kplLhbStockListRender(){
     + th('净买入', 'net')
     + th('总买入', 'buy', '当日实时=东财席位聚合（正值）；回看=KPL 口径卖出记负')
     + th('总卖出', 'sell', '当日实时=东财席位聚合（正值）；回看=KPL 口径卖出记负（负值原样展示）')
-    + '<th>所属概念</th><th>上榜原因</th></tr>';
+    + '<th title="覆盖说明：3004 实时帧（涨幅 Top30）或 2112 预测池命中方有值，其余显 --">所属概念</th>'
+    + '<th title="覆盖说明：3004 实时帧（涨幅 Top30）或 2112 预测池命中方有值，其余显 --">上榜原因</th></tr>';
   $('kplLhbStockTable').innerHTML = rows.length
     ? head + rows.map((r, i) => {
         const on = String(r.code) === KPL.lhb.selCode ? ' class="on"' : '';

@@ -74,6 +74,7 @@ def parse_lhb_stock_list(data: Dict[str, Any]) -> Dict[str, Any]:
                                              # 非席位买入额；元原样）
             "join_num": r.get("JoinNum"),    # 疑席位家数，语义待证不渲染
             "turnover": r.get("Turnover"),   # 成交额，元原样
+            "turnover_ratio": r.get("TurnoverRatio"),  # 换手率（原样字符串，如 "37.05"）
             "increase_amount": r.get("IncreaseAmount"),
             "raw": r,                        # 原样保留（fail-visible，语义增量落注）
         })

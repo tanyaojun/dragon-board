@@ -548,7 +548,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `GET /api/kpl/lhb-sale?date=&type_=0`、`GET /api/kpl/lhb-stock-board?date=`
   （GetStockList 实际上榜名单，**当日左列表主源**：2026-10-30 用户指误——原用 2112
   预测池 30 只被席位过滤剩 17 属读数入口错误，App 同源应为 83 只；BuyIn 实测为
-  净买入与 App 净买入列逐分一致，非席位买入额；:8000 本地处理 kpl_lhb_sale，30s TTL；
+  净买入与 App 净买入列逐分一致，非席位买入额；TurnoverRatio 换手率字段一并透出；
+  概念/价格/上榜原因增补源优先级：3004 实时帧（涨幅 Top30，quotas[0]概念/[1]价/[18]
+  连板原因/[19]换手率）→ 2112 预测池 → 显 --（覆盖说明见列表头 tooltip）；
+  :8000 本地处理 kpl_lhb_sale，30s TTL；
   缺 date 422，上游异常 502 结构化降级）。曾接入的 `/api/kpl/lhb-agency`
   （GetAgencyListV2）已删路由（服务层保留，jev_lhb_ammo 在用）；
   `GET /api/market/lhb-seat-dates?code=`、`GET /api/market/lhb-seat-detail?code=&date=`
