@@ -1711,10 +1711,16 @@ def test_status_bar_capture_first_and_no_html_injection(html: str, js: str):
     assert "${" not in render_fn, "状态栏 render 不得插值拼 HTML（消息必须 textContent）"
 
 
-def test_status_bar_dedup_counter(js: str):
-    """同条错误去重计数 ×N 挂当前条（非上一条）。"""
+def test_status_bar_fold_throttle(js: str):
+    """2026-10-30 刷屏治理：同类（级别+文本）在折叠窗内只累计 ×N，不再逐条新开。"""
     log_fn = _fn(js, "sbLog")
-    assert "e.n = prev.n" in log_fn and "(e.n > 1 ? '×' + e.n" in log_fn
+    assert "THROTTLE_MS" in log_fn and "ENTRIES.find" in log_fn and "(e.n > 1 ? '×' + e.n" in log_fn
+    # 交易时段感知降级：kplInTradeSession 粗粒度时段仅用于日志分级
+    assert "kplInTradeSession" in js, "非交易时段连接错误降级 helper 缺失"
+    kb = _fn(js, "kplBanner")
+    assert "kplInTradeSession()" in kb and "sbLog(lv" in kb, "kplBanner 未按交易时段分级"
+    # 双发归一：CMD_ERROR 两种序列化形态归一为 code+msg 主键
+    assert "kplErrKey" in _fn(js, "kplBanner"), "server error 双发未归一"
 
 
 def test_banner_errors_routed_to_status_bar(js: str):
@@ -1732,9 +1738,9 @@ def test_banner_errors_routed_to_status_bar(js: str):
 
 
 def test_kpl_banner_only_errors_not_ok(js: str):
-    """kplBanner 正常提示（kind='ok'）不上报，只上报 error/warn 路径。"""
+    """kplBanner 正常提示（kind='ok'）不上报，只上报 error/warn/info 路径。"""
     body = _fn(js, "kplBanner")
-    assert "kind !== 'ok' && window.sbLog" in body, "ok 提示不得进错误状态栏"
+    assert "if (kind !== 'ok'){" in body and "sbLog(lv" in body, "ok 提示不得进错误状态栏"
 
 
 def test_error_banners_suppressed_page_side(js: str):

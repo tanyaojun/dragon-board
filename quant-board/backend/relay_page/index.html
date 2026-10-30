@@ -798,11 +798,19 @@
       }
     }
   }
+  const THROTTLE_MS = 5 * 60 * 1000;   // 同类折叠窗：5 分钟内同级别同文本不新开条目，只累计 ×N
+  const lastByKey = {};
   function sbLog(level, msg){
-    const e = {level, msg, t: new Date().toLocaleTimeString('zh-CN', {hour12: false}), n: 1};
-    const prev = ENTRIES[0];
-    if (prev && prev.level === level && prev.msg === msg){ prev.n = (prev.n || 1) + 1; e.n = prev.n; }   // 同条去重计数
-    else { ENTRIES.unshift(e); if (ENTRIES.length > CAP) ENTRIES.length = CAP; }
+    const now = Date.now();
+    const t = new Date().toLocaleTimeString('zh-CN', {hour12: false});
+    let e = ENTRIES.find(x => x.level === level && x.msg === msg);
+    if (e && now - (lastByKey[level + '\n' + msg] || 0) < THROTTLE_MS){
+      e.n = (e.n || 1) + 1; e.t = t;   // 2026-10-30：刷屏治理——非交易时段重连链等重复报错折叠为单条 ×N
+    } else {
+      e = {level, msg, t, n: 1};
+      ENTRIES.unshift(e); if (ENTRIES.length > CAP) ENTRIES.length = CAP;
+    }
+    lastByKey[level + '\n' + msg] = now;
     render();
     if (level === 'error' || level === 'warn'){
       const last = $id('sbLast');
@@ -4761,12 +4769,33 @@ function kth(label, key){
   const mark = (key && s.key === key) ? (s.dir > 0 ? ' ▲' : ' ▼') : '';
   return `<th${key ? ` style="cursor:pointer" onclick="kplSetSort('${key}')"` : ''}>${label}${mark}</th>`;
 }
+function kplInTradeSession(){
+  // 粗粒度交易时段（周一~五 9:25-15:05，不含节假日）。仅用于日志分级（非交易时段
+  // 上游未开市属预期态，连接错误降级 info 折叠），绝不用于业务判定。
+  const d = new Date(), m = d.getHours() * 60 + d.getMinutes();
+  return d.getDay() >= 1 && d.getDay() <= 5 && m >= 565 && m <= 905;
+}
+function kplErrKey(s){
+  // collector 对 CMD_ERROR 双发（ev.msg 单引号 JSON 版 + server-only stringify 版），
+  // 同一错误两种序列化形态；归一为 code+msg 主键，配合状态栏同类折叠，刷屏减一半。
+  const str = String(s);
+  const code = (str.match(/code'?:\s*"?(\d+)/) || [])[1];
+  const m = (str.match(/msg'?:\s*['"]([^'"]*)['"]/) || [])[1];
+  return code ? ('server error code=' + code + (m ? '：' + m : '')) : str;
+}
 function kplBanner(msg, kind, sticky){
   const el = $('kplBanner');
   if (msg && sticky) KPL.sticky = msg;              // sticky：引导失败等必须存续到解除为止
   if (!msg && KPL.sticky){ msg = KPL.sticky; kind = ''; }
   if (!msg){ el.style.display = 'none'; el.dataset.msg = ''; return; }
-  if (kind !== 'ok' && window.sbLog) sbLog('error', '[板块行情] ' + msg);   // 连接/服务端报错进底部状态栏
+  if (kind !== 'ok'){
+    // 2026-10-30 刷屏治理：非交易时段连接类错误（上游未开市/重连链自愈）降级 info，
+    // 并标注「非交易时段·自动重试中」；交易时段仍记 error。业务报错不受影响。
+    const connErr = /server error|连接错误|network:|closed by server|signsvc|WS/.test(msg);
+    const lv = (connErr && !kplInTradeSession()) ? 'info' : 'error';
+    if (window.sbLog) sbLog(lv, '[板块行情] ' + kplErrKey(msg)
+      + (lv === 'info' ? '（非交易时段·自动重试中）' : ''));
+  }
   if (kind !== 'ok'){ el.style.display = 'none'; el.dataset.msg = ''; return; }   // 2026-10-30 用户裁决：报错横幅删除，状态栏单一出口（ok 提示仍页内显示）
   el.style.display = ''; el.dataset.msg = msg;
   el.textContent = '✔ ' + msg;
