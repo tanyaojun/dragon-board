@@ -17,7 +17,8 @@
       "arguments": "--dbpath D:\\APP_SOFT\\MongoDB\\data --logpath D:\\APP_SOFT\\MongoDB\\log\\mongod.log --logappend --port 27017",
       "externalPolicy": "refuse",
       "logOnlyErrors": false,
-      "comment": "refuse：端口被外部进程占用时只显示 PID 不清理（Safety 原则）；副作用是启动器拉起的 mongod 崩溃残留孤儿时不会自动清理，需人工处理。"
+      "openUrl": "http://localhost:8081",
+      "comment": "refuse：端口被外部进程占用时只显示 PID 不清理（Safety 原则）；副作用是启动器拉起的 mongod 崩溃残留孤儿时不会自动清理，需人工处理。openUrl 指向启动器拉起的 Mongo Express 管理页（mongo-express 只绑 [::1]，必须用 localhost 而非 127.0.0.1）；打开按钮会先拉起工具再打开浏览器。"
     },
     {
       "key": "redis",
@@ -29,7 +30,9 @@
       "externalPolicy": "reuse",
       "dumpRdbPath": "D:\\APP_SOFT\\redis\\Redis-8.10.0\\dump.rdb",
       "dumpRdbOwner": "TANNY-PC\\Think",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "openUrl": "http://127.0.0.1:8082",
+      "comment": "openUrl 指向启动器拉起的 Redis Commander 管理页（绑 127.0.0.1:8082）；打开按钮会先拉起工具再打开浏览器。"
     },
     {
       "key": "proxy",
@@ -55,7 +58,8 @@
       "fallbackArguments": "run --project tools\\VoiceWorker\\VoiceWorker.csproj",
       "isVoiceWorker": true,
       "externalPolicy": "managed",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "openUrl": "http://127.0.0.1:32145"
     },
     {
       "key": "frontend",
@@ -79,7 +83,8 @@
       "processSignature": "python-bridge/main.py",
       "externalPolicy": "managed",
       "logOnlyErrors": true,
-      "logPolicy": { "level": "errors-only" }
+      "logPolicy": { "level": "errors-only" },
+      "openUrl": "http://127.0.0.1:8765/docs"
     },
     {
       "key": "quant-api",

@@ -36,6 +36,10 @@ internal sealed class LauncherForm : Form
     private readonly Dictionary<string, Button> _stopButtons = new();
     private bool _isRefreshingStatuses;
     private bool _isManagerActionRunning;
+    // 管理动作互斥量（P1，2026-10-31 复盘）：UI 管理动作（启动/停止/全部停止/重启）
+    // 与守卫后台修复共用，停止流程执行期间守卫修复非阻塞放弃本轮，杜绝
+    // “停止流程进行中又被守卫拉起”的并发交错。
+    private readonly SemaphoreSlim _actionGate = new(1, 1);
     private bool _allowExit;
     private bool _trayNoticeShown;
 
@@ -58,16 +62,15 @@ internal sealed class LauncherForm : Form
     private static readonly TimeSpan DeferredRepairLogInterval = TimeSpan.FromMinutes(5);
     private DateTime? _lastCollectorDeferredUtc;
 
-    // 用户显式停止过的服务 key：手动停止后不自动拉起（尊重用户意图），
-    // 直到用户再次手动启动该服务才清除标记。
-    // 写可能发生在 RunManagerActionAsync 的后台线程，读在 UI 线程的刷新循环，
-    // 用锁保护避免并发读写未定义行为。
-    private readonly object _userStoppedSync = new();
-    private readonly HashSet<string> _userStoppedServices = new(StringComparer.Ordinal);
+    // 用户显式停止过的服务 key 已下沉到 LauncherProcessManager（P0，2026-10-31 复盘）：
+    // StartService 入口强制检查，任何启动路径都无法违背停止意图；UI 层仅转发。
 
     // 用户启停偏好持久化（P1.2）：launcher 重启后恢复用户手动启动过的展示/辅助服务。
     private readonly DesiredStateStore _desiredState;
     private readonly HashSet<string> _desiredEnabled;
+
+    // 状态防抖（P1）：key → (待确认状态, 已连续次数)。连续 2 次轮询一致才提交跳变。
+    private readonly Dictionary<string, (bool Value, int Count)> _pendingStatuses = new(StringComparer.Ordinal);
 
     public LauncherForm()
     {
@@ -78,6 +81,8 @@ internal sealed class LauncherForm : Form
         _desiredState = new DesiredStateStore();
         _desiredEnabled = _desiredState.LoadEnabled();
         Log($"启动管理器启动，本地日志: {LogFile.CurrentLogPath()}");
+        if (LauncherServices.LastLoadUsedFallback)
+            Log("警告: services.json 加载失败，已回退内嵌默认服务定义（入口按钮/启动参数可能与配置不一致），请检查 tools/DragonBoardLauncher/config/services.json。");
 
         Text = "龙头看板 · 启动管理器";
         Width = 660;
@@ -113,6 +118,11 @@ internal sealed class LauncherForm : Form
 
             _timer.Stop();
             _trayIcon.Visible = false;
+            // 等待在途管理动作（核心启动/全部重启/全部停止）结束再全量停止，
+            // 避免退出停止与后台启动交错、launcher 退出后新拉起进程成孤儿
+            // （review P1，2026-10-31）；等不到（>10s）则照旧强停并留痕。
+            if (!_actionGate.Wait(TimeSpan.FromSeconds(10)))
+                Log("退出等待在途管理动作超时（10s），直接执行退出停止。");
             _processManager.StopStartedProcesses();
         };
         FormClosed += (_, _) =>
@@ -234,7 +244,7 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         openQBtn.FlatAppearance.BorderColor = Color.FromArgb(62, 70, 82);
-        openQBtn.Click += (_, _) => OpenUrl("http://127.0.0.1:5174");
+        openQBtn.Click += (_, _) => OpenUrl("量化面板", "http://127.0.0.1:5174");
         Controls.Add(openQBtn);
 
         _autoStartButton.Text = IsAutoStartEnabled() ? "自启: 开" : "自启: 关";
@@ -359,9 +369,16 @@ internal sealed class LauncherForm : Form
         startBtn.FlatAppearance.BorderSize = 0;
         startBtn.Click += async (_, _) =>
         {
-            await RunManagerActionAsync(() => _processManager.StartService(svc));
+            // 清除“手动停止”标记必须在 gate 内进行（review P1，2026-10-31）：
+            // 若在持 gate 前清除，此时“全部停止”正在执行，其收尾的批量
+            // UserStoppedAdd 会在启动动作运行前覆盖标记，StartService 入口
+            // 拒绝本次显式启动，用户点击被静默吞掉。
+            await RunManagerActionAsync(() =>
+            {
+                UserStoppedRemove(key);
+                _processManager.StartService(svc);
+            });
             MarkDesired(key, enabled: true);
-            UserStoppedRemove(key); // 用户重新启动，清除"手动停止"标记
         };
         p.Controls.Add(startBtn);
         _startButtons[key] = startBtn;
@@ -380,8 +397,8 @@ internal sealed class LauncherForm : Form
         stopBtn.FlatAppearance.BorderSize = 0;
         stopBtn.Click += async (_, _) =>
         {
-            // 先记录用户手动停止意图（避免 StopService 后下一轮 RefreshStatusesAsync
-            // 自动重启先于标记写入把服务拉起——竞态窗口），再执行停止。
+            // 先记录用户手动停止意图（StartService 入口按此拒绝一切后续启动路径，
+            // 2026-10-31 复盘 P0），再执行停止。
             UserStoppedAdd(key);
             MarkDesired(key, enabled: false);
             await RunManagerActionAsync(() => _processManager.StopService(svc));
@@ -389,9 +406,12 @@ internal sealed class LauncherForm : Form
         p.Controls.Add(stopBtn);
         _stopButtons[key] = stopBtn;
 
-        // 「打开」按钮（2026-10-12 外置化）：openUrl 配置驱动，无白名单无 switch；
-        // mongo/redis 的本地管理工具（MongoExpress/RedisCommander）非 URL 语义，保留特判。
-        if (!string.IsNullOrWhiteSpace(svc.OpenUrl) || svc.Port is 27017 or 6379)
+        // 「打开」按钮（2026-10-12 外置化）：openUrl 配置驱动，无白名单无 switch。
+        // 2026-10-31 修复：外置化迁移不完整导致 bridge/voice 按钮消失、mongo/redis
+        // 只拉起工具不再打开浏览器（旧版 switch 是全服务兜底 + 工具拉起后自动
+        // OpenUrl）。现约定：openUrl 指向该服务的入口页（mongo/redis 指管理工具页），
+        // 点击时 mongo/redis 先拉起管理工具再打开浏览器；OpenUrl 失败记日志不静默。
+        if (!string.IsNullOrWhiteSpace(svc.OpenUrl))
         {
             var openBtn = new Button
             {
@@ -411,8 +431,7 @@ internal sealed class LauncherForm : Form
                     _processManager.StartMongoExpress();
                 else if (svc.Port == 6379)
                     _processManager.StartRedisCommander();
-                else
-                    OpenUrl(svc.OpenUrl!);
+                OpenUrl(svc.Name, svc.OpenUrl!);
             };
             p.Controls.Add(openBtn);
         }
@@ -424,10 +443,11 @@ internal sealed class LauncherForm : Form
     {
         return RunManagerActionAsync(() =>
         {
-            _processManager.StartAll();
-            // 核心启动视为用户显式意图，清除"手动停止"标记，恢复自动重启。
+            // 核心启动视为用户显式意图：先清除“手动停止”标记再启动。
+            // StartService 入口会拒绝仍在停止集合中的服务（P0），顺序不能反。
             foreach (var key in _services.Keys)
                 UserStoppedRemove(key);
+            _processManager.StartAll();
         });
     }
 
@@ -475,7 +495,9 @@ internal sealed class LauncherForm : Form
 
             if (!LauncherProcessManager.IsServiceRunning(svc))
             {
-                await Task.Run(() => _processManager.StartService(svc));
+                // 经 RunGuardRepairAsync 纳入管理动作互斥（review P2）：避免与 timer
+                // 触发的 guard 修复并发进入 _starting（非同步 HashSet）。
+                await RunGuardRepairAsync(() => _processManager.StartService(svc));
                 // 启动后再确认（StartService 内部失败仅记日志，不抛异常）。
                 if (LauncherProcessManager.IsServiceRunning(svc))
                     restored.Add(svc.Name);
@@ -486,29 +508,11 @@ internal sealed class LauncherForm : Form
             Log($"已按上次偏好恢复服务: {string.Join("、", restored)}");
     }
 
-    private bool UserStoppedContains(string key)
-    {
-        lock (_userStoppedSync)
-        {
-            return _userStoppedServices.Contains(key);
-        }
-    }
+    private bool UserStoppedContains(string key) => _processManager.IsUserStopped(key);
 
-    private void UserStoppedAdd(string key)
-    {
-        lock (_userStoppedSync)
-        {
-            _userStoppedServices.Add(key);
-        }
-    }
+    private void UserStoppedAdd(string key) => _processManager.UserStoppedAdd(key);
 
-    private void UserStoppedRemove(string key)
-    {
-        lock (_userStoppedSync)
-        {
-            _userStoppedServices.Remove(key);
-        }
-    }
+    private void UserStoppedRemove(string key) => _processManager.UserStoppedRemove(key);
 
     /// <summary>记录服务启用/停用偏好并持久化（P1.2）。</summary>
     private void MarkDesired(string serviceKey, bool enabled)
@@ -527,12 +531,15 @@ internal sealed class LauncherForm : Form
         _isManagerActionRunning = true;
         _timer.Stop();
         UseWaitCursor = true;
+        // 与守卫后台修复共用互斥量：管理动作执行期间，守卫修复非阻塞放弃本轮。
+        await _actionGate.WaitAsync();
         try
         {
             await Task.Run(action);
         }
         finally
         {
+            _actionGate.Release();
             _isManagerActionRunning = false;
             if (!IsDisposed)
             {
@@ -542,6 +549,29 @@ internal sealed class LauncherForm : Form
         }
 
         await RefreshStatusesAsync();
+    }
+
+    /// <summary>
+    /// 守卫后台修复动作（P1，2026-10-31 复盘）：与管理器动作（启动/停止/全部停止/
+    /// 重启）共用 _actionGate 互斥。管理动作进行中时非阻塞放弃本轮修复（下轮 3s
+    /// 轮询会重新评估），杜绝“停止流程进行中又被守卫拉起”的并发交错。
+    /// </summary>
+    private async Task RunGuardRepairAsync(Action action)
+    {
+        if (IsDisposed) return;
+        if (!await _actionGate.WaitAsync(TimeSpan.Zero)) return;
+        try
+        {
+            await Task.Run(action);
+        }
+        catch (Exception ex)
+        {
+            Log($"守卫修复动作执行失败: {ex.Message}");
+        }
+        finally
+        {
+            _actionGate.Release();
+        }
     }
 
     private async Task RefreshStatusesAsync()
@@ -575,6 +605,58 @@ internal sealed class LauncherForm : Form
         }
 
         if (IsDisposed) return;
+
+        // 状态防抖（P1，2026-10-31 复盘）：
+        // 1) 托管进程仍活着的服务，端口探测失败一律按假阴性处理，视为运行中
+        //    （事件循环被同步长任务阻塞时 500ms/2s 连接探测都会失败，但进程没死，
+        //    本日 09:06-09:07 quant-api 每 ~8.5s "已停止↔运行中"震荡即此成因）；
+        // 2) 其余跳变需连续 2 次轮询一致才提交，单次假阴性不再直接翻转状态、
+        //    不再联动按钮与守卫判定。
+        var confirmed = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var kv in statuses)
+        {
+            var key = kv.Key;
+            var raw = kv.Value;
+            if (!raw && LauncherProcessManager.HasLiveManagedProcess(_services[key]))
+            {
+                _pendingStatuses.Remove(key);
+                confirmed[key] = true;
+                continue;
+            }
+
+            if (!_lastStatuses.TryGetValue(key, out var committed))
+            {
+                confirmed[key] = raw; // 首轮无基线，直接采纳
+                continue;
+            }
+
+            if (raw == committed)
+            {
+                _pendingStatuses.Remove(key);
+                confirmed[key] = committed;
+                continue;
+            }
+
+            if (_pendingStatuses.TryGetValue(key, out var pending) && pending.Value == raw)
+            {
+                if (pending.Count + 1 >= 2)
+                {
+                    _pendingStatuses.Remove(key);
+                    confirmed[key] = raw;
+                }
+                else
+                {
+                    _pendingStatuses[key] = (raw, pending.Count + 1);
+                    confirmed[key] = committed;
+                }
+            }
+            else
+            {
+                _pendingStatuses[key] = (raw, 1);
+                confirmed[key] = committed;
+            }
+        }
+        statuses = confirmed;
 
         // 状态跳变记录（2026-10-19 复盘）："盘中掉线又自动恢复"此前在日志里完全无痕，
         // 无法判断是端口探测假阴性还是进程真的退出。
@@ -629,10 +711,16 @@ internal sealed class LauncherForm : Form
             }
             else if (_restartPolicy.TryRequestRestart("collector", out var blocked))
             {
-                _restartPolicy.RecordRestart("collector");
                 _lastRestartBlockedReason = "";
-                // 修复动作含 taskkill/Sleep/CIM 枚举（秒级），后台执行防 UI 卡顿（评审 P1）。
-                _ = Task.Run(() => _processManager.EnsureHealthy("collector"));
+                // 修复动作含 taskkill/Sleep/CIM 枚举（秒级）：经 RunGuardRepairAsync
+                // 与管理动作互斥后后台执行，防 UI 卡顿且不与停止流程交错（评审 P1）。
+                // RecordRestart 在 action 内真正开始执行时才记（review P2）：gate 被
+                // 管理动作占用而放弃本轮时，不消耗冷却/失败计数，下轮可重新请求。
+                _ = RunGuardRepairAsync(() =>
+                {
+                    _restartPolicy.RecordRestart("collector");
+                    _processManager.EnsureHealthy("collector");
+                });
             }
             else if (blocked is not null &&
                      !string.Equals(_lastRestartBlockedReason, blocked, StringComparison.Ordinal))
@@ -658,11 +746,13 @@ internal sealed class LauncherForm : Form
                 string? lockWaitBlocked = null;
                 if (_restartPolicy.TryRequestRestart("collector", out lockWaitBlocked))
                 {
-                    _restartPolicy.RecordRestart("collector");
-                    // CIM 存活探测（秒级）后台执行：仍有活着的等锁实例（tracked 或孤儿）
-                    // 时不重拉，等它拿到锁；全部退出才拉起。
-                    _ = Task.Run(() =>
+                    // CIM 存活探测（秒级）：仍有活着的等锁实例（tracked 或孤儿）
+                    // 时不重拉，等它拿到锁；全部退出才拉起。经 RunGuardRepairAsync
+                    // 与管理动作互斥后后台执行；RecordRestart 在 action 内真正
+                    // 开始执行时才记（review P2，同上）。
+                    _ = RunGuardRepairAsync(() =>
                     {
+                        _restartPolicy.RecordRestart("collector");
                         if (_processManager.HasLiveProcessByCommandLine("collector"))
                             return;
                         Log("快照采集等锁实例已全部退出，锁冲突标记失效，自动重新拉起。");
@@ -697,10 +787,15 @@ internal sealed class LauncherForm : Form
 
             if (_restartPolicy.TryRequestRestart(infraKey, out var infraBlocked))
             {
-                _restartPolicy.RecordRestart(infraKey);
                 var infraService = _services[infraKey];
-                // StartService 含 netstat/TCP 探测（秒级）：后台执行防 UI 卡顿（评审 P1）。
-                _ = Task.Run(() => _processManager.StartService(infraService));
+                // StartService 含 netstat/TCP 探测（秒级）：经 RunGuardRepairAsync
+                // 与管理动作互斥后后台执行，防 UI 卡顿且不与停止流程交错（评审 P1）；
+                // RecordRestart 在 action 内真正开始执行时才记（review P2，同上）。
+                _ = RunGuardRepairAsync(() =>
+                {
+                    _restartPolicy.RecordRestart(infraKey);
+                    _processManager.StartService(infraService);
+                });
             }
             else if (infraBlocked is not null &&
                      !string.Equals(
@@ -812,18 +907,26 @@ internal sealed class LauncherForm : Form
             && value.Contains(Application.ExecutablePath, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void OpenBoard()
+    private void OpenBoard()
     {
-        OpenUrl("http://127.0.0.1:3000");
+        OpenUrl("龙头看板", "http://127.0.0.1:3000");
     }
 
-    private static void OpenUrl(string url)
+    /// <summary>
+    /// 用默认浏览器打开 URL。2026-10-31 修复：原静默 catch（catch { }）导致
+    /// “点击无反应且无痕”，违反 fail-visible；现在成功/失败都记日志。
+    /// </summary>
+    private void OpenUrl(string name, string url)
     {
         try
         {
             Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+            Log($"已在浏览器打开 {name}: {url}");
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Log($"打开 {name} 失败（{url}）: {ex.Message}");
+        }
     }
 
     private Point _restoreLocation;

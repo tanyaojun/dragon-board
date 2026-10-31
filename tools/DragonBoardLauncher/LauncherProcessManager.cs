@@ -27,6 +27,16 @@ internal sealed class LauncherProcessManager
     private readonly IReadOnlyDictionary<string, ManagedService> _services;
     private readonly Action<string> _log;
     private readonly HashSet<string> _starting = new(StringComparer.Ordinal);
+
+    // 用户显式停止过的服务 key：手动停止后不自动拉起（尊重用户意图），直到
+    // 用户再次手动启动/核心启动/全部重启才清除。2026-10-31 复盘 P0：此前该
+    // 集合只放在 UI 层 guard 分支判断，StartService 本身不感知，任何后台启动
+    // 路径都可能违背停止意图；现下沉到管理器，StartService 入口强制检查。
+    // 写（UI 线程）与读（StartService 的各调用线程）并发，用锁保护。
+    private readonly object _userStoppedSync = new();
+    private readonly HashSet<string> _userStoppedServices = new(StringComparer.Ordinal);
+    // 服务名 → key 反查表：StartService 只拿得到 ManagedService，入口检查需要 key。
+    private readonly Dictionary<string, string> _serviceKeyByName = new(StringComparer.Ordinal);
     // 同一服务最小拉起间隔（Core.StartThrottle）：挡用户连点/多触发器叠加的
     // 秒级连发，防止拉起多个等锁实例互相踩（2026-10-12 复盘）。
     private readonly Core.StartThrottle _startThrottle = new();
@@ -51,12 +61,49 @@ internal sealed class LauncherProcessManager
         _root = root;
         _services = services;
         _log = log;
+        foreach (var kv in services)
+            _serviceKeyByName[kv.Value.Name] = kv.Key;
         _logThread = new Thread(LogDrainLoop)
         {
             IsBackground = true,
             Name = "launcher-child-log"
         };
         _logThread.Start();
+    }
+
+    /// <summary>记录用户手动停止某服务（key）：此后所有启动路径都会被 StartService 入口拒绝。</summary>
+    public void UserStoppedAdd(string key)
+    {
+        lock (_userStoppedSync)
+        {
+            _userStoppedServices.Add(key);
+        }
+    }
+
+    /// <summary>清除用户手动停止标记（用户重新启动/核心启动/全部重启时调用）。</summary>
+    public void UserStoppedRemove(string key)
+    {
+        lock (_userStoppedSync)
+        {
+            _userStoppedServices.Remove(key);
+        }
+    }
+
+    /// <summary>查询某服务是否处于用户手动停止状态。</summary>
+    public bool IsUserStopped(string key)
+    {
+        lock (_userStoppedSync)
+        {
+            return _userStoppedServices.Contains(key);
+        }
+    }
+
+    /// <summary>服务是否有启动器托管的活进程（引导进程或已记录的实际监听进程）。
+    /// 状态判定用：托管进程活着时端口探测失败一律视为假阴性（2026-10-31 复盘 P1）。</summary>
+    public static bool HasLiveManagedProcess(ManagedService service)
+    {
+        return service.Process is { HasExited: false } ||
+               service.PortOwnerProcess is { HasExited: false };
     }
 
     /// <summary>后台日志消费循环：批量取出子进程输出行并写日志（每批最多 100 行）。</summary>
@@ -244,6 +291,15 @@ internal sealed class LauncherProcessManager
         }
         try
         {
+            // 用户手动停止过的服务：拒绝一切启动路径（P0，2026-10-31 复盘）。
+            // 合法启动路径（单服务启动按钮/核心启动/全部重启）都会先清除标记。
+            if (_serviceKeyByName.TryGetValue(service.Name, out var serviceKey) &&
+                IsUserStopped(serviceKey))
+            {
+                _log($"{service.Name} 处于用户手动停止状态，忽略本次启动请求（点\"启动\"可恢复）。");
+                return;
+            }
+
             if (service.IsVoiceWorker && !IsCurrentVoiceWorkerHealthy(service))
             {
                 _log($"{service.Name} 正在运行旧版本，准备重启。");
@@ -322,7 +378,10 @@ internal sealed class LauncherProcessManager
                     pids = FindServicePidsByCommandLine(service, "孤儿清理");
                 foreach (var pid in pids)
                     KillProcessTree(pid, $"端口 {service.Port} (孤儿清理)");
-                Thread.Sleep(800);
+                // 清理后等待端口真正关闭（最多 5s）再绑定：固定 800ms 睡眠在
+                // taskkill 异步释放句柄/TIME_WAIT 残留时会提前放行，新实例绑定
+                // 10048 失败，与残留孤儿形成双实例竞争（2026-10-31 复盘 P1）。
+                WaitForPortClosed(service.Port, TimeSpan.FromSeconds(5));
                 // 清理后重新检查：仍被占用时，只要实例可用就直接复用（例如以 Windows 服务/
                 // 提权方式运行的实例，普通权限 taskkill 会拒绝访问，但实例本身工作正常）。
                 if (LauncherPorts.IsPortOpen(service.Port))
@@ -527,7 +586,18 @@ internal sealed class LauncherProcessManager
             var adopted = AdoptPortOwnerByProcessTree(service);
             if (!adopted)
             {
-                _log($"{service.Name} 启动后 20 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
+                if (service.Process is { HasExited: false })
+                {
+                    _log($"{service.Name} 启动后 20 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
+                }
+                else
+                {
+                    // 引导进程在端口监听前就退出了（典型：启动动作被随后的停止/
+                    // 全部停止打断）。区分于“启动失败”：不是服务起不来，是启动
+                    // 被中止；同时清掉“曾观察到在跑”标记，避免后续存活判定误判。
+                    _portsObservedUp.TryRemove(service.Port, out _);
+                    _log($"{service.Name} 启动动作已中止（引导进程在端口监听前退出），未留下需跟踪的实例。");
+                }
             }
         }
         catch (Exception ex)
@@ -771,7 +841,12 @@ internal sealed class LauncherProcessManager
         }
     }
 
-    public void StopService(ManagedService service)
+    /// <param name="quickVerify">
+    /// true 时验证预算降为单轮（launcher 退出路径专用，review P1：串行全量验证
+    /// 在顽固进程/权限不足时可达每服务 15-25s，多个服务叠加会冻结退出 UI）。
+    /// 单轮仍会补杀一轮残留孤儿并显式报失败，只是不多次重试。
+    /// </param>
+    public void StopService(ManagedService service, bool quickVerify = false)
     {
         try
         {
@@ -811,6 +886,37 @@ internal sealed class LauncherProcessManager
             {
                 KillProcessTree(pid, $"端口 {service.Port}");
             }
+
+            // 停止验证（P0，2026-10-31 复盘）：杀过 ≠ 已停止。uvicorn 监督进程可能在
+            // 清理间隙 respawn worker 残留孤儿占用端口；必须确认端口已释放，仍开则
+            // 重复清理（默认最多 3 轮；quickVerify 单轮），最终仍开则显式报失败。
+            var maxAttempts = quickVerify ? 1 : 3;
+            for (var attempt = 1; attempt <= maxAttempts; attempt++)
+            {
+                if (WaitForPortClosed(service.Port, TimeSpan.FromSeconds(2)))
+                {
+                    if (attempt > 1)
+                        _log($"{service.Name} 端口 {service.Port} 残留进程清理完成，已确认停止。");
+                    return;
+                }
+
+                var leftovers = LauncherPorts.GetPidsByPort(service.Port);
+                if (leftovers.Count == 0)
+                    leftovers = FindServicePidsByCommandLine(service, "停止验证清理");
+                if (leftovers.Count == 0)
+                    continue; // TCP 表损坏查不到 PID，靠连接探测下轮重试
+                foreach (var pid in leftovers)
+                    KillProcessTree(pid, $"端口 {service.Port} (停止验证清理)");
+            }
+
+            if (LauncherPorts.IsPortOpen(service.Port))
+            {
+                var stillOpen = LauncherPorts.GetPidsByPort(service.Port);
+                _log(
+                    $"停止 {service.Name} 失败：端口 {service.Port} 仍被占用" +
+                    (stillOpen.Count > 0 ? $"（PID {string.Join(", ", stillOpen)}）" : "") +
+                    "，疑似监督进程复活残留或权限不足，请手动确认后处理。");
+            }
         }
         catch (Exception ex)
         {
@@ -822,16 +928,17 @@ internal sealed class LauncherProcessManager
     {
         StopMongoExpress();
         StopRedisCommander();
-        // 用 StopService 而非 StopStartedProcess，确保端口占用的孤儿进程也会被杀掉
-        StopService(_services["quant-ui"]);
-        StopService(_services["quant-api"]);
-        StopService(_services["collector"]);
-        StopService(_services["bridge"]);
-        StopService(_services["frontend"]);
-        StopService(_services[LauncherServices.VoiceServiceKey]);
-        StopService(_services["proxy"]);
-        StopService(_services["redis"]);
-        StopService(_services["mongo"]);
+        // 用 StopService 而非 StopStartedProcess，确保端口占用的孤儿进程也会被杀掉；
+        // quickVerify：退出路径用短验证预算，防顽固进程串行验证冻结退出 UI（review P1）。
+        StopService(_services["quant-ui"], quickVerify: true);
+        StopService(_services["quant-api"], quickVerify: true);
+        StopService(_services["collector"], quickVerify: true);
+        StopService(_services["bridge"], quickVerify: true);
+        StopService(_services["frontend"], quickVerify: true);
+        StopService(_services[LauncherServices.VoiceServiceKey], quickVerify: true);
+        StopService(_services["proxy"], quickVerify: true);
+        StopService(_services["redis"], quickVerify: true);
+        StopService(_services["mongo"], quickVerify: true);
         ShutdownLogQueue();
     }
 
@@ -1255,14 +1362,17 @@ internal sealed class LauncherProcessManager
         }
     }
 
-    private static void WaitForPortClosed(int port, TimeSpan timeout)
+    /// <summary>等待端口关闭；超时仍开返回 false（供停止验证循环判定）。</summary>
+    private static bool WaitForPortClosed(int port, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (!LauncherPorts.IsPortOpen(port)) return;
+            if (!LauncherPorts.IsPortOpen(port)) return true;
             Thread.Sleep(150);
         }
+
+        return !LauncherPorts.IsPortOpen(port);
     }
 
     private static bool LooksLikeErrorOutput(string text)
@@ -1325,39 +1435,11 @@ internal sealed class LauncherProcessManager
     {
         try
         {
-            // 先终止实际监听端口的进程（uvicorn spawn 的真 server 子进程），
-            // 再终止 launcher 拉起的引导进程，避免 reloader 残留拉起新 worker。
-            // 安全：Kill 前重新验证 owner 仍是引导进程的后代且仍监听本服务端口，
-            // 防止启动后 PID 被 OS 复用给无关进程导致误杀（TOCTOU）。
-            var owner = service.PortOwnerProcess;
-            service.PortOwnerProcess = null;
-            var guidedPid = service.Process is { HasExited: false } ? service.Process.Id : 0;
-            // 端口复核双证据：netstat PID（正常路径）或连接探测（TCP 表损坏时
-            // GetPidsByPort 为空，连接探测证明端口仍被占用）；父子关系校验保留，
-            // 防 PID 复用误杀（复用进程不会是引导进程后代）。
-            if (owner is { HasExited: false } &&
-                IsDescendantOf(owner.Id, guidedPid) &&
-                (LauncherPorts.GetPidsByPort(service.Port).Contains(owner.Id) ||
-                 LauncherPorts.IsPortOpen(service.Port)))
-            {
-                try
-                {
-                    owner.Kill(entireProcessTree: true);
-                    owner.WaitForExit(3000);
-                    _log($"已停止 {service.Name} 实际监听进程。");
-                }
-                catch (Exception ex)
-                {
-                    _log($"停止 {service.Name} 实际监听进程失败: {ex.Message}");
-                }
-            }
-            else if (owner is { HasExited: false })
-            {
-                _log(
-                    $"{service.Name} 实际监听进程 PID={owner.Id} 已不满足托管条件" +
-                    "（父进程链或端口监听变化，疑似 PID 复用），跳过直接终止，仅停引导进程树。");
-            }
-
+            // 顺序（P0，2026-10-31 复盘）：必须先杀引导/监督进程整树，再补杀监听进程。
+            // uvicorn 0.34 的 Multiprocess.keep_subprocess_alive 每 0.5s 检查并 respawn
+            // 死掉的 worker；旧逻辑先杀“实际监听进程”，监督进程在树杀枚举前 respawn
+            // 新 worker，整树杀错过新生儿，留下继续占用端口的孤儿——表现为“点停止后
+            // 服务自己又运行中”。先杀父，keep_subprocess_alive 随父退出，不再复活。
             if (service.Process is { HasExited: false })
             {
                 // Refuse 接管的外部进程（自家残留）：终止前核对 exe 路径仍匹配，
@@ -1391,6 +1473,24 @@ internal sealed class LauncherProcessManager
                 service.Process.Kill(entireProcessTree: true);
                 service.Process.WaitForExit(3000);
                 _log($"已停止 {service.Name} 进程树。");
+            }
+
+            // 补杀实际监听进程：正常情况下整树杀已连带终止；仍存活则显式终止
+            //（此时监督进程已死，不会再 respawn）。该对象在跟踪时已验证过父子
+            // 关系；残余孤儿由 StopService 的端口清理 + 停止验证循环兑底。
+            var owner = service.PortOwnerProcess;
+            if (owner is { HasExited: false })
+            {
+                try
+                {
+                    owner.Kill(entireProcessTree: true);
+                    owner.WaitForExit(3000);
+                    _log($"已停止 {service.Name} 实际监听进程。");
+                }
+                catch (Exception ex)
+                {
+                    _log($"停止 {service.Name} 实际监听进程失败: {ex.Message}");
+                }
             }
         }
         catch (Exception ex)

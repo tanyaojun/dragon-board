@@ -36,6 +36,10 @@ internal static class LauncherServices
     /// <summary>核心启动依赖链（阶段顺序即依赖顺序，来自 services.json stages，加载失败回退默认）。</summary>
     private static string[][] _coreStartupStages = DefaultStages;
 
+    /// <summary>最近一次 Create 是否回退到了内嵌默认定义（services.json 缺失/解析失败/必选 key 缺失）。
+    /// 供 UI 层 fail-visible：回退字典无 openUrl 配置差异，按钮消失时应能从日志定位。</summary>
+    public static bool LastLoadUsedFallback { get; private set; }
+
     public static string[][] CoreStartupStages => _coreStartupStages;
 
     public static Dictionary<string, ManagedService> Create(string root)
@@ -45,8 +49,11 @@ internal static class LauncherServices
         var loaded = TryLoadFromConfig(root);
         if (loaded is null)
         {
+            LastLoadUsedFallback = true;
             return CreateDefaults(root);
         }
+
+        LastLoadUsedFallback = false;
 
         // 解析 stages：services.json 里 stage 顺序即依赖顺序（核心服务必须按序启动）。
         var stages = ParseStagesFromConfig(root, loaded);
@@ -288,7 +295,8 @@ internal static class LauncherServices
                 @"D:\APP_SOFT\MongoDB\bin",
                 @"D:\APP_SOFT\MongoDB\bin\mongod.exe",
                 @"--dbpath D:\APP_SOFT\MongoDB\data --logpath D:\APP_SOFT\MongoDB\log\mongod.log --port 27017",
-                externalPolicy: ServiceExternalPolicy.Refuse),
+                externalPolicy: ServiceExternalPolicy.Refuse,
+                openUrl: "http://localhost:8081"), // Mongo Express 管理页（只绑 [::1]，必须用 localhost）
             ["redis"] = new(
                 "Redis 缓存",
                 6379,
@@ -297,8 +305,10 @@ internal static class LauncherServices
                 @"redis.conf",
                 externalPolicy: ServiceExternalPolicy.Reuse,
                 dumpRdbPath: @"D:\APP_SOFT\redis\Redis-8.10.0\dump.rdb",
-                dumpRdbOwner: @"TANNY-PC\Think"),
-            ["proxy"] = new("本地代理服务", 3000, Path.Combine(root, "proxy-server"), "node", "server.js"),
+                dumpRdbOwner: @"TANNY-PC\Think",
+                openUrl: "http://127.0.0.1:8082"), // Redis Commander 管理页
+            ["proxy"] = new("本地代理服务", 3000, Path.Combine(root, "proxy-server"), "node", "server.js",
+                openUrl: "http://127.0.0.1:3000/docs"),
             [VoiceServiceKey] = new(
                 "本地语音服务",
                 VoiceWorkerPort,
@@ -307,56 +317,64 @@ internal static class LauncherServices
                 "",
                 "dotnet",
                 @"run --project tools\VoiceWorker\VoiceWorker.csproj",
-                isVoiceWorker: true),
+                isVoiceWorker: true,
+                openUrl: "http://127.0.0.1:32145"),
             ["frontend"] = new(
                 "龙头看板前端",
                 5173,
                 root,
                 "node",
                 "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5173",
-                envVars: NoColorEnv()),
+                envVars: NoColorEnv(),
+                openUrl: "http://127.0.0.1:5173"),
             ["bridge"] = new(
                 "通达信行情桥",
                 8765,
                 root,
                 "python",
                 "python-bridge/main.py",
-                logOnlyErrors: true),
+                logOnlyErrors: true,
+                openUrl: "http://127.0.0.1:8765/docs"),
             ["quant-api"] = new(
                 "量化后端 API",
                 8000,
                 quantRoot,
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
-                "python"),
+                "python",
+                openUrl: "http://127.0.0.1:8000/docs"),
             ["collector"] = new(
                 "快照采集服务",
                 8001,
                 quantRoot,
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001",
-                "python"),
+                "python",
+                openUrl: "http://127.0.0.1:8001/docs"),
             ["relay-page"] = new(
                 "JEV 叙事工作台",
                 8008,
                 quantRoot,
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.serve_relay_page:app --host 127.0.0.1 --port 8008",
-                "python"),
+                "python",
+                openUrl: "http://127.0.0.1:8008"),
             ["kpl-socket"] = new(
                 "KPL 实时行情",
                 8002,
                 quantRoot,
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.serve_kpl_socket:app --host 127.0.0.1 --port 8002",
-                "python"),
+                "python",
+                openUrl: "http://127.0.0.1:8002/kpl"),
             ["quant-ui"] = new(
                 "量化面板前端",
                 5174,
                 Path.Combine(quantRoot, "frontend"),
                 "node",
                 "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5174",
-                envVars: NoColorEnv())
+                envVars: NoColorEnv(),
+                openUrl: "http://127.0.0.1:5174")
         };
     }
 
