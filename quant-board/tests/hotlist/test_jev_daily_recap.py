@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.operations import jev_daily_recap as ops
 from backend.services.jev import jev_daily_recap_corpus as corpus
 
+_QUESTIONS_ROUTE_PATH = "backend.data.repositories.repository_factory.get_runtime_mongodb_database"
+
 QUESTION_KEYS = ("recap_shape", "money_style", "plan_bias", "focus_direction", "risk_flag")
 
 
@@ -180,10 +182,22 @@ def test_build_questions_focus_choices_dynamic_and_all_five():
     qs = corpus.build_questions(corpus.collect_review_facts(mk_rise(), mk_dieban()))
     assert set(qs) == set(QUESTION_KEYS)
     assert list(qs["focus_direction"]["criteria"]) == ["算力", "机器人", "空仓观望"]  # top8 + 空仓观望
-    # 判据只引用 state 字段：不含未定义占位符
+    # 判据只引用 state 字段：不含未定义占位符；无开发黑话/无预判提示（开火前文本清理）
     for spec in qs.values():
         for v in spec["criteria"].values():
             assert "{" not in v and "}" not in v
+            assert "开火" not in v and "贫料" not in v
+    assert "净流入未转负" not in qs["money_style"]["criteria"]["低吸为主"], \
+        "判据不得包含机械判不核对的资金预判"
+
+
+def test_build_state_no_duplicate_degraded_sources():
+    """投喂语料去重：degradedSources 只在顶层一份，summary 内剔除（开火前文本清理）。"""
+    facts = corpus.collect_review_facts(mk_rise(), mk_dieban())
+    state = corpus.build_state("2026-10-31", facts, {"eod": 62.0})
+    assert "degradedSources" not in state["summary"]
+    assert state["degradedSources"] == facts["degradedSources"]
+    assert "degradedSources" not in state["summary"]["rise"]
 
 
 # ---------------------------------------------------------------- 成文模板 / 短叙事
@@ -208,9 +222,9 @@ def test_narrative_library_selection_and_fallback():
     f = corpus.collect_review_facts(mk_rise(), mk_dieban())
     n = corpus.compose_recap_text("d", f, {}, {"recap_shape": "强势延续", "focus_direction": "算力"})["narrative"]
     assert "连涨梯队最高4板" in n and "算力" in n
-    # 未知/未判定档位 → 不足段（不硬编故事）
+    # 未知/未判定档位 → 不足段（不硬编故事；且无开发黑话入页）
     n2 = corpus.compose_recap_text("d", f, {}, {"recap_shape": None})["narrative"]
-    assert "原料不足" in n2
+    assert "原料不足" in n2 and "开火" not in n2
 
 
 # ---------------------------------------------------------------- 主流程（dry / apply / 幂等）
@@ -218,7 +232,7 @@ def test_narrative_library_selection_and_fallback():
 def test_dry_run_zero_call_zero_write(material, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("dry 模式不得真调用 jev")
-    monkeypatch.setattr(ops, "call_jev", boom)
+    monkeypatch.setattr(ops, "dispatch_jev_call", boom)
     db = FakeDb()
     result = ops.run_daily_recap_for_date("2026-10-31", apply=False, db=db)
     assert result["ok"] and result["report"]["skippedJev"] is True
@@ -233,7 +247,7 @@ def test_apply_happy_path_jev_sources_and_persist(material, monkeypatch):
     answers = {"recap_shape": "强势延续", "money_style": "接力为主", "plan_bias": "进攻",
                "focus_direction": "算力", "risk_flag": "中风险"}
     monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))  # conftest 护栏清空 token
-    monkeypatch.setattr(ops, "call_jev",
+    monkeypatch.setattr(ops, "dispatch_jev_call",
                         lambda *a, **k: _envelope(answers, usage={"totalTokens": 99}))
     db = FakeDb()
     rep = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=db)["report"]
@@ -248,7 +262,7 @@ def test_apply_invalid_choice_rule_fallback_plan_follows_final_shape(material, m
     invalid = {"recap_shape": "胡说八道", "money_style": "接力为主", "plan_bias": "乱来",
                "focus_direction": "不存在的板块", "risk_flag": "中风险"}
     monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
-    monkeypatch.setattr(ops, "call_jev", lambda *a, **k: _envelope(invalid))
+    monkeypatch.setattr(ops, "dispatch_jev_call", lambda *a, **k: _envelope(invalid))
     rep = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())["report"]
     # 无效答案逐题兜底；有效答案（money_style/risk_flag）仍采信 jev
     assert rep["answers"]["recap_shape"]["source"] == "rule_fallback"
@@ -266,7 +280,7 @@ def test_apply_jev_insufficient_slot_unjudged(material, monkeypatch):
     answers = {"recap_shape": "insufficient_evidence", "money_style": "接力为主",
                "plan_bias": "进攻", "focus_direction": "算力", "risk_flag": "中风险"}
     monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
-    monkeypatch.setattr(ops, "call_jev", lambda *a, **k: _envelope(answers))
+    monkeypatch.setattr(ops, "dispatch_jev_call", lambda *a, **k: _envelope(answers))
     rep = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())["report"]
     assert rep["answers"]["recap_shape"]["choice"] is None
     assert rep["answers"]["recap_shape"]["source"] == "jev_insufficient"
@@ -279,7 +293,7 @@ def test_apply_jev_insufficient_slot_unjudged(material, monkeypatch):
 
 def test_apply_call_failure_full_rule_fallback(material, monkeypatch):
     monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
-    monkeypatch.setattr(ops, "call_jev",
+    monkeypatch.setattr(ops, "dispatch_jev_call",
                         lambda *a, **k: ({"success": False, "errors": [{"message": "network: x"}]}, 5))
     rep = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())["report"]
     assert rep["jev"] is None
@@ -290,7 +304,7 @@ def test_apply_call_failure_full_rule_fallback(material, monkeypatch):
 def test_no_material_no_jev(material, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("贫料日不得烧 jev")
-    monkeypatch.setattr(ops, "call_jev", boom)
+    monkeypatch.setattr(ops, "dispatch_jev_call", boom)
     monkeypatch.setattr(ops, "collect_rise_review", lambda db, date: {"ok": False})
     monkeypatch.setattr(ops, "collect_dieban_review", lambda db, date: {"ok": False})
     result = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())
@@ -311,10 +325,148 @@ def test_partial_missing_material_still_emits(monkeypatch):
     monkeypatch.setattr(ops, "collect_rise_review", lambda db, date: {"ok": False})
     monkeypatch.setattr(ops, "collect_dieban_review", lambda db, date: mk_dieban())
     monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
-    monkeypatch.setattr(ops, "call_jev",
+    monkeypatch.setattr(ops, "dispatch_jev_call",
                         lambda *a, **k: ({"success": False, "errors": [{"message": "network: x"}]}, 5))
     rep = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())["report"]
     assert rep["ok"] is True
     assert any(d["reason"] == "review_doc_unavailable" for d in rep["degraded"])
     assert rep["answers"]["recap_shape"]["source"] == "rule_fallback"
     assert rep["text"]["conclusion"]          # 机械版成文仍在
+
+
+# ---------------------------------------------------------------- 评审修复（2026-10-31）回归
+
+def test_nodata_page_registered_with_reason():
+    """评审 Major-1：ok=True+noData=True 页必须登记结构化原因（门2 degraded 率不得低估）。"""
+    nodata_rise = {"ok": True, "noData": True, "reason": "2026-10-31 无 half_hour 快照行（未回填）",
+                   "degraded": [], "stocks": []}
+    facts = corpus.collect_review_facts(nodata_rise, mk_dieban())
+    assert facts["rise"]["noData"] is True
+    hit = [d for d in facts["degradedSources"] if d["source"] == "rise" and d["action"] == "page_no_data"]
+    assert len(hit) == 1 and "无 half_hour 快照行" in hit[0]["reason"]
+    # 单页 noData 仍按可数锚点机械判（fail-visible 不硬门禁）
+    assert corpus.rule_recap_shape(facts) == "混沌轮动"
+
+
+def test_focus_direction_skips_unsegmented_bucket():
+    """评审 nit：「未分板块」兕底桶不得成为主攻方向档位。"""
+    facts = corpus.collect_review_facts(
+        mk_rise(positive={"netInflowTotal": 1e8, "topBoards": [{"board": "未分板块", "count": 3},
+                                                               {"board": "算力", "count": 2}]}),
+        mk_dieban())
+    assert corpus.rule_focus_direction(facts) == "算力"
+    qs = corpus.build_questions(facts)
+    assert "未分板块" not in qs["focus_direction"]["criteria"]
+    # 全部为未分板块 → 空仓观望
+    facts2 = corpus.collect_review_facts(
+        mk_rise(positive={"netInflowTotal": 1e8, "topBoards": [{"board": "未分板块", "count": 3}]}),
+        mk_dieban())
+    assert corpus.rule_focus_direction(facts2) == "空仓观望"
+
+
+def test_apply_plan_bias_insufficient_override_keeps_degraded_consistent(material, monkeypatch):
+    """评审 Minor-1：plan_bias 被 jev 判 insufficient 又被兕底覆盖时，degraded 记录同步改写。"""
+    answers = {"recap_shape": "退潮防守", "money_style": "观望为主",
+               "plan_bias": "insufficient_evidence", "focus_direction": "空仓观望",
+               "risk_flag": "高风险"}
+    monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
+    monkeypatch.setattr(ops, "dispatch_jev_call", lambda *a, **k: _envelope(answers))
+    rep = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())["report"]
+    # 兜底跟随最终 recap_shape（退潮防守→防守），落库 degraded 与 answers 自洽
+    assert rep["answers"]["plan_bias"] == {"choice": "防守", "source": "rule_fallback"}
+    pb = [d for d in rep["degraded"] if d["source"] == "plan_bias"]
+    assert len(pb) == 1 and pb[0]["action"] == "rule_fallback"
+    assert "plan_bias_insufficient_overridden" in pb[0]["reason"]
+
+
+def test_apply_missing_token_full_rule_fallback(material, monkeypatch):
+    """评审 Minor-3②：apply 但缺 jev token → 全机械判兜底 + degraded 登记，不炸不烧。"""
+    monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", ""))
+    result = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=FakeDb())
+    rep = result["report"]
+    assert rep["skippedJev"] is False and rep["jev"] is None
+    assert all(rep["answers"][q]["source"] == "rule_fallback" for q in QUESTION_KEYS)
+    assert any(d["source"] == "jev" and d["reason"] == "missing_jev_token"
+               for d in rep["degraded"])
+
+
+def test_apply_force_recomputes_existing_ok_doc(material, monkeypatch):
+    """评审 Minor-3①：--force 对已有 ok 文档仍重算（幂等跳过仅缺省生效）。"""
+    answers = {"recap_shape": "分歧加剧", "money_style": "低吸为主", "plan_bias": "均衡",
+               "focus_direction": "算力", "risk_flag": "中风险"}
+    monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
+    monkeypatch.setattr(ops, "dispatch_jev_call", lambda *a, **k: _envelope(answers))
+    db = FakeDb()
+    col = db.collections.setdefault("hotlist_jev_daily_recap", FakeCol())
+    col.docs["2026-10-31"] = {"_id": "2026-10-31", "ok": True}
+    result = ops.run_daily_recap_for_date("2026-10-31", apply=True, force=True, db=db)
+    assert result.get("skipped") is None
+    assert result["report"]["answers"]["recap_shape"]["choice"] == "分歧加剧"
+    # 缺省（无 force）仍幂等跳过
+    result2 = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=db)
+    assert result2.get("skipped") is True
+
+
+def test_daily_recap_route_four_paths(monkeypatch):
+    """评审 Minor-3④：读口四条路径（422 缺参 / 502 读库异常 / missing / 命中投影）。"""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    class _Col:
+        def __init__(self, doc=None, boom=False):
+            self.doc, self.boom = doc, boom
+
+        def find_one(self, q=None, *a, **k):
+            if self.boom:
+                raise RuntimeError("mock db down")
+            return self.doc
+
+    class _Db:
+        def __init__(self, col):
+            self.col = col
+
+        def __getitem__(self, name):
+            return self.col
+
+    client = TestClient(app)
+
+    monkeypatch.setattr(_QUESTIONS_ROUTE_PATH, lambda: _Db(_Col()))
+    r = client.get("/api/hotlist-jev/daily-recap", params={"date": "2026-10-31"})
+    assert r.status_code == 200 and r.json()["missing"] is True
+    assert "未生成" in r.json()["missingReason"] and "开火" not in r.json()["missingReason"]
+
+    monkeypatch.setattr(_QUESTIONS_ROUTE_PATH, lambda: _Db(_Col(boom=True)))
+    r = client.get("/api/hotlist-jev/daily-recap", params={"date": "2026-10-31"})
+    assert r.status_code == 502 and r.json()["ok"] is False
+
+    doc = {"_id": "2026-10-31", "ok": True, "date": "2026-10-31",
+           "text": {"conclusion": "c"}, "answers": {}}
+    monkeypatch.setattr(_QUESTIONS_ROUTE_PATH, lambda: _Db(_Col(doc)))
+    r = client.get("/api/hotlist-jev/daily-recap", params={"date": "2026-10-31"})
+    assert r.status_code == 200 and r.json()["missing"] is False
+    assert r.json()["report"]["text"]["conclusion"] == "c"
+    assert "_id" not in r.json()["report"]          # 内部键不下发
+
+    r = client.get("/api/hotlist-jev/daily-recap")  # 缺 date → 422
+    assert r.status_code == 422
+
+
+def test_persist_failure_marks_result_and_degraded(material, monkeypatch):
+    """评审 Minor-2：落库失败 → persistFailed 顶层可见（main 据此 exit 1），degraded 登记。"""
+    monkeypatch.setattr(ops, "_jev_credentials", lambda: ("acc", "tok"))
+    monkeypatch.setattr(ops, "dispatch_jev_call", lambda *a, **k: _envelope(
+        {"recap_shape": "强势延续", "money_style": "接力为主", "plan_bias": "进攻",
+         "focus_direction": "算力", "risk_flag": "中风险"}))
+
+    class BoomDb(FakeDb):
+        def __getitem__(self, name):
+            if name == "hotlist_jev_daily_recap":
+                raise RuntimeError("mock persist down")
+            return super().__getitem__(name)
+
+    result = ops.run_daily_recap_for_date("2026-10-31", apply=True, db=BoomDb())
+    assert result["ok"] is True and result.get("persistFailed") is True
+    rep = result["report"]
+    assert rep["persistedId"] is None
+    assert any(d["source"] == "persistence" and d["reason"].startswith("persist_failed")
+               for d in rep["degraded"])

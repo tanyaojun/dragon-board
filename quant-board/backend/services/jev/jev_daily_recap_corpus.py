@@ -4,7 +4,7 @@
 设计/预登记：quant-board/docs/hotlist-jev/jev-daily-recap-design.md。
 - 语料包 = state（上涨/下跌复盘可数事实 + 情绪链锚点，全部可数）+ 5 道 choice 题
   （判据只引用 state 已有字段，v2.1 教训）+ 单 call 输出合同（call_jev/parse_jev_response）；
-- 成文 = 版本化模板 × 槽位值 + 短叙事预写文段库（NARRATORY_LIBRARY，§1 实现裁决：
+- 成文 = 版本化模板 × 槽位值 + 短叙事预写文段库（NARRATIVE_LIBRARY，§1 实现裁决：
   jev 题型合同只见 choice/score，自由文本题型未验证 → 短叙事零 jev 措辞）；
 - 机械判 = 一致率对照基线 + 兜底（判据与题目 criteria 同数，改一处须同步文档）；
 - 本模块纯函数零 IO 零外呼：review 字典/情绪锚点由 operations 层装载（monkeypatch 边界）。
@@ -43,6 +43,9 @@ _SHAPE_CN = {"big_face": "大面", "zha_ban": "炸板", "fade": "冲高回落",
              "high_close": "强势", "tail_dive": "尾盘跳水", "up": "上涨",
              "down": "下跌", "flat": "平盘"}
 
+# rise topBoards 里的兕底桶：无板块归属，不得作为主攻方向档位（评审 2026-10-31）
+_UNSEGMENTED_BOARD = "未分板块"
+
 
 # ---------------------------------------------------------------- 纯函数：事实压缩
 
@@ -78,6 +81,11 @@ def collect_review_facts(rise: dict[str, Any] | None,
         if not isinstance(doc, dict) or doc.get("ok") is not True:
             degraded.append({"source": tag, "reason": "review_doc_unavailable", "action": "page_absent"})
             return {"noData": True}
+        if doc.get("noData") is True:
+            # ok=True 但 noData=True（当日无快照行/未到截点）：结构化原因必须透传，
+            # 否则 pilot 门2（degraded 天数占比）系统性低估 noData 日（评审 Major-1，2026-10-31）
+            degraded.append({"source": tag, "reason": str(doc.get("reason") or "page_no_data"),
+                             "action": "page_no_data"})
         for item in doc.get("degraded") or []:
             degraded.append({"source": tag, "reason": f"{item.get('scope')}: {item.get('reason')}",
                              "action": "passthrough"})
@@ -196,11 +204,13 @@ def rule_plan_bias(recap_shape: str) -> str:
 
 
 def rule_focus_direction(facts: dict[str, Any]) -> str:
-    """主攻方向机械判：rise 正向板块 top1（空名单→空仓观望）。"""
+    """主攻方向机械判：rise 正向板块 top1（空名单/兕底桶「未分板块」→ 空仓观望）。"""
     boards = facts["rise"]["topBoards"]
-    if not boards:
-        return FOCUS_FALLBACK
-    return str(boards[0].get("board") or FOCUS_FALLBACK)
+    for b in boards:
+        name = str(b.get("board") or "")
+        if name and name != _UNSEGMENTED_BOARD:
+            return name
+    return FOCUS_FALLBACK
 
 
 def rule_risk_flag(facts: dict[str, Any]) -> str:
@@ -228,7 +238,8 @@ def build_questions(facts: dict[str, Any]) -> dict[str, Any]:
 
     判据只引用 state.summary 已有字段（v2.1 教训）；阈值与 RULES 机械判同数。
     """
-    boards = [str(b.get("board")) for b in facts["rise"]["topBoards"] if b.get("board")]
+    boards = [str(b.get("board")) for b in facts["rise"]["topBoards"]
+              if b.get("board") and str(b.get("board")) != _UNSEGMENTED_BOARD]
     focus_choices = boards[:8] + [FOCUS_FALLBACK]
     return {
         "recap_shape": {
@@ -253,7 +264,7 @@ def build_questions(facts: dict[str, Any]) -> dict[str, Any]:
             "criteria": {
                 "接力为主": f"涨跌比≥{_R_RATIO_STRONG:g} 且 大面=0（无亏钱效应，接力有溢价）",
                 "观望为主": f"大面≥{_R_BIGFACE_WATCH} 或 全市场跌停≥{_R_LIMITDOWN_RISK}（亏钱效应显著）",
-                "低吸为主": "其余：形态分化但资金未离场（净流入未转负主导）",
+                "低吸为主": "其余：不满足接力/观望判据（形态分化但亏钱效应未主导）",
                 "insufficient_evidence": "上涨与下跌两页复盘原料均缺失",
             },
         },
@@ -287,10 +298,13 @@ def build_questions(facts: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any]) -> dict[str, Any]:
-    """state 包：summary（两页事实）+ emotion 锚点 + degradedSources（fail-visible）。"""
+    """state 包：summary（两页事实）+ emotion 锚点 + degradedSources（fail-visible）。
+
+    degradedSources 只在顶层保留一份（summary 内剔除，不重复投喂，开火前文本清理 2026-10-31）。
+    """
     return {
         "date": date,
-        "summary": facts,
+        "summary": {k: v for k, v in facts.items() if k != "degradedSources"},
         "emotion": {
             "eod": emotion.get("eod"),
             "prevEod": emotion.get("prevEod"),
@@ -310,7 +324,7 @@ def _slot(value: Any, unit: str = "") -> str:
     if value is None:
         return "暂缺"
     if isinstance(value, float) and value.is_integer():
-        value = int(value)          # 计数类槽位 4.0 → 4（浮点整值不帶小数尾巴）
+        value = int(value)          # 计数类槽位 4.0 → 4（浮点整值不带小数尾巴）
     return f"{value}{unit}"
 
 
@@ -356,7 +370,7 @@ _NARRATIVE_TPL = {
     "退潮防守": "今日亏钱效应主导：大面{bigFace}家压过强势{highClose}家，全市场跌停{limitDown}家，主力净流出{netOut}。退潮期现金为王，隔日以防守为主，不抄下跌中继。",
     "冰点修复": "连跌梯队仍在（最高{maxStreakFall}连跌）但上涨家数已回升（涨{poolUp}/跌{poolDown}），冰点后有修复迹象。修复初日先看量能确认，隔日轻仓试错强修复方向{focus}。",
     "混沌轮动": "今日涨跌均衡、无主导形态（大面{bigFace}家、炸板{zhaBan}家、强势{highClose}家），板块锚点分散。混沌期降低频率，隔日以{focus}为观察样本，不重仓表态。",
-    "insufficient_evidence": "本日复盘原料不足，两页名单存在缺口，机械归层不可用；成文仅保留可数事实，隔日计划缺锚不开火。",
+    "insufficient_evidence": "本日复盘原料不足，两页名单存在缺口，机械归层不可用；成文仅保留可数事实，隔日计划因缺锚未给出档位判断。",
 }
 
 

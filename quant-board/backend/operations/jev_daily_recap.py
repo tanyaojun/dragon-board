@@ -32,7 +32,7 @@ from backend.operations.jev_daily_line import (
 )
 from backend.operations.phase_pulse import PULSE_BAND_LABELS, load_eod_scores
 from backend.services.jev import jev_daily_recap_corpus as corpus
-from backend.services.jev.jev_client import call_jev, parse_jev_response
+from backend.services.jev.jev_client import dispatch_jev_call, parse_jev_response
 from backend.services.jev.jev_dieban_review import collect_dieban_review
 from backend.services.jev.jev_rise_review import collect_rise_review
 
@@ -131,6 +131,7 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
     jev_meta: dict[str, Any] | None = None
     usage: dict[str, Any] = {}
     skipped_jev = False
+    persist_failed = False
     if not apply:
         slots = dict(rule_answers)
         sources = {q: "rule_dry" for q in _QUESTION_KEYS}
@@ -145,7 +146,10 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
             slots: dict[str, str | None] = dict(rule_answers)   # 兜底值，jev 有效答案逐题覆盖
             sources = {q: "rule_fallback" for q in _QUESTION_KEYS}
             try:
-                envelope, latency_ms = call_jev(account, token, state=state, questions=questions)
+                # 通道选择统一走 dispatch_jev_call（单一事实源）：.env.local 配有
+                # JEV_TYPESAFE_KEY 时优先官方直连（可经代理）。2026-10-31 实测：
+                # 直写 call_jev（CF 网关）撞上游区域封锁，全部回退机械判。
+                envelope, latency_ms = dispatch_jev_call(state=state, questions=questions)
                 parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(_QUESTION_KEYS))
             except Exception as exc:  # noqa: BLE001 — 解析层意外炸穿降级兜底，不丢当日日报
                 parsed = {"ok": False, "errorCode": "call_parse_exception",
@@ -155,6 +159,7 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                 jev_meta = {"latencyMs": parsed.get("latencyMs"), "model": "typesafe/jev"}
                 answers = parsed.get("answers") or {}
                 shape_answer: str | None = None
+                plan_degraded_idx: int | None = None   # 兜底覆盖计划题时同步改写 degraded（评审 Minor-1）
                 for q in _QUESTION_KEYS:
                     answer = ((answers.get(q) or {}).get("choice"))
                     answer = str(answer) if answer is not None else None
@@ -164,6 +169,8 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                         sources[q] = "jev_insufficient"
                         degraded.append({"source": q, "reason": "insufficient_evidence",
                                          "action": "slot_unjudged"})
+                        if q == "plan_bias":
+                            plan_degraded_idx = len(degraded) - 1
                     elif answer in choices:
                         slots[q] = answer
                         sources[q] = "jev"
@@ -176,6 +183,11 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                 if sources["plan_bias"] != "jev":
                     fb = _fallback_plan_bias(shape_answer)
                     slots["plan_bias"] = fb
+                    if sources["plan_bias"] == "jev_insufficient":
+                        # 兜底覆盖了 jev 的未判定作答：degraded 记录同步改写，落库不自相矛盾
+                        entry = degraded[plan_degraded_idx]
+                        entry["reason"] = f"plan_bias_insufficient_overridden: {fb!r}"
+                        entry["action"] = "rule_fallback" if fb else "slot_unjudged"
                     sources["plan_bias"] = "rule_fallback" if fb else "slot_unjudged"
             else:
                 degraded.append({"source": "jev",
@@ -214,8 +226,12 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
             persisted = None
             degraded.append({"source": "persistence", "reason": f"persist_failed: {exc}",
                              "action": "stdout_only"})
+            persist_failed = True
         report["persistedId"] = persisted
-    return {"ok": True, "report": report}
+    result = {"ok": True, "report": report}
+    if persist_failed:
+        result["persistFailed"] = True   # 退出码可见：main() 对该日 exit 1（评审 Minor-2）
+    return result
 
 
 def _question_choices(questions: dict[str, Any], q: str) -> tuple[str, ...]:
@@ -246,8 +262,8 @@ def _dates_between(start: str, end: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="复盘日报（jev daily recap，默认 dry 零调用）")
     parser.add_argument("--date", help="YYYY-MM-DD（与 --start/--end 二选一）")
-    parser.add_argument("--start", help="区间回填起点 YYYY-MM-DD（需 --apply）")
-    parser.add_argument("--end", help="区间回填终点 YYYY-MM-DD（需 --apply）")
+    parser.add_argument("--start", help="区间回填起点 YYYY-MM-DD（配 --apply 为真实调用；缺省 dry 逐日打印机械判）")
+    parser.add_argument("--end", help="区间回填终点 YYYY-MM-DD（配 --apply 为真实调用；缺省 dry 逐日打印机械判）")
     parser.add_argument("--apply", action="store_true",
                         help="真实调用 jev 并落库 hotlist_jev_daily_recap；缺省只算机械判+成文（零调用零写库）")
     parser.add_argument("--force", action="store_true", help="当日已有 ok 文档仍重算（幂等跳过的逃生口）")
@@ -259,7 +275,9 @@ def main() -> int:
     for d in dates:
         result = run_daily_recap_for_date(d, apply=args.apply, force=args.force)
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        if not result.get("ok") and result.get("errorCode") != "no_material":
+        if result.get("persistFailed"):
+            exit_code = 1
+        elif not result.get("ok") and result.get("errorCode") != "no_material":
             exit_code = 1
     return exit_code
 

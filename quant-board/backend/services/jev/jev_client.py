@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -130,6 +131,31 @@ def call_jev_typesafe(api_token: str, state, questions: dict,
                       proxy: str | None = None) -> tuple[dict, int]:
     """官方直连通道；同套退避重试。"""
     return _with_retry(lambda: _call_typesafe_primary(api_token, state, questions, model, timeout, proxy))
+
+
+def dispatch_jev_call(state: dict, questions: dict, *, cf_account: str | None = None,
+                      cf_token: str | None = None, timeout: int = 60) -> tuple[dict, int]:
+    """通道选择单一事实源（2026-10-31）：
+
+    JEV_TYPESAFE_KEY 存在 → 官方直连（api.typesafe.ai；451 地区封锁需经
+    JEV_TYPESAFE_PROXY 代理，默认 model=jev-latest）；
+    否则 → CF 网关（api.cloudflare.com ai/run，model=typesafe/jev）。
+
+    两条通道返回同形状 envelope，parse_jev_response 下游零改动。
+    cf_account/cf_token 缺省时从环境读取（调用方需已确保 .env.local 入 environ；
+    实测 2026-10-31：CF 网关上游对部分区域返回 "Model unavailable in this
+    region"，生产必须优先走 typesafe 直连，勿再直写 call_jev）。
+    sentiment_compute._dispatch_jev 为历史等价实现（含 enabled 门），暂保留。
+    """
+    ts_key = os.environ.get("JEV_TYPESAFE_KEY", "").strip()
+    if ts_key:
+        proxy = os.environ.get("JEV_TYPESAFE_PROXY", "").strip() or None
+        return call_jev_typesafe(ts_key, state=state, questions=questions,
+                                 model="jev-latest", timeout=timeout, proxy=proxy)
+    account = (cf_account or os.environ.get("JEV_CF_ACCOUNT") or "").strip() or DEFAULT_ACCOUNT_ID
+    token = (cf_token or os.environ.get("JEV_CF_TOKEN") or "").strip()
+    return call_jev(account, token, state=state, questions=questions,
+                    model="typesafe/jev", timeout=timeout)
 
 
 def parse_jev_response(envelope: dict, latency_ms: int,
