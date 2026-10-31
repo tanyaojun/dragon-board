@@ -991,6 +991,9 @@ const FRESH_CN = {fresh_catalyst:'新鲜', continuing:'延续', none:'无明确�
 const numOr = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
 const fmtYi = v => { const n = numOr(v, null); return n == null ? '--' : (n / 1e8).toFixed(2); };
 const fmtPctChg = v => { const n = numOr(v, null); return n == null ? '--' : (n > 0 ? '+' : '') + n.toFixed(2) + '%'; };
+// 金融域涨红绿跌（A股约定，与 KPL 行情页 .kpl-up/.kpl-down 同规，2026-10-31 用户需求）
+const pctColor = v => { const n = numOr(v, null); return n == null ? 'var(--text)' : n > 0 ? 'var(--red)' : n < 0 ? 'var(--green)' : 'var(--text)'; };
+const moneyColor = v => { const n = numOr(v, null); return n == null ? 'var(--muted)' : n > 0 ? 'var(--red)' : n < 0 ? 'var(--green)' : 'var(--muted)'; };
 
 const badge = (txt, cls) => txt ? `<span class="badge ${cls}">${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
 // 缺位徽标（F2，2026-10-18 分层）：**只标主锚整根不可用**（琥珀）——例外标记；
@@ -3539,12 +3542,13 @@ function dbRenderKpi(D){
     + clickable('大跌≤-7%', fx(p.deepDrop), `其中跌停 ${fx(p.dieban)} · 非跌停 ${fx(p.deepDropOnly)}`, 'big')
     + clickable('下跌家数', fx(p.down), `池内涨跌比 ${fx(p.ratio)}（涨 ${fx(p.up)} / 平 ${fx(p.flat)} / 池 ${fx(p.rows)} 只）`, 'down')
     + clickable('触板回撤', fx(dd.count), ddSub, 'draw')
-    + card('跌幅最深', big.name ? `<span style="color:var(--red)">${esc(big.name)}</span> ${num(big.pctChange)}%`
+    + card('跌幅最深', big.name ? `<span style="color:${pctColor(big.pctChange)}">${esc(big.name)}</span> ${num(big.pctChange)}%`
         : '--', [big.board, (big.sources || []).includes('pool') ? '' :
         `（来源：${esc((big.sources || []).join('+'))}）`].filter(Boolean).join('')
         || '当日采集池内最深')
-    + card('主力净流出', neg.netOutflowTotal == null ? '--' : fmtYi(neg.netOutflowTotal) + ' 亿',
-        worst ? `最大流出 ${esc(worst.name || worst.code)} ${fmtYi(worst.mainNet)} 亿` : '缺主力净额字段（--）');
+    + card('主力净流出', neg.netOutflowTotal == null ? '--'
+        : `<span style="color:${moneyColor(neg.netOutflowTotal)}">${fmtYi(neg.netOutflowTotal)} 亿</span>`,
+        worst ? `最大流出 ${esc(worst.name || worst.code)} <span style="color:${moneyColor(worst.mainNet)}">${fmtYi(worst.mainNet)} 亿</span>` : '缺主力净额字段（--）');
 }
 function dbRenderBoards(D){
   const top = ((D.negative || {}).topBoards) || [];
@@ -3602,16 +3606,16 @@ function dbRenderRows(){
       ? `<span style="color:var(--muted2)" title="当日最高价→最新价回落（快照派生，非触板口径）">${s.intradayDrawdownPct.toFixed(2)}%</span>`
       : '-');
   const netCell = s => s.mainNet == null ? '-'
-    : `<span class="num" style="color:${s.mainNet < 0 ? 'var(--red)' : 'var(--muted)'}">${fmtYi(s.mainNet)}</span>`;
+    : `<span class="num" style="color:${moneyColor(s.mainNet)}">${fmtYi(s.mainNet)}</span>`;   // 净流入红 / 净流出绿
   const rows = filtered.map((s, i) => {
     const entry = STATE.diebanEntries[i];
     const open = ui.openKey === entry.key;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('die', '${js(entry.key)}')">
       <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
       <td>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${dbTypeBadges(s)}</td>
-      <td class="num" style="color:${(s.pctChange || 0) < 0 ? 'var(--red)' : 'var(--text)'}">${fmtPctChg(s.pctChange)}</td>
+      <td class="num" style="color:${pctColor(s.pctChange)}">${fmtPctChg(s.pctChange)}</td>
       <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
-      <td class="num">${fmtPctChg(s.ret3d)}</td><td>${ddCell(s)}</td>
+      <td class="num" style="color:${pctColor(s.ret3d)}">${fmtPctChg(s.ret3d)}</td><td>${ddCell(s)}</td>
       <td class="num">${s.turnoverRate == null ? '-' : s.turnoverRate.toFixed(2) + '%'}</td>
       <td class="num">${s.volumeRatio == null ? '-' : s.volumeRatio.toFixed(2)}</td>
       <td>${netCell(s)}</td><td style="font-size:12px;color:var(--muted2)">${esc(dbSrcTxt(s))}</td></tr>`
@@ -3825,12 +3829,13 @@ function rsRenderKpi(D){
     + clickable('触板未封', fx(touchAll), `盘中 high≈涨停价且收盘未封 · 池内 ${fx(p.touch)} 只`, 'touch')
     + clickable('涨幅>7%', fx(strongAll), `池内 ${fx(p.strong)} 只（名单基线 >5%）`, 'strong')
     + clickable('池内上涨', fx(p.up), `池内涨跌比 ${fx(p.ratio)}（跌 ${fx(p.down)} / 平 ${fx(p.flat)} / 池 ${fx(p.rows)} 只）`, 'up')
-    + card('涨幅最高', big.name ? `<span style="color:var(--green)">${esc(big.name)}</span> ${num(big.pctChange)}%`
+    + card('涨幅最高', big.name ? `<span style="color:${pctColor(big.pctChange)}">${esc(big.name)}</span> ${num(big.pctChange)}%`
         : '--', [big.board ? esc(big.board) : '', (big.sources || []).includes('pool') ? '' :
         `（来源：${esc((big.sources || []).join('+'))}）`].filter(Boolean).join('')
         || '当日名单内最高')
-    + card('主力净流入（池内）', pos.netInflowTotal == null ? '--' : fmtYi(pos.netInflowTotal) + ' 亿',
-        top ? `最大流入 ${esc(top.name || top.code)} ${fmtYi(top.mainNet)} 亿` : '全市场日线行无资金字段（仅池内）');
+    + card('主力净流入（池内）', pos.netInflowTotal == null ? '--'
+        : `<span style="color:${moneyColor(pos.netInflowTotal)}">${fmtYi(pos.netInflowTotal)} 亿</span>`,
+        top ? `最大流入 ${esc(top.name || top.code)} <span style="color:${moneyColor(top.mainNet)}">${fmtYi(top.mainNet)} 亿</span>` : '全市场日线行无资金字段（仅池内）');
 }
 function rsRenderBoards(D){
   const top = ((D.positive || {}).topBoards) || [];
@@ -3884,16 +3889,16 @@ function rsRenderRows(){
   const ampCell = s => s.amplitudePct != null
     ? `<span class="num" title="(最高−最低)/昨收（日线/快照同式；缺前收不可算）">${s.amplitudePct.toFixed(2)}%</span>` : '-';
   const netCell = s => s.mainNet == null ? '-'
-    : `<span class="num" style="color:${s.mainNet > 0 ? 'var(--green)' : 'var(--muted)'}">${fmtYi(s.mainNet)}</span>`;
+    : `<span class="num" style="color:${moneyColor(s.mainNet)}">${fmtYi(s.mainNet)}</span>`;   // 净流入红 / 净流出绿
   const rows = filtered.map((s, i) => {
     const entry = STATE.riseEntries[i];
     const open = ui.openKey === entry.key;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('rise', '${js(entry.key)}')">
       <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
       <td>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${rsTypeBadges(s)}</td>
-      <td class="num" style="color:${(s.pctChange || 0) > 0 ? 'var(--green)' : 'var(--text)'}">${fmtPctChg(s.pctChange)}</td>
+      <td class="num" style="color:${pctColor(s.pctChange)}">${fmtPctChg(s.pctChange)}</td>
       <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
-      <td class="num">${fmtPctChg(s.ret3d)}</td><td>${ampCell(s)}</td>
+      <td class="num" style="color:${pctColor(s.ret3d)}">${fmtPctChg(s.ret3d)}</td><td>${ampCell(s)}</td>
       <td class="num">${s.turnoverRate == null ? '-' : s.turnoverRate.toFixed(2) + '%'}</td>
       <td class="num">${s.volumeRatio == null ? '-' : s.volumeRatio.toFixed(2)}</td>
       <td>${netCell(s)}</td><td style="font-size:12px;color:var(--muted2)">${esc(rsSrcTxt(s))}</td></tr>`
