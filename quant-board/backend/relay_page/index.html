@@ -616,14 +616,15 @@
        盘后链/CLI 产出落库，本页纯读。问题走底部状态栏/控制台（页面横幅禁令）。 -->
   <section id="tab-recap" style="display:none">
     <div class="page-head"><div><h2>复盘日报</h2>
-      <p>上涨/下跌复盘 + 情绪锚点 → 盘后投喂 jev 归层 → 模板成文；短叙事由预写文段库（版本化）按归层档位选段，jev 零自由措辞。观察参考，非交易信号。</p></div></div>
+      <p>上涨/下跌复盘 + 情绪链判定 + KPL 盘播 → 收敛成隔日交易计划；主攻方向由题材龙头判定机械派生，环境判断直接引用 EOD/连板情绪链结论。观察参考，非交易信号。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
       <h3>复盘结论与隔日计划 <span class="hint" id="recapHint"></span></h3>
+      <div class="kpi-strip" id="recapKpi" style="margin-bottom:12px"></div>
       <div id="recapBody" style="display:flex;flex-direction:column;gap:12px"></div>
       <details id="recapDetail" style="margin-top:12px">
-        <summary>语料包与归层明细（state / 题目 / 逐题答案来源）</summary>
-        <pre id="recapStateJson" style="max-height:420px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
+        <summary>题目集与投喂语料（判定明细 / 原始存档）</summary>
+        <div id="recapDetailBody"></div>
       </details>
     </div>
   </section>
@@ -4300,30 +4301,144 @@ const NAV = [
 // 成文由盘后链/CLI 落库（operations.jev_daily_recap），本页纯读。
 // 问题一律走底部状态栏 sbLog / 控制台（页面横幅禁令）；页内无横幅。
 const RC_TAG = '[复盘日报] ';
-const RC_ANSWER_CN = { recap_shape: '复盘归层', money_style: '赚钱效应', plan_bias: '隔日倾向',
-                       focus_direction: '主攻方向', risk_flag: '风险档' };
-const RC_SOURCE_CLS = { jev: 'b-red', jev_insufficient: 'b-gray', rule_fallback: 'b-amber',
-                        rule_dry: 'b-gray', slot_unjudged: 'b-gray' };
-function rcAnswerBadges(answers){
-  return Object.entries(answers || {}).map(([q, a]) => {
-    const src = (a && a.source) || '?';
-    const val = (a && a.choice) || '未判定';
-    return `<span class="badge ${RC_SOURCE_CLS[src] || 'b-gray'}" title="答案来源 ${esc(src)}">` +
-      `${RC_ANSWER_CN[q] || q}·${esc(val)}</span>`;
-  }).join(' ');
+const RC_QUESTIONS = ['plan_bias', 'play_style', 'avoid_focus', 'key_watch'];
+const RC_Q_CN = { plan_bias: '基调与仓位', play_style: '参与方式',
+                  avoid_focus: '回避重点', key_watch: '验证信号' };
+const RC_SOURCE_CN = { jev: 'AI 判定', jev_insufficient: 'AI 未判定',
+                       rule_fallback: '规则兜底', rule_dry: '规则判定', slot_unjudged: '未判定' };
+function _rcFx(v){ return v == null ? '暂缺' : String(v); }
+function _rcNum(v){ return v == null ? '暂缺' : (Number.isInteger(Number(v)) ? Number(v) : Math.round(Number(v) * 100) / 100); }
+function _rcPanel(title, st, inner){
+  return `<div class="lg-panels" style="margin-top:10px"><div class="lg-panel">` +
+    `<div class="lg-phead"><b>${esc(title)}</b><span class="st">${esc(st)}</span></div>` +
+    `<div class="lg-tree">${inner}</div></div></div>`;
 }
-function rcRenderBlock(title, text){
-  return `<div><div class="k" style="color:var(--muted);font-size:12px;margin-bottom:4px">${esc(title)}</div>` +
-    `<div style="font-size:14px;line-height:1.7">${esc(text)}</div></div>`;
+function _rcSrcBadge(a){
+  const src = (a && a.source) || '?';
+  const cls = src === 'jev' ? 'b-red' : src === 'jev_insufficient' ? 'b-gray' : 'b-amber';
+  return `<span class="badge ${cls}">${esc(RC_SOURCE_CN[src] || src)}</span>`;
+}
+function _rcAgreeCount(R){
+  const answers = R.answers || {}, ruleA = R.ruleAnswers || {};
+  let n = 0, tot = 0;
+  RC_QUESTIONS.forEach(q => {
+    const a = answers[q];
+    if (!a) return;
+    tot++;
+    if (a.choice != null && a.choice === ruleA[q]) n++;
+  });
+  return { n, tot };
+}
+function _rcFactTree(R){
+  const s = R.summary || {}, rise = s.rise || {}, die = s.dieban || {};
+  const rs = rise.shapes || {}, ds = die.shapes || {};
+  const em = R.emotion || {}, eod = R.eodJudge || {}, rj = R.relayJudgment || {};
+  const ra = rj.answers || {}, promo = R.promotion || {}, ma = R.marketAmount || {};
+  const sh = (v) => v == null ? '暂缺' : String(v);
+  return {
+    '市场宽度': { '全市场上涨家数': _rcFx(rise.riseCount), '全市场跌停家数': _rcFx(die.limitDownCount),
+                 '采集池涨/跌家数': `${_rcFx(rise.poolUp)} / ${_rcFx(rise.poolDown)}`,
+                 '采集池涨跌比': _rcFx(rise.ratio) },
+    '形态面（当日计数）': { '大面': sh(rs.big_face), '炸板': sh(rs.zha_ban), '冲高回落': sh(rs.fade),
+                        '强势收高位': sh(rs.high_close), '尾盘跳水': sh(rs.tail_dive) },
+    '情绪链判定（引用）': { '情绪分（20日分位）': `${_rcFx(em.eod)}（${_rcFx(em.eod20dPercentile)}%）`,
+                        '情绪带': _rcFx(em.bandLabel),
+                        'EOD 阶段': _rcFx(eod.stage), 'EOD 风险级': _rcFx(eod.riskLevel) },
+    '连板情绪判定（引用）': { '连板情绪指数': _rcNum(rj.index), '相位': _rcFx(ra.relay_phase),
+                          '边际方向': _rcFx(ra.relay_momentum), '梯队结构': _rcFx(ra.ladder_health),
+                          '赚钱效应': _rcFx(ra.money_effect), '题材脉络': _rcFx(ra.theme_pulse),
+                          '龙头强度分': _rcNum(rj.leaderStrengthScore) },
+    '接力与量能': { '今日晋级率': `${_rcNum(promo.rate)}%（${_rcFx(promo.promotedCount)}/${_rcFx(promo.baseCount)}）`,
+                 '量能较昨日': `${_rcFx(ma.change1d)}%`,
+                 '主力净额（池内口径）': ma.mainNetAmount == null ? '暂缺' : `${_rcNum(ma.mainNetAmount / 1e8)} 亿` },
+  };
+}
+function _rcAttackBoards(R){
+  const boards = ((R.themeBoards || {}).boards) || [];
+  const hit = boards.filter(b => b.continuation === 'strong_extend').map(b => b.board).filter(Boolean);
+  return hit.length ? hit.join('、') : '空仓观望';
+}
+function _rcPlanTree(R){
+  const answers = R.answers || {}, ruleA = R.ruleAnswers || {};
+  const pick = (q) => {
+    const a = answers[q] || {};
+    return `${a.choice == null ? '未判定' : a.choice}（${RC_SOURCE_CN[a.source] || a.source || '-'}`
+      + `；规则参考 ${ruleA[q] == null ? '未判定' : ruleA[q]}）`;
+  };
+  return {
+    '基调与仓位': pick('plan_bias'),
+    '参与方式': pick('play_style'),
+    '进攻方向': `${_rcAttackBoards(R)}（题材龙头强延续板块，机械派生）`,
+    '回避重点': pick('avoid_focus'),
+    '隔日验证信号': pick('key_watch'),
+  };
+}
+function rcMode(mode, ev){
+  if (ev) ev.stopPropagation();
+  (STATE.recapUi || (STATE.recapUi = {})).mode = mode;
+  renderRecap();
+}
+function rcCopyRaw(ev){
+  if (ev) ev.stopPropagation();
+  const R = (STATE.recap || {}).report || {};
+  copyText(JSON.stringify(R, null, 2), ev && ev.target);
+}
+function renderRecapDetail(R){
+  const host = $('recapDetailBody');
+  if (!host) return;
+  const ui = STATE.recapUi || (STATE.recapUi = { mode: 'detail' });
+  const u = R.usage || {};
+  const meta = `<div class="lg-meta">
+    <div><div class="k">持续时间</div><div class="v">${R.jev && R.jev.latencyMs != null ? R.jev.latencyMs + ' ms' : '-'}</div></div>
+    <div><div class="k">输入 tokens</div><div class="v">${u.input_tokens != null ? Number(u.input_tokens).toLocaleString() : '-'}</div></div>
+    <div><div class="k">输出 tokens</div><div class="v">${u.output_tokens != null ? Number(u.output_tokens).toLocaleString() : '-'}</div></div>
+    <div><div class="k">状态</div><div class="v">${R.skippedJev ? '机械判（未调用 jev）' : 'ok'}</div></div></div>`;
+  let body;
+  if (ui.mode === 'raw'){
+    body = `<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0">` +
+      `<b>存档文档 JSON（原始）</b><button class="lg-copy" onclick="rcCopyRaw(event)">⧉ 复制</button></div>` +
+      `<pre>${esc(JSON.stringify(R, null, 2))}</pre></div>`;
+  } else {
+    const answers = R.answers || {}, ruleA = R.ruleAnswers || {};
+    const qrows = RC_QUESTIONS.map(q => {
+      const a = answers[q] || {};
+      const crit = (((R.questionsRaw || {})[q] || {}).criteria) || {};
+      const critTxt = a.choice != null ? (crit[a.choice] || '-') : '该题未判定';
+      const agree = a.choice != null && a.choice === ruleA[q];
+      return `<tr><td>${esc(RC_Q_CN[q] || q)}</td><td>${esc(a.choice || '未判定')} ${_rcSrcBadge(a)}</td>` +
+        `<td>${esc(ruleA[q] == null ? '未判定' : ruleA[q])}</td>` +
+        `<td>${a.choice == null ? '-' : (agree ? '✅' : '⚠️')}</td>` +
+        `<td class="lg-reason" title="${esc(critTxt)}">${esc(critTxt)}</td></tr>`;
+    }).join('');
+    const qtable = `<table><tr><th>题目</th><th>当日定档</th><th>规则参考</th><th>一致</th><th>该档入选标准（原话）</th></tr>${qrows}</table>`;
+    const stateTree = { summary: R.summary, emotion: R.emotion, kplWrap: R.kplWrap,
+                        relayJudgment: R.relayJudgment, eodJudge: R.eodJudge,
+                        themeBoards: R.themeBoards, marketAmount: R.marketAmount,
+                        promotion: R.promotion };
+    body = `<div class="lg-panels">
+      <div class="lg-panel"><div class="lg-phead"><b>题目与判定</b><span class="st">AI vs 固定规则对照</span></div>${qtable}</div>
+      <div class="lg-panel"><div class="lg-phead"><b>投喂语料</b><span class="st">state 原文（判据引用的字段都在这里）</span>` +
+      `<button class="lg-copy" onclick="rcCopyRaw(event)">⧉ 复制</button></div><div class="lg-tree">${treeHtml(stateTree, '')}</div></div>
+    </div>`;
+  }
+  host.innerHTML = `<div class="lg-card" onclick="event.stopPropagation()">
+    <div class="lg-head"><div class="lg-title">🕐 jev · 复盘日报 ${esc(R.date || '')}</div>
+      <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="rcMode('detail', event)">详细信息</button>
+      <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="rcMode('raw', event)">原始 JSON</button></div></div>
+    ${meta}${body}
+    <div class="lg-foot"><span><span class="k">题集版本</span> <code>${esc(R.questionSetVersion || '-')}</code></span>
+      <span><span class="k">模板版本</span> <code>${esc(String(R.templateVersion ?? '-'))}</code></span>
+      <span><span class="k">存档 _id</span> <code>${esc(String(R.date || '-'))}</code></span></div></div>`;
 }
 function renderRecap(){
   const D = STATE.recap;
-  const body = $('recapBody'), hint = $('recapHint'), det = $('recapDetail');
+  const body = $('recapBody'), hint = $('recapHint'), det = $('recapDetail'), kpi = $('recapKpi');
   if (!body) return;
   if (!D || D.ok === false){
     if (window.sbLog) sbLog('error', RC_TAG + ((D && D.reason) || '未知原因'));
     body.innerHTML = '<p class="hint">读口异常，原因见底部状态栏。</p>';
     if (hint) hint.textContent = '';
+    if (kpi) kpi.innerHTML = '';
     if (det) det.open = false;
     return;
   }
@@ -4332,6 +4447,7 @@ function renderRecap(){
     body.innerHTML = '<p class="hint">当日日报未生成（原因见底部状态栏）。非交易日/盘后链未跑属正常；'
       + '交易日盘后可由 operations.jev_daily_recap 产出。</p>';
     if (hint) hint.textContent = '';
+    if (kpi) kpi.innerHTML = '';
     if (det) det.open = false;
     return;
   }
@@ -4340,21 +4456,29 @@ function renderRecap(){
   const degraded = R.degraded || [];
   if (degraded.length && window.sbLog)
     sbLog('warn', RC_TAG + degraded.map(d => `${d.source}: ${d.reason}`).join(' ｜ '));
-  const skipped = R.skippedJev ? '（机械判 dry 产物，未经 jev 归层）' : '';
+  const skipped = R.skippedJev ? '（机械判产物，未经 jev 归层）' : '';
+  const ag = _rcAgreeCount(R);
   if (hint) hint.textContent =
-    `模板 v${R.templateVersion ?? '?'} · 题集 ${R.questionSetVersion ?? '?'}${skipped}`;
+    `${R.date || ''} · 模板 v${R.templateVersion ?? '?'} · 题集 ${R.questionSetVersion ?? '?'}`
+    + ` · AI与规则一致 ${ag.n}/${ag.tot}${skipped} · 判定明细见下方折叠`;
+  const em = R.emotion || {}, die = (R.summary || {}).dieban || {}, rise = (R.summary || {}).rise || {};
+  const kcard = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  if (kpi) kpi.innerHTML =
+    kcard('基调与仓位', esc((answers.plan_bias || {}).choice || '未判定'),
+          esc(RC_SOURCE_CN[(answers.plan_bias || {}).source] || '-'))
+    + kcard('参与方式', esc((answers.play_style || {}).choice || '未判定'),
+            '回避：' + esc((answers.avoid_focus || {}).choice || '未判定'))
+    + kcard('进攻方向', esc(_rcAttackBoards(R)), '题材龙头强延续板块（机械派生）')
+    + kcard('情绪分', esc(_rcNum(em.eod)),
+            esc(_rcFx(em.bandLabel)) + ' · 20日分位 ' + esc(_rcNum(em.eod20dPercentile)) + '%')
+    + kcard('全市场跌停', esc(_rcNum(die.limitDownCount)),
+            '上涨 ' + esc(_rcNum(rise.riseCount)) + ' 家 · 涨跌比 ' + esc(_rcNum(rise.ratio)))
+    + kcard('隔日验证', esc((answers.key_watch || {}).choice || '未判定'),
+            '晋级率 ' + esc(_rcNum((R.promotion || {}).rate)) + '%');
   body.innerHTML =
-    rcRenderBlock('复盘结论', (R.text || {}).conclusion || '暂缺')
-    + rcRenderBlock('隔日交易计划', (R.text || {}).plan || '暂缺')
-    + `<div style="display:flex;flex-wrap:wrap;gap:6px">${rcAnswerBadges(answers)}</div>`
-    + '<p class="hint">观察参考，非交易信号，不构成投资建议；徽标灰=机械判/未判定，黄=兜底，红=jev 归层。</p>';
-  if (det){
-    $('recapStateJson').textContent = JSON.stringify({
-      summary: R.summary, emotion: R.emotion, ruleAnswers: R.ruleAnswers,
-      answers, questionsRaw: R.questionsRaw, degraded, jev: R.jev, usage: R.usage,
-      generatedAt: R.generatedAt,
-    }, null, 2);
-  }
+    _rcPanel('复盘结论', '可数事实与链判定引用（每个数字可回溯到语料）', treeHtml(_rcFactTree(R), ''))
+    + _rcPanel('隔日交易计划', '档位来源见括注（AI 判定 / 规则参考）', treeHtml(_rcPlanTree(R), ''));
+  renderRecapDetail(R);
 }
 
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
