@@ -1,0 +1,268 @@
+# -*- coding: utf-8 -*-
+"""复盘日报（jev daily recap）：两页复盘事实 + 情绪锚点 → 单 call 语料包 → 归层 → 模板成文 → 落库。
+
+设计/预登记：quant-board/docs/hotlist-jev/jev-daily-recap-design.md（2026-10-31 用户裁决）。
+- 语料拼装/题目/模板/机械判全部在 services/jev/jev_daily_recap_corpus（单一实现，本模块零重复）；
+- 两页复盘均 noData → 不出语料包不烧 jev（贫料不开火，errorCode=no_material）；
+- dry（缺省）零真调用零写库（skippedJev=true，答案=机械判）；--apply 才真调用+upsert；
+- 幂等：当日 ok 文档已存在自动跳过（--force 重算）；排程链接线在 pilot 门判通过后另行提交；
+- pytest 一律 mock call_jev/FakeDb，禁真调用（硬红线 §1.2#7）。
+
+用法（quant-board 目录；pilot 期人工开火记账）：
+  ./.venv/Scripts/python.exe -m backend.operations.jev_daily_recap --date 2026-10-31 [--apply] [--force]
+  ./.venv/Scripts/python.exe -m backend.operations.jev_daily_recap --start 2026-10-20 --end 2026-10-31 [--apply]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import date as _date, timedelta
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from backend.core.backtest.execution import band_of_score
+from backend.operations.jev_daily_line import (
+    QUESTION_SET_VERSION_DAILY_LINE,
+    _jev_credentials,
+    eod_percentile,
+)
+from backend.operations.phase_pulse import PULSE_BAND_LABELS, load_eod_scores
+from backend.services.jev import jev_daily_recap_corpus as corpus
+from backend.services.jev.jev_client import call_jev, parse_jev_response
+from backend.services.jev.jev_dieban_review import collect_dieban_review
+from backend.services.jev.jev_rise_review import collect_rise_review
+
+COLLECTION = "hotlist_jev_daily_recap"
+
+_QUESTION_KEYS = ("recap_shape", "money_style", "plan_bias", "focus_direction", "risk_flag")
+
+
+# ---------------------------------------------------------------- 数据装载（monkeypatch 边界）
+
+def _get_db() -> Any:
+    from backend.data.repositories import repository_factory
+
+    return repository_factory.get_runtime_mongodb_database()
+
+
+def load_emotion(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """情绪链锚点（只读引用，不重算不建第二事实源）：EOD/分位/带/daily_line 句与形态。"""
+    degraded: list[dict[str, str]] = []
+    eod_scores = load_eod_scores(date)
+    eod = eod_scores.get(date)
+    eod = eod if isinstance(eod, (int, float)) and not isinstance(eod, bool) else None
+    if eod is None:
+        degraded.append({"source": "emotion", "reason": "missing_eod_score", "action": "anchor_absent"})
+    prior = [(d, s) for d, s in sorted(eod_scores.items())
+             if d < date and isinstance(s, (int, float)) and not isinstance(s, bool)]
+    raw_prior = sum(1 for d in eod_scores if d < date)
+    if raw_prior > len(prior):
+        degraded.append({"source": "emotion", "reason": f"prior_eod_none_dropped: {raw_prior - len(prior)}",
+                         "action": "excluded_from_percentile"})
+    pct = eod_percentile([s for _, s in prior[-20:]], eod) if (eod is not None and prior) else None
+    if eod is not None and pct is None:
+        degraded.append({"source": "emotion", "reason": "eod20d_sample_small", "action": "percentile_unavailable"})
+    band_tag = band_of_score(eod) if eod is not None else None
+    line_doc = None
+    try:
+        line_doc = db["phase_monitor"].find_one({"_id": f"line:{date}"}) if eod is not None else None
+    except Exception:  # noqa: BLE001 — advisory 参照缺失不阻断日报
+        line_doc = None
+    line_parts = ((line_doc or {}).get("parts") or {})
+    if line_doc is None and eod is not None:
+        degraded.append({"source": "emotion", "reason": "daily_line_doc_missing", "action": "sentence_absent"})
+    return {
+        "eod": eod,
+        "prevEod": prior[-1][1] if prior else None,
+        "prevEodDate": prior[-1][0] if prior else None,
+        "eod20dPercentile": pct,
+        "bandTag": band_tag,
+        "bandLabel": PULSE_BAND_LABELS[band_tag][0] if band_tag else None,
+        "dailyLineSentence": (line_doc or {}).get("sentence"),
+        "dailyShape": line_parts.get("shape"),
+        "dailyLineTemplateVersion": (line_doc or {}).get("meta", {}).get("templateVersion"),
+        "dailyLineQuestionSetVersion": QUESTION_SET_VERSION_DAILY_LINE,
+    }, degraded
+
+
+# ---------------------------------------------------------------- 主流程
+
+def _fallback_plan_bias(final_recap_shape: str | None) -> str | None:
+    """plan_bias 兜底跟随最终 recap_shape 档位（保持成文自洽，不为再判一次）。"""
+    if final_recap_shape is None or final_recap_shape == "insufficient_evidence":
+        return None
+    return corpus.rule_plan_bias(final_recap_shape)
+
+
+def run_daily_recap_for_date(date: str, *, apply: bool = False,
+                             force: bool = False, db: Any = None) -> dict[str, Any]:
+    """产出当日复盘日报。apply=False：零 jev 调用零写库（机械判答案，skippedJev 标注）。"""
+    db = db if db is not None else _get_db()
+
+    if apply and not force:
+        try:
+            existing = db[COLLECTION].find_one({"_id": date, "ok": True})
+        except Exception:  # noqa: BLE001 — 幂等检查失败不阻断（靠 upsert 幂等兜底）
+            existing = None
+        if existing is not None:
+            return {"ok": True, "skipped": True, "reason": "already_ok_doc",
+                    "date": date, "persistedId": existing.get("_id")}
+
+    rise = collect_rise_review(db, date)
+    dieban = collect_dieban_review(db, date)
+    facts = corpus.collect_review_facts(rise, dieban)
+    if facts["rise"]["noData"] and facts["dieban"]["noData"]:
+        return {"ok": False, "errorCode": "no_material",
+                "message": (f"{date} 上涨/下跌复盘原料均缺失（贫料不开火：不出语料包不烧 jev；"
+                            f"fail-visible，不伪造），见 degraded"),
+                "degradedSources": facts["degradedSources"]}
+
+    emotion, emotion_degraded = load_emotion(db, date)
+    degraded: list[dict[str, str]] = list(facts["degradedSources"]) + emotion_degraded
+
+    questions = corpus.build_questions(facts)
+    state = corpus.build_state(date, facts, emotion)
+    rule_answers = {q: corpus.RULES[q](facts) for q in _QUESTION_KEYS}
+
+    jev_meta: dict[str, Any] | None = None
+    usage: dict[str, Any] = {}
+    skipped_jev = False
+    if not apply:
+        slots = dict(rule_answers)
+        sources = {q: "rule_dry" for q in _QUESTION_KEYS}
+        skipped_jev = True
+    else:
+        account, token = _jev_credentials()
+        if not token:
+            degraded.append({"source": "jev", "reason": "missing_jev_token", "action": "rule_fallback"})
+            slots = dict(rule_answers)
+            sources = {q: "rule_fallback" for q in _QUESTION_KEYS}
+        else:
+            slots: dict[str, str | None] = dict(rule_answers)   # 兜底值，jev 有效答案逐题覆盖
+            sources = {q: "rule_fallback" for q in _QUESTION_KEYS}
+            try:
+                envelope, latency_ms = call_jev(account, token, state=state, questions=questions)
+                parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(_QUESTION_KEYS))
+            except Exception as exc:  # noqa: BLE001 — 解析层意外炸穿降级兜底，不丢当日日报
+                parsed = {"ok": False, "errorCode": "call_parse_exception",
+                          "errorDetail": f"{type(exc).__name__}: {str(exc)[:150]}"}
+            if parsed.get("ok"):
+                usage = parsed.get("usage") or {}
+                jev_meta = {"latencyMs": parsed.get("latencyMs"), "model": "typesafe/jev"}
+                answers = parsed.get("answers") or {}
+                shape_answer: str | None = None
+                for q in _QUESTION_KEYS:
+                    answer = ((answers.get(q) or {}).get("choice"))
+                    answer = str(answer) if answer is not None else None
+                    choices = _question_choices(questions, q)
+                    if answer == "insufficient_evidence":
+                        slots[q] = None          # 该槽「未判定」，成文事实段不依赖档位
+                        sources[q] = "jev_insufficient"
+                        degraded.append({"source": q, "reason": "insufficient_evidence",
+                                         "action": "slot_unjudged"})
+                    elif answer in choices:
+                        slots[q] = answer
+                        sources[q] = "jev"
+                    else:
+                        degraded.append({"source": q, "reason": f"invalid_choice: {answer!r}",
+                                         "action": "rule_fallback"})
+                    if q == "recap_shape":
+                        shape_answer = slots.get(q)
+                # plan_bias 兜底跟随最终 recap_shape（jev 未答/无效时保持自洽）
+                if sources["plan_bias"] != "jev":
+                    fb = _fallback_plan_bias(shape_answer)
+                    slots["plan_bias"] = fb
+                    sources["plan_bias"] = "rule_fallback" if fb else "slot_unjudged"
+            else:
+                degraded.append({"source": "jev",
+                                 "reason": f"{parsed.get('errorCode')}: {str(parsed.get('errorDetail') or '')[:120]}",
+                                 "action": "rule_fallback"})
+                # 兜底自洽：plan_bias 跟随机械判 recap_shape
+                slots["plan_bias"] = _fallback_plan_bias(rule_answers["recap_shape"]) or None
+                if slots["plan_bias"] is None:
+                    sources["plan_bias"] = "slot_unjudged"
+
+    text = corpus.compose_recap_text(date, facts, emotion, slots)
+    report: dict[str, Any] = {
+        "_id": date,
+        "date": date,
+        "ok": True,
+        "summary": facts,
+        "emotion": emotion,
+        "ruleAnswers": rule_answers,
+        "answers": {q: {"choice": slots.get(q), "source": sources[q]} for q in _QUESTION_KEYS},
+        "text": text,
+        "questionsRaw": questions,
+        "templateVersion": corpus.RECAP_TEMPLATE_VERSION,
+        "questionSetVersion": corpus.QUESTION_SET_VERSION_RECAP,
+        "narrativeLibraryVersion": corpus.NARRATIVE_LIBRARY_VERSION,
+        "jev": jev_meta,
+        "usage": usage,
+        "skippedJev": skipped_jev,
+        "degraded": degraded,
+        "generatedAt": _now_iso(),
+    }
+    if apply:
+        try:
+            db[COLLECTION].replace_one({"_id": date}, report, upsert=True)
+            persisted: Any = date
+        except Exception as exc:  # noqa: BLE001 — 落库失败显式登记，stdout 仍可回收（fail-visible）
+            persisted = None
+            degraded.append({"source": "persistence", "reason": f"persist_failed: {exc}",
+                             "action": "stdout_only"})
+        report["persistedId"] = persisted
+    return {"ok": True, "report": report}
+
+
+def _question_choices(questions: dict[str, Any], q: str) -> tuple[str, ...]:
+    return tuple((questions.get(q) or {}).get("criteria") or ())
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _dates_between(start: str, end: str) -> list[str]:
+    try:
+        d0, d1 = _date.fromisoformat(start), _date.fromisoformat(end)
+    except ValueError as exc:
+        raise SystemExit(f"--start/--end 需 YYYY-MM-DD：{exc}") from exc
+    if d1 < d0:
+        raise SystemExit("--start 不得晚于 --end")
+    out = []
+    cur = d0
+    while cur <= d1:
+        out.append(cur.isoformat())
+        cur += timedelta(days=1)
+    return out
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="复盘日报（jev daily recap，默认 dry 零调用）")
+    parser.add_argument("--date", help="YYYY-MM-DD（与 --start/--end 二选一）")
+    parser.add_argument("--start", help="区间回填起点 YYYY-MM-DD（需 --apply）")
+    parser.add_argument("--end", help="区间回填终点 YYYY-MM-DD（需 --apply）")
+    parser.add_argument("--apply", action="store_true",
+                        help="真实调用 jev 并落库 hotlist_jev_daily_recap；缺省只算机械判+成文（零调用零写库）")
+    parser.add_argument("--force", action="store_true", help="当日已有 ok 文档仍重算（幂等跳过的逃生口）")
+    args = parser.parse_args()
+    if not args.date and not (args.start and args.end):
+        parser.error("需要 --date 或 --start/--end")
+    dates = [args.date] if args.date else _dates_between(args.start, args.end)
+    exit_code = 0
+    for d in dates:
+        result = run_daily_recap_for_date(d, apply=args.apply, force=args.force)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if not result.get("ok") and result.get("errorCode") != "no_material":
+            exit_code = 1
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

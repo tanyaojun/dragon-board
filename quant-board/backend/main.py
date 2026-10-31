@@ -17,6 +17,7 @@ from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.hotlist_jev_routes import router as hotlist_jev_router
 from backend.api.hotlist_jev_dieban_routes import router as hotlist_jev_dieban_router
 from backend.api.hotlist_jev_rise_routes import router as hotlist_jev_rise_router
+from backend.api.hotlist_jev_daily_recap_routes import router as hotlist_jev_daily_recap_router
 from backend.api.hotlist_jev_limitup_routes import router as hotlist_jev_limitup_router
 from backend.api.phase_monitor_routes import router as phase_monitor_router
 from backend.api.journal_routes import router as journal_router
@@ -115,6 +116,7 @@ app.include_router(hotlist_jev_router)
 app.include_router(hotlist_jev_limitup_router)
 app.include_router(hotlist_jev_dieban_router)
 app.include_router(hotlist_jev_rise_router)
+app.include_router(hotlist_jev_daily_recap_router)
 app.include_router(phase_monitor_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)

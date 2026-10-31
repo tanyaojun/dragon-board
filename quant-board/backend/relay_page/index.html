@@ -612,6 +612,22 @@
     </div>
   </section>
 
+  <!-- 复盘日报（jev daily recap，2026-10-31 预登记 jev-daily-recap-design.md）：
+       盘后链/CLI 产出落库，本页纯读。问题走底部状态栏/控制台（页面横幅禁令）。 -->
+  <section id="tab-recap" style="display:none">
+    <div class="page-head"><div><h2>复盘日报</h2>
+      <p>上涨/下跌复盘 + 情绪锚点 → 盘后投喂 jev 归层 → 模板成文；短叙事由预写文段库（版本化）按归层档位选段，jev 零自由措辞。观察参考，非交易信号。</p></div></div>
+    <div class="ph-line"></div>
+    <div class="card">
+      <h3>复盘结论与隔日计划 <span class="hint" id="recapHint"></span></h3>
+      <div id="recapBody" style="display:flex;flex-direction:column;gap:12px"></div>
+      <details id="recapDetail" style="margin-top:12px">
+        <summary>语料包与归层明细（state / 题目 / 逐题答案来源）</summary>
+        <pre id="recapStateJson" style="max-height:420px;overflow:auto;font-size:12px;white-space:pre-wrap"></pre>
+      </details>
+    </div>
+  </section>
+
   <section id="tab-kpl" style="display:none">
     <div class="ph-line" style="margin-bottom:14px"></div>
     <div class="card">
@@ -876,6 +892,7 @@
 const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, dieban: null,
   rise: null,   // 上涨复盘读口（GET /api/hotlist-jev/rise-review，2026-10-31）
+  recap: null,  // 复盘日报读口（GET /api/hotlist-jev/daily-recap，纯读；2026-10-31）
   tlData: { loading: false, error: null, doc: null, rows: [] },
                         // 题材龙头（rv-themes）：区间内全部龙头-日（tlFetch 按 relayRange 取）
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
@@ -1328,9 +1345,9 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels, band, dieban, rise;
+  let series, slots, labels, band, dieban, rise, recap;
   try {
-    [series, slots, labels, band, dieban, rise] = await Promise.all([
+    [series, slots, labels, band, dieban, rise, recap] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
@@ -1343,6 +1360,9 @@ async function loadAll(){
       // 上涨复盘（上涨名单）：读口异常走底部状态栏（页内不打横幅），带 reason 不静默当空页
       jget('/api/hotlist-jev/rise-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'rise_read_failed: ' + (e && e.message ? e.message : '?') })),
+      // 复盘日报（纯读落库文档）：读口异常走底部状态栏（页内不打横幅），缺文档显式 missing 原因
+      jget('/api/hotlist-jev/daily-recap' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
+        reason: 'recap_read_failed: ' + (e && e.message ? e.message : '?') })),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -1374,11 +1394,12 @@ async function loadAll(){
   STATE.band = band;
   STATE.dieban = dieban;
   STATE.rise = rise;
+  STATE.recap = recap;
   bandRefreshSync();   // 接管后端正在跑的分带刷新任务（页面刷新/多标签/双击重入时不断链）
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderDieban(); renderRise();
+  renderRelayTab(); renderLabels(); renderDieban(); renderRise(); renderRecap();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
@@ -4267,15 +4288,78 @@ const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察'
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
                      ['detail', '连板情绪', '🗓️']];
 const NAV = [
-  {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['rise', '上涨复盘', '📈'], ['dieban', '下跌复盘', '📉']]},
+  {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['rise', '上涨复盘', '📈'], ['dieban', '下跌复盘', '📉'], ['recap', '复盘日报', '📰']]},
   // KPL 行情子目录（2026-10-27 用户需求；2026-10-28 「精选板块」更名「板块行情」，页内增
   // 精选/行业页签）：精选 = 开盘啦板块强度排行实时/历史（含服务端 list_son 二级板块）；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
   {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩'], ['kpllhb', '龙虎榜', '🏆']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
+// ════════════════════════════════════════════════════════════════════════════
+// 复盘日报（jev daily recap，2026-10-31 预登记 jev-daily-recap-design.md）
+// 成文由盘后链/CLI 落库（operations.jev_daily_recap），本页纯读。
+// 问题一律走底部状态栏 sbLog / 控制台（页面横幅禁令）；页内无横幅。
+const RC_TAG = '[复盘日报] ';
+const RC_ANSWER_CN = { recap_shape: '复盘归层', money_style: '赚钱效应', plan_bias: '隔日倾向',
+                       focus_direction: '主攻方向', risk_flag: '风险档' };
+const RC_SOURCE_CLS = { jev: 'b-red', jev_insufficient: 'b-gray', rule_fallback: 'b-amber',
+                        rule_dry: 'b-gray', slot_unjudged: 'b-gray' };
+function rcAnswerBadges(answers){
+  return Object.entries(answers || {}).map(([q, a]) => {
+    const src = (a && a.source) || '?';
+    const val = (a && a.choice) || '未判定';
+    return `<span class="badge ${RC_SOURCE_CLS[src] || 'b-gray'}" title="答案来源 ${esc(src)}">` +
+      `${RC_ANSWER_CN[q] || q}·${esc(val)}</span>`;
+  }).join(' ');
+}
+function rcRenderBlock(title, text){
+  return `<div><div class="k" style="color:var(--muted);font-size:12px;margin-bottom:4px">${esc(title)}</div>` +
+    `<div style="font-size:14px;line-height:1.7">${esc(text)}</div></div>`;
+}
+function renderRecap(){
+  const D = STATE.recap;
+  const body = $('recapBody'), hint = $('recapHint'), det = $('recapDetail');
+  if (!body) return;
+  if (!D || D.ok === false){
+    if (window.sbLog) sbLog('error', RC_TAG + ((D && D.reason) || '未知原因'));
+    body.innerHTML = '<p class="hint">读口异常，原因见底部状态栏。</p>';
+    if (hint) hint.textContent = '';
+    if (det) det.open = false;
+    return;
+  }
+  if (D.missing){
+    if (window.sbLog) sbLog('info', RC_TAG + (D.missingReason || '当日日报未生成'));
+    body.innerHTML = '<p class="hint">当日日报未生成（原因见底部状态栏）。非交易日/盘后链未跑属正常；'
+      + '交易日盘后可由 operations.jev_daily_recap 产出。</p>';
+    if (hint) hint.textContent = '';
+    if (det) det.open = false;
+    return;
+  }
+  const R = D.report || {};
+  const answers = R.answers || {};
+  const degraded = R.degraded || [];
+  if (degraded.length && window.sbLog)
+    sbLog('warn', RC_TAG + degraded.map(d => `${d.source}: ${d.reason}`).join(' ｜ '));
+  const skipped = R.skippedJev ? '（机械判 dry 产物，未烧 jev）' : '';
+  if (hint) hint.textContent =
+    `模板 v${R.templateVersion ?? '?'} · 题集 ${R.questionSetVersion ?? '?'}${skipped}`;
+  body.innerHTML =
+    rcRenderBlock('复盘结论', (R.text || {}).conclusion || '暂缺')
+    + rcRenderBlock('隔日交易计划', (R.text || {}).plan || '暂缺')
+    + rcRenderBlock('短叙事（AI 归层 · 模板成文）', (R.text || {}).narrative || '暂缺')
+    + `<div style="display:flex;flex-wrap:wrap;gap:6px">${rcAnswerBadges(answers)}</div>`
+    + '<p class="hint">观察参考，非交易信号，不构成投资建议；徽标灰=机械判/未判定，黄=兜底，红=jev 归层。</p>';
+  if (det){
+    $('recapStateJson').textContent = JSON.stringify({
+      summary: R.summary, emotion: R.emotion, ruleAnswers: R.ruleAnswers,
+      answers, questionsRaw: R.questionsRaw, degraded, jev: R.jev, usage: R.usage,
+      generatedAt: R.generatedAt,
+    }, null, 2);
+  }
+}
+
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
-                    rise: ['上涨复盘'],
+                    rise: ['上涨复盘'], recap: ['复盘日报'],
                     kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'], kpllhb: ['龙虎榜'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 

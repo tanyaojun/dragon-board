@@ -1508,6 +1508,33 @@ def test_rise_page_registered_like_dieban_review(html: str, js: str):
     assert "STATE.riseEntries" in lg_entries, "行展开条目路由须含 rise"
 
 
+def test_recap_daily_page_registered_and_statusbar_only(html: str, js: str):
+    """2026-10-31 预登记（jev-daily-recap-design.md）：新增【复盘日报】页（纯读落库文档）。
+
+    - 侧栏/面包屑/tab 区块/载入链齐备；页内无横幅（问题走底部状态栏）；
+    - renderRecap 三分支 fail-visible：读口异常 error / missing info / degraded warn；
+    - 语料包明细为折叠 details，不成横幅。"""
+    assert "['recap', '复盘日报'," in js, "侧栏须有【复盘日报】入口"
+    assert "recap: ['复盘日报']" in js, "面包屑须含复盘日报"
+    assert 'id="tab-recap"' in html, "须有 tab-recap 区块"
+    seg = html[html.index('id="tab-recap"'):]
+    seg = seg[: seg.index("</section>")]
+    for hook in ('<h2>复盘日报</h2>', 'id="recapHint"', 'id="recapBody"',
+                 'id="recapStateJson"', '<details'):
+        assert hook in seg, f"复盘日报页缺展示骨架：{hook}"
+    assert "banner" not in seg.lower(), "复盘日报页不得有横幅宿主"
+    load = _fn(js, "loadAll")
+    assert "'/api/hotlist-jev/daily-recap'" in load, "loadAll 须拉复盘日报读口"
+    assert "renderRecap();" in load, "loadAll 须触发复盘日报重绘"
+    render = _fn(js, "renderRecap")
+    assert "RC_TAG = '[复盘日报] '" in js, "状态栏前缀常量须存在"
+    for key in ("D.ok === false", "D.missing", "R.degraded"):
+        assert key in render, f"renderRecap 缺 fail-visible 分支：{key}"
+    assert "sbLog('error', RC_TAG" in render and "sbLog('info', RC_TAG" in render \
+        and "sbLog('warn', RC_TAG" in render, "异常/缺文档/降级须分级进底部状态栏"
+    assert "非交易信号" in render, "页脚须声明非交易信号"
+
+
 def test_dieban_scope_predicates_behaviour(js: str, tmp_path):
     """**行为**回归（node 探针）：负反馈范围谓词与筛选（跌停/连跌/一字/大跌/回撤/下跌）。"""
     if shutil.which("node") is None:
