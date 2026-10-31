@@ -35,10 +35,79 @@ from backend.services.jev import jev_daily_recap_corpus as corpus
 from backend.services.jev.jev_client import dispatch_jev_call, parse_jev_response
 from backend.services.jev.jev_dieban_review import collect_dieban_review
 from backend.services.jev.jev_rise_review import collect_rise_review
+from backend.operations.theme_leader_label import (
+    LIVE_ARCHIVE_COLLECTION,
+    _AI_GEN_NOTE,
+    _MARKET_WRAP_RE,
+)
 
 COLLECTION = "hotlist_jev_daily_recap"
 
 _QUESTION_KEYS = ("recap_shape", "money_style", "plan_bias", "focus_direction", "risk_flag")
+
+
+# ---------------------------------------------------------------- 语料 v2 增补（2026-10-31 用户裁决）
+
+KPL_WRAP_TIME = "15:00"          # 收盘大盘综述播报时点
+RELAY_COLLECTION = "hotlist_jev_relay_index"
+
+
+def load_kpl_wrap(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """KPL 直播 15:00 大盘综述（kpl_live_daily 日归档，17:30 挂链落库；零模型调用）。
+
+    归档缺/当日无综述条 → ok:false + degraded 登记（fail-visible，不拿其他时点冒充综述）。
+    原文剔除 AI 生成标注尾注后原样入语料（不做任何改写）。
+    """
+    degraded: list[dict[str, str]] = []
+    try:
+        doc = db[LIVE_ARCHIVE_COLLECTION].find_one({"_id": str(date)}) or {}
+    except Exception as exc:  # noqa: BLE001 — 归档读失败显式降级
+        return {"ok": False, "reason": f"archive_read_failed: {exc}"}, [
+            {"source": "kpl_wrap", "reason": f"archive_read_failed: {exc}", "action": "corpus_absent"}]
+    items = doc.get("items") or []
+    hits = [str(it.get("comment") or "").strip() for it in items
+            if str(it.get("time") or "") == KPL_WRAP_TIME and _MARKET_WRAP_RE.search(str(it.get("comment") or ""))]
+    if not hits:
+        reason = "archive_missing" if not items else f"no_{KPL_WRAP_TIME}_wrap_in_archive"
+        degraded.append({"source": "kpl_wrap", "reason": reason, "action": "corpus_absent"})
+        return {"ok": False, "reason": reason}, degraded
+    comment = hits[-1]
+    if comment.endswith(_AI_GEN_NOTE):
+        comment = comment[: -len(_AI_GEN_NOTE)].rstrip()
+    return {"ok": True, "time": KPL_WRAP_TIME, "comment": comment,
+            "fromArchive": True}, degraded
+
+
+def load_relay_judgment(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """连板情绪判定结果（hotlist_jev_relay_index，_id={date}:RELAY；只读引用不重算不建第二事实源）。
+
+    只喂结构化档位（指数/相位/边际/梯队/钱效/题材/龙头强度），不喂模型生成的 narrative 原文
+    （防模型输出回流污染语料）。缺档/非 ok → ok:false + degraded。
+    """
+    degraded: list[dict[str, str]] = []
+    try:
+        doc = db[RELAY_COLLECTION].find_one({"_id": f"{date}:RELAY"}) or {}
+    except Exception as exc:  # noqa: BLE001 — 读失败显式降级
+        return {"ok": False, "reason": f"relay_read_failed: {exc}"}, [
+            {"source": "relay_judgment", "reason": f"relay_read_failed: {exc}", "action": "corpus_absent"}]
+    if doc.get("status") != "ok":
+        reason = "relay_doc_missing" if not doc else f"relay_status_{doc.get('status')}"
+        degraded.append({"source": "relay_judgment", "reason": reason, "action": "corpus_absent"})
+        return {"ok": False, "reason": reason}, degraded
+    answers = doc.get("answers") or {}
+    picked: dict[str, Any] = {}
+    for key in ("relay_phase", "relay_momentum", "ladder_health",
+                "money_effect", "theme_pulse"):
+        a = answers.get(key) or {}
+        picked[key] = a.get("choice")
+    leader = answers.get("leader_strength") or {}
+    idx_score = answers.get("relay_index") or {}
+    return {"ok": True,
+            "index": doc.get("relayIndex"),
+            "indexScore": idx_score.get("score"),
+            "answers": picked,
+            "leaderStrengthScore": leader.get("score"),
+            "questionSetVersion": doc.get("questionSetVersion")}, degraded
 
 
 # ---------------------------------------------------------------- 数据装载（monkeypatch 边界）
@@ -122,10 +191,14 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                 "degradedSources": facts["degradedSources"]}
 
     emotion, emotion_degraded = load_emotion(db, date)
-    degraded: list[dict[str, str]] = list(facts["degradedSources"]) + emotion_degraded
+    kpl_wrap, kpl_degraded = load_kpl_wrap(db, date)
+    relay_judgment, relay_degraded = load_relay_judgment(db, date)
+    degraded: list[dict[str, str]] = (list(facts["degradedSources"]) + emotion_degraded
+                                      + kpl_degraded + relay_degraded)
 
     questions = corpus.build_questions(facts)
-    state = corpus.build_state(date, facts, emotion)
+    state = corpus.build_state(date, facts, emotion,
+                               kpl_wrap=kpl_wrap, relay_judgment=relay_judgment)
     rule_answers = {q: corpus.RULES[q](facts) for q in _QUESTION_KEYS}
 
     jev_meta: dict[str, Any] | None = None
@@ -205,6 +278,8 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
         "ok": True,
         "summary": facts,
         "emotion": emotion,
+        "kplWrap": kpl_wrap,
+        "relayJudgment": relay_judgment,
         "ruleAnswers": rule_answers,
         "answers": {q: {"choice": slots.get(q), "source": sources[q]} for q in _QUESTION_KEYS},
         "text": text,

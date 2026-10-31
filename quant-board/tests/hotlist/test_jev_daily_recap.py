@@ -104,6 +104,8 @@ def material(monkeypatch):
     monkeypatch.setattr(ops, "load_emotion", lambda db, date: (dict(EMOTION), []))
     monkeypatch.setattr(ops, "collect_rise_review", lambda db, date: mk_rise())
     monkeypatch.setattr(ops, "collect_dieban_review", lambda db, date: mk_dieban())
+    monkeypatch.setattr(ops, "load_kpl_wrap", lambda db, date: ({"ok": True, "time": "15:00", "comment": "综述", "fromArchive": True}, []))
+    monkeypatch.setattr(ops, "load_relay_judgment", lambda db, date: ({"ok": True, "index": 30.6, "answers": {}}, []))
 
 
 # ---------------------------------------------------------------- 语料拼装（纯函数）
@@ -449,6 +451,104 @@ def test_daily_recap_route_four_paths(monkeypatch):
 
     r = client.get("/api/hotlist-jev/daily-recap")  # 缺 date → 422
     assert r.status_code == 422
+
+
+def test_load_kpl_wrap_found_strips_ai_note(monkeypatch):
+    """语料 v2：15:00 大盘综述原样入语料（剔 AI 生成尾注）；判别词单一事实源复用。"""
+    from backend.operations.theme_leader_label import _AI_GEN_NOTE
+
+    class WrapDb:
+        def __getitem__(self, name):
+            assert name == "kpl_live_daily"
+            return self
+
+        def find_one(self, q):
+            assert q == {"_id": "2026-10-30"}
+            return {"_id": "2026-10-30", "items": [
+                {"time": "14:55", "comment": "尾盘低迷" + _AI_GEN_NOTE},
+                {"time": "15:00", "comment": "三大指数冲高回落，创业板指跌超-4%" + _AI_GEN_NOTE},
+            ]}
+
+    payload, degraded = ops.load_kpl_wrap(WrapDb(), "2026-10-30")
+    assert payload["ok"] is True and payload["time"] == "15:00"
+    assert payload["comment"] == "三大指数冲高回落，创业板指跌超-4%"
+    assert _AI_GEN_NOTE not in payload["comment"] and degraded == []
+
+    # 非综述时点/判别词不命中 → 显式降级（不拿其他时点冒充综述）
+    class NoWrapDb:
+        def __getitem__(self, name):
+            return self
+
+        def find_one(self, q):
+            return {"_id": "d", "items": [{"time": "14:55", "comment": "尾盘低迷"}]}
+
+    payload2, degraded2 = ops.load_kpl_wrap(NoWrapDb(), "d")
+    assert payload2 == {"ok": False, "reason": "no_15:00_wrap_in_archive"}
+    assert degraded2[0]["source"] == "kpl_wrap" and degraded2[0]["action"] == "corpus_absent"
+
+    # 归档整缺
+    class EmptyDb:
+        def __getitem__(self, name):
+            return self
+
+        def find_one(self, q):
+            return None
+
+    payload3, degraded3 = ops.load_kpl_wrap(EmptyDb(), "d")
+    assert payload3 == {"ok": False, "reason": "archive_missing"}
+    assert degraded3[0]["reason"] == "archive_missing"
+
+
+def test_load_relay_judgment_structured_only(monkeypatch):
+    """语料 v2：连板情绪判定只喂结构化档位；缺档/非 ok 显式降级；narrative 原文不回流。"""
+    class RelayDb:
+        def __init__(self, doc):
+            self.doc = doc
+
+        def __getitem__(self, name):
+            assert name == "hotlist_jev_relay_index"
+            return self
+
+        def find_one(self, q):
+            assert q == {"_id": "2026-10-30:RELAY"}
+            return self.doc
+
+    good = {"_id": "2026-10-30:RELAY", "status": "ok", "relayIndex": 30.6,
+            "questionSetVersion": "v7.1",
+            "narrative": "模型生成的叙事原文（不得回流）",
+            "answers": {"relay_phase": {"choice": "divergence", "confidence": 0.87},
+                        "relay_momentum": {"choice": "weakening"},
+                        "ladder_health": {"choice": "pyramid"},
+                        "money_effect": {"choice": "losing"},
+                        "theme_pulse": {"choice": "mainline_continue"},
+                        "leader_strength": {"score": 5.25},
+                        "relay_index": {"score": 2.75}}}
+    payload, degraded = ops.load_relay_judgment(RelayDb(good), "2026-10-30")
+    assert payload["ok"] is True and payload["index"] == 30.6
+    assert payload["answers"]["relay_phase"] == "divergence"
+    assert payload["leaderStrengthScore"] == 5.25 and degraded == []
+    assert "narrative" not in payload        # 模型原文不进语料
+
+    payload2, degraded2 = ops.load_relay_judgment(RelayDb({}), "2026-10-30")
+    assert payload2 == {"ok": False, "reason": "relay_doc_missing"}
+    assert degraded2[0]["source"] == "relay_judgment"
+
+    payload3, degraded3 = ops.load_relay_judgment(RelayDb({"status": "degraded"}), "2026-10-30")
+    assert payload3 == {"ok": False, "reason": "relay_status_degraded"}
+
+
+def test_build_state_v2_blocks_and_fail_visible():
+    """语料 v2：kplWrap/relayJudgment 入 state 顶层；缺料 ok:false 透传。"""
+    facts = corpus.collect_review_facts(mk_rise(), mk_dieban())
+    state = corpus.build_state("2026-10-31", facts, {"eod": 62.0},
+                               kpl_wrap={"ok": True, "comment": "综述"},
+                               relay_judgment={"ok": True, "index": 30.6})
+    assert state["kplWrap"] == {"ok": True, "comment": "综述"}
+    assert state["relayJudgment"] == {"ok": True, "index": 30.6}
+    assert "degradedSources" not in state["summary"]
+    state2 = corpus.build_state("2026-10-31", facts, {"eod": 62.0})
+    assert state2["kplWrap"] == {"ok": False, "reason": "kpl_wrap_unavailable"}
+    assert state2["relayJudgment"] == {"ok": False, "reason": "relay_judgment_unavailable"}
 
 
 def test_persist_failure_marks_result_and_degraded(material, monkeypatch):

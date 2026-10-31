@@ -297,12 +297,15 @@ def build_questions(facts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any]) -> dict[str, Any]:
-    """state 包：summary（两页事实）+ emotion 锚点 + degradedSources（fail-visible）。
+def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any],
+                kpl_wrap: dict[str, Any] | None = None,
+                relay_judgment: dict[str, Any] | None = None) -> dict[str, Any]:
+    """state 包：summary（两页事实）+ emotion 锚点 + KPL 15:00 盘播报 + 连板情绪判定（state v2）。
 
-    degradedSources 只在顶层保留一份（summary 内剔除，不重复投喂，开火前文本清理 2026-10-31）。
-    """
-    return {
+    - degradedSources 只在顶层保留一份（summary 内剔除，不重复投喂，开火前文本清理 2026-10-31）；
+    - kpl_wrap / relay_judgment 由 operations 层装载（IO 边界），缺料带 ok:false+reason（fail-visible）；
+      语料增补登记设计文档 §9（2026-10-31 用户裁决：每日一句不补）。"""
+    state = {
         "date": date,
         "summary": {k: v for k, v in facts.items() if k != "degradedSources"},
         "emotion": {
@@ -316,6 +319,12 @@ def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any]) -> di
         },
         "degradedSources": facts.get("degradedSources") or [],
     }
+    # 语料 v2 增补（2026-10-31 用户裁决）：KPL 直播 15:00 大盘综述 + 连板情绪判定结果。
+    # 缺料 ok:false 原样透传（fail-visible），operations 层已同步登记 degraded。
+    state["kplWrap"] = kpl_wrap if isinstance(kpl_wrap, dict) else {"ok": False, "reason": "kpl_wrap_unavailable"}
+    state["relayJudgment"] = relay_judgment if isinstance(relay_judgment, dict) \
+        else {"ok": False, "reason": "relay_judgment_unavailable"}
+    return state
 
 
 # ---------------------------------------------------------------- 成文模板（版本化）

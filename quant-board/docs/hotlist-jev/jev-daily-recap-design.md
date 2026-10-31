@@ -124,3 +124,24 @@ pilot 未开火（零已落库产物），v1 无跨代可比性 → 原位修订
 补充（同日评审 Minor-4 落地）：读口 missingReason「pilot 期未开火/贫料日」→「pilot 期未到/
 原料不足日」；页面 skippedJev 徽标「未烧 jev」→「未经 jev 归层」；rise-review/daily-recap
 读口 date 参数补 encodeURIComponent。
+
+
+## 9. 语料 v2 增补（2026-10-31 用户裁决，pilot Day1 重算）
+
+裁决：①每日一句（daily_line 句位）不补、不重跑该链；②KPL 直播 15:00 大盘综述进语料；
+③连板情绪判定结果进语料。10-30 pilot Day1 日报以增补后语料 `--force` 重算（1 次调用），
+重算后仍记为 Day1 基准（原档为通道失败兜底档，本就不计有效样本）。
+
+新增原料（state v2，`build_state` 顶层两个块）：
+
+1. `kplWrap`：KPL 直播 15:00 大盘综述原文。来源 `kpl_live_daily`（_id=date，17:30 挂链
+   归档，零模型调用）；取 time=15:00 且命中大盘综述判别词（复用 theme_leader_label
+   `_MARKET_WRAP_RE`，单一事实源）的条目，剔除 AI 生成标注尾注后**原样投喂不改写**；
+   归档缺/无 15:00 综述条 → ok:false + degraded（corpus_absent）。
+2. `relayJudgment`：连板情绪判定结果（`hotlist_jev_relay_index`，_id={date}:RELAY，只读
+   引用不重算）。只喂结构化档位：relayIndex 指数、五道 choice（相位/边际/梯队/钱效/题材）、
+   龙头强度分、题集版本；**不喂模型生成的 narrative 原文**（防模型输出回流污染语料）；
+   缺档/非 ok → ok:false + degraded。
+
+补数实录（同日）：全市场上涨逐股文档缺 + 上涨历史回溯缺 20 日 → `market_rise_pool
+--start 2026-09-28 --end 2026-10-30 --apply`（本地日线重算，零模型调用）回填。
