@@ -259,6 +259,11 @@ def _as_float(value: object) -> float | None:
     return number
 
 
+# 公开别名：数值化 helper 被 market_rise_pool 等兄弟模块复用（review nit 2026-10-31：
+# 跨模块 import 私有符号会在本模块重构时静默破坏消费方）；旧名保留兼容既有调用。
+as_float = _as_float
+
+
 def _as_int(value: object) -> int | None:
     number = _as_float(value)
     return int(number) if number is not None and number == int(number) else None

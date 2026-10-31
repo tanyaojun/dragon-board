@@ -392,7 +392,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand">
       <div class="sb-logo">🧭</div>
-      <div><div class="sb-title">JEV 叙事工作台</div><div class="sb-sub">连板情绪指数 · 热榜叙事 · 涨/跌停复盘</div></div>
+      <div><div class="sb-title">JEV 叙事工作台</div><div class="sb-sub">连板情绪指数 · 热榜叙事 · 涨/跌复盘</div></div>
     </div>
     <div class="sb-search"><span>🔍</span><input id="sbSearch" placeholder="快速搜索…" oninput="sbFilter(this.value)"><kbd>Ctrl K</kbd></div>
     <nav class="sb-nav" id="sbNav"></nav>
@@ -587,7 +587,7 @@
   </section>
 
   <section id="tab-dieban" style="display:none">
-    <div class="page-head"><div><h2>跌停复盘</h2>
+    <div class="page-head"><div><h2>下跌复盘</h2>
       <p>个股名单 = 全市场逐股跌停 ∪ 采集池 ∪ 同花顺大幅回撤池；缺源与口径降级显式标注。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
@@ -597,6 +597,20 @@
       <div class="board-row" id="diebanBoardRow"></div>
       <div class="lf-bar" id="diebanFilterBar"></div>
       <table id="diebanTable"></table>
+    </div>
+  </section>
+
+  <section id="tab-rise" style="display:none">
+    <div class="page-head"><div><h2>上涨复盘</h2>
+      <p>个股名单 = 全市场逐股涨幅>5% 且未封涨停（本地日线重算）∪ 采集池快照行；触板未封/连涨/板块分布同下跌复盘展示语言。</p></div></div>
+    <div class="ph-line"></div>
+    <div class="card">
+      <h3>上涨名单与口径汇总 <span class="hint" id="riseHint"></span></h3>
+      <div id="riseBanner"></div>
+      <div class="kpi-strip" id="riseKpi" style="margin-bottom:12px"></div>
+      <div class="board-row" id="riseBoardRow"></div>
+      <div class="lf-bar" id="riseFilterBar"></div>
+      <table id="riseTable"></table>
     </div>
   </section>
 
@@ -863,6 +877,7 @@
 })();
 const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, dieban: null,
+  rise: null,   // 上涨复盘读口（GET /api/hotlist-jev/rise-review，2026-10-31）
   tlData: { loading: false, error: null, doc: null, rows: [] },
                         // 题材龙头（rv-themes）：区间内全部龙头-日（tlFetch 按 relayRange 取）
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
@@ -875,6 +890,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   tlSort: { key: 'date', dir: -1 },   // 区间台账默认最新在前（同 relay/detail 的日期列）
   tlNarr: {},           // code → {narrative, questionsRaw}（懒拉；null=请求中）
   diebanEntries: [], diebanUi: { openKey: null },
+  riseEntries: [], riseUi: { openKey: null },
   slotEntries: [], relayEntries: [],
   // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
@@ -886,6 +902,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   bandRefreshTimer: null,
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   diebanFilter: { q: '', board: '', scope: 'neg', streak: '', draw: '' },
+  riseFilter: { q: '', board: '', scope: 'neg', streak: '' },
   relayFilter: { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' },
   // 判定明细行选中（2026-10-18）：点行 → 页头 KPI 卡跟随该日联动；null=用日期框当日
   relayFocus: null,
@@ -902,7 +919,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   pulse: { loading: false, error: null, api: null, view: 'candidates' },   // V2c 盘中红盘提示
   pulseTimer: null,
   labelSort: { key: 'rank', dir: 1 },
-  diebanSort: { key: 'pctChange', dir: 1 } };
+  diebanSort: { key: 'pctChange', dir: 1 },
+  riseSort: { key: 'pctChange', dir: -1 } };   // 上涨复盘默认涨幅最高在前（下跌复盘默认最弱在前）
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
@@ -1287,18 +1305,21 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels, band, dieban;
+  let series, slots, labels, band, dieban, rise;
   try {
-    [series, slots, labels, band, dieban] = await Promise.all([
+    [series, slots, labels, band, dieban, rise] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
       // 离线分带读数（fail-visible：缺失/损坏 → {ok:false,reason,hint}，页面显式标注未生成）
       jget('/api/hotlist-jev/relay-band').catch(e => ({ ok: false, degraded: true,
         reason: 'band_read_failed: ' + (e && e.message ? e.message : '?') })),
-      // 跌停复盘（负反馈名单）：读口异常同样不得静默当空页，带 reason 回填 banner
+      // 跌停复盘（下跌复盘，2026-10-31 更名）负反馈名单：读口异常同样不得静默当空页，带 reason 回填 banner
       jget('/api/hotlist-jev/dieban-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'dieban_read_failed: ' + (e && e.message ? e.message : '?') })),
+      // 上涨复盘（上涨名单）：读口异常同样不得静默当空页，带 reason 回填 banner
+      jget('/api/hotlist-jev/rise-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
+        reason: 'rise_read_failed: ' + (e && e.message ? e.message : '?') })),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -1329,11 +1350,12 @@ async function loadAll(){
   STATE.labels = labels;
   STATE.band = band;
   STATE.dieban = dieban;
+  STATE.rise = rise;
   bandRefreshSync();   // 接管后端正在跑的分带刷新任务（页面刷新/多标签/双击重入时不断链）
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderDieban();
+  renderRelayTab(); renderLabels(); renderDieban(); renderRise();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
@@ -3395,7 +3417,7 @@ function setLabelSort(key){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// 跌停复盘：负反馈名单（跌停 / 连跌 / 一字跌停 / 大跌 / 触板回撤）
+// 下跌复盘：负反馈名单（跌停 / 连跌 / 一字跌停 / 大跌 / 触板回撤）
 // 口径单一事实源 = 后端 services/jev/jev_dieban_review.py，页面只做展示与筛选：
 //   · 个股明细 = 全市场逐股跌停（market_daily_limit_down_stocks：EM > 快照 > 本地日线，
 //     一天一文档、逐行标来源）∪ 采集池（250 只热榜池）当日快照行 ∪ 同花顺大幅回撤池逐股；
@@ -3446,7 +3468,7 @@ function dbRenderBanner(D){
   const host = $('diebanBanner');
   if (!host) return;
   if (!D || D.ok === false){
-    if (window.sbLog) sbLog('error', '[跌停复盘] ' + ((D && D.reason) || '未知原因'));
+    if (window.sbLog) sbLog('error', '[下跌复盘] ' + ((D && D.reason) || '未知原因'));
     host.innerHTML = '';   // 2026-10-30 用户裁决：读口不可用横幅删除，状态栏单一出口
     return;
   }
@@ -3694,6 +3716,285 @@ function dbDetailHtml(e){
   </div>`;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 上涨复盘：上涨名单（涨幅>5% 未涨停 / 触板未封 / 连涨）
+// 口径单一事实源 = 后端 services/jev/jev_rise_review.py，页面只做展示与筛选：
+//   · 个股明细 = 全市场逐股（market_daily_rise_stocks：本地通达信日线重算，涨幅>5% 且
+//     收盘未封涨停、价格精确闸 0.005 元，一天一文档）∪ 采集池（250 只热榜池）当日快照行；
+//   · 全市场口径无外呼（该名单无东财池）；当日盘后首次读触发一次本地日线懒加载（1 次/日）；
+//   · 触板未封 = 盘中 high≈涨停价（±0.005 元）且收盘未封；缺高低价 → 未知不判否（--）；
+//   · 连涨 = 逐日回溯全市场上涨集合（回溯 10 交易日）；近3日涨幅/振幅不可算一律 '--'；
+//   · 主力净额只有采集池行带（全市场日线行无资金字段），KPI 只统计池内并显式披露。
+// 展示风格与字段对齐下跌复盘：KPI 条（可点筛选）+ 板块 chips + 筛选条 + 可排序表 + 行展开。
+// ═════════════════════════════════════════════════════════════════════════════
+const RS_SCOPE_CN = { neg: '上涨名单全部', rise: '涨幅>5%未涨停', strong: '涨幅>7%', streak: '连涨≥2',
+                     touch: '触板未封', up: '池内上涨', all: '全部个股' };
+const RS_SCOPE_PRED = {
+  neg: s => !!(s.rise || s.touchedLimitUp),
+  rise: s => !!s.rise,
+  strong: s => !!s.strong,
+  streak: s => (s.streak || 0) >= 2,
+  touch: s => !!s.touchedLimitUp,
+  // 「池内上涨」与 KPI 池口径一致（限定采集池来源；不限定会把全市场日线行全筛进来，
+  // 表行数远大于 KPI 数值，2026-10-31 review minor）
+  up: s => s.pctChange != null && s.pctChange > 0 && (s.sources || []).includes('pool'),
+  all: () => true,
+};
+const rsScopePool = (stocks, f) => (stocks || []).filter(RS_SCOPE_PRED[f.scope] || RS_SCOPE_PRED.neg);
+function rsMatches(s, f){
+  if (f.q){ const q = f.q.toLowerCase();
+    if (!String(s.code || '').toLowerCase().includes(q) && !String(s.name || '').toLowerCase().includes(q)) return false; }
+  if (f.board && (s.board || '未分板块') !== f.board) return false;
+  if (f.streak && (s.streak || 0) < Number(f.streak)) return false;
+  return true;
+}
+// 类型徽标：大涨/连涨/触板未封（同股可多标）；封涨停股不入名单，仅在「全部个股」范围里标灰
+function rsTypeBadges(s){
+  const out = [];
+  if (s.strong) out.push(`<span class="badge b-red">大涨</span>`);
+  if ((s.streak || 0) >= 2) out.push(`<span class="badge b-red">连涨${s.streak}</span>`);
+  if (s.touchedLimitUp) out.push(`<span class="badge b-amber">触板未封</span>`);
+  if (s.sealedLimitUp) out.push(`<span class="badge b-gray">涨停（不入名单）</span>`);
+  return out.length ? out.join(' ') : '<span class="badge b-gray">-</span>';
+}
+const rsSrcTxt = s => (s.sources || []).map(x => x === 'pool' ? '采集池快照'
+  : x === 'full_market' ? '全市场日线' : x).join(' + ') || '-';
+function rsEntryOf(s, i){
+  return { key: String(s.code || ('rs:' + i)), kind: 'rise',
+    label: (s.name || s.code || '?') + ' ' + (s.code || ''), doc: s };
+}
+function rsRenderBanner(D){
+  const host = $('riseBanner');
+  if (!host) return;
+  if (!D || D.ok === false){
+    if (window.sbLog) sbLog('error', '[上涨复盘] ' + ((D && D.reason) || '未知原因'));
+    host.innerHTML = '';   // 同下跌复盘 2026-10-30 用户裁决：读口不可用横幅删除，状态栏单一出口
+    return;
+  }
+  const msgs = [];
+  if (D.intraday) msgs.push(`盘中口径 · ${esc(D.slotTime || '')}（收盘后为 15:00 收盘口径；连涨/近3日基准仍取已收盘交易日）`);
+  const DEG_CN = { snapshot_frame: '当日无 half_hour 快照帧', snapshot_stock_rows: '该槽无采集池行',
+    full_market_rise: '全市场上涨逐股文档缺（未回填 / 当日未到 15:05 截点 / 日线覆盖不足；名单仅采集池口径）',
+    streak_lookback: '连涨回溯窗内缺 15:00 采集池行 → 连涨天数可能被截断（缺几日已在 reason 标注）',
+    rise_history: '上涨家数分位窗内缺逐日文档（缺几日已在 reason 标注）',
+    ret3d: '历史不足，近3日涨幅不可算' };
+  for (const d of (D.degraded || [])) msgs.push(DEG_CN[d.scope] || `${d.scope}: ${d.reason}`);
+  if (D.noData) msgs.push(D.reason || '当日无可用记录');
+  host.innerHTML = msgs.length
+    ? `<div class="banner amber"><span>⚠️</span><span>${msgs.map(esc).join(' ｜ ')}</span></div>`
+    : '';
+}
+function rsRenderKpi(D){
+  const p = D.pool || {}, fr = D.fullRise || {}, pos = D.positive || {};
+  const big = (D.stats || {}).biggestGain || {};
+  const stocks = D.stocks || [];
+  const f = STATE.riseFilter;
+  const fx = v => (v == null || !isFinite(v)) ? '--' : String(v);
+  const num = (v, d) => v == null ? '--' : (isFinite(v) ? Number(v).toFixed(d == null ? 2 : d) : '--');
+  const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const clickable = (k, v, sub, scope, title) => `<div class="kpi click${f.scope === scope ? ' on' : ''}"
+    title="点击筛选：${esc(title || k)}" onclick="rsScope('${scope}')"><div class="k">${k}</div>
+    <div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const pctTxt = fr.percentile == null ? '分位不可算'
+    : `${fr.percentile >= 0.8 ? '极高' : fr.percentile >= 0.6 ? '偏高' : fr.percentile <= 0.2 ? '极低' : fr.percentile <= 0.4 ? '偏低' : '中性'} ${Math.round(fr.percentile * 100)} 分位（${fr.historyDays || 0} 日同源）`;
+  const rowsTxt = fr.rowsMissing ? '逐股明细缺 · 名单仅采集池口径'
+    : fr.rowsCount != null ? `逐股 ${fr.rowsCount} 行 · ${esc(fr.rowsSourceLabel || '源未知')}`
+    : '逐股明细缺';
+  const countTitle = fr.fullMarketScope ? '上涨家数（全市场 >5% 未涨停）' : '上涨家数（口径未知）';
+  const countSub = `${rowsTxt} · 池内 ${fx(p.rise)} · ${esc(pctTxt)}`;
+  const touchAll = stocks.filter(s => s.touchedLimitUp).length;
+  const strongAll = stocks.filter(s => s.strong).length;
+  const top = pos.netInflowTop || null;
+  $('riseKpi').innerHTML =
+    clickable(countTitle, fr.count != null ? fx(fr.count) : fx(p.rise), countSub, 'rise')
+    + clickable('连涨≥2 天', fx(p.streak2), `最长 ${fx(p.maxStreak)} 天${p.maxStreakName ? ' · ' + esc(p.maxStreakName) : ''}（回溯 ${((D.stats || {}).streakLookback ?? '--')} 日：全市场逐股文档 ${((D.stats || {}).streakDays || {}).riseDocs ?? '--'} 日，槽覆盖 ${((D.stats || {}).streakDays || {}).slotDays ?? '--'}/${((D.stats || {}).streakDays || {}).priorDays ?? '--'}）`, 'streak')
+    + clickable('触板未封', fx(touchAll), `盘中 high≈涨停价且收盘未封 · 池内 ${fx(p.touch)} 只`, 'touch')
+    + clickable('涨幅>7%', fx(strongAll), `池内 ${fx(p.strong)} 只（名单基线 >5%）`, 'strong')
+    + clickable('池内上涨', fx(p.up), `池内涨跌比 ${fx(p.ratio)}（跌 ${fx(p.down)} / 平 ${fx(p.flat)} / 池 ${fx(p.rows)} 只）`, 'up')
+    + card('涨幅最高', big.name ? `<span style="color:var(--green)">${esc(big.name)}</span> ${num(big.pctChange)}%`
+        : '--', [big.board ? esc(big.board) : '', (big.sources || []).includes('pool') ? '' :
+        `（来源：${esc((big.sources || []).join('+'))}）`].filter(Boolean).join('')
+        || '当日名单内最高')
+    + card('主力净流入（池内）', pos.netInflowTotal == null ? '--' : fmtYi(pos.netInflowTotal) + ' 亿',
+        top ? `最大流入 ${esc(top.name || top.code)} ${fmtYi(top.mainNet)} 亿` : '全市场日线行无资金字段（仅池内）');
+}
+function rsRenderBoards(D){
+  const top = ((D.positive || {}).topBoards) || [];
+  const f = STATE.riseFilter;
+  $('riseBoardRow').innerHTML = '<span class="k">板块分布</span>'
+    + (top.length ? top.map(b => `<span class="chip${f.board === b.board ? ' on' : ''}"
+        title="点击筛选该板块" onclick="rsBoard('${js(b.board)}')">${esc(b.board)} ${b.count}</span>`).join('')
+      : '<span class="chip plain">无上涨股</span>');
+}
+function rsSel(label, key, opts){
+  const cur = STATE.riseFilter[key];
+  return `<select title="${esc(label)}筛选" onchange="rsSet('${key}', this.value)">`
+    + [['', label + ' · 全部']].concat(opts).map(([v, t]) =>
+        `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('') + '</select>';
+}
+function rsRenderBar(pool){
+  const bar = $('riseFilterBar');
+  const ae = document.activeElement;
+  // 输入/下拉聚焦时跳过重建（60s 轮询不夺焦点；状态由 STATE 持有）
+  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
+  const dist = {};
+  for (const s of pool){ const b = s.board || '未分板块'; dist[b] = (dist[b] || 0) + 1; }
+  const boards = Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([v]) => [v, v]);
+  $('riseFilterBar').innerHTML =
+    rsSel('范围', 'scope', Object.entries(RS_SCOPE_CN))
+    + `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.riseFilter.q)}" oninput="rsQ(this.value)">`
+    + rsSel('板块', 'board', boards)
+    + rsSel('连涨', 'streak', [['2', '≥2 天'], ['3', '≥3 天']])
+    + `<button onclick="rsClear()">清除筛选</button>`
+    + `<span class="cnt" id="riseCnt"></span>`;
+}
+function rsRenderRows(){
+  const D = STATE.rise || {};
+  const stocks = D.stocks || [], f = STATE.riseFilter, ui = STATE.riseUi;
+  const pool = rsScopePool(stocks, f);
+  const filtered = pool.filter(s => rsMatches(s, f));
+  const ds = STATE.riseSort;
+  const rkv = { code: x => x.code || '', name: x => x.name || '',
+    pctChange: x => x.pctChange == null ? -99 : x.pctChange,
+    streak: x => x.streak || 0,
+    ret3d: x => x.ret3d == null ? -999 : x.ret3d,
+    amplitudePct: x => x.amplitudePct == null ? -1 : x.amplitudePct,
+    turnoverRate: x => x.turnoverRate == null ? -1 : x.turnoverRate,
+    volumeRatio: x => x.volumeRatio == null ? -1 : x.volumeRatio,
+    mainNet: x => x.mainNet == null ? 0 : x.mainNet };
+  filtered.sort((a, b) => { const va = rkv[ds.key](a), vb = rkv[ds.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * ds.dir; });
+  STATE.riseEntries = filtered.map(rsEntryOf);
+  const cnt = $('riseCnt');
+  if (cnt) cnt.textContent = `${filtered.length} / ${stocks.length} 只`;
+  const ampCell = s => s.amplitudePct != null
+    ? `<span class="num" title="(最高−最低)/昨收（日线/快照同式；缺前收不可算）">${s.amplitudePct.toFixed(2)}%</span>` : '-';
+  const netCell = s => s.mainNet == null ? '-'
+    : `<span class="num" style="color:${s.mainNet > 0 ? 'var(--green)' : 'var(--muted)'}">${fmtYi(s.mainNet)}</span>`;
+  const rows = filtered.map((s, i) => {
+    const entry = STATE.riseEntries[i];
+    const open = ui.openKey === entry.key;
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('rise', '${js(entry.key)}')">
+      <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
+      <td>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${rsTypeBadges(s)}</td>
+      <td class="num" style="color:${(s.pctChange || 0) > 0 ? 'var(--green)' : 'var(--text)'}">${fmtPctChg(s.pctChange)}</td>
+      <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
+      <td class="num">${fmtPctChg(s.ret3d)}</td><td>${ampCell(s)}</td>
+      <td class="num">${s.turnoverRate == null ? '-' : s.turnoverRate.toFixed(2) + '%'}</td>
+      <td class="num">${s.volumeRatio == null ? '-' : s.volumeRatio.toFixed(2)}</td>
+      <td>${netCell(s)}</td><td style="font-size:12px;color:var(--muted2)">${esc(rsSrcTxt(s))}</td></tr>`
+      + (open ? `<tr class="lg-detail"><td colspan="12">${detailHtml(entry, 'rise')}</td></tr>` : '');
+  }).join('');
+  const th = (label, key) => `<th class="sortable" onclick="setRiseSort('${key}')">${label}${sortMark(ds, key)}</th>`;
+  $('riseTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th><th>板块</th><th>类型</th>${th('涨幅', 'pctChange')}${th('连涨', 'streak')}${th('近3日', 'ret3d')}${th('振幅', 'amplitudePct')}${th('换手', 'turnoverRate')}${th('量比', 'volumeRatio')}${th('主力净额(亿)', 'mainNet')}<th>来源</th></tr>`
+    + (rows || `<tr><td colspan="12" class="empty">无匹配个股（调整筛选条件）</td></tr>`);
+}
+function renderRise(){
+  const D = STATE.rise || {};
+  rsRenderBanner(D);
+  const stocks = (D && D.ok !== false && !D.noData) ? (D.stocks || []) : [];
+  if (!stocks.length){
+    $('riseKpi').innerHTML = ''; $('riseBoardRow').innerHTML = ''; $('riseFilterBar').innerHTML = '';
+    STATE.riseEntries = [];
+    $('riseHint').textContent = (D && (D.reason || (D.ok === false ? '读口不可用' : ''))) || '';
+    // 读失败不得谎称「当日无上涨」（同下跌复盘：ok=false 与 noData 语义不同）
+    $('riseTable').innerHTML = (D && D.ok === false)
+      ? '<tr><td class="empty">读口不可用：未取到名单（原因见页面提示与底部状态栏）</td></tr>'
+      : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股文档；见提示行）</td></tr>';
+    return;
+  }
+  const pool = rsScopePool(stocks, STATE.riseFilter);
+  const posN = (D.positive && D.positive.count != null) ? D.positive.count : pool.length;
+  const fr = D.fullRise || {};
+  $('riseHint').textContent = `${D.date || ''} · ${D.intraday ? '盘中口径 ' + (D.slotTime || '') : '收盘口径 15:00'}`
+    + ` · 池内 ${(D.pool || {}).rows} 只 · 上涨名单 ${posN} 只`
+    + (fr.rowsMissing ? ' · 全市场逐股缺（名单仅采集池口径）'
+       : ` · 全市场逐股 ${fr.rowsCount ?? '--'} 行（${fr.rowsSourceLabel || '源未知'}）`)
+    + ' · 点击行查看口径与原始字段';
+  rsRenderKpi(D);
+  rsRenderBoards(D);
+  rsRenderBar(pool);
+  rsRenderRows();
+}
+// 文本搜索只重渲染表体（筛选条不动，输入焦点不丢）
+function rsQ(v){ STATE.riseFilter.q = v; rsRenderRows(); }
+function rsSet(k, v){
+  STATE.riseFilter[k] = v;
+  const stocks = (STATE.rise || {}).stocks || [];
+  let pool = rsScopePool(stocks, STATE.riseFilter);
+  // 切换范围后若原板块在新池内不存在 → 选项退化「全部」而筛选仍生效 → 0 行假象（同下跌复盘）
+  if (STATE.riseFilter.board && !pool.some(x => (x.board || '') === STATE.riseFilter.board)){
+    STATE.riseFilter.board = '';
+    pool = rsScopePool(stocks, STATE.riseFilter);
+  }
+  rsRenderKpi(STATE.rise || {});
+  rsRenderBoards(STATE.rise || {});
+  rsRenderBar(pool);
+  rsRenderRows();
+}
+// KPI 卡点击切换范围；再点一次回「上涨名单全部」
+function rsScope(v){
+  const f = STATE.riseFilter;
+  f.scope = f.scope === v ? 'neg' : v;
+  rsSet('scope', f.scope);
+}
+function rsBoard(v){ const f = STATE.riseFilter; f.board = f.board === v ? '' : v; rsSet('board', f.board); }
+function rsClear(){
+  STATE.riseFilter = { q: '', board: '', scope: 'neg', streak: '' };
+  renderRise();
+}
+function setRiseSort(key){
+  const s = STATE.riseSort;
+  if (s.key === key) s.dir = -s.dir; else s.key = key, s.dir = -1;   // 默认涨幅最高/连涨最多在前
+  rsRenderRows();
+}
+// 行展开：派生读数（可核字段）+ 读口行 JSON。本页无模型调用，故只讲口径不讲 tokens/耗时。
+function rsDetailHtml(e){
+  const s = e.doc || {};
+  const num = v => (v == null || !isFinite(v)) ? null : +Number(v).toFixed(2);
+  const derived = {
+    '代码/名称': `${s.code || '--'} ${s.name || ''}`.trim(),
+    '板块': s.board || '未分板块',
+    '上涨判定': {
+      '涨幅>5% 且未封涨停': !!s.rise,
+      '收盘封涨停（不入名单）': s.sealedLimitUp == null ? null : !!s.sealedLimitUp,
+      '触板未封（盘中 high≈涨停价）': s.touchedLimitUp == null ? null : !!s.touchedLimitUp,
+      '涨停价': num(s.limitUpPrice),
+      '收盘/最新价': num(s.price),
+    },
+    '连涨': s.streak == null ? null : { '天数（含当日，逐日回溯全市场上涨集合）': s.streak },
+    '涨跌与量能': {
+      '涨跌幅%': num(s.pctChange),
+      '近3日累计涨幅%': num(s.ret3d),
+      '振幅%': num(s.amplitudePct),
+      '昨收': num(s.preClose),
+      '最高/最低': [num(s.high), num(s.low)],
+      '换手%': num(s.turnoverRate),
+      '量比': num(s.volumeRatio),
+    },
+    '资金': {
+      '主力净额（元）': num(s.mainNet),
+      '主力净占比%': num(s.mainNetRatio),
+      '成交额（元）': num(s.amount),
+    },
+    '数据来源': rsSrcTxt(s),
+  };
+  return `<div class="lg-card" onclick="event.stopPropagation()">
+    <div class="lg-head"><div class="lg-title">📈 ${esc(e.label)}</div>
+      <span class="lg-asof">${rsTypeBadges(s)} · 来源 ${esc(rsSrcTxt(s))}</span>
+      <div class="lg-toggle"><button onclick="lgCopy('rise', 'doc', event)">⧉ 复制读口行</button></div></div>
+    <div class="lg-panels" style="margin-top:10px">
+      <div class="lg-panel"><div class="lg-phead"><b>口径与读数</b><span class="st">派生字段（null=不可算，不补 0）</span></div>
+        <div class="lg-tree">${treeHtml(derived, '')}</div></div>
+      <div class="lg-panel"><div class="lg-phead"><b>读口行 JSON</b><span class="st">GET /api/hotlist-jev/rise-review</span></div>
+        <div class="lg-tree">${treeHtml(s, '')}</div></div>
+    </div>
+    <div class="lg-foot"><span><span class="k">上涨判定</span> <code>涨幅>5% 且 close≠limit_up_price（±0.005）</code></span>
+      <span><span class="k">全市场逐股</span> <code>market_daily_rise_stocks（本地通达信日线重算，一天一文档）</code></span>
+      <span><span class="k">采集池</span> <code>snapshot_stock_rows 15:00 half_hour</code></span></div>
+  </div>`;
+}
+
 // ---------- 明细存档：调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ----------
 // 数据事实：series/relay-index 读口整文档返回；slot/eod 存 questionsRaw+responseRaw(envelope)，
 // state 线上载荷=narrative 文本（jev_client POST body：{state, model, questions}）；
@@ -3812,15 +4113,20 @@ function entryResp(e){
   if (d.answers || d.scores) return { _note: 'responseRaw 未存档（旧文档）', answers: d.answers, scores: d.scores };
   return { _note: 'responseRaw 未存档' };
 }
-function lgUi(view){ return view === 'lab' ? STATE.labelUi : view === 'die' ? STATE.diebanUi : STATE.detailUi[view]; }
+function lgUi(view){ return view === 'lab' ? STATE.labelUi : view === 'die' ? STATE.diebanUi
+  : view === 'rise' ? STATE.riseUi : STATE.detailUi[view]; }
 function lgEntries(view){ return view === 'lab' ? STATE.labelEntries : view === 'die' ? STATE.diebanEntries
+  : view === 'rise' ? STATE.riseEntries
   : view === 'slot' ? STATE.slotEntries : STATE.relayEntries; }
 function lgAfter(view){ if (view === 'lab') renderLabels(); else if (view === 'die') renderDieban();
+  else if (view === 'rise') renderRise();
   else if (view === 'slot') renderSlots(); else renderRelayTab(); }
 function lgOpenEntry(view){ return (lgEntries(view) || []).find(x => x.key === lgUi(view).openKey) || null; }
 function detailHtml(e, view){
-  // 跌停复盘行展开（2026-10-20）：非模型调用日志 → 口径读数 + 读口行 JSON
+  // 下跌复盘行展开（2026-10-20）：非模型调用日志 → 口径读数 + 读口行 JSON
   if (view === 'die') return dbDetailHtml(e);
+  // 上涨复盘行展开（2026-10-31）：同上，口径与字段对齐下跌复盘
+  if (view === 'rise') return rsDetailHtml(e);
   // 懒拉失败：显式展示失败与重试入口，不静默回落到瘦行（§4.0 不得用空结果伪装缺失）
   if (e.docErr && view === 'relay'){
     return `<div class="lg-head"><div class="lg-title">⚠️ ${esc(e.label)} 完整存档拉取失败</div></div>
@@ -3925,14 +4231,15 @@ const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察'
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
                      ['detail', '连板情绪', '🗓️']];
 const NAV = [
-  {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['dieban', '跌停复盘', '📉']]},
+  {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['rise', '上涨复盘', '📈'], ['dieban', '下跌复盘', '📉']]},
   // KPL 行情子目录（2026-10-27 用户需求；2026-10-28 「精选板块」更名「板块行情」，页内增
   // 精选/行业页签）：精选 = 开盘啦板块强度排行实时/历史（含服务端 list_son 二级板块）；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
   {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩'], ['kpllhb', '龙虎榜', '🏆']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
-const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
+const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
+                    rise: ['上涨复盘'],
                     kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'], kpllhb: ['龙虎榜'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 

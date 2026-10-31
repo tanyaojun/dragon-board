@@ -1421,25 +1421,29 @@ def test_review_kpi_height_buckets_use_streak_not_space_boards(js: str):
         "streakOf 须保留 undefined→boards 回落（旧档/join 缺失不新增猜数）"
 
 
-# ── 2026-10-20 用户需求：新增【跌停复盘】页（样式与涨停复盘同源）─────────────────
+# ── 2026-10-20 用户需求：新增【跌停复盘】页；2026-10-31 页名更「下跌复盘」并新增【上涨复盘】页 ──
 def test_dieban_page_registered_like_limitup_review(html: str, js: str):
     """侧栏/面包屑/载入链/挂载点齐备，展示骨架与涨停复盘同源（KPI 条+板块 chips+筛选条+表）。"""
-    assert "['dieban', '跌停复盘'," in js, "侧栏须有【跌停复盘】入口"
-    assert "dieban: ['跌停复盘']" in js, "面包屑须含跌停复盘"
+    assert "['dieban', '下跌复盘'," in js, "侧栏须有【下跌复盘】入口"
+    assert "['rise', '上涨复盘'," in js, "侧栏须有【上涨复盘】入口"
+    assert "dieban: ['下跌复盘']" in js, "面包屑须含下跌复盘"
+    assert "rise: ['上涨复盘']" in js, "面包屑须含上涨复盘"
     assert 'id="tab-dieban"' in html, "须有 tab-dieban 区块"
     seg = html[html.index('id="tab-dieban"'):]
     seg = seg[: seg.index("</section>")]
-    for hook in ('class="page-head"', "<h2>跌停复盘</h2>", 'id="diebanBanner"',
+    for hook in ('class="page-head"', "<h2>下跌复盘</h2>", 'id="diebanBanner"',
                  'id="diebanHint"', 'id="diebanKpi"', 'id="diebanBoardRow"',
                  'id="diebanFilterBar"', 'id="diebanTable"'):
         assert hook in seg, f"跌停复盘页缺展示骨架：{hook}"
     assert 'class="kpi-strip" id="diebanKpi"' in seg, "KPI 条须复用涨停复盘的 kpi-strip 样式"
     assert 'class="lf-bar" id="diebanFilterBar"' in seg, "筛选条须复用 lf-bar 样式"
     load = _fn(js, "loadAll")
-    assert "/api/hotlist-jev/dieban-review" in load, "loadAll 须拉取跌停复盘读口"
-    assert "renderDieban()" in load, "loadAll 须触发跌停复盘重绘"
+    assert "/api/hotlist-jev/dieban-review" in load, "loadAll 须拉取下跌复盘读口"
+    assert "renderDieban()" in load, "loadAll 须触发下跌复盘重绘"
+    assert "/api/hotlist-jev/rise-review" in load, "loadAll 须拉取上涨复盘读口"
+    assert "renderRise()" in load, "loadAll 须触发上涨复盘重绘"
     # 读口失败不得静默当空页：catch 必须带 reason
-    assert "dieban_read_failed" in load
+    assert "dieban_read_failed" in load and "rise_read_failed" in load
 
 
 def test_dieban_page_fail_visible_banner(js: str):
@@ -1451,7 +1455,7 @@ def test_dieban_page_fail_visible_banner(js: str):
     banner = _fn(js, "dbRenderBanner")
     for key in ("ok === false", "intraday", "D.degraded", "noData"):
         assert key in banner, f"banner 缺 fail-visible 分支：{key}"
-    assert "sbLog('error', '[跌停复盘] " in banner, "读口不可用须进底部状态栏"
+    assert "sbLog('error', '[下跌复盘] " in banner, "读口不可用须进底部状态栏"
     assert "banner amber" not in banner.split('const msgs')[0], "读口不可用不得再渲染页内黄条"
     render = _fn(js, "renderDieban")
     assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
@@ -1462,6 +1466,36 @@ def test_dieban_page_fail_visible_banner(js: str):
     for key in ("full_market_count_disputed", "streak_lookback", "countDisputed"):
         assert key in (banner if key != "countDisputed" else _fn(js, "dbRenderKpi")),             f"新披露字段未被消费：{key}"
     assert "未落库" not in js, "页面/注释不得再称全市场逐股未落库（§1.2-5 展示须随结论同步）"
+
+
+def test_rise_page_registered_like_dieban_review(html: str, js: str):
+    """2026-10-31 用户需求：新增【上涨复盘】页（全市场涨幅>5% 未涨停；样式与下跌复盘同源）。
+
+    - 侧栏/面包屑/tab 区块/载入链/挂载点齐备；
+    - 行展开走 lgRow('rise') 通用链（STATE.riseUi/riseEntries），detailHtml 分支到 rsDetailHtml；
+    - 读口失败不得静默当空页（catch 带 reason + 状态栏）。
+    """
+    assert "['rise', '上涨复盘'," in js, "侧栏须有【上涨复盘】入口"
+    assert "rise: ['上涨复盘']" in js, "面包屑须含上涨复盘"
+    assert 'id="tab-rise"' in html, "须有 tab-rise 区块"
+    seg = html[html.index('id="tab-rise"'):]
+    seg = seg[: seg.index("</section>")]
+    for hook in ('class="page-head"', "<h2>上涨复盘</h2>", 'id="riseBanner"',
+                 'id="riseHint"', 'id="riseKpi"', 'id="riseBoardRow"',
+                 'id="riseFilterBar"', 'id="riseTable"'):
+        assert hook in seg, f"上涨复盘页缺展示骨架：{hook}"
+    assert 'class="kpi-strip" id="riseKpi"' in seg, "KPI 条须复用 kpi-strip 样式"
+    banner = _fn(js, "rsRenderBanner")
+    for key in ("ok === false", "intraday", "D.degraded", "noData"):
+        assert key in banner, f"rise banner 缺 fail-visible 分支：{key}"
+    assert "sbLog('error', '[上涨复盘] " in banner, "读口不可用须进底部状态栏"
+    render = _fn(js, "renderRise")
+    assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
+    assert "读口不可用：未取到名单" in render and "当日无任何可用原始记录" in render
+    detail = _fn(js, "detailHtml")
+    assert "rsDetailHtml" in detail, "detailHtml 须分支到上涨复盘行展开"
+    lg_entries = _fn(js, "lgEntries")
+    assert "STATE.riseEntries" in lg_entries, "行展开条目路由须含 rise"
 
 
 def test_dieban_scope_predicates_behaviour(js: str, tmp_path):
@@ -1733,7 +1767,7 @@ def test_banner_errors_routed_to_status_bar(js: str):
         body = _fn(js, fn_name)
         assert 'sbLog(' in body and tag in body, f"{fn_name} 未挂接状态栏（缺 {tag} 前缀）"
     # render 类错误分支（读口异常/降级）同样透出
-    for tag in ('[题材龙头]', '[跌停复盘]', '[板块节点]', '[盘中红盘]'):
+    for tag in ('[题材龙头]', '[下跌复盘]', '[上涨复盘]', '[板块节点]', '[盘中红盘]'):
         assert f"sbLog('error', '{tag}" in js or f"sbLog('warn', '{tag}" in js, f"{tag} 报错分支未挂状态栏"
 
 
