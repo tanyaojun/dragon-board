@@ -214,11 +214,28 @@ def load_theme_boards(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str
 
 
 def load_market_amount(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    """量能锚点（hotlist_sentiment EOD 档 metrics.comparison：今日/昨日池内成交额合计，同口径对比）。
+    """量能锚点：优先全市场口径（market_daily_amount 参考集合，TDX 综指单源），
+    参考集合缺日/读失败 → 回退池内口径（EOD 档 metrics.comparison 今日/昨日合计，同口径对比）。
 
-    全市场口径参考集合 market_daily_amount 需 TDX 节点回填（10-23 起缺、节点池暂不可用），
-    本 loader 用池内同口径比值（今日/昨日集合可比）；绝对值为池内口径，字段名如实标注。
+    回退带 caliber 标注（market/pool）：10-30 实测两口径方向可能相反（池内 -2% vs
+    全市场 +7.6%，池成分换手导致）——判据语义（量能维持=change1d<0）两口径通用，
+    但投喂必须让模型知道口径。
     """
+    try:
+        from backend.services.jev.jev_sentiment_compute import load_market_daily_amount_map
+
+        amount_map = load_market_daily_amount_map(db)
+        if str(date) in amount_map:
+            prior = [d for d in amount_map if d < str(date)]
+            if prior:
+                prev_date = max(prior)
+                today, yesterday = amount_map[str(date)], amount_map[prev_date]
+                change1d = round((today / yesterday - 1) * 100, 2) if yesterday else None
+                return ({"ok": True, "caliber": "market", "todayTurnover": today,
+                         "yesterdayTurnover": yesterday, "change1d": change1d,
+                         "prevDate": prev_date}, [])
+    except Exception:  # noqa: BLE001 — 全市场口径不可用静默回退池内（degraded 由池内分支登记）
+        pass
     try:
         doc = db["hotlist_sentiment"].find_one(
             {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
@@ -233,7 +250,7 @@ def load_market_amount(db: Any, date: str) -> tuple[dict[str, Any], list[dict[st
         degraded = [{"source": "market_amount", "reason": "turnover_missing",
                      "action": "corpus_absent"}]
         return {"ok": False, "reason": "turnover_missing"}, degraded
-    return {"ok": True, "todayTurnover": today, "yesterdayTurnover": yesterday,
+    return {"ok": True, "caliber": "pool", "todayTurnover": today, "yesterdayTurnover": yesterday,
             "change1d": cmp_.get("totalChange1d"),
             "mainNetAmount": (cmp_.get("today") or {}).get("mainNetAmount")}, []
 

@@ -29,9 +29,33 @@ HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
 SOURCE = "tdx_index_kline_backfill"
 
 
+def _apply_hq_setup_patch() -> None:
+    """tdxpy 握手身份 patch（与 python-bridge/main.py 2026-09-23 补丁同源，单一修法）：
+
+    TdxHq_API.setup() 默认连发 SetupCmd1/2/3，SetupCmd3 携带旧版客户端标识串会被
+    主站软拒绝（4 字节空响应 → 空 K 线）。只发 SetupCmd1+2 后行情/K线/指数正常。
+    本脚本 9-23 补丁时点未同步（2026-10-31 实测全池「空 K 线」的根因），此处补齐；
+    设 TDX_KEEP_TDXPY_SETUP3=1 可回退原始三连握手。
+    """
+    import os
+
+    if os.getenv("TDX_KEEP_TDXPY_SETUP3", "") in ("1", "true", "True"):
+        return
+    from tdxpy.hq import TdxHq_API
+    from tdxpy.parser.setup_commands import SetupCmd1, SetupCmd2
+
+    def _setup_without_legacy_identity(self):
+        SetupCmd1(self.client).call_api()
+        SetupCmd2(self.client).call_api()
+
+    TdxHq_API.setup = _setup_without_legacy_identity
+
+
 def fetch_amount_map() -> dict[str, float]:
     """TDX 综指日线 → {YYYY-MM-DD: 两市合计成交额元}；多节点探测直至可用。"""
     from mootdx.quotes import Quotes
+
+    _apply_hq_setup_patch()
 
     pool = json.loads(HOSTS_PATH.read_text(encoding="utf-8"))["candidates"]
     last_err: Exception | None = None

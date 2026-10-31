@@ -540,9 +540,33 @@ def test_load_eod_judge_and_theme_and_amount(monkeypatch):
     assert degraded == []
 
     amount, adeg = ops.load_market_amount(SentDb(doc), "2026-10-30")
-    assert amount["ok"] is True and amount["todayTurnover"] == 5322e8
+    assert amount["ok"] is True and amount["caliber"] == "pool"   # 无参考集合 → 回退池内口径
+    assert amount["todayTurnover"] == 5322e8
     assert amount["yesterdayTurnover"] == 5312e8 and amount["change1d"] == -2
     assert adeg == []
+
+    # 全市场口径优先（market_daily_amount 有当日 → market caliber；SentDb 无该集合 → 异常回退池内）
+    class MarketDb:
+        def __getitem__(self, name):
+            if name == "market_daily_amount":
+                return self
+
+            assert name == "hotlist_sentiment"
+            return self
+
+        def find_one(self, q):
+            return doc
+
+        def find(self, q=None, projection=None):
+            return [{"_id": "2026-10-30", "totalAmount": 16744.7e8},
+                    {"_id": "2026-10-29", "totalAmount": 15565.2e8},
+                    {"_id": "2026-10-28", "totalAmount": 14000e8}]
+
+    mk, mkdeg = ops.load_market_amount(MarketDb(), "2026-10-30")
+    assert mk == {"ok": True, "caliber": "market", "todayTurnover": 16744.7e8,
+                  "yesterdayTurnover": 15565.2e8, "change1d": 7.58,
+                  "prevDate": "2026-10-29"}
+    assert mkdeg == []
 
     p2, d2 = ops.load_eod_judge(SentDb({}), "d")
     assert p2 == {"ok": False, "reason": "eod_doc_missing"} and d2[0]["source"] == "eod_judge"
