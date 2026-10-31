@@ -4764,11 +4764,11 @@ const KPL = {
         sale: null, saleDate: '', saleMsg: '', saleLoading: false,   // view：rt=当日实时 | his=历史回看；tab：stock=个股 | sale=营业部（板块行情同款页签）
         selCode: '', seat: null, seatCode: '', seatDate: '', seatMsg: '', seatLatest: '',
         seatMode: 'stock', branch: null, branchName: '', branchDate: '', branchMsg: '',
-        day: null, dayDate: '', dayMsg: '',          // 东财全日席位：stocks 过滤集 / branches 名集
+        day: null, dayDate: '', dayMsg: '',          // 东财全日席位：净买入/总买卖增补 + 席位榜对照 + 行情/原因兜底底座
         board: null, boardDate: '', boardMsg: '',     // KPL GetStockList 实际上榜名单（当日左列表主源）
         sFilter: {q: '', mkt: ''}, sSort: {key: 'zf', dir: -1}},
   // selCode=个股页签选中股；seat=席位前五快照（个股模式）；seatMode=stock|branch（营业部页签反查）；
-  // day=东财全日席位按股聚合（左列表过滤集）；sFilter/sSort=个股列表搜索/筛选/排序（涨停复盘同款）
+  // day=东财全日席位按股聚合（净买入/总买卖增补+口径对照）；sFilter/sSort=个股列表搜索/筛选/排序（涨停复盘同款）
   // selCode=左列表选中个股；seat=席位前五快照（东财 lhb-seat-detail）；seatDate=席位已加载日期；
   // seatLatest=该股最近上榜日（空态提示用）
   lhbPoll: null,
@@ -5867,7 +5867,7 @@ function kplFmtVal(v, suf){
 async function kplLhbEnter(){
   kplLhbRefresh();
   if (!KPL.lhb.sale) kplLhbSaleLoad(kplLhbLhbDate());   // 营业部页签数据（首次进页即取）
-  kplLhbDayLoad(kplLhbLhbDate());          // 东财当日席位过滤集（个股页签默认仅上榜）
+  kplLhbDayLoad(kplLhbLhbDate());          // 东财当日席位（净买入/总买卖增补+席位榜对照）
   kplLhbBoardLoad(kplLhbLhbDate());        // KPL 实际上榜名单（当日左列表主源）
   if (!KPL.lhbPoll){
     KPL.lhbPoll = setInterval(() => {
@@ -6159,7 +6159,7 @@ function kplLhbBoardLoad(d){
     });
 }
 function kplLhbDayLoad(d){
-  // 东财全日席位按股聚合：左列表「仅上榜」过滤集；空态/失败不硬门禁（显注记显全部，fail-visible）
+  // 东财全日席位按股聚合：净买入/总买卖增补+席位榜对照+行情/原因兜底底座（原过滤职责已删）
   if (KPL.lhb.dayDate === d && (KPL.lhb.day || KPL.lhb.dayMsg)){ kplLhbStockListRender(); return; }
   KPL.lhb.day = null; KPL.lhb.dayDate = d; KPL.lhb.dayMsg = '';
   fetch('/api/market/lhb-day-detail?date=' + encodeURIComponent(d))
@@ -6202,7 +6202,7 @@ function kplLhbDateChange(){
   KPL.lhb.selCode = '';                    // 日期切换重置选中（stockListRender 回落首行）
   const date = kplLhbLhbDate();
   kplLhbSaleLoad(date);                    // 营业部页签跟日期
-  kplLhbDayLoad(date);                     // 东财当日席位过滤集跟日期
+  kplLhbDayLoad(date);                     // 东财当日席位增补/对照跟日期
   kplLhbBoardLoad(date);                   // KPL 实际上榜名单跟日期
   if (KPL.lhb.seatMode === 'branch' && KPL.lhb.branchName)
     kplLhbBranchLoad(date, KPL.lhb.branchName);   // 营业部反查跟日期

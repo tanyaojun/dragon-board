@@ -284,7 +284,8 @@ class LhbSeatDetailService:
         cache[key] = (time.monotonic(), value)
 
     async def get_day_seats(self, date: str) -> dict[str, Any]:
-        """全市场当日席位行（东财）：左列表「有席位上榜」过滤集 + 营业部反查数据底座。
+        """全市场当日席位行（东财）：左列表净买入/总买卖增补与「席位榜」口径对照 +
+        营业部反查数据底座（席位三态过滤已随读数入口修正删除，2026-10-30 用户裁决）。
 
         原始行与聚合结果同帧入缓存（day/dayrows 双 key），营业部反查不再二次打上游。
         """

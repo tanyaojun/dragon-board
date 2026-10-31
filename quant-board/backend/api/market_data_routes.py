@@ -305,7 +305,8 @@ async def lhb_seat_detail(code: str = "", date: str = ""):
 
 @router.get("/api/market/lhb-day-detail", response_model=None)
 async def lhb_day_detail(date: str = ""):
-    """东财龙虎榜：全市场当日席位行按股聚合（左列表「有席位上榜」过滤集）。
+    """东财龙虎榜：全市场当日席位行按股聚合（左列表净买入/总买卖增补 + 席位榜口径
+    对照；原「仅上榜」过滤职责已随主源改 GetStockList 实际名单删除，2026-10-30）。
 
     当日无数据（盘前/盘中未生成/非交易日）按日历日回看至最近有数据交易日，
     显式标注 requested_date/effective_date/note（fail-visible，不伪装当日数据）。

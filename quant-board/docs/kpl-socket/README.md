@@ -563,8 +563,9 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `GET /api/market/lhb-seat-dates?code=`、`GET /api/market/lhb-seat-detail?code=&date=`
   （:8000 本地处理 market_proxy/lhb_seat_detail，东财 datacenter-web，日期 10min/明细
   30min TTL；参数非法 422，上游异常 200+ok:false 结构化降级同 surge 模式）；
-  `GET /api/market/lhb-day-detail?date=`（全市场当日席位行按股聚合，左列表「仅上榜」
-  过滤集 + 营业部名集 + 证券名称表（RPT_DAILYBILLBOARD_DETAILSNEW 当日名单，
+  `GET /api/market/lhb-day-detail?date=`（全市场当日席位行按股聚合，左列表净买入/
+  总买卖增补 + 「席位榜」口径对照 + 行情/原因兜底底座 + 营业部名集 + 证券名称表
+  （RPT_DAILYBILLBOARD_DETAILSNEW 当日名单，
   席位报表不带证券名），分页拉全 ≤10 页）；`GET /api/market/lhb-branch-detail?date=&name=`
   （营业部反查：KPL 营业部名归一去公司后缀 + difflib≥0.6 模糊匹配东财席位行，
   按股聚合买卖明细，未命中返候选名）。
