@@ -1431,10 +1431,11 @@ def test_dieban_page_registered_like_limitup_review(html: str, js: str):
     assert 'id="tab-dieban"' in html, "须有 tab-dieban 区块"
     seg = html[html.index('id="tab-dieban"'):]
     seg = seg[: seg.index("</section>")]
-    for hook in ('class="page-head"', "<h2>下跌复盘</h2>", 'id="diebanBanner"',
+    for hook in ('class="page-head"', "<h2>下跌复盘</h2>",
                  'id="diebanHint"', 'id="diebanKpi"', 'id="diebanBoardRow"',
                  'id="diebanFilterBar"', 'id="diebanTable"'):
         assert hook in seg, f"跌停复盘页缺展示骨架：{hook}"
+    assert 'id="diebanBanner"' not in html, "横幅宿主须删除（降级走底部状态栏，2026-10-31 裁决）"
     assert 'class="kpi-strip" id="diebanKpi"' in seg, "KPI 条须复用涨停复盘的 kpi-strip 样式"
     assert 'class="lf-bar" id="diebanFilterBar"' in seg, "筛选条须复用 lf-bar 样式"
     load = _fn(js, "loadAll")
@@ -1453,10 +1454,11 @@ def test_dieban_page_fail_visible_banner(js: str):
     （dbRenderBanner 的 ok===false 分支改为 sbLog + 不渲染）；口径/降级说明条保留。
     """
     banner = _fn(js, "dbRenderBanner")
-    for key in ("ok === false", "intraday", "D.degraded", "noData"):
+    for key in ("ok === false", "D.degraded", "noData"):
         assert key in banner, f"banner 缺 fail-visible 分支：{key}"
-    assert "sbLog('error', '[下跌复盘] " in banner, "读口不可用须进底部状态栏"
-    assert "banner amber" not in banner.split('const msgs')[0], "读口不可用不得再渲染页内黄条"
+    assert "'[下跌复盘] '" in banner and "sbLog('error', tag" in banner, "读口不可用须进底部状态栏"
+    assert "sbLog('warn', tag + msgs.join" in banner, "降级原因须进底部状态栏（2026-10-31 裁决）"
+    assert "banner amber" not in banner and "innerHTML" not in banner, "页内不得再渲染任何横幅"
     render = _fn(js, "renderDieban")
     assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
     # 读口不可用 ≠ 当日无负反馈：两个空态文案必须分开（不得把读失败说成「无数据」）
@@ -1480,15 +1482,18 @@ def test_rise_page_registered_like_dieban_review(html: str, js: str):
     assert 'id="tab-rise"' in html, "须有 tab-rise 区块"
     seg = html[html.index('id="tab-rise"'):]
     seg = seg[: seg.index("</section>")]
-    for hook in ('class="page-head"', "<h2>上涨复盘</h2>", 'id="riseBanner"',
+    for hook in ('class="page-head"', "<h2>上涨复盘</h2>",
                  'id="riseHint"', 'id="riseKpi"', 'id="riseBoardRow"',
                  'id="riseFilterBar"', 'id="riseTable"'):
         assert hook in seg, f"上涨复盘页缺展示骨架：{hook}"
+    assert 'id="riseBanner"' not in html, "横幅宿主须删除（降级走底部状态栏，2026-10-31 裁决）"
     assert 'class="kpi-strip" id="riseKpi"' in seg, "KPI 条须复用 kpi-strip 样式"
     banner = _fn(js, "rsRenderBanner")
-    for key in ("ok === false", "intraday", "D.degraded", "noData"):
+    for key in ("ok === false", "D.degraded", "noData"):
         assert key in banner, f"rise banner 缺 fail-visible 分支：{key}"
-    assert "sbLog('error', '[上涨复盘] " in banner, "读口不可用须进底部状态栏"
+    assert "'[上涨复盘] '" in banner and "sbLog('error', tag" in banner, "读口不可用须进底部状态栏"
+    assert "sbLog('warn', tag + msgs.join" in banner, "降级原因须进底部状态栏（2026-10-31 裁决）"
+    assert "banner amber" not in banner and "innerHTML" not in banner, "页内不得再渲染任何横幅"
     render = _fn(js, "renderRise")
     assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
     assert "读口不可用：未取到名单" in render and "当日无任何可用原始记录" in render
@@ -1766,9 +1771,11 @@ def test_banner_errors_routed_to_status_bar(js: str):
     for fn_name, tag in routed.items():
         body = _fn(js, fn_name)
         assert 'sbLog(' in body and tag in body, f"{fn_name} 未挂接状态栏（缺 {tag} 前缀）"
-    # render 类错误分支（读口异常/降级）同样透出
-    for tag in ('[题材龙头]', '[下跌复盘]', '[上涨复盘]', '[板块节点]', '[盘中红盘]'):
+    # render 类错误分支（读口异常/降级）同样透出（下跌/上涨复盘用 tag 常量 + sbLog 变量调用）
+    for tag in ('[题材龙头]', '[板块节点]', '[盘中红盘]'):
         assert f"sbLog('error', '{tag}" in js or f"sbLog('warn', '{tag}" in js, f"{tag} 报错分支未挂状态栏"
+    for tag in ('[下跌复盘]', '[上涨复盘]'):
+        assert f"'{tag} '" in js and "sbLog('error', tag" in js, f"{tag} 报错分支未挂状态栏"
 
 
 def test_kpl_banner_only_errors_not_ok(js: str):

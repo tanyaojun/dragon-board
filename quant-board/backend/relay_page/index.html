@@ -592,7 +592,6 @@
     <div class="ph-line"></div>
     <div class="card">
       <h3>负反馈名单与口径汇总 <span class="hint" id="diebanHint"></span></h3>
-      <div id="diebanBanner"></div>
       <div class="kpi-strip" id="diebanKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="diebanBoardRow"></div>
       <div class="lf-bar" id="diebanFilterBar"></div>
@@ -606,7 +605,6 @@
     <div class="ph-line"></div>
     <div class="card">
       <h3>上涨名单与口径汇总 <span class="hint" id="riseHint"></span></h3>
-      <div id="riseBanner"></div>
       <div class="kpi-strip" id="riseKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="riseBoardRow"></div>
       <div class="lf-bar" id="riseFilterBar"></div>
@@ -3465,15 +3463,14 @@ function dbEntryOf(s, i){
     label: (s.name || s.code || '?') + ' ' + (s.code || ''), doc: s };
 }
 function dbRenderBanner(D){
-  const host = $('diebanBanner');
-  if (!host) return;
+  // 2026-10-31 用户裁决（延伸 10-30「读口不可用只进状态栏」）：页内不再打任何横幅，
+  // 读口不可用/降级/无数据统一走底部状态栏单一出口；口径说明只留在提示行（renderDieban hint）。
+  const tag = '[下跌复盘] ';
   if (!D || D.ok === false){
-    if (window.sbLog) sbLog('error', '[下跌复盘] ' + ((D && D.reason) || '未知原因'));
-    host.innerHTML = '';   // 2026-10-30 用户裁决：读口不可用横幅删除，状态栏单一出口
+    if (window.sbLog) sbLog('error', tag + ((D && D.reason) || '未知原因'));
     return;
   }
   const msgs = [];
-  if (D.intraday) msgs.push(`盘中口径 · ${esc(D.slotTime || '')}（收盘后为 15:00 收盘口径；连跌/近3日基准仍取已收盘交易日）`);
   const DEG_CN = { ths_drawdown_pool: '同花顺大幅回撤池不可用（回撤逐股缺失）',
     snapshot_frame: '当日无 half_hour 快照帧', snapshot_stock_rows: '该槽无采集池行',
     full_market_limit_down: '全市场跌停家数降级为采集池口径',
@@ -3487,9 +3484,7 @@ function dbRenderBanner(D){
   if (fmB.rowsTruncated) msgs.push(`全市场逐股已截断（源自报 ${fmB.rowsDocCount ?? '--'} 家，仅返回 ${fmB.rowsCount ?? '--'} 行；家数以自报数为准，行数为实际可用名单）`);
   if (fmB.rowsBad > 0) msgs.push(`全市场逐股坏行 ${fmB.rowsBad} 条已跳过（不阻断其余行）`);
   if (D.noData) msgs.push(D.reason || '当日无可用记录');
-  host.innerHTML = msgs.length
-    ? `<div class="banner amber"><span>⚠️</span><span>${msgs.map(esc).join(' ｜ ')}</span></div>`
-    : '';
+  if (msgs.length && window.sbLog) sbLog('warn', tag + msgs.join(' ｜ '));
 }
 function dbRenderKpi(D){
   const p = D.pool || {}, fm = D.fullMarket || {}, dd = D.drawdown || {};
@@ -3614,8 +3609,8 @@ function renderDieban(){
     $('diebanHint').textContent = (D && (D.reason || (D.ok === false ? '读口不可用' : ''))) || '';
     // 读失败不得谎称「当日无负反馈」（review minor：ok=false 与 noData 语义不同）
     $('diebanTable').innerHTML = (D && D.ok === false)
-      ? '<tr><td class="empty">读口不可用：未取到名单（原因见上方横幅）</td></tr>'
-      : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股 / 无回撤池逐股；见横幅）</td></tr>';
+      ? '<tr><td class="empty">读口不可用：未取到名单（原因见底部状态栏）</td></tr>'
+      : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股 / 无回撤池逐股；降级原因见底部状态栏）</td></tr>';
     return;
   }
   const pool = dbScopePool(stocks, STATE.diebanFilter);
@@ -3764,15 +3759,14 @@ function rsEntryOf(s, i){
     label: (s.name || s.code || '?') + ' ' + (s.code || ''), doc: s };
 }
 function rsRenderBanner(D){
-  const host = $('riseBanner');
-  if (!host) return;
+  // 2026-10-31 用户裁决：与下跌复盘同规——页内不打任何横幅，读口不可用/降级/无数据
+  // 统一走底部状态栏单一出口；口径说明只留在提示行（renderRise hint）。
+  const tag = '[上涨复盘] ';
   if (!D || D.ok === false){
-    if (window.sbLog) sbLog('error', '[上涨复盘] ' + ((D && D.reason) || '未知原因'));
-    host.innerHTML = '';   // 同下跌复盘 2026-10-30 用户裁决：读口不可用横幅删除，状态栏单一出口
+    if (window.sbLog) sbLog('error', tag + ((D && D.reason) || '未知原因'));
     return;
   }
   const msgs = [];
-  if (D.intraday) msgs.push(`盘中口径 · ${esc(D.slotTime || '')}（收盘后为 15:00 收盘口径；连涨/近3日基准仍取已收盘交易日）`);
   const DEG_CN = { snapshot_frame: '当日无 half_hour 快照帧', snapshot_stock_rows: '该槽无采集池行',
     full_market_rise: '全市场上涨逐股文档缺（未回填 / 当日未到 15:05 截点 / 日线覆盖不足；名单仅采集池口径）',
     streak_lookback: '连涨回溯窗内缺 15:00 采集池行 → 连涨天数可能被截断（缺几日已在 reason 标注）',
@@ -3780,9 +3774,7 @@ function rsRenderBanner(D){
     ret3d: '历史不足，近3日涨幅不可算' };
   for (const d of (D.degraded || [])) msgs.push(DEG_CN[d.scope] || `${d.scope}: ${d.reason}`);
   if (D.noData) msgs.push(D.reason || '当日无可用记录');
-  host.innerHTML = msgs.length
-    ? `<div class="banner amber"><span>⚠️</span><span>${msgs.map(esc).join(' ｜ ')}</span></div>`
-    : '';
+  if (msgs.length && window.sbLog) sbLog('warn', tag + msgs.join(' ｜ '));
 }
 function rsRenderKpi(D){
   const p = D.pool || {}, fr = D.fullRise || {}, pos = D.positive || {};
@@ -3899,8 +3891,8 @@ function renderRise(){
     $('riseHint').textContent = (D && (D.reason || (D.ok === false ? '读口不可用' : ''))) || '';
     // 读失败不得谎称「当日无上涨」（同下跌复盘：ok=false 与 noData 语义不同）
     $('riseTable').innerHTML = (D && D.ok === false)
-      ? '<tr><td class="empty">读口不可用：未取到名单（原因见页面提示与底部状态栏）</td></tr>'
-      : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股文档；见提示行）</td></tr>';
+      ? '<tr><td class="empty">读口不可用：未取到名单（原因见底部状态栏）</td></tr>'
+      : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股文档；降级原因见底部状态栏）</td></tr>';
     return;
   }
   const pool = rsScopePool(stocks, STATE.riseFilter);
