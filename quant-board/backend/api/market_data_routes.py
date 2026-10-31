@@ -6,6 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from backend.market_proxy.concepts import get_concept_map_service
+from backend.api.lhb_fallback import walk_back
 from backend.market_proxy.hotlists import (
     GET_PLATFORMS,
     POST_PLATFORMS,
@@ -15,6 +16,7 @@ from backend.market_proxy.indices import get_market_overview_service
 from backend.market_proxy.limitup import get_limitup_service
 from backend.market_proxy.lhb_seat_detail import (
     LhbSeatParamError,
+    LhbSeatUpstreamError,
     get_lhb_seat_service,
 )
 from backend.market_proxy.longhu import get_longhu_service
@@ -303,9 +305,24 @@ async def lhb_seat_detail(code: str = "", date: str = ""):
 
 @router.get("/api/market/lhb-day-detail", response_model=None)
 async def lhb_day_detail(date: str = ""):
-    """东财龙虎榜：全市场当日席位行按股聚合（左列表「有席位上榜」过滤集）。"""
+    """东财龙虎榜：全市场当日席位行按股聚合（左列表「有席位上榜」过滤集）。
+
+    当日无数据（盘前/盘中未生成/非交易日）按日历日回看至最近有数据交易日，
+    显式标注 requested_date/effective_date/note（fail-visible，不伪装当日数据）。
+    """
+
+    async def _fetch(d: str):
+        try:
+            return await get_lhb_seat_service().get_day_seats(d)
+        except LhbSeatUpstreamError as exc:
+            # 东财对无数据日期（周末/节假日/未生成）返回空响应体并抛上游异常——
+            # 转译为空态继续回看；真实网络/限频故障仍走 degraded 快速失败
+            if "返回数据为空" in str(exc):
+                return {"ok": False, "date": d, "stocks": [], "branches": []}
+            raise
+
     try:
-        payload = await get_lhb_seat_service().get_day_seats(date)
+        payload = await walk_back(date, _fetch, lambda p: not (p.get("stocks") or []))
     except LhbSeatParamError as exc:
         return JSONResponse(status_code=422, content={"ok": False, "reason": str(exc)})
     except Exception as exc:

@@ -466,3 +466,41 @@ def test_lhb_stock_board_restored_routes(client, monkeypatch):
     assert body["rows"][0]["code"] == "603696"
     assert body["rows"][0]["buy_in"] == "121003701.36"       # 元原样不缩放
     assert body["rows"][0]["increase_amount"] == "10.01%"
+
+
+def test_lhb_day_fallback_routes(client, monkeypatch):
+    """当日无数据回退（2026-10-30 用户裁决）：空日逐日历日回看至上个有数据日，显式标注。"""
+    from backend.services import kpl_lhb_sale as sale_svc
+    # 2026-11-01（周日）/10-31（周六）空，10-30 有数据
+    data = {"errcode": "0", "Time": "2026-10-30", "Total": 1, "list": [
+        {"ID": "000678", "Name": "襄阳轴承", "BuyIn": "-134504061",
+         "Turnover": "3224592082", "IncreaseAmount": "-3.57%"}]}
+
+    def fake_stock_list(date):
+        assert isinstance(date, str) and date >= "2026-10-21"   # 回看不越过 10 日上限
+        return data if date == "2026-10-30" else {"errcode": "0", "Time": date,
+                                                  "Total": 0, "list": []}
+
+    monkeypatch.setattr(sale_svc, "fetch_lhb_stock_list", fake_stock_list)
+    r = client.get("/api/kpl/lhb-stock-board?date=2026-11-01")
+    body = r.json()
+    assert r.status_code == 200 and body["rows"]
+    assert body["effective_date"] == "2026-10-30" and body["requested_date"] == "2026-11-01"
+    assert "已回退" in body["note"]
+
+    def fake_sale(date, type_=0):
+        return data if date == "2026-10-30" else {"errcode": "0", "Time": date,
+                                                  "Total": 0, "list": []}
+
+    monkeypatch.setattr(sale_svc, "fetch_lhb_sale", fake_sale)
+    r = client.get("/api/kpl/lhb-sale?date=2026-11-01")
+    body = r.json()
+    assert r.status_code == 200 and body["rows"][0]["name"] == "襄阳轴承"
+    assert body["effective_date"] == "2026-10-30" and "已回退" in body["note"]
+
+    # 回看 10 日全空：不伪装，显式注明未回退
+    monkeypatch.setattr(sale_svc, "fetch_lhb_stock_list",
+                        lambda date: {"errcode": "0", "Time": date, "Total": 0, "list": []})
+    r = client.get("/api/kpl/lhb-stock-board?date=2020-01-01")
+    body = r.json()
+    assert r.status_code == 200 and body["rows"] == [] and "均为空" in body["note"]

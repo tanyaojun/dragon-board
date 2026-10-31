@@ -260,6 +260,9 @@ async def test_routes_contract(monkeypatch: pytest.MonkeyPatch):
                 raise LhbSeatParamError("date 非法")
             if date == "boom":
                 raise LhbSeatUpstreamError("上游挂了")
+            if date == "2026-10-28":   # 仅供回退测试：10-29/10-30 空，10-28 有数据
+                return {"ok": True, "date": date, "stocks": [{"code": "600519"}],
+                        "branches": ["华泰证券股份有限公司总部"]}
             return {"ok": True, "date": date, "stocks": [], "branches": []}
 
         async def get_branch_seats(self, date, name):
@@ -283,8 +286,14 @@ async def test_routes_contract(monkeypatch: pytest.MonkeyPatch):
     assert degraded.status_code == 200 and degraded.json()["degraded"] is True
     dates = c.get("/api/market/lhb-seat-dates", params={"code": "000788"})
     assert dates.status_code == 200 and dates.json()["dates"] == ["2022-03-15"]
-    day = c.get("/api/market/lhb-day-detail", params={"date": "2026-10-30"})
+    day = c.get("/api/market/lhb-day-detail", params={"date": "2020-01-01"})
     assert day.status_code == 200 and day.json()["stocks"] == []
+    assert "未回退" in day.json()["note"]          # 回看 10 日均空：显式注明不伪装
+    fb = c.get("/api/market/lhb-day-detail", params={"date": "2026-10-30"})
+    assert fb.status_code == 200 and fb.json()["effective_date"] == "2026-10-28"
+    assert fb.json()["requested_date"] == "2026-10-30"
+    assert "已回退" in fb.json()["note"]           # 当日无数据回退显式标注（2026-10-30 用户裁决）
+    assert fb.json()["stocks"] == [{"code": "600519"}]
     day_bad = c.get("/api/market/lhb-day-detail", params={"date": "bad-day"})
     assert day_bad.status_code == 422
     day_boom = c.get("/api/market/lhb-day-detail", params={"date": "boom"})

@@ -568,6 +568,13 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   席位报表不带证券名），分页拉全 ≤10 页）；`GET /api/market/lhb-branch-detail?date=&name=`
   （营业部反查：KPL 营业部名归一去公司后缀 + difflib≥0.6 模糊匹配东财席位行，
   按股聚合买卖明细，未命中返候选名）。
+  **当日无数据回退（2026-10-30 用户裁决，`backend/api/lhb_fallback.py`）**：
+  lhb-stock-board / lhb-sale / lhb-day-detail 三读口空态时按日历日回看至最近有数据
+  交易日（≤10 日，跨长假显式指定历史日期），显式标注 requested_date/effective_date/
+  note（不伪装当日数据，fail-visible）；东财周末/未生成空响应抛上游异常已转译为
+  空态继续回看，真实网络/限频故障仍 degraded 快速失败；东财 day 空日不入缓存
+  （榜 17:30 生成后立即可见）；列表计数行显「榜日期 X（已回退）」，右栏席位前五/
+  营业部反查跟实际数据日。
 - :8008 relay 页「KPL 行情 → 龙虎榜🏆」页签（**2026-10-30 二次改版**，用户需求）：
   **左=龙虎榜控件（个股/营业部页签切换，板块行情精选/行业同款）/
   右=席位前五（东财）**——个股页签：当日实时=**GetStockList 实际上榜名单**（2112 预测

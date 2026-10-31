@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from backend.services import kpl_ranking_service
 from backend.services.kpl_ranking_service import KplRankingError
+from backend.api.lhb_fallback import walk_back
 
 router = APIRouter(prefix="/api/kpl", tags=["kpl-socket"])
 
@@ -203,16 +204,18 @@ async def lhb_sale(date: str = "", type_: int = 0) -> JSONResponse:
         return JSONResponse(status_code=422, content={
             "ok": False, "degraded": True, "reason": "missing_date",
             "note": "必传 date=YYYY-MM-DD（营业部榜按日拉取，无默认回看）"})
+
+    def _fetch(d: str):
+        return lhb_sale_svc.parse_lhb_sale(lhb_sale_svc.fetch_lhb_sale(d, type_))
+
     try:
-        raw = lhb_sale_svc.fetch_lhb_sale(date, type_)
+        parsed = await walk_back(date, _fetch, lambda p: not p["rows"])
     except Exception as exc:
         return JSONResponse(status_code=502, content={
             "ok": False, "degraded": True, "reason": "upstream_error",
             "note": str(exc)[:200]})
-    parsed = lhb_sale_svc.parse_lhb_sale(raw)
     if not parsed["rows"]:
-        parsed["note"] = ("该日期营业部榜为空（盘前/盘中查当日属正常：榜约 17:00 盘后生成；"
-                          "非交易日亦空），非降级")
+        parsed["note"] = "该日期及回看 10 日营业部榜均为空（盘前/盘中查当日属正常：榜约 17:00 盘后生成；非交易日亦空），非降级"
     return JSONResponse(content=parsed)
 
 
@@ -221,7 +224,7 @@ async def lhb_sale(date: str = "", type_: int = 0) -> JSONResponse:
 # 原先用 2112 预测池 30 只被席位过滤剩 17 属读数入口错误）；/lhb-agency 保持删除
 # （服务层 GetStockList/GetAgencyListV2 fetch/parse 保留，jev_lhb_ammo 直用）。
 @router.get("/lhb-stock-board")
-def lhb_stock_board(date: str = "") -> JSONResponse:
+async def lhb_stock_board(date: str = "") -> JSONResponse:
     """营业部个股榜读口（GetStockList，applhb 域）：当日实际上榜名单（KPL App 龙虎榜同源）。
 
     合同同 lhb_sale（README §13）：同步 def + 上游 30s TTL；缺 date 422；
@@ -233,13 +236,19 @@ def lhb_stock_board(date: str = "") -> JSONResponse:
         return JSONResponse(status_code=422, content={
             "ok": False, "degraded": True, "reason": "missing_date",
             "note": "必传 date=YYYY-MM-DD（个股榜按日拉取，无默认回看）"})
+
+    def _fetch(d: str):
+        return lhb_sale_svc.parse_lhb_stock_list(lhb_sale_svc.fetch_lhb_stock_list(d))
+
     try:
-        raw = lhb_sale_svc.fetch_lhb_stock_list(date)
+        parsed = await walk_back(date, _fetch, lambda p: not p["rows"])
     except Exception as exc:
         return JSONResponse(status_code=502, content={
             "ok": False, "degraded": True, "reason": "upstream_error",
             "note": str(exc)[:200]})
-    return JSONResponse(content=lhb_sale_svc.parse_lhb_stock_list(raw))
+    if not parsed["rows"]:
+        parsed["note"] = "该日期及回看 10 日上榜名单均为空（~17:00 盘后生成/非交易日，非降级）"
+    return JSONResponse(content=parsed)
 
 
 @router.get("/daban-list-history")

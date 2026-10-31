@@ -6088,6 +6088,10 @@ function kplLhbStockListRender(){
   const cnt = $('kplLhbSCnt');
   if (cnt) cnt.textContent = rows.length + ' / ' + all.length + ' 只'
     + (dayCodes && dayCodes.size ? ' · 席位榜 ' + dayCodes.size + ' 只' : '')
+    + (KPL.lhb.board && KPL.lhb.board.effective_date
+      ? ' · 榜日期 ' + KPL.lhb.board.effective_date
+        + (KPL.lhb.board.effective_date !== KPL.lhb.board.requested_date ? '（已回退）' : '')
+      : '')
     + (seatNote ? ' · ' + seatNote : '');
   if (changed && KPL.lhb.selCode) kplLhbSelectStock(KPL.lhb.selCode);   // 自动选首行 → 触发席位前五加载
 }
@@ -6096,14 +6100,17 @@ function kplLhbSelectStock(code){
   KPL.lhb.seatMode = 'stock';                       // 个股页签选中 → 席位前五个股模式
   for (const tr of $('kplLhbStockTable').querySelectorAll('tr[data-code]'))
     tr.classList.toggle('on', tr.getAttribute('data-code') === KPL.lhb.selCode);
-  kplLhbSeatLoad(KPL.lhb.selCode, kplLhbLhbDate());   // 右栏席位前五跟选中股+当前榜日期
+  // 榜日期优先取名单实际数据日（当日无数据已回退时，右栏跟回退日一致，2026-10-30 用户裁决）
+  const eff = (KPL.lhb.board && KPL.lhb.board.effective_date) || kplLhbLhbDate();
+  kplLhbSeatLoad(KPL.lhb.selCode, eff);   // 右栏席位前五跟选中股+当前榜日期
 }
 function kplLhbSelectBranch(name){
   KPL.lhb.branchName = String(name);
   KPL.lhb.seatMode = 'branch';                      // 营业部页签选中 → 右栏反查该营业部当日买卖个股
   for (const tr of $('kplLhbSaleTable').querySelectorAll('tr[data-name]'))
     tr.classList.toggle('on', tr.getAttribute('data-name') === KPL.lhb.branchName);
-  kplLhbBranchLoad(kplLhbLhbDate(), KPL.lhb.branchName);
+  const eff = (KPL.lhb.sale && KPL.lhb.sale.effective_date) || kplLhbLhbDate();
+  kplLhbBranchLoad(eff, KPL.lhb.branchName);
 }
 async function kplLhbBranchLoad(d, name){
   KPL.lhb.branchDate = d; KPL.lhb.branchMsg = '';

@@ -349,8 +349,14 @@ class LhbSeatDetailService:
             cached = self._cache_get(self._cache, f"day:{day}", self._detail_ttl)
             if cached is not None:
                 return cached   # 并发重复拉取，以先入者为准
-            self._cache_put(self._cache, f"day:{day}", out)
-            self._cache_put(self._cache, f"dayrows:{day}", raw_rows)
+            if stocks:
+                # 空日不入缓存（2026-10-30 回退裁决配套）：榜约 17:30 盘后生成，
+                # 缓存空态会遮住刚生成的数据；回退探测由路由层 walk_back 负责
+                self._cache_put(self._cache, f"day:{day}", out)
+                self._cache_put(self._cache, f"dayrows:{day}", raw_rows)
+        if not stocks:
+            out = {**out, "note": ("该日期无上榜席位数据（盘前/盘中查当日属正常：榜约 17:30 "
+                                   "盘后生成；非交易日亦空），非降级")}
         return out
 
     async def get_branch_seats(self, date: str, branch_name: str) -> dict[str, Any]:
