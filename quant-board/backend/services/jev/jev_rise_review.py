@@ -32,9 +32,10 @@ import time
 from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID, percentile_fraction
-from backend.core.limit_rules import limit_up_price
+from backend.core.limit_rules import is_limit_down_pct, limit_up_price
 from backend.operations import market_rise_pool as rp
 from backend.services.jev import jev_dieban_review as _die
+from backend.services.jev.shape_types import shape_fields
 
 SNAPSHOT_TYPE = _die.SNAPSHOT_TYPE
 CLOSE_SLOT = _die.CLOSE_SLOT
@@ -251,6 +252,14 @@ def collect_rise_review(db: Any, date: str,
         streak[code] = count
     for code, s in stocks.items():
         s["streak"] = streak.get(code) if s.get("rise") else None
+
+    # ── 日线形态分型（2026-10-31 用户裁决：游资复盘口径，shape_types 单一实现）──
+    # 封板股（收盘涨停/跌停）shape=None，由既有徽标表达；触板事实用快照已算值
+    for s in stocks.values():
+        s.update(shape_fields(s["code"], s["pctChange"], s["price"], s["preClose"],
+                              s["high"], s["low"],
+                              sealed_down=is_limit_down_pct(s["pctChange"], s["code"]),
+                              touched=s.get("touchedLimitUp")))
 
     # ── 全市场上涨家数分位（同源 = 本地日线；缺文档日剔除并披露）────────────────
     history_dates = prior[-HISTORY_DAYS:]

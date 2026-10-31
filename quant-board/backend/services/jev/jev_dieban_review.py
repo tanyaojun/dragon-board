@@ -60,6 +60,7 @@ from backend.operations.market_dieban_pool import (
     rows_for_date,
     source_label,
 )
+from backend.services.jev.shape_types import shape_fields
 
 SNAPSHOT_TYPE = "half_hour"
 CLOSE_SLOT = "15:00"
@@ -484,6 +485,12 @@ def collect_dieban_review(db: Any, date: str,
             if "ths_drawdown" not in stock["sources"]:
                 stock["sources"] = stock["sources"] + ["ths_drawdown"]
             stock["ths"] = _compact_ths_item(item)
+
+    # ── 日线形态分型（2026-10-31 用户裁决：游资复盘口径，shape_types 单一实现）──
+    # 封板股（收盘跌停名单/封涨停）shape=None，由既有跌停/一字徽标表达；触板事实按日线 high 自算
+    for s in stocks.values():
+        s.update(shape_fields(s["code"], s["pctChange"], s["price"], s["preClose"],
+                              s["high"], s["low"], sealed_down=bool(s.get("limitDown"))))
 
     # ── 全市场跌停家数（同源分位；跨源存疑日剔除出分位窗并披露）────────────────
     history_all = (reference_counts(db, prior[-HISTORY_DAYS:], full_source)

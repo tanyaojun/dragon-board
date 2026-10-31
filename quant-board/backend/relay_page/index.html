@@ -3471,7 +3471,7 @@ function dbMatches(s, f){
   if (f.draw && !(s.maxDrawdownPct != null && s.maxDrawdownPct >= Number(f.draw))) return false;
   return true;
 }
-// 类型徽标：跌停/一字/连跌/大跌/回撤（同股可多标，不重复报跌停与大跌）
+// 类型徽标：跌停/一字/连跌/大跌/回撤 + 游资复盘形态类型（同股可多标，不重复报跌停与大跌）
 function dbTypeBadges(s){
   const out = [];
   if (s.limitDown) out.push(`<span class="badge b-red">跌停</span>`);
@@ -3479,6 +3479,7 @@ function dbTypeBadges(s){
   if ((s.streak || 0) >= 2) out.push(`<span class="badge b-red">连跌${s.streak}</span>`);
   if (s.deepDrop && !s.limitDown) out.push(`<span class="badge b-amber">大跌</span>`);
   if (s.maxDrawdownPct != null) out.push(`<span class="badge b-amber">触板回撤</span>`);
+  if (s.shape) out.push(`<span class="badge ${SHAPE_TYPE_CLS[s.shape]}" title="游资复盘形态（振幅综合判断，日线近似口径）">${SHAPE_TYPE_CN[s.shape]}</span>`);
   return out.length ? out.join(' ') : '<span class="badge b-gray">-</span>';
 }
 const dbSrcTxt = s => (s.sources || []).map(x => x === 'pool' ? '采集池快照'
@@ -3706,6 +3707,11 @@ function dbDetailHtml(e){
       '触板后回撤%（THS 回撤池）': num(s.maxDrawdownPct),
       '日内回撤%（当日最高→最新）': num(s.intradayDrawdownPct),
     },
+    '形态（游资复盘口径，日线近似）': s.shape == null ? null : {
+      '形态类型': SHAPE_TYPE_CN[s.shape] || s.shape,
+      '盘中最高涨幅%': num(s.highPct),
+      '收盘位置（0=收最低 1=收最高）': num(s.closePos),
+    },
     '涨跌与量能': {
       '涨跌幅%': num(s.pctChange),
       '近3日累计跌幅%': num(s.ret3d),
@@ -3769,13 +3775,19 @@ function rsMatches(s, f){
   if (f.streak && (s.streak || 0) < Number(f.streak)) return false;
   return true;
 }
-// 类型徽标：大涨/连涨/触板未封（同股可多标）；封涨停股不入名单，仅在「全部个股」范围里标灰
+// 类型徽标：大涨/连涨/形态类型（同股可多标）；封涨停股不入名单，仅在「全部个股」范围里标灰
+// 形态类型 = shape_types 游资复盘口径（后端单一实现），徽标色随涨红绿跌色系：
+// 跌向形态（大面/冲高回落/尾盘跳水）绿、炸板黄（中性警示）、强势红、兜底灰
+const SHAPE_TYPE_CN = { big_face: '大面', zha_ban: '炸板', fade: '冲高回落', high_close: '强势',
+                       tail_dive: '尾盘跳水', up: '上涨', down: '下跌', flat: '平盘' };
+const SHAPE_TYPE_CLS = { big_face: 'b-green', zha_ban: 'b-amber', fade: 'b-green', high_close: 'b-red',
+                        tail_dive: 'b-green', up: 'b-gray', down: 'b-gray', flat: 'b-gray' };
 function rsTypeBadges(s){
   const out = [];
   if (s.strong) out.push(`<span class="badge b-red">大涨</span>`);
   if ((s.streak || 0) >= 2) out.push(`<span class="badge b-red">连涨${s.streak}</span>`);
-  if (s.touchedLimitUp) out.push(`<span class="badge b-amber">触板未封</span>`);
-  if (s.sealedLimitUp) out.push(`<span class="badge b-gray">涨停（不入名单）</span>`);
+  if (s.shape) out.push(`<span class="badge ${SHAPE_TYPE_CLS[s.shape]}" title="游资复盘形态（振幅综合判断，日线近似口径）">${SHAPE_TYPE_CN[s.shape]}</span>`);
+  else if (s.sealedLimitUp) out.push(`<span class="badge b-gray">涨停（不入名单）</span>`);
   return out.length ? out.join(' ') : '<span class="badge b-gray">-</span>';
 }
 const rsSrcTxt = s => (s.sources || []).map(x => x === 'pool' ? '采集池快照'
@@ -3982,6 +3994,11 @@ function rsDetailHtml(e){
       '收盘/最新价': num(s.price),
     },
     '连涨': s.streak == null ? null : { '天数（含当日，逐日回溯全市场上涨集合）': s.streak },
+    '形态（游资复盘口径，日线近似）': s.shape == null ? null : {
+      '形态类型': SHAPE_TYPE_CN[s.shape] || s.shape,
+      '盘中最高涨幅%': num(s.highPct),
+      '收盘位置（0=收最低 1=收最高）': num(s.closePos),
+    },
     '涨跌与量能': {
       '涨跌幅%': num(s.pctChange),
       '近3日累计涨幅%': num(s.ret3d),
