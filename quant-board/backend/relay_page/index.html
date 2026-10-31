@@ -1088,14 +1088,24 @@ const bandDayMap = () => { const m = {}; for (const o of bandDays()) m[o.d] = o;
 // 有次日实测的判定日（与离线诊断 have 同口径：premA 非空 ⇔ 次日池/棒齐）——
 // 客户端统计表统一用它，避免「客户端 n=64 / 诊断 n=63」类口径不一致
 const measurable = rows => rows.filter(o => o.premA != null);
+let _bandMissingKey = '';
 const bandDiagMissing = () => { const b = STATE.band || {};
-  return !b.ok ? `<div class="warn">离线分带表未就绪（${esc(b.reason || 'unknown')}）——${esc(b.hint || '可点右侧按钮在页面内刷新')} ${bandRefreshBtn()}</div>` : ''; };
+  if (b.ok){ _bandMissingKey = ''; return ''; }
+  // 2026-10-31 用户裁决（主窗口不打横幅/大段文本）：缺失原因进底部状态栏，
+  // 后端长 hint（含 cwd 指引）进浏览器 console；页内只保留一键刷新按钮。
+  const key = (b.reason || '') + '|' + (b.hint || '');
+  if (key !== _bandMissingKey){
+    _bandMissingKey = key;
+    if (window.sbLog) sbLog('warn', '[分带观察] 离线分带表未就绪（' + (b.reason || 'unknown') + '）——可点页内「刷新分带表」按钮');
+    if (b.hint && window.console && console.log) console.log('[分带观察] 未就绪 hint\n' + b.hint);
+  }
+  return bandRefreshBtn(); };
 
 // ══ 分带表刷新（2026-10-19 用户需求）══════════════════════════════════════════
 // 【分带观察】滞后/缺失时页面内一键重算，不再要求手敲命令行。后端在 :8000 起后台任务跑
 // scripts/jev_relay_band_diagnostic.py --emit-json（零模型调用：只读 Mongo + 本地通达信日线，
 // 全窗约 5–9 分钟），产物先写临时文件、成功退出后原子替换；本页每 5s 轮询任务状态，
-// 完成后 loadAll 重取新表。fail-visible：失败保留旧表并把日志尾部/错误原因放回 banner。
+// 完成后 loadAll 重取新表。fail-visible：失败保留旧表，日志尾部/错误原因进状态栏与 console（页内不打横幅）。
 const bandRefreshBusy = () => !!(STATE.bandRefresh && STATE.bandRefresh.running);
 const bandElapsed = ts => { if (!ts) return '?';
   const s = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 1000));
@@ -1106,21 +1116,33 @@ const bandRefreshBtn = (label) => {
     title="全窗约 5–9 分钟，完成后本页自动刷新"
     onclick="event.stopPropagation(); bandRefresh()">${esc(st.running ? `刷新中…（${bandElapsed(st.startedAt)}）` : (label || '刷新分带表'))}</button>`;
 };
+let _bandWarnKey = '';
 function bandRefreshWarnHtml(){
   const st = STATE.bandRefresh || {};
   const latestD = ((STATE.series || []).slice(-1)[0] || {}).tradingDate || '';
   const w = (bandDoc() || {}).window || {};
   const lag = !!(latestD && w.end && latestD > w.end);
   // 表缺失时不在这里重复警示：renderDiagPanel 的 bandDiagMissing() 已给出「未就绪 + 刷新按钮」，
-  // 两者同屏会出现两条几乎相同的警示（评审 F-minor-2）。本 banner 只负责「滞后 / 刷新任务态 / 刷新失败」。
-  if (!lag && !st.running && !st.error) return '';
-  let text;
-  if (st.running) text = `分带表刷新中…（${st.startedAt ? esc(String(st.startedAt).replace('T', ' ')) + ' 起，已 ' + bandElapsed(st.startedAt) : '正在启动'}）`;
-  else if (st.error) text = `分带表刷新失败（${esc(st.error)}）——旧表保留，可重试`;
-  else text = `分带表与当前序列不同步（⚠ 滞后：序列已到 ${esc(latestD)}，分带表止于 ${esc(w.end)}）——盘后链 16:00 会自动重算，需立刻刷新点右侧按钮`;
-  const tail = (!st.running && st.logTail)
-    ? `<div class="prov" style="margin-top:6px;white-space:pre-wrap;max-height:110px;overflow:auto">${esc(st.logTail)}</div>` : '';
-  return `<div class="warn" style="margin-bottom:10px">${text} —— ${bandRefreshBtn()}${tail}</div>`;
+  // 两者同屏会出现两条几乎相同的警示（评审 F-minor-2）。本处只负责「滞后 / 刷新任务态 / 刷新失败」。
+  // 2026-10-31 用户裁决（AGENTS：主窗口不打横幅/大段文本）：文字全部进底部状态栏，
+  // 日志尾部进浏览器 console；页内只保留一键刷新按钮这一个控件。状态变化才记一条，防 5s 轮询刷屏。
+  if (!lag && !st.running && !st.error){ _bandWarnKey = ''; return ''; }
+  const key = st.running ? 'running' : st.error ? 'error:' + st.error : 'lag:' + latestD + '>' + w.end;
+  if (key !== _bandWarnKey){
+    _bandWarnKey = key;
+    if (st.running){
+      if (window.sbLog) sbLog('info', '[分带观察] 分带表刷新中…（'
+        + (st.startedAt ? String(st.startedAt).replace('T', ' ') + ' 起，已 ' + bandElapsed(st.startedAt) : '正在启动')
+        + '），完成后本页自动刷新');
+    } else if (st.error){
+      if (window.sbLog) sbLog('error', '[分带观察] 分带表刷新失败（' + st.error + '）——旧表保留，可在页内重试');
+    } else {
+      if (window.sbLog) sbLog('warn', '[分带观察] 分带表与当前序列不同步（滞后：序列已到 ' + latestD
+        + '，分带表止于 ' + w.end + '）——盘后链 16:00 会自动重算，或点页内「刷新分带表」按钮');
+    }
+    if (st.logTail && window.console && console.log) console.log('[分带观察] 刷新任务日志尾部\n' + st.logTail);
+  }
+  return bandRefreshBtn();
 }
 function renderBandRefreshWarn(){ const el = $('diagWarn'); if (el) el.innerHTML = bandRefreshWarnHtml(); }
 // 接管已在跑的任务（多标签/刷新页面/双击重入）：POST 返回 already_running 或页面加载时
@@ -1312,10 +1334,10 @@ async function loadAll(){
       // 离线分带读数（fail-visible：缺失/损坏 → {ok:false,reason,hint}，页面显式标注未生成）
       jget('/api/hotlist-jev/relay-band').catch(e => ({ ok: false, degraded: true,
         reason: 'band_read_failed: ' + (e && e.message ? e.message : '?') })),
-      // 跌停复盘（下跌复盘，2026-10-31 更名）负反馈名单：读口异常同样不得静默当空页，带 reason 回填 banner
+      // 跌停复盘（下跌复盘，2026-10-31 更名）负反馈名单：读口异常走底部状态栏（页内不打横幅）
       jget('/api/hotlist-jev/dieban-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'dieban_read_failed: ' + (e && e.message ? e.message : '?') })),
-      // 上涨复盘（上涨名单）：读口异常同样不得静默当空页，带 reason 回填 banner
+      // 上涨复盘（上涨名单）：读口异常走底部状态栏（页内不打横幅），带 reason 不静默当空页
       jget('/api/hotlist-jev/rise-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'rise_read_failed: ' + (e && e.message ? e.message : '?') })),
     ]);
@@ -2067,7 +2089,7 @@ function relayDocFetch(key){
 }
 // 单日复跑（2026-10-19 用户需求）：网络抖动/降级日手动重判。
 // 真实调用 jev 模型（≈7.5K tokens），走 POST /api/hotlist-jev/relay-index/rerun（后端 default force）；
-// 成功后丢弃旧存档并 loadAll 刷新序列 + 重拉当日完整存档；失败/降级结果落卡片内 banner（不弹阻断式 alert）。
+// 成功后丢弃旧存档并 loadAll 刷新序列 + 重拉当日完整存档；失败/降级结果在明细卡内一行提示（不弹阻断式 alert，不打横幅）。
 function relayRerun(key){
   if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
   const ok = window.confirm(`重跑 ${key} 连板指数？\n\n将真实调用 jev 模型（约 7.5K tokens）重新判定该日并覆盖存档。\n建议仅在网络抖动导致 degraded 时使用。`);
@@ -2341,7 +2363,7 @@ async function tlFetch(){
                      doc: doc, rows: (doc && doc.leaders) || [] };
   } catch (e) {
     if (seq !== _tlSeq) return;
-    // 后台刷新失败 → 保留旧数据可见 + banner 报错（不清空列表，fail-visible 不闪断）
+    // 后台刷新失败 → 保留旧数据可见 + 原因进页内提示/状态栏（不清空列表，fail-visible 不闪断）
     if (bg){
       STATE.tlData = { loading: false, rangeKey: key, error: 'theme_leaders_read_failed: '
         + (e && e.message ? e.message : e), doc: STATE.tlData.doc, rows: STATE.tlData.rows };
@@ -2391,7 +2413,7 @@ async function nodesFetch(date){
       error: (r && r.ok === false) ? (r.reason || '读库降级') : null, api: r, doc: (r && r.doc) || null };
   } catch (e) {
     if (seq !== _nodesSeq) return;
-    // 后台刷新失败 → 保留旧数据 + banner 报错（§4.0 不闪断不清空）
+    // 后台刷新失败 → 保留旧数据 + 原因结构化透出（§4.0 不闪断不清空，不打横幅）
     STATE.nodesData = { loading: false,
       error: 'sector_nodes_read_failed: ' + (e && e.message ? e.message : e),
       api: null, doc: bg ? STATE.nodesData.doc : null };
@@ -4721,7 +4743,7 @@ function renderDiagPanel(agg){
   const rows = agg.rows;
   const rg = STATE.relayRange || {};
   const bars = b.bars || {};
-  renderBandRefreshWarn();   // 滞后/缺失/刷新中 → banner（含一键刷新按钮，零模型调用）
+  renderBandRefreshWarn();   // 滞后/刷新态/失败 → 状态栏 + console（页内只留一键刷新按钮，零模型调用）
   const bandRows = agg.bands.filter(r => BAND_ORDER.includes(r.name));
   if (!bandRows.length){
     el.innerHTML = bandDiagMissing() || '<div class="empty">当前统计窗口内无分带读数</div>';
@@ -5212,7 +5234,7 @@ function kplHandleEvent(ev){
       KPL.status.lastError = ev.msg || (ev.server ? 'server error: ' + JSON.stringify(ev.server) : '');
       if (!KPL.status.lastError){ kplUpdateStats(); break; }   // server-only 事件无文本：只计统计
       // 重连链是设计内稳定性模型（README §三）：会话轮换/codec 自愈属例行噪声，
-      // 降级到统计行；认证拒绝/反作弊/解码失败等异常才上横幅。
+      // 降级到统计行；认证拒绝/反作弊/解码失败等异常才进底部状态栏 error。
       // server error 1106（连接错误）＝会话 TTL 到期时服务器对末次 keepalive 的拒绝+断开
       // 信号（2026-10-28 验收实测：cmd=110 raw 帧恒在 close 前一瞬，会话期间数据全量到流），
       // 属例行噪声；订阅超限型 1106 会在订阅期出现且无数据，两者以数据流健康为准。
@@ -5339,7 +5361,7 @@ async function kplFetchSectorUniverse(){
       const ids = (r.ok && r.items) ? r.items.map(it => it.plate_id).filter(id => isKplSector(id)) : [];
       if (ids.length){
         // 二级板块名单同源抓取（2026-10-28）：list_son/list_soninfo 服务端下发，App 同款；
-        // sons_unpaired 时结构化透出横幅，不静默丢弃
+        // sons_unpaired 时结构化透出状态栏（sticky），不静默丢弃
         KPL.sons = r.sons || {};
         KPL.sonsNote = (r.sons_unpaired && r.sons_unpaired.note) || '';
         if (KPL.sonsNote) kplBanner('二级板块名单异常：' + KPL.sonsNote, '', true);
@@ -5400,7 +5422,7 @@ function kplSectorBlocks(){
   // 排行接口 list_son/list_soninfo 服务端直接下发（list_son=父板块 id，list_soninfo=同 19 列
   // 子板块行，等长按位配对；实测同期 40+ 一级板块有树子板块但服务端仅下发 1 个）。
   // 网页照搬同一名单：sons[父id]=[子板块行]；实时模式强度/资金列优先 socket 值（无流回退 HTTP 行）。
-  // sons 尚未拿到（排行读口全程失败）时不展示任何子板块（App 同款空态，引导失败本身有横幅）。
+  // sons 尚未拿到（排行读口全程失败）时不展示任何子板块（App 同款空态，引导失败本身进状态栏）。
   const sons = KPL.mode === 'history' ? KPL.hist.sons : KPL.sons;
   const tree = KPL.plateTree;
   const byId = {}; rows.forEach(r => { byId[r.plate_id] = r; });
@@ -6145,7 +6167,7 @@ function kplDabanBanner(view, msg){
 }
 
 // ════ 龙虎榜页签（2026-10-29 三期：2112 预测 + 3004 实时 + HisBeOnTheLHB 历史）════
-// fail-visible：降级读口把 reason 透出到 banner；缺字段/无数据渲染 '--'，不伪装 0/空。
+// fail-visible：降级读口把 reason 透出到底部状态栏（页内横幅已删）；缺字段/无数据渲染 '--'，不伪装 0/空。
 // 资金字段=元原样（task-3 双源验证 docs/kpl-socket/lhb-scaling-verification.md），展示亿化。
 function kplLhbBanner(elId, msg){
   const el = $(elId);
@@ -6196,7 +6218,7 @@ async function kplLhbFetchSnap(){
       msgs.push((key === 'fc' ? '2112 预测' : '3004 实时') + '请求失败：' + (e.message || e));
     }
   }
-  KPL.lhb.rtMsgs = msgs;   // 实时链消息缓存：回看模式下不顶掉回看 banner
+  KPL.lhb.rtMsgs = msgs;   // 实时链消息缓存：回看模式下不顶掉回看状态提示
   kplLhbRender();
 }
 function kplLhbBannerUpdate(){
@@ -6836,7 +6858,7 @@ function kplDabanRender(view){
   }
   $(conf.p + 'StockTable').innerHTML = rows.length ? html + '</tbody>'
     : '<tbody><tr><td class="empty">'
-      + (snap ? (snap.ok ? '列表为空（盘前/收盘态可能无数据，稍后自动刷新）' : '快照不可用（见上方横幅）')
+      + (snap ? (snap.ok ? '列表为空（盘前/收盘态可能无数据，稍后自动刷新）' : '快照不可用（原因见底部状态栏）')
              : '等待 2103 快照到流（进入页签即拉取，每 4s 轮询兜底）') + '</td></tr></tbody>';
   // 统计行（页缺口显式透出，不伪装全量）
   const maxN = snap && snap.max_size != null ? snap.max_size : '--';

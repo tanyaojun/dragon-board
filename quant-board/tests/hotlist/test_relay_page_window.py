@@ -1185,10 +1185,15 @@ def test_eod_rerun_executes_post_and_refresh(js: str, tmp_path):
 
 # ── 2026-10-19：【分带观察】滞后/缺失改为一键刷新按钮（零模型调用）──────────────
 def test_band_refresh_button_replaces_manual_command(js: str, html: str):
-    """滞后 banner 不再是「手敲命令行」提示，而是可点击的一键刷新按钮。"""
+    """滞后/失败不再是页内横幅，而是：文字进底部状态栏 + console，页内保留一键刷新按钮
+    （2026-10-31 用户裁决：主窗口不打横幅/大段文本，AGENTS 同规）。"""
     warn = _fn(js, "bandRefreshWarnHtml")
-    assert "分带表与当前序列不同步" in warn, "滞后提示须保留（fail-visible）"
-    assert "bandRefreshBtn()" in warn, "滞后 banner 内须有一键刷新按钮"
+    assert "分带表与当前序列不同步" in warn, "滞后提示文案保留（走状态栏，不页内渲染）"
+    assert "sbLog('warn'" in warn and "[分带观察]" in warn, "滞后提示须进底部状态栏（2026-10-31 裁决）"
+    assert "sbLog('error'" in warn, "刷新失败须进底部状态栏"
+    assert "console.log" in warn, "日志尾部进浏览器 console（不页内大段文本）"
+    assert "bandRefreshBtn()" in warn, "页内保留一键刷新按钮（唯一控件）"
+    assert "banner" not in warn and "innerHTML" not in warn, "页内不再渲染横幅文本"
     assert "重跑 scripts/jev_relay_band_diagnostic.py --emit-json" not in js, \
         "手敲命令行的说明应已被按钮取代"
     # 未生成时的提示同样带按钮（缺失场景可一键补齐）
@@ -1399,10 +1404,10 @@ def test_pager_updates_even_when_filter_select_holds_focus(js: str):
 
 
 def test_band_warn_banner_does_not_duplicate_missing_notice(js: str):
-    """F-minor-2：表缺失时 bandDiagMissing() 已给警示+按钮，banner 不得再重复一条。"""
+    """F-minor-2：表缺失时 bandDiagMissing() 已给警示+按钮，本处不得再重复一条。"""
     warn = _fn(js, "bandRefreshWarnHtml")
     assert "离线分带表未就绪" not in warn, "缺失提示只由 bandDiagMissing 呈现（避免同屏两条重复警示）"
-    assert "if (!lag && !st.running && !st.error) return ''" in warn
+    assert "if (!lag && !st.running && !st.error)" in warn, "无滞后/无任务/无失败时页内不渲染任何提示"
 
 
 # ── 2026-10-19 用户报障：涨停复盘 KPI 真连板口径 ─────────────────────────────
