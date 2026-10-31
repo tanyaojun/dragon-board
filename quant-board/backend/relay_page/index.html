@@ -1358,10 +1358,10 @@ async function loadAll(){
       jget('/api/hotlist-jev/dieban-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'dieban_read_failed: ' + (e && e.message ? e.message : '?') })),
       // 上涨复盘（上涨名单）：读口异常走底部状态栏（页内不打横幅），带 reason 不静默当空页
-      jget('/api/hotlist-jev/rise-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
+      jget('/api/hotlist-jev/rise-review' + (date ? '?date=' + encodeURIComponent(date) : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'rise_read_failed: ' + (e && e.message ? e.message : '?') })),
       // 复盘日报（纯读落库文档）：读口异常走底部状态栏（页内不打横幅），缺文档显式 missing 原因
-      jget('/api/hotlist-jev/daily-recap' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
+      jget('/api/hotlist-jev/daily-recap' + (date ? '?date=' + encodeURIComponent(date) : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'recap_read_failed: ' + (e && e.message ? e.message : '?') })),
     ]);
   } catch (err) {
@@ -4340,7 +4340,7 @@ function renderRecap(){
   const degraded = R.degraded || [];
   if (degraded.length && window.sbLog)
     sbLog('warn', RC_TAG + degraded.map(d => `${d.source}: ${d.reason}`).join(' ｜ '));
-  const skipped = R.skippedJev ? '（机械判 dry 产物，未烧 jev）' : '';
+  const skipped = R.skippedJev ? '（机械判 dry 产物，未经 jev 归层）' : '';
   if (hint) hint.textContent =
     `模板 v${R.templateVersion ?? '?'} · 题集 ${R.questionSetVersion ?? '?'}${skipped}`;
   body.innerHTML =

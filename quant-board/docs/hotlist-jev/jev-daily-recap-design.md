@@ -120,3 +120,7 @@ pilot 未开火（零已落库产物），v1 无跨代可比性 → 原位修订
 
 同轮新增防回归断言：题面判据无「开火/贫料」黑话、无机械判不核对的条件；state 无重复
 投喂；短叙事兜底段无开发黑话。
+
+补充（同日评审 Minor-4 落地）：读口 missingReason「pilot 期未开火/贫料日」→「pilot 期未到/
+原料不足日」；页面 skippedJev 徽标「未烧 jev」→「未经 jev 归层」；rise-review/daily-recap
+读口 date 参数补 encodeURIComponent。

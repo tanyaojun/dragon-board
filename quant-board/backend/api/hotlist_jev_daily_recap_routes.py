@@ -16,8 +16,8 @@ from backend.data.repositories import repository_factory
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
 
-_MISSING_REASON = ("当日复盘日报未生成（盘后链 jevDailyRecap 未跑 / pilot 期未开火 / 非交易日；"
-                   "贫料日不产出不伪造，fail-visible）")
+_MISSING_REASON = ("当日复盘日报未生成（盘后链未执行 / pilot 期未到 / 非交易日；"
+                   "原料不足日不产出不伪造，fail-visible）")
 
 
 @router.get("/daily-recap")
