@@ -173,3 +173,34 @@ pilot 未开火（零已落库产物），v1 无跨代可比性 → 原位修订
 
 题目集 v2（4 计划题）判据文本待用户裁决后写定（只引用语料已有字段），换代登记
 QUESTION_SET_VERSION_RECAP v1→v2 另行提交。
+
+
+## 11. 题目集 v2（2026-10-31 用户裁决确认；QUESTION_SET_VERSION_RECAP v1→v2，模板 v2→v3）
+
+裁决四点：①基调+仓位合并 1 题 4 档；②验证信号题保留；③短叙事段删除（复述数字无参考
+含义）；④10-30 以 v2 重算作 pilot 基准。
+
+### 11.1 生态位重定义
+
+环境判断层零缺口（EOD 情绪链/连板情绪链/题材龙头链已回答，v1 环境题纯重复烧 token）；
+日报唯一产出 = **链间收敛成隔日计划**。主攻方向移出题集（题材龙头链 continuation 判定
+证据质量高于让 AI 从板块 top8 粗选），由 `derive_focus_direction` 机械派生
+（strong_extend 板块；空 → 空仓观望）。
+
+### 11.2 v2 题目与判据（判据只引用语料 v3 已有字段，与 RULES 机械判同数）
+
+| # | 题 | choices | 判据（机械判同数） |
+|---|---|---|---|
+| 1 | plan_bias 基调+仓位档 | 进攻/均衡/防守/空仓观望 | 进攻=money_effect=strong 且 momentum∈{accelerating,holding} 且 riskLevel≠高；均衡=neutral（或 strong 但 riskLevel=高）；防守=losing 且 ladder=pyramid 且 跌停<50；空仓观望=losing 且（ladder∈{inverted,sparse} 或 跌停≥50） |
+| 2 | play_style 参与打法 | 龙头核心/低位首板/分歧低吸/只看不追 | 龙头核心=ladder=pyramid 且 money∈{strong,neutral} 且 leaderStrengthScore≥6；分歧低吸=phase=divergence 且 money=neutral（优先于低位首板）；低位首板=点火强延续题材（continuation=strong_extend 且 depth∈{igniting,fermenting}）且 money≠losing；只看不追=其余 |
+| 3 | avoid_focus 回避重点 | 高位断板承接/追高打板/弱势板块补跌/无明确回避 | 高位断板承接=大面≥3 或 跌停≥50；追高打板=炸板≥20 或 炸板>强势；弱势板块补跌=ending 板块≥2；优先级从上到下 |
+| 4 | key_watch 验证信号 | 晋级率修复/炸板率回落/量能维持/高位股承接 | 晋级率修复=promotion.rate<30；炸板率回落=炸板≥20；量能维持=change1d<0；高位股承接=大面≥3 或 跌停≥30；优先级从上到下 |
+
+阈值预登记：跌停空仓线 50 / 龙头强度分 6（0-10 原始分）/ 大面 3 / 炸板 20 / 衰竭板块 2 /
+晋级率 30%。改阈值须用户点头并升版本。
+
+### 11.3 成文 v3
+
+只余【复盘结论】（可数事实：家数/形态/情绪/EOD 判定/晋级率/量能）与【隔日交易计划】
+（五槽：倾向/打法/方向(机械派生)/回避/验证）两段；短叙事文段库整体删除
+（NARRATIVE_LIBRARY_VERSION 字段随档退役）。

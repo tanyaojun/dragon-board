@@ -4346,7 +4346,6 @@ function renderRecap(){
   body.innerHTML =
     rcRenderBlock('复盘结论', (R.text || {}).conclusion || '暂缺')
     + rcRenderBlock('隔日交易计划', (R.text || {}).plan || '暂缺')
-    + rcRenderBlock('短叙事（AI 归层 · 模板成文）', (R.text || {}).narrative || '暂缺')
     + `<div style="display:flex;flex-wrap:wrap;gap:6px">${rcAnswerBadges(answers)}</div>`
     + '<p class="hint">观察参考，非交易信号，不构成投资建议；徽标灰=机械判/未判定，黄=兜底，红=jev 归层。</p>';
   if (det){

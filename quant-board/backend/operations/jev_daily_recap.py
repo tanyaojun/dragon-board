@@ -44,7 +44,9 @@ from backend.operations.theme_leader_label import (
 
 COLLECTION = "hotlist_jev_daily_recap"
 
-_QUESTION_KEYS = ("recap_shape", "money_style", "plan_bias", "focus_direction", "risk_flag")
+# 题目集 v2（2026-10-31 用户裁决）：4 道计划题；环境题删（EOD/连板情绪链已回答），
+# 主攻方向由语料层机械派生（corpus.derive_focus_direction）
+_QUESTION_KEYS = ("plan_bias", "play_style", "avoid_focus", "key_watch")
 
 
 # ---------------------------------------------------------------- 语料 v2 增补（2026-10-31 用户裁决）
@@ -260,13 +262,6 @@ def load_promotion(db: Any, date: str, prev_date: str | None) -> tuple[dict[str,
             "denom": stats.get("denom")}, []
 
 
-def _fallback_plan_bias(final_recap_shape: str | None) -> str | None:
-    """plan_bias 兜底跟随最终 recap_shape 档位（保持成文自洽，不为再判一次）。"""
-    if final_recap_shape is None or final_recap_shape == "insufficient_evidence":
-        return None
-    return corpus.rule_plan_bias(final_recap_shape)
-
-
 def run_daily_recap_for_date(date: str, *, apply: bool = False,
                              force: bool = False, db: Any = None) -> dict[str, Any]:
     """产出当日复盘日报。apply=False：零 jev 调用零写库（机械判答案，skippedJev 标注）。"""
@@ -302,12 +297,12 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                                       + eod_degraded + theme_degraded
                                       + amount_degraded + promo_degraded)
 
-    questions = corpus.build_questions(facts)
     state = corpus.build_state(date, facts, emotion,
                                kpl_wrap=kpl_wrap, relay_judgment=relay_judgment,
                                eod_judge=eod_judge, theme_boards=theme_boards,
                                market_amount=market_amount, promotion=promotion)
-    rule_answers = {q: corpus.RULES[q](facts) for q in _QUESTION_KEYS}
+    questions = corpus.build_questions(state)
+    rule_answers = {q: corpus.RULES[q](state) for q in _QUESTION_KEYS}
 
     jev_meta: dict[str, Any] | None = None
     usage: dict[str, Any] = {}
@@ -339,8 +334,6 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                 usage = parsed.get("usage") or {}
                 jev_meta = {"latencyMs": parsed.get("latencyMs"), "model": "typesafe/jev"}
                 answers = parsed.get("answers") or {}
-                shape_answer: str | None = None
-                plan_degraded_idx: int | None = None   # 兜底覆盖计划题时同步改写 degraded（评审 Minor-1）
                 for q in _QUESTION_KEYS:
                     answer = ((answers.get(q) or {}).get("choice"))
                     answer = str(answer) if answer is not None else None
@@ -350,36 +343,18 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
                         sources[q] = "jev_insufficient"
                         degraded.append({"source": q, "reason": "insufficient_evidence",
                                          "action": "slot_unjudged"})
-                        if q == "plan_bias":
-                            plan_degraded_idx = len(degraded) - 1
                     elif answer in choices:
                         slots[q] = answer
                         sources[q] = "jev"
                     else:
                         degraded.append({"source": q, "reason": f"invalid_choice: {answer!r}",
                                          "action": "rule_fallback"})
-                    if q == "recap_shape":
-                        shape_answer = slots.get(q)
-                # plan_bias 兜底跟随最终 recap_shape（jev 未答/无效时保持自洽）
-                if sources["plan_bias"] != "jev":
-                    fb = _fallback_plan_bias(shape_answer)
-                    slots["plan_bias"] = fb
-                    if sources["plan_bias"] == "jev_insufficient":
-                        # 兜底覆盖了 jev 的未判定作答：degraded 记录同步改写，落库不自相矛盾
-                        entry = degraded[plan_degraded_idx]
-                        entry["reason"] = f"plan_bias_insufficient_overridden: {fb!r}"
-                        entry["action"] = "rule_fallback" if fb else "slot_unjudged"
-                    sources["plan_bias"] = "rule_fallback" if fb else "slot_unjudged"
             else:
                 degraded.append({"source": "jev",
                                  "reason": f"{parsed.get('errorCode')}: {str(parsed.get('errorDetail') or '')[:120]}",
                                  "action": "rule_fallback"})
-                # 兜底自洽：plan_bias 跟随机械判 recap_shape
-                slots["plan_bias"] = _fallback_plan_bias(rule_answers["recap_shape"]) or None
-                if slots["plan_bias"] is None:
-                    sources["plan_bias"] = "slot_unjudged"
 
-    text = corpus.compose_recap_text(date, facts, emotion, slots)
+    text = corpus.compose_recap_text(date, state, slots)
     report: dict[str, Any] = {
         "_id": date,
         "date": date,
@@ -398,7 +373,6 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
         "questionsRaw": questions,
         "templateVersion": corpus.RECAP_TEMPLATE_VERSION,
         "questionSetVersion": corpus.QUESTION_SET_VERSION_RECAP,
-        "narrativeLibraryVersion": corpus.NARRATIVE_LIBRARY_VERSION,
         "jev": jev_meta,
         "usage": usage,
         "skippedJev": skipped_jev,

@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
-"""复盘日报语料拼装层（jev daily recap，2026-10-31 用户裁决预登记）。
+"""复盘日报语料拼装层（jev daily recap，题目集 v2 / 模板 v3 / 语料 state v3）。
 
-设计/预登记：quant-board/docs/hotlist-jev/jev-daily-recap-design.md。
-- 语料包 = state（上涨/下跌复盘可数事实 + 情绪链锚点，全部可数）+ 5 道 choice 题
-  （判据只引用 state 已有字段，v2.1 教训）+ 单 call 输出合同（call_jev/parse_jev_response）；
-- 成文 = 版本化模板 × 槽位值 + 短叙事预写文段库（NARRATIVE_LIBRARY，§1 实现裁决：
-  jev 题型合同只见 choice/score，自由文本题型未验证 → 短叙事零 jev 措辞）；
-- 机械判 = 一致率对照基线 + 兜底（判据与题目 criteria 同数，改一处须同步文档）；
-- 本模块纯函数零 IO 零外呼：review 字典/情绪锚点由 operations 层装载（monkeypatch 边界）。
+设计/预登记：quant-board/docs/hotlist-jev/jev-daily-recap-design.md（§9/§10/§11）。
+- 生态位（2026-10-31 用户裁决）：环境判断已由 EOD 情绪链/连板情绪链/题材龙头链回答，
+  日报**只做链间收敛成隔日计划**——4 道计划题（基调+仓位/打法/回避/验证信号），
+  主攻方向由题材龙头方向块机械派生（不问 AI），短叙事段删除（复述数字无参考含义）；
+- 语料包 = state v3（两页事实 + emotion + KPL 综述 + 连板情绪判定 + EOD 结构化判定
+  + 题材方向块 + 量能 + 晋级率，缺料 ok:false 透传）+ 4 道 choice 题（判据**只引用
+  state 已有字段**，与机械判同数）+ 单 call 输出合同；
+- 本模块纯函数零 IO 零外呼：state 各块由 operations 层装载（monkeypatch 边界）。
 
 纪律：pytest 一律 mock，禁真调用（硬红线 §1.2#7）；缺料不伪造（fail-visible，§4.0）。
 """
@@ -16,35 +17,147 @@ from __future__ import annotations
 from typing import Any
 
 # 版本戳（换代必须登记 jev-daily-recap-design.md；跨代不可比）
-RECAP_TEMPLATE_VERSION = 1
-QUESTION_SET_VERSION_RECAP = "v1"
+RECAP_TEMPLATE_VERSION = 3          # v3：成文只剩结论/计划两段，短叙事删除
+QUESTION_SET_VERSION_RECAP = "v2"   # v2：4 道计划题（环境题全删，判据直引语料字段）
 
-# 归层档位（choices 集预登记；机械判与题目 criteria 同数）
-RECAP_SHAPE_CHOICES = ("强势延续", "分歧加剧", "退潮防守", "冰点修复", "混沌轮动",
+# 题目 choices 预登记（判据与机械判同数；改一处须同步文档 §11）
+PLAN_BIAS_CHOICES = ("进攻", "均衡", "防守", "空仓观望", "insufficient_evidence")
+PLAY_STYLE_CHOICES = ("龙头核心", "低位首板", "分歧低吸", "只看不追", "insufficient_evidence")
+AVOID_FOCUS_CHOICES = ("高位断板承接", "追高打板", "弱势板块补跌", "无明确回避",
                        "insufficient_evidence")
-MONEY_STYLE_CHOICES = ("接力为主", "低吸为主", "观望为主", "insufficient_evidence")
-PLAN_BIAS_CHOICES = ("进攻", "均衡", "防守", "insufficient_evidence")
-RISK_FLAG_CHOICES = ("高风险", "中风险", "低风险", "insufficient_evidence")
-FOCUS_FALLBACK = "空仓观望"
+KEY_WATCH_CHOICES = ("晋级率修复", "炸板率回落", "量能维持", "高位股承接",
+                     "insufficient_evidence")
 
 RECAP_UNKNOWN = "未判定"
 
-# 机械判阈值（与 _questions 的 criteria 文案同数，改一处须同步文档并登记设计文档）
-_R_RATIO_STRONG = 2.0      # 涨跌比强市线
-_R_BOTH_HOT = 10           # 两旺线：池内涨/跌家数
-_R_LIMITDOWN_DEFENSE = 5   # 跌停家数退潮线
-_R_BIGFACE_WATCH = 5       # 大面家数观望/高风险线
-_R_LIMITDOWN_RISK = 10     # 跌停家数高风险线
-_R_STREAK = 3              # 梯队高度线（连涨/连跌）
+# 机械判阈值（与 build_questions 的 criteria 文案同数；改一处须同步文档并登记设计文档）
+_PLAN_LIMITDOWN_EMPTY = 50    # 空仓观望：跌停家数线
+_PLAY_LEADER_MIN = 6.0        # 龙头核心：龙头强度分（0-10 原始分）线
+_AVOID_BIGFACE = 3            # 高位断板承接：大面家数线
+_AVOID_ZHABAN = 20            # 追高打板：炸板家数线
+_AVOID_ENDING_BOARDS = 2      # 弱势板块补跌：衰竭板块数线
+_WATCH_PROMOTION = 30.0       # 晋级率修复：今日晋级率%（低于则隔日验证修复）
+_IGNITING_DEPTHS = ("igniting", "fermenting")
 
-_SHAPE_ORDER = ("big_face", "zha_ban", "fade", "high_close", "tail_dive",
-                "up", "down", "flat")
-_SHAPE_CN = {"big_face": "大面", "zha_ban": "炸板", "fade": "冲高回落",
-             "high_close": "强势", "tail_dive": "尾盘跳水", "up": "上涨",
-             "down": "下跌", "flat": "平盘"}
+_STRONG_MOMENTUM = ("accelerating", "holding")
+_BROKEN_LADDER = ("inverted", "sparse")
 
-# rise topBoards 里的兕底桶：无板块归属，不得作为主攻方向档位（评审 2026-10-31）
-_UNSEGMENTED_BOARD = "未分板块"
+
+# ---------------------------------------------------------------- 机械判视图（state → 扁平锚点）
+
+def _mech_view(state: dict[str, Any]) -> dict[str, Any]:
+    """state 包 → 机械判扁平视图（None=缺料不伪造；RULES 与 criteria 均只消费本视图字段）。"""
+    summary = (state or {}).get("summary") or {}
+    r = summary.get("rise") or {}
+    d = summary.get("dieban") or {}
+    shapes = r.get("shapes") or {}
+    relay = (state or {}).get("relayJudgment") or {}
+    answers = relay.get("answers") or {}
+    eod = (state or {}).get("eodJudge") or {}
+    boards = ((state or {}).get("themeBoards") or {}).get("boards") or []
+    amount = (state or {}).get("marketAmount") or {}
+    promo = (state or {}).get("promotion") or {}
+    return {
+        "no_material": bool((r.get("noData")) and (d.get("noData"))),
+        "limit_down": d.get("limitDownCount"),
+        "big_face": shapes.get("big_face"),
+        "zha_ban": shapes.get("zha_ban"),
+        "high_close": shapes.get("high_close"),
+        # 连板情绪链判定（v7.1 档位 token 原值）
+        "money_effect": answers.get("money_effect"),
+        "relay_phase": answers.get("relay_phase"),
+        "relay_momentum": answers.get("relay_momentum"),
+        "ladder_health": answers.get("ladder_health"),
+        "leader_strength": relay.get("leaderStrengthScore"),
+        # EOD 结构化判定
+        "risk_level": eod.get("riskLevel"),
+        # 题材方向块
+        "igniting_strong": any(b.get("continuation") == "strong_extend"
+                               and b.get("depth") in _IGNITING_DEPTHS for b in boards),
+        "ending_boards": sum(1 for b in boards if b.get("continuation") == "ending"),
+        "attack_boards": [str(b.get("board")) for b in boards
+                          if b.get("continuation") == "strong_extend" and b.get("board")],
+        # 量能 / 晋级率
+        "change1d": amount.get("change1d"),
+        "promotion_rate": promo.get("rate"),
+    }
+
+
+def derive_focus_direction(state: dict[str, Any]) -> str:
+    """主攻方向 = 题材龙头方向块机械派生（strong_extend 板块；空 → 空仓观望）。
+
+    2026-10-31 用户裁决：方向问题删出题集——题材龙头/板块龙头链已给出带证据的方向，
+    AI 再选一遍是用粗证据覆盖细证据。
+    """
+    attack = _mech_view(state)["attack_boards"]
+    return attack[0] if attack else "空仓观望"
+
+
+# ---------------------------------------------------------------- 机械判（与 criteria 同数）
+
+def rule_plan_bias(v: dict[str, Any]) -> str:
+    """隔日基调+仓位档机械判（判据与 build_questions.plan_bias 同数）。"""
+    if v["no_material"] or v["money_effect"] is None:
+        return "insufficient_evidence"
+    if v["money_effect"] == "losing":
+        if v["ladder_health"] in _BROKEN_LADDER or (v["limit_down"] is not None
+                                                    and v["limit_down"] >= _PLAN_LIMITDOWN_EMPTY):
+            return "空仓观望"
+        return "防守"
+    if v["money_effect"] == "strong" and v["relay_momentum"] in _STRONG_MOMENTUM \
+            and v["risk_level"] != "高":
+        return "进攻"
+    return "均衡"
+
+
+def rule_play_style(v: dict[str, Any]) -> str:
+    """参与打法机械判（判据与 build_questions.play_style 同数）。"""
+    if v["no_material"] or v["money_effect"] is None:
+        return "insufficient_evidence"
+    if v["ladder_health"] == "pyramid" and v["money_effect"] in ("strong", "neutral") \
+            and v["leader_strength"] is not None and v["leader_strength"] >= _PLAY_LEADER_MIN:
+        return "龙头核心"
+    if v["relay_phase"] == "divergence" and v["money_effect"] == "neutral":
+        return "分歧低吸"
+    if v["igniting_strong"] and v["money_effect"] != "losing":
+        return "低位首板"
+    return "只看不追"
+
+
+def rule_avoid_focus(v: dict[str, Any]) -> str:
+    """回避重点机械判（判据与 build_questions.avoid_focus 同数；优先级从上到下）。"""
+    if v["no_material"]:
+        return "insufficient_evidence"
+    if (v["big_face"] is not None and v["big_face"] >= _AVOID_BIGFACE) \
+            or (v["limit_down"] is not None and v["limit_down"] >= _PLAN_LIMITDOWN_EMPTY):
+        return "高位断板承接"
+    if (v["zha_ban"] is not None and v["zha_ban"] >= _AVOID_ZHABAN) \
+            or (v["zha_ban"] is not None and v["high_close"] is not None
+                and v["zha_ban"] > v["high_close"]):
+        return "追高打板"
+    if v["ending_boards"] >= _AVOID_ENDING_BOARDS:
+        return "弱势板块补跌"
+    return "无明确回避"
+
+
+def rule_key_watch(v: dict[str, Any]) -> str:
+    """隔日验证信号机械判（判据与 build_questions.key_watch 同数；今日数据缺口项优先）。"""
+    if v["no_material"]:
+        return "insufficient_evidence"
+    if v["promotion_rate"] is not None and v["promotion_rate"] < _WATCH_PROMOTION:
+        return "晋级率修复"
+    if v["zha_ban"] is not None and v["zha_ban"] >= _AVOID_ZHABAN:
+        return "炸板率回落"
+    if v["change1d"] is not None and v["change1d"] < 0:
+        return "量能维持"
+    return "高位股承接"
+
+
+# 对外入口统一收 state 包（内部先扁平化为机械判视图）
+RULES = {"plan_bias": lambda state: rule_plan_bias(_mech_view(state)),
+         "play_style": lambda state: rule_play_style(_mech_view(state)),
+         "avoid_focus": lambda state: rule_avoid_focus(_mech_view(state)),
+         "key_watch": lambda state: rule_key_watch(_mech_view(state))}
 
 
 # ---------------------------------------------------------------- 纯函数：事实压缩
@@ -55,7 +168,8 @@ def _num(value: Any) -> float | None:
 
 def _shape_counts(stocks: list[dict[str, Any]]) -> dict[str, int]:
     """stocks[].shape 形态计数（None=封板/缺料不计入；缺失保持缺失不伪造）。"""
-    counts = {k: 0 for k in _SHAPE_ORDER}
+    counts = {k: 0 for k in ("big_face", "zha_ban", "fade", "high_close", "tail_dive",
+                             "up", "down", "flat")}
     for s in stocks or []:
         shape = (s or {}).get("shape")
         if shape in counts:
@@ -111,8 +225,6 @@ def collect_review_facts(rise: dict[str, Any] | None,
 
     rise_stocks = rise_doc.get("stocks") if isinstance(rise_doc.get("stocks"), list) else []
     dieban_stocks = dieban_doc.get("stocks") if isinstance(dieban_doc.get("stocks"), list) else []
-    rise_shapes = _shape_counts(rise_stocks)
-    dieban_shapes = _shape_counts(dieban_stocks)
 
     return {
         "rise": {
@@ -127,7 +239,7 @@ def collect_review_facts(rise: dict[str, Any] | None,
             "netInflowTotal": _num(rise_pos.get("netInflowTotal")),
             "topBoards": (rise_pos.get("topBoards") or [])[:5],
             "topStocks": _top_stocks(rise_stocks, 5, reverse=True),
-            "shapes": rise_shapes,
+            "shapes": _shape_counts(rise_stocks),
         },
         "dieban": {
             "noData": bool(dieban_doc.get("noData")),
@@ -141,157 +253,79 @@ def collect_review_facts(rise: dict[str, Any] | None,
             "netOutflowTotal": _num(dieban_neg.get("netOutflowTotal")),
             "topBoards": (dieban_neg.get("topBoards") or [])[:5],
             "topStocks": _top_stocks(dieban_stocks, 5, reverse=False),
-            "shapes": dieban_shapes,
+            "shapes": _shape_counts(dieban_stocks),
         },
         "degradedSources": degraded,
     }
 
 
-def rule_recap_shape(facts: dict[str, Any]) -> str:
-    """复盘归层机械判（优先级从上到下；与 RECAP_QUESTIONS.recap_shape criteria 同数）。
-
-    两页全缺 → insufficient_evidence；任一页可用即按可数锚点判（缺的字段视为不满足该分支）。
-    """
-    r, d = facts["rise"], facts["dieban"]
-    if r["noData"] and d["noData"]:
-        return "insufficient_evidence"
-    pool_up, pool_down = r["poolUp"], r["poolDown"]   # 两旺口径：采集池涨/跌家数（同页）
-    ratio, big_face, zha_ban = r["ratio"], r["shapes"]["big_face"], r["shapes"]["zha_ban"]
-    high_close = r["shapes"]["high_close"]
-    limit_down, max_streak_r = d["limitDownCount"], r["maxStreak"]
-    max_streak_d = d["maxStreak"]
-    if (ratio is not None and ratio >= _R_RATIO_STRONG
-            and big_face <= zha_ban
-            and max_streak_r is not None and max_streak_r >= _R_STREAK):
-        return "强势延续"
-    if (pool_up is not None and pool_up >= _R_BOTH_HOT
-            and pool_down is not None and pool_down >= _R_BOTH_HOT
-            and big_face > 0 and high_close > 0):
-        return "分歧加剧"
-    if ((big_face > high_close)
-            and limit_down is not None and limit_down >= _R_LIMITDOWN_DEFENSE):
-        return "退潮防守"
-    if (max_streak_d is not None and max_streak_d >= _R_STREAK
-            and pool_up is not None and pool_down is not None
-            and pool_up >= pool_down):
-        return "冰点修复"
-    return "混沌轮动"
-
-
-def rule_money_style(facts: dict[str, Any]) -> str:
-    """赚钱效应档位机械判（与 money_style criteria 同数）。"""
-    r, d = facts["rise"], facts["dieban"]
-    if r["noData"] and d["noData"]:
-        return "insufficient_evidence"
-    ratio, big_face = r["ratio"], r["shapes"]["big_face"]
-    if ratio is not None and ratio >= _R_RATIO_STRONG and big_face == 0:
-        return "接力为主"
-    if ((big_face >= _R_BIGFACE_WATCH)
-            or (d["limitDownCount"] is not None and d["limitDownCount"] >= _R_LIMITDOWN_RISK)):
-        return "观望为主"
-    return "低吸为主"
-
-
-def rule_plan_bias(recap_shape: str) -> str:
-    """隔日计划倾向机械判（与 plan_bias criteria 同数：强势延续→进攻；退潮防守→防守；其余→均衡）。"""
-    if recap_shape == "强势延续":
-        return "进攻"
-    if recap_shape == "退潮防守":
-        return "防守"
-    if recap_shape == "insufficient_evidence":
-        return "insufficient_evidence"
-    return "均衡"
-
-
-def rule_focus_direction(facts: dict[str, Any]) -> str:
-    """主攻方向机械判：rise 正向板块 top1（空名单/兕底桶「未分板块」→ 空仓观望）。"""
-    boards = facts["rise"]["topBoards"]
-    for b in boards:
-        name = str(b.get("board") or "")
-        if name and name != _UNSEGMENTED_BOARD:
-            return name
-    return FOCUS_FALLBACK
-
-
-def rule_risk_flag(facts: dict[str, Any]) -> str:
-    """风险档位机械判（与 risk_flag criteria 同数）。"""
-    r, d = facts["rise"], facts["dieban"]
-    if r["noData"] and d["noData"]:
-        return "insufficient_evidence"
-    big_face, limit_down = r["shapes"]["big_face"], d["limitDownCount"]
-    if big_face >= _R_BIGFACE_WATCH or (limit_down is not None and limit_down >= _R_LIMITDOWN_RISK):
-        return "高风险"
-    if big_face == 0 and limit_down == 0 and (r["ratio"] is not None and r["ratio"] >= _R_RATIO_STRONG):
-        return "低风险"
-    return "中风险"
-
-
-RULES = {"recap_shape": rule_recap_shape, "money_style": rule_money_style,
-         "plan_bias": lambda facts: rule_plan_bias(rule_recap_shape(facts)),
-         "focus_direction": rule_focus_direction, "risk_flag": rule_risk_flag}
-
-
 # ---------------------------------------------------------------- 题料包 / state
 
-def build_questions(facts: dict[str, Any]) -> dict[str, Any]:
-    """5 道 choice 题（单 call；focus_direction choices = rise 正向板块 top8 + 空仓观望，动态）。
+def build_questions(state: dict[str, Any]) -> dict[str, Any]:
+    """4 道计划题（题目集 v2，单 call）。判据只引用 state 已有字段（与 RULES 机械判同数）。
 
-    判据只引用 state.summary 已有字段（v2.1 教训）；阈值与 RULES 机械判同数。
+    2026-10-31 用户裁决：环境判断题（复盘归层/赚钱效应档位）全删——EOD 情绪链与连板
+    情绪链已回答；主攻方向由题材龙头方向块机械派生，不再设题。
     """
-    boards = [str(b.get("board")) for b in facts["rise"]["topBoards"]
-              if b.get("board") and str(b.get("board")) != _UNSEGMENTED_BOARD]
-    focus_choices = boards[:8] + [FOCUS_FALLBACK]
+    v = _mech_view(state)
     return {
-        "recap_shape": {
-            "type": "choice",
-            "instructions": (
-                "根据今日上涨/下跌复盘可数事实（采集池涨跌家数与比、形态计数 大面/炸板/冲高回落/强势/"
-                "尾盘跳水、连涨连跌梯队高度、全市场跌停家数），今日全天属于哪种复盘归层？"
-                "只描述当日已发生事实，不预测后市。"
-            ),
-            "criteria": {
-                "强势延续": f"采集池涨跌比≥{_R_RATIO_STRONG:g} 且 大面≤炸板 且 连涨高度≥{_R_STREAK}",
-                "分歧加剧": f"两旺：池内涨≥{_R_BOTH_HOT} 且 跌≥{_R_BOTH_HOT}，且 大面>0 且 强势>0（形态分化）",
-                "退潮防守": f"大面>强势 且 全市场跌停≥{_R_LIMITDOWN_DEFENSE}",
-                "冰点修复": f"连跌高度≥{_R_STREAK}（负反馈梯队仍在）且 池内涨≥跌（修复）",
-                "混沌轮动": "以上判据均不满足：涨跌均衡、无主导形态",
-                "insufficient_evidence": "上涨与下跌两页复盘原料均缺失",
-            },
-        },
-        "money_style": {
-            "type": "choice",
-            "instructions": "根据形态面与资金锚点（大面/炸板计数、采集池涨跌比、主力净流入流出），今日赚钱效应属于哪种档位？",
-            "criteria": {
-                "接力为主": f"涨跌比≥{_R_RATIO_STRONG:g} 且 大面=0（无亏钱效应，接力有溢价）",
-                "观望为主": f"大面≥{_R_BIGFACE_WATCH} 或 全市场跌停≥{_R_LIMITDOWN_RISK}（亏钱效应显著）",
-                "低吸为主": "其余：不满足接力/观望判据（形态分化但亏钱效应未主导）",
-                "insufficient_evidence": "上涨与下跌两页复盘原料均缺失",
-            },
-        },
         "plan_bias": {
             "type": "choice",
-            "instructions": "基于今日复盘归层（recap_shape 语义），隔日交易计划倾向哪个档位？只给倾向档位，不给个股与点位。",
+            "instructions": (
+                "综合 EOD 情绪结构化判定（state.eodJudge：score/stage/riskLevel）、连板情绪判定"
+                "（state.relayJudgment.answers：money_effect/relay_momentum/ladder_health）、"
+                "全市场跌停家数（state.summary.dieban.limitDownCount），隔日交易计划总基调与仓位档？"
+                "只给档位，不给个股与点位。"
+            ),
             "criteria": {
-                "进攻": "recap_shape=强势延续",
-                "均衡": "recap_shape=分歧加剧/冰点修复/混沌轮动",
-                "防守": "recap_shape=退潮防守",
-                "insufficient_evidence": "recap_shape=insufficient_evidence",
+                "进攻": "money_effect=strong 且 relay_momentum=accelerating/holding 且 riskLevel≠高（可上仓位）",
+                "均衡": "money_effect=neutral；或 strong 但 riskLevel=高（半仓防守性参与）",
+                "防守": "money_effect=losing 且 ladder_health=pyramid 且 跌停<50（轻仓试错）",
+                "空仓观望": "money_effect=losing 且（ladder_health=inverted/sparse 或 跌停≥50）",
+                "insufficient_evidence": "EOD/连板情绪与两页复盘原料均缺失",
             },
         },
-        "focus_direction": {
+        "play_style": {
             "type": "choice",
-            "instructions": "隔日主攻方向：从今日上涨复盘正向板块锚点（state.summary.rise.topBoards）中选择，或空仓观望。只选方向，不给个股。",
-            "criteria": {c: f"state.summary.rise.topBoards 板块锚点：{c}" for c in boards[:8]}
-            | {FOCUS_FALLBACK: "上涨名单空/板块锚点缺失/无明确方向"},
-        },
-        "risk_flag": {
-            "type": "choice",
-            "instructions": "隔日风险档位：根据大面计数与全市场跌停家数判断。",
+            "instructions": (
+                "隔日参与打法：结合梯队健康（ladder_health）、赚钱效应（money_effect）、"
+                "龙头强度分（state.relayJudgment.leaderStrengthScore，0-10）、题材阶段"
+                "（state.themeBoards.boards 的 continuation/depth）选择。只选打法，不给个股。"
+            ),
             "criteria": {
-                "高风险": f"大面≥{_R_BIGFACE_WATCH} 或 全市场跌停≥{_R_LIMITDOWN_RISK}",
-                "低风险": f"大面=0 且 跌停=0 且 涨跌比≥{_R_RATIO_STRONG:g}",
-                "中风险": "其余",
-                "insufficient_evidence": "上涨与下跌两页复盘原料均缺失",
+                "龙头核心": "ladder_health=pyramid 且 money_effect=strong/neutral 且 leaderStrengthScore≥6",
+                "低位首板": "题材点火（continuation=strong_extend 且 depth=igniting/fermenting）且 money_effect≠losing",
+                "分歧低吸": "relay_phase=divergence 且 money_effect=neutral",
+                "只看不追": "以上不满足（亏钱效应主导/题材衰竭）",
+                "insufficient_evidence": "连板情绪与题材方向块原料均缺失",
+            },
+        },
+        "avoid_focus": {
+            "type": "choice",
+            "instructions": (
+                "隔日回避重点：根据形态计数（大面/炸板/强势）、全市场跌停家数、衰竭板块名单"
+                "（state.themeBoards.boards 中 continuation=ending）。只选最优先一项。"
+            ),
+            "criteria": {
+                "高位断板承接": "大面≥3 或 全市场跌停≥50",
+                "追高打板": "炸板≥20 或 炸板>强势",
+                "弱势板块补跌": "continuation=ending 的板块≥2",
+                "无明确回避": "以上均不满足",
+                "insufficient_evidence": "两页复盘与题材方向块原料均缺失",
+            },
+        },
+        "key_watch": {
+            "type": "choice",
+            "instructions": (
+                "隔日最该验证的信号（今日数据缺口项）：晋级率（state.promotion.rate）、"
+                "炸板计数、量能变化（state.marketAmount.change1d）、高位股表现。只选一项。"
+            ),
+            "criteria": {
+                "晋级率修复": "promotion.rate<30（今日晋级率已显著走低）",
+                "炸板率回落": "炸板≥20（且晋级率未显著走低）",
+                "量能维持": "marketAmount.change1d<0（已缩量，验证能否维持）",
+                "高位股承接": "以上不满足，但大面≥3 或 跌停≥30",
+                "insufficient_evidence": "晋级率/量能锚点缺失",
             },
         },
     }
@@ -304,12 +338,13 @@ def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any],
                 theme_boards: dict[str, Any] | None = None,
                 market_amount: dict[str, Any] | None = None,
                 promotion: dict[str, Any] | None = None) -> dict[str, Any]:
-    """state 包：summary（两页事实）+ emotion 锚点 + KPL 15:00 盘播报 + 连板情绪判定（state v2）。
+    """state 包（v3）：summary + emotion + KPL 综述 + 连板情绪判定 + EOD 结构化判定
+    + 题材方向块 + 量能 + 晋级率。degradedSources 只在顶层一份（不重复投喂）。
+    各块缺料 ok:false 透传（operations 层同步登记 degraded；fail-visible）。"""
+    def _blk(value: dict[str, Any] | None, reason: str) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {"ok": False, "reason": reason}
 
-    - degradedSources 只在顶层保留一份（summary 内剔除，不重复投喂，开火前文本清理 2026-10-31）；
-    - kpl_wrap / relay_judgment 由 operations 层装载（IO 边界），缺料带 ok:false+reason（fail-visible）；
-      语料增补登记设计文档 §9（2026-10-31 用户裁决：每日一句不补）。"""
-    state = {
+    return {
         "date": date,
         "summary": {k: v for k, v in facts.items() if k != "degradedSources"},
         "emotion": {
@@ -318,28 +353,15 @@ def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any],
             "eod20dPercentile": emotion.get("eod20dPercentile"),
             "bandTag": emotion.get("bandTag"),
             "bandLabel": emotion.get("bandLabel"),
-            "dailyLineSentence": emotion.get("dailyLineSentence"),
-            "dailyShape": emotion.get("dailyShape"),
         },
+        "kplWrap": _blk(kpl_wrap, "kpl_wrap_unavailable"),
+        "relayJudgment": _blk(relay_judgment, "relay_judgment_unavailable"),
+        "eodJudge": _blk(eod_judge, "eod_judge_unavailable"),
+        "themeBoards": _blk(theme_boards, "theme_boards_unavailable"),
+        "marketAmount": _blk(market_amount, "market_amount_unavailable"),
+        "promotion": _blk(promotion, "promotion_unavailable"),
         "degradedSources": facts.get("degradedSources") or [],
     }
-    # 语料 v2 增补（2026-10-31 用户裁决）：KPL 直播 15:00 大盘综述 + 连板情绪判定结果。
-    # 缺料 ok:false 原样透传（fail-visible），operations 层已同步登记 degraded。
-    state["kplWrap"] = kpl_wrap if isinstance(kpl_wrap, dict) else {"ok": False, "reason": "kpl_wrap_unavailable"}
-    state["relayJudgment"] = relay_judgment if isinstance(relay_judgment, dict) \
-        else {"ok": False, "reason": "relay_judgment_unavailable"}
-
-    def _blk(value: dict[str, Any] | None, reason: str) -> dict[str, Any]:
-        return value if isinstance(value, dict) else {"ok": False, "reason": reason}
-
-    # 语料 v3（2026-10-31 用户裁决「先补缺失语料」）：EOD 结构化判定 / 题材龙头方向块 /
-    # 量能锚点 / 晋级率锚点。缺料 ok:false 透传（fail-visible）；进攻/回避名单由消费方
-    # 按 continuation 机械派生，语料只存档位原值（单一事实源 = theme_leader_ammo）。
-    state["eodJudge"] = _blk(eod_judge, "eod_judge_unavailable")
-    state["themeBoards"] = _blk(theme_boards, "theme_boards_unavailable")
-    state["marketAmount"] = _blk(market_amount, "market_amount_unavailable")
-    state["promotion"] = _blk(promotion, "promotion_unavailable")
-    return state
 
 
 # ---------------------------------------------------------------- 成文模板（版本化）
@@ -358,58 +380,47 @@ def _yi(value: Any) -> str:
     return f"{round(n / 1e8, 2)}亿" if n is not None else "暂缺"
 
 
-def compose_recap_text(date: str, facts: dict[str, Any], emotion: dict[str, Any],
-                       slots: dict[str, Any]) -> dict[str, str]:
-    """模板 v1 成文（纯函数）。slots = 各题最终档位（jev 或机械判兜底后的值）。
+def compose_recap_text(date: str, state: dict[str, Any], slots: dict[str, Any]) -> dict[str, str]:
+    """模板 v3 成文（纯函数）：只余复盘结论 + 隔日交易计划两段（短叙事已删，用户裁决）。
 
-    槽缺失显式「暂缺」，不伪造 0（fail-visible）；措辞改动必须升 RECAP_TEMPLATE_VERSION。
+    slots = 各题最终档位（jev 或机械判兜底后的值）；主攻方向由 state 机械派生（derive_focus_direction）。
+    槽缺失显式「暂缺/未判定」，不伪造 0（fail-visible）；措辞改动必须升 RECAP_TEMPLATE_VERSION。
     """
-    r, d = facts["rise"], facts["dieban"]
-    rs = r["shapes"]
-    eod20 = emotion.get("eod20dPercentile")
+    summary = state.get("summary") or {}
+    r = summary.get("rise") or {}
+    d = summary.get("dieban") or {}
+    rs = r.get("shapes") or {}
+    ds = d.get("shapes") or {}
+    emotion = state.get("emotion") or {}
+    v = _mech_view(state)
+
     conclusion = (
-        f"【复盘结论】{slots.get('recap_shape') or RECAP_UNKNOWN}（{slots.get('money_style') or RECAP_UNKNOWN}）。"
-        f"全市场上涨{_slot(r['riseCount'], '家')}、跌停{_slot(d['limitDownCount'], '家')}，"
-        f"采集池涨跌比{_slot(r['ratio'])}；形态面：大面{rs['big_face']}·炸板{rs['zha_ban']}"
-        f"·冲高回落{rs['fade']}·强势{rs['high_close']}·尾盘跳水{rs['tail_dive']}。"
+        f"【复盘结论】全市场上涨{_slot(r.get('riseCount'), '家')}、"
+        f"跌停{_slot(d.get('limitDownCount'), '家')}，"
+        f"采集池涨跌比{_slot(r.get('ratio'))}；"
+        f"形态面：大面{v['big_face'] if v['big_face'] is not None else '暂缺'}"
+        f"·炸板{v['zha_ban'] if v['zha_ban'] is not None else '暂缺'}"
+        f"·冲高回落{ds.get('fade', 0) if isinstance(ds.get('fade'), int) else '暂缺'}"
+        f"·强势{v['high_close'] if v['high_close'] is not None else '暂缺'}"
+        f"·尾盘跳水{ds.get('tail_dive', 0) if isinstance(ds.get('tail_dive'), int) else '暂缺'}。"
         f"情绪分{_slot(emotion.get('eod'))}（{_slot(emotion.get('bandLabel'))}，"
-        f"20日分位{_slot(eod20, '%')}）。"
+        f"20日分位{_slot(emotion.get('eod20dPercentile'), '%')}）；"
+        f"EOD判定：{_slot((state.get('eodJudge') or {}).get('stage'))}"
+        f"·风险级{_slot((state.get('eodJudge') or {}).get('riskLevel'))}；"
+        f"晋级率{_slot(v['promotion_rate'], '%')}（{_slot((state.get('promotion') or {}).get('promotedCount'))}"
+        f"/{_slot((state.get('promotion') or {}).get('baseCount'))}）；"
+        f"量能较昨日{_slot(v['change1d'], '%')}。"
     )
-    ds = d["shapes"]
+    focus = derive_focus_direction(state)
     plan = (
         f"【隔日交易计划】倾向{slots.get('plan_bias') or RECAP_UNKNOWN}，"
-        f"主攻方向{slots.get('focus_direction') or RECAP_UNKNOWN}。"
-        f"风险档：{slots.get('risk_flag') or RECAP_UNKNOWN}"
-        f"（锚点：大面{rs['big_face']}、跌停{_slot(d['limitDownCount'])}、"
-        f"连跌高度{_slot(d['maxStreak'])}）。观察参考，非交易信号，不构成投资建议。"
+        f"参与方式{slots.get('play_style') or RECAP_UNKNOWN}，"
+        f"进攻方向{focus}，"
+        f"回避{slots.get('avoid_focus') or RECAP_UNKNOWN}，"
+        f"隔日验证{slots.get('key_watch') or RECAP_UNKNOWN}。"
+        f"锚点：大面{v['big_face'] if v['big_face'] is not None else '暂缺'}、"
+        f"跌停{_slot(d.get('limitDownCount'))}、"
+        f"梯队{_slot((state.get('relayJudgment') or {}).get('answers', {}).get('ladder_health') or RECAP_UNKNOWN)}。"
+        f"观察参考，非交易信号，不构成投资建议。"
     )
-    return {"conclusion": conclusion, "plan": plan, "narrative": _narrative(facts, emotion, slots)}
-
-
-# 短叙事文段库 v1（每档 recap_shape 一段预写短文；{槽位}插值；改措辞升 NARRATIVE_LIBRARY_VERSION）
-NARRATIVE_LIBRARY_VERSION = 1
-_NARRATIVE_TPL = {
-    "强势延续": "今日多头结构完好：采集池涨跌比{ratio}，大面零星（{bigFace}家）而强势收高位{highClose}家，连涨梯队最高{maxStreakRise}板。资金接力意愿在，隔日顺着{focus}方向做强势股的持续性，忌追泛泛跟风。",
-    "分歧加剧": "今日涨跌两旺（池内涨{poolUp}/跌{poolDown}），大面{bigFace}家与强势{highClose}家并存，市场在主线内部剧烈换手。分歧日的纪律是不抢分歧半山腰，等隔日方向再表态。",
-    "退潮防守": "今日亏钱效应主导：大面{bigFace}家压过强势{highClose}家，全市场跌停{limitDown}家，主力净流出{netOut}。退潮期现金为王，隔日以防守为主，不抄下跌中继。",
-    "冰点修复": "连跌梯队仍在（最高{maxStreakFall}连跌）但上涨家数已回升（涨{poolUp}/跌{poolDown}），冰点后有修复迹象。修复初日先看量能确认，隔日轻仓试错强修复方向{focus}。",
-    "混沌轮动": "今日涨跌均衡、无主导形态（大面{bigFace}家、炸板{zhaBan}家、强势{highClose}家），板块锚点分散。混沌期降低频率，隔日以{focus}为观察样本，不重仓表态。",
-    "insufficient_evidence": "本日复盘原料不足，两页名单存在缺口，机械归层不可用；成文仅保留可数事实，隔日计划因缺锚未给出档位判断。",
-}
-
-
-def _narrative(facts: dict[str, Any], emotion: dict[str, Any], slots: dict[str, Any]) -> str:
-    """短叙事 = NARRATIVE_LIBRARY 选段 + 可数事实插值（零 jev 措辞，§1 实现裁决）。"""
-    shape = slots.get("recap_shape")
-    tpl = _NARRATIVE_TPL.get(shape)
-    if tpl is None:  # 未判定/未知档位：不硬编故事，落不足段
-        tpl = _NARRATIVE_TPL["insufficient_evidence"]
-    r, d = facts["rise"], facts["dieban"]
-    rs = r["shapes"]
-    return tpl.format(
-        ratio=_slot(r["ratio"]), bigFace=rs["big_face"], zhaBan=rs["zha_ban"],
-        highClose=rs["high_close"], maxStreakRise=_slot(r["maxStreak"]),
-        maxStreakFall=_slot(d["maxStreak"]), poolUp=_slot(r["poolUp"]),
-        poolDown=_slot(r["poolDown"]), limitDown=_slot(d["limitDownCount"]),
-        netOut=_yi(d["netOutflowTotal"]), focus=slots.get("focus_direction") or RECAP_UNKNOWN,
-    )
+    return {"conclusion": conclusion, "plan": plan}
