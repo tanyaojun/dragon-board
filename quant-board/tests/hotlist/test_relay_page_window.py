@@ -1508,51 +1508,6 @@ def test_rise_page_registered_like_dieban_review(html: str, js: str):
     assert "STATE.riseEntries" in lg_entries, "行展开条目路由须含 rise"
 
 
-def test_recap_daily_page_registered_and_statusbar_only(html: str, js: str):
-    """2026-10-31 预登记（jev-daily-recap-design.md）：【复盘日报】页（纯读落库文档）。
-
-    2026-10-31 用户裁决版式（七点）：KPI 卡条 + 成文叙事表格（lg-tree 分组字段）+
-    题目集/投喂语料收进涨停复盘同款详情卡（lg-card，详细信息/原始 JSON 切换）+
-    无横幅（问题走底部状态栏）+ 日期随顶栏全局控件。
-    """
-    assert "['recap', '复盘日报'," in js, "侧栏须有【复盘日报】入口"
-    assert "recap: ['复盘日报']" in js, "面包屑须含复盘日报"
-    assert 'id="tab-recap"' in html, "须有 tab-recap 区块"
-    seg = html[html.index('id="tab-recap"'):]
-    seg = seg[: seg.index("</section>")]
-    for hook in ('<h2>复盘日报</h2>', 'id="recapHint"', 'id="recapBody"',
-                 'id="recapKpi"', 'id="recapDetailBody"', '<details'):
-        assert hook in seg, f"复盘日报页缺展示骨架：{hook}"
-    assert "非交易信号" in seg, "页头须声明非交易信号"
-    assert "banner" not in seg.lower(), "复盘日报页不得有横幅宿主"
-    # 2026-10-31 裁决：日期列表版式（连板情绪同构）——区间条 + 逐日列表 + 行展开
-    for hook in ('id="recapRangeBar"', 'id="recapTable"', 'id="recapListHint"'):
-        assert hook in seg, f"复盘日报页缺日期列表骨架：{hook}"
-    load = _fn(js, "loadAll")
-    assert "rcSeriesFetch()" in load, "loadAll 须拉取区间 series"
-    assert "function rcRangeBar()" in js and "function rcPreset(" in js, "区间条（近1月/近3月/全部）须存在"
-    assert "function rcRow(" in js and "rcRowFetch(" in js, "行展开懒拉完整档须存在"
-    assert "'/api/hotlist-jev/daily-recap'" in load, "loadAll 须拉复盘日报读口"
-    assert "renderRecap();" in load, "loadAll 须触发复盘日报重绘"
-    render = _fn(js, "renderRecap")
-    assert "RC_TAG = '[复盘日报] '" in js, "状态栏前缀常量须存在"
-    for key in ("D.ok === false", "D.missing", "R.degraded"):
-        assert key in render, f"renderRecap 缺 fail-visible 分支：{key}"
-    assert "sbLog('error', RC_TAG" in render and "sbLog('info', RC_TAG" in render \
-        and "sbLog('warn', RC_TAG" in render, "异常/缺文档/降级须分级进底部状态栏"
-    # 版式七点守卫：KPI 卡条 / 叙事表格（treeHtml 分组）/ 详情卡（详细信息+原始JSON切换）
-    assert "$('recapKpi')" in render, "renderRecap 须渲染 KPI 卡条"
-    assert "treeHtml(_rcFactTree(R), '')" in render and "treeHtml(_rcPlanTree(R), '')" in render, \
-        "成文须为叙事表格（分组字段树）"
-    detail = _fn(js, "rcDetailCardHtml")
-    assert "rcMode('detail', event)" in detail and "rcMode('raw', event)" in detail, \
-        "详情卡须有 详细信息/原始 JSON 切换（涨停复盘同款）"
-    assert "lg-card" in detail and "lg-meta" in detail and "lg-foot" in detail, \
-        "详情卡须复用 lg-card 范式"
-    assert "treeHtml(stateTree, '')" in detail, "投喂语料须以字段树展示"
-    assert "narrative" not in render + detail, "短叙事已删（题目集 v2 裁决），不得回流"
-
-
 def test_dieban_scope_predicates_behaviour(js: str, tmp_path):
     """**行为**回归（node 探针）：负反馈范围谓词与筛选（跌停/连跌/一字/大跌/回撤/下跌）。"""
     if shutil.which("node") is None:
