@@ -48,6 +48,10 @@ dotnet publish tools\DragonBoardLauncher\DragonBoardLauncher.csproj -p:PublishPr
 - 服务定义外置在 `config/services.json`（P1.1）：路径/参数/端口/依赖顺序/`externalPolicy`
   （`managed` 托管清理 / `reuse` 复用外部实例如 Redis / `refuse` 只提示不清理如 MongoDB）。
   文件缺失或解析失败时回退内嵌默认，不影响启动。
+- ⚠️ `openUrl` 双处维护约定（2026-10-31 review P2）：新增/修改服务的 openUrl 时，
+  `config/services.json` 与 `LauncherServices.CreateDefaults` 回退字典**必须同轮同步**，
+  否则配置加载失败回退时会出现按钮缺失/入口不一致（单一事实源是 services.json，
+  回退字典仅为容灾副本；已由 `LastLoadUsedFallback` 告警日志兼底）。
 - 用户启停偏好持久化到 `%LOCALAPPDATA%\DragonBoardLauncher\state.json`（P1.2）：
   launcher 重启后核心服务始终随 StartAll 启动，展示/辅助服务（前端/量化面板/语音）
   按上次偏好恢复；手动停止的服务不会被无条件重新拉起。

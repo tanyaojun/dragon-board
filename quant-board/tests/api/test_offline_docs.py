@@ -53,3 +53,17 @@ def test_missing_assets_skip_docs_route(monkeypatch, tmp_path):
     # 资源缺失：不接管 /docs（404），也不挂载静态目录
     assert client.get("/docs").status_code == 404
     assert client.get("/static/swagger-ui/swagger-ui-bundle.js").status_code == 404
+
+
+def test_existing_docs_route_skips_install_to_avoid_shadowing():
+    """docs_url 未置 None 时默认 /docs 已注册：检测到遮蔽风险必须告警跳过，
+    而不是注册一个永不生效的自定义路由（静默漂移，2026-10-31 review P2）。"""
+    app = FastAPI(title="DocsTest")  # docs_url 默认 "/docs"，默认路由已存在
+    install_offline_docs(app)
+
+    docs_routes = [r for r in app.routes if getattr(r, "path", None) == "/docs"]
+    # 仅默认路由一份，未被追加第二条；且返回的仍是 CDN 版默认页
+    assert len(docs_routes) == 1
+    client = TestClient(app)
+    body = client.get("/docs").text
+    assert "/static/swagger-ui/" not in body

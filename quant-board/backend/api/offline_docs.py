@@ -31,6 +31,8 @@ def install_offline_docs(app: FastAPI) -> None:
 
     资源缺失时不抛异常、只记日志并跳过接管（此时 /docs 由 docs_url=None
     保持 404，fail-visible，不会退回不可用的 CDN 版本）。
+    宿主 app 未以 docs_url=None 创建时，默认 /docs 路由已先行注册，本路由
+    会被遮蔽且永不生效（静默漂移）；此处检测到遮蔽风险即告警并跳过接管。
     """
     index_js = _SWAGGER_ASSETS_DIR / "swagger-ui-bundle.js"
     index_css = _SWAGGER_ASSETS_DIR / "swagger-ui.css"
@@ -41,6 +43,16 @@ def install_offline_docs(app: FastAPI) -> None:
             "swagger-ui 静态资源缺失: %s（/docs 将不可用），"
             "请补齐 backend/static/swagger-ui/ 下的 swagger-ui-bundle.js 与 swagger-ui.css",
             _SWAGGER_ASSETS_DIR,
+        )
+        return
+
+    if any(getattr(route, "path", None) == "/docs" for route in app.routes):
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "app 已注册 /docs 路由（docs_url 未置 None？），install_offline_docs "
+            "跳过接管以免自定义路由被默认路由遮蔽、静默失效；"
+            "请将 FastAPI(docs_url=None) 后再调用本函数。",
         )
         return
 
