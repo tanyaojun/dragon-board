@@ -6024,6 +6024,7 @@ function kplLhbStockListRender(){
   const f = KPL.lhb.sFilter;
   // 席位三态过滤已随读数入口修正删除（2026-10-30 用户裁决）：主源=GetStockList 实际
   // 上榜名单，仅上榜恒真/仅未上榜恒空，无区分意义；东财 dayCodes 仅作 cnt 口径对照
+  let rows = all;
   if (f.q) rows = rows.filter(r =>
     (r.name || '').toLowerCase().includes(f.q) || String(r.code || '').includes(f.q)
     || (r.plate || '').toLowerCase().includes(f.q) || (r.reason || '').toLowerCase().includes(f.q));
