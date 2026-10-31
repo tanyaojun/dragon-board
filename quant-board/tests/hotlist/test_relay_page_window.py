@@ -1525,7 +1525,13 @@ def test_recap_daily_page_registered_and_statusbar_only(html: str, js: str):
         assert hook in seg, f"复盘日报页缺展示骨架：{hook}"
     assert "非交易信号" in seg, "页头须声明非交易信号"
     assert "banner" not in seg.lower(), "复盘日报页不得有横幅宿主"
+    # 2026-10-31 裁决：日期列表版式（连板情绪同构）——区间条 + 逐日列表 + 行展开
+    for hook in ('id="recapRangeBar"', 'id="recapTable"', 'id="recapListHint"'):
+        assert hook in seg, f"复盘日报页缺日期列表骨架：{hook}"
     load = _fn(js, "loadAll")
+    assert "rcSeriesFetch()" in load, "loadAll 须拉取区间 series"
+    assert "function rcRangeBar()" in js and "function rcPreset(" in js, "区间条（近1月/近3月/全部）须存在"
+    assert "function rcRow(" in js and "rcRowFetch(" in js, "行展开懒拉完整档须存在"
     assert "'/api/hotlist-jev/daily-recap'" in load, "loadAll 须拉复盘日报读口"
     assert "renderRecap();" in load, "loadAll 须触发复盘日报重绘"
     render = _fn(js, "renderRecap")
@@ -1538,7 +1544,7 @@ def test_recap_daily_page_registered_and_statusbar_only(html: str, js: str):
     assert "$('recapKpi')" in render, "renderRecap 须渲染 KPI 卡条"
     assert "treeHtml(_rcFactTree(R), '')" in render and "treeHtml(_rcPlanTree(R), '')" in render, \
         "成文须为叙事表格（分组字段树）"
-    detail = _fn(js, "renderRecapDetail")
+    detail = _fn(js, "rcDetailCardHtml")
     assert "rcMode('detail', event)" in detail and "rcMode('raw', event)" in detail, \
         "详情卡须有 详细信息/原始 JSON 切换（涨停复盘同款）"
     assert "lg-card" in detail and "lg-meta" in detail and "lg-foot" in detail, \

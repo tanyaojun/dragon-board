@@ -666,3 +666,38 @@ def test_daily_recap_route_four_paths(monkeypatch):
 
     r = client.get("/api/hotlist-jev/daily-recap")
     assert r.status_code == 422
+
+
+def test_daily_recap_route_series(monkeypatch):
+    """区间列表模式（连板情绪同构）：轻量投影、只列 ok 档、按日期升序。"""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    class ListCol:
+        def find(self, q):
+            assert q["ok"] is True and q["_id"]["$gte"] == "2026-10-20" and q["_id"]["$lte"] == "2026-10-31"
+            return [{"_id": "2026-10-28", "ok": True, "date": "2026-10-28",
+                     "answers": {"plan_bias": {"choice": "空仓观望", "source": "jev"},
+                                 "play_style": {"choice": "只看不追", "source": "jev"},
+                                 "avoid_focus": {"choice": "高位断板承接", "source": "jev"},
+                                 "key_watch": {"choice": "晋级率修复", "source": "jev"}},
+                     "ruleAnswers": {"plan_bias": "空仓观望", "play_style": "只看不追",
+                                     "avoid_focus": "高位断板承接", "key_watch": "晋级率修复"},
+                     "questionSetVersion": "v2", "templateVersion": 3, "skippedJev": False,
+                     "generatedAt": "t", "text": {"conclusion": "重载荷不下发"}},
+                    {"_id": "2026-10-27", "ok": True, "date": "2026-10-27",
+                     "answers": {}, "ruleAnswers": {}, "questionSetVersion": "v2"}]
+
+    class ListDb:
+        def __getitem__(self, name):
+            return ListCol()
+
+    monkeypatch.setattr(_QUESTIONS_ROUTE_PATH, lambda: ListDb())
+    client = TestClient(app)
+    r = client.get("/api/hotlist-jev/daily-recap", params={"start": "2026-10-20", "end": "2026-10-31"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and [x["date"] for x in body["series"]] == ["2026-10-27", "2026-10-28"]
+    row = body["series"][1]
+    assert row["plan_bias"] == "空仓观望" and row["agree"] == 4 and row["questionTotal"] == 4
+    assert "text" not in row and "summary" not in row      # 重载荷不下发

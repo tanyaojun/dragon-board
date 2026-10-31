@@ -618,6 +618,7 @@
     <div class="page-head"><div><h2>复盘日报</h2>
       <p>上涨/下跌复盘 + 情绪链判定 + KPL 盘播 → 收敛成隔日交易计划；主攻方向由题材龙头判定机械派生，环境判断直接引用 EOD/连板情绪链结论。观察参考，非交易信号。</p></div></div>
     <div class="ph-line"></div>
+    <div class="lf-bar" id="recapRangeBar"></div>
     <div class="card">
       <h3>复盘结论与隔日计划 <span class="hint" id="recapHint"></span></h3>
       <div class="kpi-strip" id="recapKpi" style="margin-bottom:12px"></div>
@@ -626,6 +627,10 @@
         <summary>题目集与投喂语料（判定明细 / 原始存档）</summary>
         <div id="recapDetailBody"></div>
       </details>
+    </div>
+    <div class="card" style="margin-top:14px">
+      <h3>逐日复盘日报 <span class="hint" id="recapListHint"></span></h3>
+      <table id="recapTable"></table>
     </div>
   </section>
 
@@ -926,6 +931,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   view: 'overview', relayView: 'phase',   // 当前一级视图 / 连板指数子视图
   // 判定明细日期区间（原作者语义，2026-10-18 用户裁决：控件在页头）：{start,end}；end=null 跟随最新
   relayRange: null,
+  recapRange: null, recapSeries: [], recapDocs: {}, recapOpenKey: null, recapPreset: null, recapBack: null,
   relayBack: null,    // 预设按钮的回退点（“再点一次恢复上次区间”）
   relayPreset: null,  // 最近点过的预设（展示意图；高亮以区间等价判定为准）
   relaySort: { key: 'date', dir: -1 },
@@ -1364,6 +1370,8 @@ async function loadAll(){
       // 复盘日报（纯读落库文档）：读口异常走底部状态栏（页内不打横幅），缺文档显式 missing 原因
       jget('/api/hotlist-jev/daily-recap' + (date ? '?date=' + encodeURIComponent(date) : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'recap_read_failed: ' + (e && e.message ? e.message : '?') })),
+      // 逐日列表（区间轻量投影，与连板情绪 series 同构）
+      rcSeriesFetch(),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -4373,6 +4381,107 @@ function _rcPlanTree(R){
     '隔日验证信号': pick('key_watch'),
   };
 }
+// ── 逐日列表（连板情绪同构）：区间条 + 轻量 series + 行展开懒拉完整档 ──
+function rcSeriesFetch(){
+  const rg = STATE.recapRange || { start: null, end: null };
+  const qs = [];
+  if (rg.start) qs.push('start=' + encodeURIComponent(rg.start));
+  if (rg.end) qs.push('end=' + encodeURIComponent(rg.end));
+  return jget('/api/hotlist-jev/daily-recap' + (qs.length ? '?' + qs.join('&') : ''))
+    .then(d => { STATE.recapSeries = (d && d.series) || []; return d; })
+    .catch(e => { STATE.recapSeries = []; STATE.recapSeriesErr = (e && e.message) || '?'; return null; });
+}
+function _rcSeriesLast(){ return (STATE.recapSeries.length ? STATE.recapSeries[STATE.recapSeries.length - 1].date : ''); }
+function rcRange(k, v){
+  if (!STATE.recapRange) STATE.recapRange = {};
+  STATE.recapRange[k] = v || null;
+  STATE.recapPreset = null;
+  loadAll();
+}
+function rcPresetRange(kind){
+  if (kind === 'all') return { start: null, end: null };
+  const last = _rcSeriesLast();
+  if (!last) return null;
+  const d = new Date(last + 'T00:00:00');
+  d.setMonth(d.getMonth() - (kind === 'm1' ? 1 : 3)); d.setDate(d.getDate() + 1);
+  return { start: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'), end: null };
+}
+function rcPreset(kind){
+  const back = STATE.recapBack;
+  if (STATE.recapPreset === kind && back){
+    STATE.recapRange = back.start || back.end ? back : null;
+    STATE.recapBack = null; STATE.recapPreset = null;
+  } else {
+    if (!STATE.recapPreset) STATE.recapBack = STATE.recapRange ? { ...STATE.recapRange } : null;
+    const next = rcPresetRange(kind);
+    if (next) STATE.recapRange = next;
+    STATE.recapPreset = kind;
+  }
+  loadAll();
+}
+function rcRangeBar(){
+  const rg = STATE.recapRange || { start: null, end: null };
+  const last = _rcSeriesLast();
+  const pbtn = (kind, label) => `<button class="${STATE.recapPreset === kind ? 'on' : ''}"
+      onclick="rcPreset('${kind}')">${label}</button>`;
+  return `<input type="date" title="开始日期（留空=最早）" value="${esc(rg.start || '')}" onchange="rcRange('start', this.value)">`
+    + `<span class="sep">→</span>`
+    + `<input type="date" title="结束日期（留空=跟随最新）" value="${esc(rg.end || last)}" onchange="rcRange('end', this.value)">`
+    + pbtn('m1', '近1月') + pbtn('m3', '近3月') + pbtn('all', '全部');
+}
+function rcSeriesRender(){
+  const bar = $('recapRangeBar'), table = $('recapTable'), hint = $('recapListHint');
+  if (!table) return;
+  if (bar) bar.innerHTML = rcRangeBar();
+  const series = STATE.recapSeries || [];
+  if (hint) hint.textContent = `${series.length} 日` + (STATE.recapSeriesErr ? ' · 读口异常见底部状态栏' : ' · 点击行展开判定明细');
+  if (STATE.recapSeriesErr && window.sbLog) sbLog('error', RC_TAG + '列表读口不可用：' + STATE.recapSeriesErr);
+  const rows = series.map(r => {
+    const open = STATE.recapOpenKey === r.date;
+    const qc = (q) => esc(r[q] || '未判定');
+    const ag = r.questionTotal ? `${r.agree}/${r.questionTotal}` : '-';
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="rcRow('${js(r.date)}')">
+      <td><span class="lg-caret">▶</span>${esc(r.date)}</td><td>${qc('plan_bias')}</td><td>${qc('play_style')}</td>
+      <td>${qc('avoid_focus')}</td><td>${qc('key_watch')}</td><td>${ag}</td>
+      <td style="font-size:12px">${esc(r.questionSetVersion || '-')}</td></tr>`
+      + (open ? `<tr class="lg-detail"><td colspan="7" style="padding:0">${rcRowDetailBody(r.date)}</td></tr>` : '');
+  }).join('');
+  table.innerHTML = `<tr><th>日期</th><th>基调与仓位</th><th>参与方式</th><th>回避重点</th><th>验证信号</th><th>一致</th><th>题集</th></tr>`
+    + (rows || '<tr><td colspan="7" class="empty">区间内无日报存档（pilot 期按日开火产出）</td></tr>');
+}
+function rcRow(date){
+  STATE.recapOpenKey = STATE.recapOpenKey === date ? null : date;
+  if (STATE.recapOpenKey && !STATE.recapDocs[date]) rcRowFetch(date);
+  rcSeriesRender();
+  if (STATE.recapOpenKey) rcDetailMount(date);
+}
+function rcRowFetch(date){
+  jget('/api/hotlist-jev/daily-recap?date=' + encodeURIComponent(date))
+    .then(d => {
+      STATE.recapDocs[date] = (d && d.missing) ? null : (d && d.report);
+      rcSeriesRender();
+      if (STATE.recapOpenKey === date) rcDetailMount(date);
+    })
+    .catch(e => { if (window.sbLog) sbLog('error', RC_TAG + date + ' 明细拉取失败：' + ((e && e.message) || '?')); });
+}
+function rcDetailMount(date){
+  const host = $('recapRowDetail_' + date);
+  if (!host) return;
+  const R = STATE.recapDocs[date];
+  if (R === undefined){
+    host.innerHTML = '<p class="hint">明细拉取中…</p>';
+    rcRowFetch(date);
+    return;
+  }
+  if (R === null){
+    host.innerHTML = '<p class="hint">该日无 ok 存档（原因见底部状态栏；单日拉取 missing 不静默）。</p>';
+    return;
+  }
+  host.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.innerHTML = rcDetailCardHtml(R);
+  host.appendChild(wrap.firstChild);
+}
 function rcMode(mode, ev){
   if (ev) ev.stopPropagation();
   (STATE.recapUi || (STATE.recapUi = {})).mode = mode;
@@ -4386,7 +4495,10 @@ function rcCopyRaw(ev){
 function renderRecapDetail(R){
   const host = $('recapDetailBody');
   if (!host) return;
-  const ui = STATE.recapUi || (STATE.recapUi = { mode: 'detail' });
+  host.innerHTML = rcDetailCardHtml(R, STATE.recapUi || (STATE.recapUi = { mode: 'detail' }));
+}
+function rcDetailCardHtml(R, ui){
+  if (!ui) ui = { mode: 'detail' };
   const u = R.usage || {};
   const meta = `<div class="lg-meta">
     <div><div class="k">持续时间</div><div class="v">${R.jev && R.jev.latencyMs != null ? R.jev.latencyMs + ' ms' : '-'}</div></div>
@@ -4421,7 +4533,7 @@ function renderRecapDetail(R){
       `<button class="lg-copy" onclick="rcCopyRaw(event)">⧉ 复制</button></div><div class="lg-tree">${treeHtml(stateTree, '')}</div></div>
     </div>`;
   }
-  host.innerHTML = `<div class="lg-card" onclick="event.stopPropagation()">
+  return `<div class="lg-card" onclick="event.stopPropagation()">
     <div class="lg-head"><div class="lg-title">🕐 jev · 复盘日报 ${esc(R.date || '')}</div>
       <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="rcMode('detail', event)">详细信息</button>
       <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="rcMode('raw', event)">原始 JSON</button></div></div>
@@ -4479,6 +4591,7 @@ function renderRecap(){
     _rcPanel('复盘结论', '可数事实与链判定引用（每个数字可回溯到语料）', treeHtml(_rcFactTree(R), ''))
     + _rcPanel('隔日交易计划', '档位来源见括注（AI 判定 / 规则参考）', treeHtml(_rcPlanTree(R), ''));
   renderRecapDetail(R);
+  rcSeriesRender();
 }
 
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
