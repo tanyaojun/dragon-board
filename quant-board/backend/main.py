@@ -84,7 +84,13 @@ app = FastAPI(
     title="QuantBoard",
     version="0.1.0",
     description="Python RankTrend 回测平台",
+    docs_url=None,  # /docs 由 offline_docs 接管（本地 swagger 资源，CDN 8s+ 延迟致空白）
+    redoc_url=None,  # 同根因：redoc 默认走 CDN（reDoc standalone js），本链路无消费者
 )
+
+from backend.api.offline_docs import install_offline_docs
+
+install_offline_docs(app)
 
 # after-save 钩子注册（2026-09-10）：快照写入后的后处理（快照缓存失效 + analyze 产物落库）
 # 统一由数据层 `save_snapshot_ingest` 触发，两条写入路径（ingest 路由 / collector 直写）自动一致。

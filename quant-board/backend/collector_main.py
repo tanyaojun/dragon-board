@@ -436,7 +436,16 @@ async def lifespan(app: FastAPI):
         lock.release()
 
 
-app = FastAPI(title="QuantBoard Snapshot Collector", lifespan=lifespan)
+app = FastAPI(
+    title="QuantBoard Snapshot Collector",
+    lifespan=lifespan,
+    docs_url=None,  # /docs 由 offline_docs 接管（本地 swagger 资源，CDN 8s+ 延迟致空白）
+    redoc_url=None,  # 同根因：redoc 默认走 CDN（reDoc standalone js），本链路无消费者
+)
+
+from backend.api.offline_docs import install_offline_docs
+
+install_offline_docs(app)
 
 # after-save 钩子注册（2026-09-10）：8001 进程同样注册，保证 collector 直写库路径与 ingest
 # 路由的快照后处理（缓存失效 + analyze 产物落库）由同一处（数据层 `save_snapshot_ingest`）触发。
