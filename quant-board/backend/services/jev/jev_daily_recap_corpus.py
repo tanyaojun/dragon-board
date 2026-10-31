@@ -299,7 +299,11 @@ def build_questions(facts: dict[str, Any]) -> dict[str, Any]:
 
 def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any],
                 kpl_wrap: dict[str, Any] | None = None,
-                relay_judgment: dict[str, Any] | None = None) -> dict[str, Any]:
+                relay_judgment: dict[str, Any] | None = None,
+                eod_judge: dict[str, Any] | None = None,
+                theme_boards: dict[str, Any] | None = None,
+                market_amount: dict[str, Any] | None = None,
+                promotion: dict[str, Any] | None = None) -> dict[str, Any]:
     """state 包：summary（两页事实）+ emotion 锚点 + KPL 15:00 盘播报 + 连板情绪判定（state v2）。
 
     - degradedSources 只在顶层保留一份（summary 内剔除，不重复投喂，开火前文本清理 2026-10-31）；
@@ -324,6 +328,17 @@ def build_state(date: str, facts: dict[str, Any], emotion: dict[str, Any],
     state["kplWrap"] = kpl_wrap if isinstance(kpl_wrap, dict) else {"ok": False, "reason": "kpl_wrap_unavailable"}
     state["relayJudgment"] = relay_judgment if isinstance(relay_judgment, dict) \
         else {"ok": False, "reason": "relay_judgment_unavailable"}
+
+    def _blk(value: dict[str, Any] | None, reason: str) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {"ok": False, "reason": reason}
+
+    # 语料 v3（2026-10-31 用户裁决「先补缺失语料」）：EOD 结构化判定 / 题材龙头方向块 /
+    # 量能锚点 / 晋级率锚点。缺料 ok:false 透传（fail-visible）；进攻/回避名单由消费方
+    # 按 continuation 机械派生，语料只存档位原值（单一事实源 = theme_leader_ammo）。
+    state["eodJudge"] = _blk(eod_judge, "eod_judge_unavailable")
+    state["themeBoards"] = _blk(theme_boards, "theme_boards_unavailable")
+    state["marketAmount"] = _blk(market_amount, "market_amount_unavailable")
+    state["promotion"] = _blk(promotion, "promotion_unavailable")
     return state
 
 

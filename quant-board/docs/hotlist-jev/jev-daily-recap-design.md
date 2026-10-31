@@ -145,3 +145,31 @@ pilot 未开火（零已落库产物），v1 无跨代可比性 → 原位修订
 
 补数实录（同日）：全市场上涨逐股文档缺 + 上涨历史回溯缺 20 日 → `market_rise_pool
 --start 2026-09-28 --end 2026-10-30 --apply`（本地日线重算，零模型调用）回填。
+
+
+## 10. 语料 v3 增补（2026-10-31 用户裁决「先补缺失语料」；题目集 v2 重设计前置条件）
+
+用户裁定方向：题目集全部重设计（环境判断题删——EOD/连板情绪已回答；短叙事删除待确认），
+复盘日报唯一生态位 = 链间收敛成隔日计划。四道计划题（基调+仓位/打法/回避/验证信号）经
+逐题对账发现判据引用字段不在语料 → 先补料再动题（AGENTS 归因顺序：原料→题目）。
+
+新增原料（state v3 顶层四块，全部机械读档/复用单源算式，零模型调用）：
+
+1. `eodJudge`：hotlist_sentiment half_hour EOD 档（与 emotion.eod 同源自洽）的
+   score/stage/riskLevel。已知边界：库内并存 snapshotType=daily 聚合档（10-30：
+   50.8/启动）与 half_hour EOD（43.0/退潮）口径不一致，待专查后再裁决用哪个。
+2. `themeBoards`：题材龙头链板块级 doc（{tradingDate, docKind:sector}）的
+   continuation/depth 档位原值；进攻（strong_extend）/回避（ending）名单由消费方
+   机械派生，语料只存档位（单一事实源=theme_leader_ammo）。
+3. `marketAmount`：EOD 档 metrics.comparison 的今日/昨日池内成交额合计 + totalChange1d
+   + 主力净额（同口径对比）。全市场口径 market_daily_amount 需 TDX 节点回填
+   （10-23 起缺，节点池暂不可用——「59.36.5.11 空 K 线」），恢复后可切全市场口径。
+4. `promotion`：复用连板情绪链 `_promotion_stats` 单一算式（昨日封板池→今日晋级率），
+   只喂数值（rate/baseCount/promotedCount/brokenCount/denom）不喂代码名单；prev 交易日
+   取 emotion.prevEodDate，缺失显式降级。
+
+10-30 实测：晋级率 23.1%（9/39）、量能 5322亿 vs 5312亿（+0.2%）、EOD 43.0/退潮/高风险、
+题材方向 医疗医药 strong_extend vs AI硬件/商业航天/机器人 ending——四题判据的字段供给齐了。
+
+题目集 v2（4 计划题）判据文本待用户裁决后写定（只引用语料已有字段），换代登记
+QUESTION_SET_VERSION_RECAP v1→v2 另行提交。

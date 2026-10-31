@@ -35,6 +35,7 @@ from backend.services.jev import jev_daily_recap_corpus as corpus
 from backend.services.jev.jev_client import dispatch_jev_call, parse_jev_response
 from backend.services.jev.jev_dieban_review import collect_dieban_review
 from backend.services.jev.jev_rise_review import collect_rise_review
+from backend.operations.jev_relay_index import _promotion_stats
 from backend.operations.theme_leader_label import (
     LIVE_ARCHIVE_COLLECTION,
     _AI_GEN_NOTE,
@@ -160,6 +161,105 @@ def load_emotion(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str
 
 # ---------------------------------------------------------------- 主流程
 
+def load_eod_judge(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """EOD 情绪结构化判定（hotlist_sentiment half_hour EOD 档，与 load_eod_scores 同源自洽）。
+
+    注意：库内另存在 snapshotType=daily 聚合档（10-30：score 50.8/stage 启动），与 half_hour
+    EOD 档（43.0/退潮）口径不一致——已知边界登记设计文档 §10 待专查；本 loader 取 half_hour
+    EOD（与 emotion.eod 同源，避免语料内自相矛盾）。
+    """
+    try:
+        doc = db["hotlist_sentiment"].find_one(
+            {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+             "slotTime": "EOD", "tradingDate": str(date)}) or {}
+    except Exception as exc:  # noqa: BLE001 — 读失败显式降级
+        return {"ok": False, "reason": f"eod_read_failed: {exc}"}, [
+            {"source": "eod_judge", "reason": f"eod_read_failed: {exc}", "action": "corpus_absent"}]
+    if not doc:
+        degraded = [{"source": "eod_judge", "reason": "eod_doc_missing", "action": "corpus_absent"}]
+        return {"ok": False, "reason": "eod_doc_missing"}, degraded
+    score = (doc.get("emotionScore") or {}).get("score")
+    return {"ok": True, "score": score, "stage": doc.get("stage"),
+            "riskLevel": doc.get("riskLevel")}, []
+
+
+def load_theme_boards(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """题材龙头方向块（hotlist_jev_theme_leader_labels 板块级 doc，延续性/投机阶段档位）。
+
+    进攻/回避名单由消费方机械派生（strong_extend→进攻候选；ending→回避候选），loader 只读档。
+    全天无板块档（链未跑/当日无题材）→ ok:false + degraded，不伪造空名单。
+    """
+    try:
+        docs = list(db["hotlist_jev_theme_leader_labels"].find(
+            {"tradingDate": str(date), "docKind": "sector"}))
+    except Exception as exc:  # noqa: BLE001 — 读失败显式降级
+        return {"ok": False, "reason": f"theme_read_failed: {exc}"}, [
+            {"source": "theme_boards", "reason": f"theme_read_failed: {exc}", "action": "corpus_absent"}]
+    if not docs:
+        degraded = [{"source": "theme_boards", "reason": "theme_sector_docs_missing",
+                     "action": "corpus_absent"}]
+        return {"ok": False, "reason": "theme_sector_docs_missing"}, degraded
+    boards = []
+    for d in docs:
+        a = d.get("answers") or {}
+        boards.append({
+            "board": d.get("board"),
+            "continuation": (a.get("theme_continuation") or {}).get("choice"),
+            "depth": (a.get("theme_speculation_depth") or {}).get("choice"),
+        })
+    boards.sort(key=lambda b: str(b.get("board") or ""))
+    return {"ok": True, "boards": boards}, []
+
+
+def load_market_amount(db: Any, date: str) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """量能锚点（hotlist_sentiment EOD 档 metrics.comparison：今日/昨日池内成交额合计，同口径对比）。
+
+    全市场口径参考集合 market_daily_amount 需 TDX 节点回填（10-23 起缺、节点池暂不可用），
+    本 loader 用池内同口径比值（今日/昨日集合可比）；绝对值为池内口径，字段名如实标注。
+    """
+    try:
+        doc = db["hotlist_sentiment"].find_one(
+            {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+             "slotTime": "EOD", "tradingDate": str(date)}) or {}
+    except Exception as exc:  # noqa: BLE001 — 读失败显式降级
+        return {"ok": False, "reason": f"amount_read_failed: {exc}"}, [
+            {"source": "market_amount", "reason": f"amount_read_failed: {exc}", "action": "corpus_absent"}]
+    cmp_ = ((doc.get("metrics") or {}).get("comparison") or {})
+    today = (cmp_.get("today") or {}).get("totalTurnover")
+    yesterday = (cmp_.get("yesterday") or {}).get("totalTurnover")
+    if today is None:
+        degraded = [{"source": "market_amount", "reason": "turnover_missing",
+                     "action": "corpus_absent"}]
+        return {"ok": False, "reason": "turnover_missing"}, degraded
+    return {"ok": True, "todayTurnover": today, "yesterdayTurnover": yesterday,
+            "change1d": cmp_.get("totalChange1d"),
+            "mainNetAmount": (cmp_.get("today") or {}).get("mainNetAmount")}, []
+
+
+def load_promotion(db: Any, date: str, prev_date: str | None) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """晋级率锚点（复用连板情绪链 _promotion_stats 单一算式：昨日封板池→今日晋级/断板）。
+
+    只喂数值不喂代码名单（token 纪律）；prev_date 缺（如首日/停市日）→ 显式降级不硬算。
+    """
+    if not prev_date:
+        degraded = [{"source": "promotion", "reason": "prev_trading_date_unknown",
+                     "action": "corpus_absent"}]
+        return {"ok": False, "reason": "prev_trading_date_unknown"}, degraded
+    try:
+        stats = _promotion_stats(db, prev_date, str(date), "dragonboard_live")
+    except Exception as exc:  # noqa: BLE001 — 算式异常显式降级
+        return {"ok": False, "reason": f"promotion_failed: {exc}"}, [
+            {"source": "promotion", "reason": f"promotion_failed: {exc}", "action": "corpus_absent"}]
+    if stats.get("ok") is not True:
+        degraded = [{"source": "promotion", "reason": f"promotion_unavailable: {stats.get('reason')}",
+                     "action": "corpus_absent"}]
+        return {"ok": False, "reason": f"promotion_unavailable: {stats.get('reason')}"}, degraded
+    return {"ok": True, "rate": stats.get("rate"), "baseCount": len(stats.get("base") or []),
+            "promotedCount": len(stats.get("promoted") or []),
+            "brokenCount": len(stats.get("broken") or []),
+            "denom": stats.get("denom")}, []
+
+
 def _fallback_plan_bias(final_recap_shape: str | None) -> str | None:
     """plan_bias 兜底跟随最终 recap_shape 档位（保持成文自洽，不为再判一次）。"""
     if final_recap_shape is None or final_recap_shape == "insufficient_evidence":
@@ -193,12 +293,20 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
     emotion, emotion_degraded = load_emotion(db, date)
     kpl_wrap, kpl_degraded = load_kpl_wrap(db, date)
     relay_judgment, relay_degraded = load_relay_judgment(db, date)
+    eod_judge, eod_degraded = load_eod_judge(db, date)
+    theme_boards, theme_degraded = load_theme_boards(db, date)
+    market_amount, amount_degraded = load_market_amount(db, date)
+    promotion, promo_degraded = load_promotion(db, date, emotion.get("prevEodDate"))
     degraded: list[dict[str, str]] = (list(facts["degradedSources"]) + emotion_degraded
-                                      + kpl_degraded + relay_degraded)
+                                      + kpl_degraded + relay_degraded
+                                      + eod_degraded + theme_degraded
+                                      + amount_degraded + promo_degraded)
 
     questions = corpus.build_questions(facts)
     state = corpus.build_state(date, facts, emotion,
-                               kpl_wrap=kpl_wrap, relay_judgment=relay_judgment)
+                               kpl_wrap=kpl_wrap, relay_judgment=relay_judgment,
+                               eod_judge=eod_judge, theme_boards=theme_boards,
+                               market_amount=market_amount, promotion=promotion)
     rule_answers = {q: corpus.RULES[q](facts) for q in _QUESTION_KEYS}
 
     jev_meta: dict[str, Any] | None = None
@@ -280,6 +388,10 @@ def run_daily_recap_for_date(date: str, *, apply: bool = False,
         "emotion": emotion,
         "kplWrap": kpl_wrap,
         "relayJudgment": relay_judgment,
+        "eodJudge": eod_judge,
+        "themeBoards": theme_boards,
+        "marketAmount": market_amount,
+        "promotion": promotion,
         "ruleAnswers": rule_answers,
         "answers": {q: {"choice": slots.get(q), "source": sources[q]} for q in _QUESTION_KEYS},
         "text": text,

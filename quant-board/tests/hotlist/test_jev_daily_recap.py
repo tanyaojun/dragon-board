@@ -106,6 +106,10 @@ def material(monkeypatch):
     monkeypatch.setattr(ops, "collect_dieban_review", lambda db, date: mk_dieban())
     monkeypatch.setattr(ops, "load_kpl_wrap", lambda db, date: ({"ok": True, "time": "15:00", "comment": "综述", "fromArchive": True}, []))
     monkeypatch.setattr(ops, "load_relay_judgment", lambda db, date: ({"ok": True, "index": 30.6, "answers": {}}, []))
+    monkeypatch.setattr(ops, "load_eod_judge", lambda db, date: ({"ok": True, "score": 43.0, "stage": "退潮", "riskLevel": "高"}, []))
+    monkeypatch.setattr(ops, "load_theme_boards", lambda db, date: ({"ok": True, "boards": []}, []))
+    monkeypatch.setattr(ops, "load_market_amount", lambda db, date: ({"ok": True, "todayTurnover": 1.0, "yesterdayTurnover": 1.0, "change1d": 0, "mainNetAmount": None}, []))
+    monkeypatch.setattr(ops, "load_promotion", lambda db, date, prev: ({"ok": True, "rate": 23.1, "baseCount": 39, "promotedCount": 9, "brokenCount": 30, "denom": 39}, []))
 
 
 # ---------------------------------------------------------------- 语料拼装（纯函数）
@@ -549,6 +553,122 @@ def test_build_state_v2_blocks_and_fail_visible():
     state2 = corpus.build_state("2026-10-31", facts, {"eod": 62.0})
     assert state2["kplWrap"] == {"ok": False, "reason": "kpl_wrap_unavailable"}
     assert state2["relayJudgment"] == {"ok": False, "reason": "relay_judgment_unavailable"}
+
+
+def test_load_eod_judge_and_theme_and_amount(monkeypatch):
+    """语料 v3：EOD 结构化判定（half_hour EOD 同源）；题材方向块；量能锚点。"""
+
+    class SentDb:
+        def __init__(self, doc):
+            self.doc = doc
+
+        def __getitem__(self, name):
+            assert name == "hotlist_sentiment"
+            return self
+
+        def find_one(self, q):
+            assert q["snapshotType"] == "half_hour" and q["slotTime"] == "EOD"
+            return self.doc
+
+    doc = {"emotionScore": {"score": 43.0}, "stage": "退潮", "riskLevel": "高",
+           "metrics": {"comparison": {
+               "today": {"totalTurnover": 5322e8, "mainNetAmount": -105.6e8},
+               "yesterday": {"totalTurnover": 5312e8}, "totalChange1d": -2}}}
+    payload, degraded = ops.load_eod_judge(SentDb(doc), "2026-10-30")
+    assert payload == {"ok": True, "score": 43.0, "stage": "退潮", "riskLevel": "高"}
+    assert degraded == []
+
+    amount, adeg = ops.load_market_amount(SentDb(doc), "2026-10-30")
+    assert amount["ok"] is True and amount["todayTurnover"] == 5322e8
+    assert amount["yesterdayTurnover"] == 5312e8 and amount["change1d"] == -2
+    assert adeg == []
+
+    # 缺档/缺量能 → 显式降级
+    p2, d2 = ops.load_eod_judge(SentDb({}), "d")
+    assert p2 == {"ok": False, "reason": "eod_doc_missing"} and d2[0]["source"] == "eod_judge"
+    p3, d3 = ops.load_market_amount(SentDb({"metrics": {}}), "d")
+    assert p3 == {"ok": False, "reason": "turnover_missing"} and d3[0]["reason"] == "turnover_missing"
+
+
+def test_load_theme_boards_and_promotion(monkeypatch):
+    """语料 v3：题材方向块（板块级 doc 枚举）；晋级率（复用 _promotion_stats 单一算式）。"""
+
+    class ThemeDb:
+        def __getitem__(self, name):
+            assert name == "hotlist_jev_theme_leader_labels"
+            return self
+
+        def find(self, q):
+            assert q == {"tradingDate": "2026-10-30", "docKind": "sector"}
+            return [{"board": "医疗医药", "answers": {
+                        "theme_continuation": {"choice": "strong_extend"},
+                        "theme_speculation_depth": {"choice": "igniting"}}},
+                    {"board": "AI硬件", "answers": {
+                        "theme_continuation": {"choice": "ending"},
+                        "theme_speculation_depth": {"choice": "igniting"}}}]
+
+    payload, degraded = ops.load_theme_boards(ThemeDb(), "2026-10-30")
+    assert payload["ok"] is True and len(payload["boards"]) == 2
+    by_name = {b["board"]: b for b in payload["boards"]}
+    assert by_name["医疗医药"]["continuation"] == "strong_extend"
+    assert by_name["AI硬件"]["continuation"] == "ending"
+    assert degraded == []
+
+    # 无板块档 → 显式降级（不伪造空名单）
+    class EmptyThemeDb:
+        def __getitem__(self, name):
+            return self
+
+        def find(self, q):
+            return []
+
+    p2, d2 = ops.load_theme_boards(EmptyThemeDb(), "d")
+    assert p2 == {"ok": False, "reason": "theme_sector_docs_missing"}
+    assert d2[0]["reason"] == "theme_sector_docs_missing"
+
+    # 晋级率：prev_date 缺 → 降级；正常 → 数值透传（内部 _promotion_stats 由 ops 引用替换）
+    p3, d3 = ops.load_promotion(object(), "2026-10-30", None)
+    assert p3 == {"ok": False, "reason": "prev_trading_date_unknown"}
+    assert d3[0]["reason"] == "prev_trading_date_unknown"
+
+    class FakeStatsDb:
+        pass
+
+    orig = ops._promotion_stats
+    try:
+        ops._promotion_stats = lambda db, prev, date, ds: {
+            "ok": True, "rate": 23.1, "base": ["a", "b"],
+            "promoted": ["a"], "broken": ["b"], "denom": 2}
+        p4, d4 = ops.load_promotion(FakeStatsDb(), "2026-10-30", "2026-10-29")
+        assert p4 == {"ok": True, "rate": 23.1, "baseCount": 2, "promotedCount": 1,
+                      "brokenCount": 1, "denom": 2}   # 只喂数值，代码名单不进语料
+        assert d4 == []
+        ops._promotion_stats = lambda db, prev, date, ds: {"ok": False, "reason": "x final 缺失"}
+        p5, d5 = ops.load_promotion(FakeStatsDb(), "2026-10-30", "2026-10-29")
+        assert p5["ok"] is False and "promotion_unavailable" in p5["reason"]
+    finally:
+        ops._promotion_stats = orig
+
+
+def test_build_state_v3_blocks():
+    """语料 v3：四块入 state 顶层；缺料 ok:false 透传。"""
+    facts = corpus.collect_review_facts(mk_rise(), mk_dieban())
+    state = corpus.build_state(
+        "2026-10-31", facts, {"eod": 43.0},
+        kpl_wrap={"ok": True, "comment": "综述"},
+        relay_judgment={"ok": True, "index": 30.6},
+        eod_judge={"ok": True, "stage": "退潮", "riskLevel": "高"},
+        theme_boards={"ok": True, "boards": [{"board": "医疗医药", "continuation": "strong_extend"}]},
+        market_amount={"ok": True, "todayTurnover": 5322e8},
+        promotion={"ok": True, "rate": 23.1})
+    assert state["eodJudge"] == {"ok": True, "stage": "退潮", "riskLevel": "高"}
+    assert state["themeBoards"]["boards"][0]["board"] == "医疗医药"
+    assert state["marketAmount"]["ok"] and state["promotion"]["rate"] == 23.1
+    state2 = corpus.build_state("2026-10-31", facts, {"eod": 43.0})
+    assert state2["eodJudge"] == {"ok": False, "reason": "eod_judge_unavailable"}
+    assert state2["themeBoards"] == {"ok": False, "reason": "theme_boards_unavailable"}
+    assert state2["marketAmount"] == {"ok": False, "reason": "market_amount_unavailable"}
+    assert state2["promotion"] == {"ok": False, "reason": "promotion_unavailable"}
 
 
 def test_persist_failure_marks_result_and_degraded(material, monkeypatch):
