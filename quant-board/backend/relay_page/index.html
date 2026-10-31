@@ -757,11 +757,6 @@
               <option value="cy">创业板</option><option value="kc">科创板</option>
               <option value="bj">北交所</option><option value="sz">深主板</option>
             </select>
-            <select title="席位过滤" onchange="kplLhbSSet('seat', this.value)">
-              <option value="on" selected>席位 · 仅上榜</option>
-              <option value="all">席位 · 全部</option>
-              <option value="off">席位 · 仅未上榜</option>
-            </select>
             <button onclick="kplLhbSClear()">清除筛选</button>
             <span class="cnt" id="kplLhbSCnt"></span>
           </div>
@@ -4771,7 +4766,7 @@ const KPL = {
         seatMode: 'stock', branch: null, branchName: '', branchDate: '', branchMsg: '',
         day: null, dayDate: '', dayMsg: '',          // 东财全日席位：stocks 过滤集 / branches 名集
         board: null, boardDate: '', boardMsg: '',     // KPL GetStockList 实际上榜名单（当日左列表主源）
-        sFilter: {q: '', mkt: '', seat: 'on'}, sSort: {key: 'zf', dir: -1}},
+        sFilter: {q: '', mkt: ''}, sSort: {key: 'zf', dir: -1}},
   // selCode=个股页签选中股；seat=席位前五快照（个股模式）；seatMode=stock|branch（营业部页签反查）；
   // day=东财全日席位按股聚合（左列表过滤集）；sFilter/sSort=个股列表搜索/筛选/排序（涨停复盘同款）
   // selCode=左列表选中个股；seat=席位前五快照（东财 lhb-seat-detail）；seatDate=席位已加载日期；
@@ -6027,18 +6022,8 @@ function kplLhbStockListRender(){
   const all = kplLhbStockRows();
   const day = KPL.lhb.day, dayCodes = day ? new Set((day.stocks || []).map(s => String(s.code))) : null;
   const f = KPL.lhb.sFilter;
-  // 席位过滤（2026-10-30 用户需求：默认仅显有营业部上榜的股票）；席位数据缺/空不硬门禁，
-  // 显注记显全部（fail-visible）
-  let rows = all;
-  let seatNote = '';
-  if (f.seat !== 'all'){
-    if (dayCodes && dayCodes.size){
-      rows = rows.filter(r => dayCodes.has(String(r.code)) === (f.seat === 'on'));
-    } else {
-      // on/off 都不可判定（席位数据缺）：不硬门禁显全部 + 注记（fail-visible，review #4）
-      seatNote = KPL.lhb.dayMsg ? '当日席位数据不可用（' + KPL.lhb.dayMsg + '），暂显全部' : '当日席位数据加载中，暂显全部';
-    }
-  }
+  // 席位三态过滤已随读数入口修正删除（2026-10-30 用户裁决）：主源=GetStockList 实际
+  // 上榜名单，仅上榜恒真/仅未上榜恒空，无区分意义；东财 dayCodes 仅作 cnt 口径对照
   if (f.q) rows = rows.filter(r =>
     (r.name || '').toLowerCase().includes(f.q) || String(r.code || '').includes(f.q)
     || (r.plate || '').toLowerCase().includes(f.q) || (r.reason || '').toLowerCase().includes(f.q));
@@ -6084,15 +6069,14 @@ function kplLhbStockListRender(){
           + '<td>' + esc(r.plate || '--') + '</td>'
           + '<td>' + esc(r.reason || '--') + '</td></tr>';
       }).join('')
-    : '<tr><td colspan="13" style="color:var(--muted)">--（当前筛选无匹配；可放宽席位/市场筛选或清筛选）</td></tr>';
+    : '<tr><td colspan="13" style="color:var(--muted)">--（当前筛选无匹配；可放宽市场筛选或清筛选）</td></tr>';
   const cnt = $('kplLhbSCnt');
   if (cnt) cnt.textContent = rows.length + ' / ' + all.length + ' 只'
     + (dayCodes && dayCodes.size ? ' · 席位榜 ' + dayCodes.size + ' 只' : '')
     + (KPL.lhb.board && KPL.lhb.board.effective_date
       ? ' · 榜日期 ' + KPL.lhb.board.effective_date
         + (KPL.lhb.board.effective_date !== KPL.lhb.board.requested_date ? '（已回退）' : '')
-      : '')
-    + (seatNote ? ' · ' + seatNote : '');
+      : '');
   if (changed && KPL.lhb.selCode) kplLhbSelectStock(KPL.lhb.selCode);   // 自动选首行 → 触发席位前五加载
 }
 function kplLhbSelectStock(code){
@@ -6139,7 +6123,7 @@ function kplLhbSSet(k, v){
   kplLhbStockListRender();
 }
 function kplLhbSClear(){
-  KPL.lhb.sFilter = {q: '', mkt: '', seat: 'on'};
+  KPL.lhb.sFilter = {q: '', mkt: ''};
   $('kplLhbSq').value = '';
   const sels = $('kplLhbSFilter').querySelectorAll('select');
   if (sels[0]) sels[0].value = '';
