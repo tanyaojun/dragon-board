@@ -30,6 +30,7 @@ class FakeCollection:
     def __init__(self):
         self.docs: dict[str, dict] = {}
         self.replacements: list[str] = []
+        self.updates: list[str] = []
 
     def find_one(self, q, *a, **k):
         return self.docs.get(q["_id"])
@@ -37,6 +38,20 @@ class FakeCollection:
     def replace_one(self, q, doc, upsert=False):
         self.replacements.append(q["_id"])
         self.docs[q["_id"]] = doc
+
+    def update_one(self, q, update, upsert=False):
+        """$set 语义（含 frames.<key> 点路径，与 MongoDB 一致）；upsert 新建时
+        query _id 带入文档（MongoDB 行为）。"""
+        self.updates.append(q["_id"])
+        doc = self.docs.setdefault(q["_id"], {})
+        if upsert and "_id" not in doc:
+            doc["_id"] = q["_id"]
+        for k, v in update.get("$set", {}).items():
+            if "." in k:
+                head, tail = k.split(".", 1)
+                doc.setdefault(head, {})[tail] = v
+            else:
+                doc[k] = v
 
 
 class FakeDB:
@@ -92,11 +107,11 @@ def env(monkeypatch):
     return db
 
 
-QUOTES = {"600001": (11.0, 10.0),    # +10%
-          "600002": (9.8, 10.0),     # -2%
-          "600003": (5.0, 5.0),      # 0%
-          "600004": (2.2, 2.0),      # +10%
-          "300001": (20.0, 21.0)}    # -4.76%
+QUOTES = {"600001": (11.0, 10.0, 1.2e8),    # +10%
+          "600002": (9.8, 10.0, 3.4e7),     # -2%
+          "600003": (5.0, 5.0, 0.0),        # 0%（零成交真读数保留，量比配对剔除）
+          "600004": (2.2, 2.0, 8.0e6),      # +10%
+          "300001": (20.0, 21.0, None)}     # -4.76%（amount 不可考对账）
 
 
 def _fetch_ok(codes):
@@ -159,19 +174,26 @@ def test_fetch_quotes_partial_batch_error_keeps_data(monkeypatch):
             return pd.DataFrame([{"code": "600002", "price": 9.8, "last_close": 10.0}])
 
     monkeypatch.setattr(sp, "_tdx_daily_client", lambda: FlakyClient())
-    assert sp._fetch_quotes({"600001", "600002"}) == {"600002": (9.8, 10.0)}
+    assert sp._fetch_quotes({"600001", "600002"}) == {"600002": (9.8, 10.0, None)}
 
 
 def test_pulse_stats_manual_check():
-    """红盘率/聚合涨幅手算对拍 + 全缺不伪 0 + quotes_map=None 不可考。"""
+    """红盘率/聚合涨幅手算对拍 + 全缺不伪 0 + quotes_map=None 不可考 + amount 对账。"""
     codes = {"600001", "600002", "600003", "600999"}   # 600999 缺报价
     s = _pulse_stats(QUOTES, codes)
     assert s["memberN"] == 4 and s["quotedN"] == 3 and s["missingN"] == 1
     assert s["pctMean"] == round((10.0 - 2.0 + 0.0) / 3, 2)
     assert s["redRatio"] == round(1 / 3, 3)
+    # V4-E：amountQuotedN+amountMissingN=quotedN 对账；零成交真读数计入聚合
+    assert s["amountQuotedN"] == 3 and s["amountMissingN"] == 0
+    assert s["amountSum"] == round(1.2e8 + 3.4e7 + 0.0, 2)
+    s2 = _pulse_stats(QUOTES, {"600001", "300001"})   # 300001 amount 不可考
+    assert s2["amountQuotedN"] == 1 and s2["amountMissingN"] == 1
+    assert s2["amountSum"] == 1.2e8
     empty = _pulse_stats(QUOTES, {"600998"})
     assert empty["pctMean"] is None and empty["redRatio"] is None
-    assert empty["missingN"] == 1
+    assert empty["missingN"] == 1 and empty["amountSum"] is None
+    assert empty["amountQuotedN"] == 0 and empty["amountMissingN"] == 0
     assert _pulse_stats(None, {"600001"})["pctMean"] is None
 
 
@@ -200,7 +222,7 @@ def test_compute_pulse_tdx_down_fail_visible(env):
     assert payload["ok"] is True
     assert all(e["pulse"] is None for e in payload["all"])
     assert "TDX 盘中报价不可考" in payload["meta"]["reason"]
-    assert "不落 15:00 帧" in payload["meta"]["frameSkip"]
+    assert "不落帧" in payload["meta"]["frameSkip"]
 
 
 def test_compute_pulse_no_prev_trading_day(env, monkeypatch):
@@ -213,37 +235,44 @@ def test_compute_pulse_no_prev_trading_day(env, monkeypatch):
 
 
 def test_frame_saved_after_1505_trading_day(env, monkeypatch):
-    """≥15:05 且交易日 → 幂等落帧（_id={date}:PULSE）。"""
+    """≥15:05 且交易日 → 幂等落帧（_id={date}:PULSE，update_one 保留 frames）。"""
     monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
                         lambda d: (True, "weekday"))
     payload = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 6, 0),
                             quotes_fetcher=_fetch_ok)
     assert payload["meta"]["framesSaved"] is True
-    assert env.pulse.replacements == [f"{TODAY}:PULSE"]
+    assert payload["meta"]["frameSavedKey"] == "15:00"
+    assert env.pulse.updates == [f"{TODAY}:PULSE"]
     frame = env.pulse.docs[f"{TODAY}:PULSE"]
     assert frame["date"] == TODAY and frame["evidenceStage"] == "closed"
     assert frame["_id"] == f"{TODAY}:PULSE"
-    # 幂等：收盘后再算仍是同键覆盖（replace_one 计数=2、单档）
+    assert frame["meta"]["framesSaved"] is True   # 顶层 meta 与内存一致
+    # V4-E：frames["15:00"] 带板块红盘读数+amount 明细；无昨日帧 → 量比 None
+    fb = frame["frames"]["15:00"]["boards"]["机器人"]
+    assert fb["pctMean"] == 4.5 and fb["amounts"]["600001"] == 1.2e8
+    assert fb["volRatioMedian"] is None and fb["volRatioQuotedN"] == 0
+    assert frame["frames"]["15:00"]["volBasis"] == "prev_frame_missing"
+    # 幂等：收盘后再算仍是同键覆盖（update_one 计数=2、单档）
     compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 30, 0),
                   quotes_fetcher=_fetch_ok)
-    assert env.pulse.replacements.count(f"{TODAY}:PULSE") == 2
+    assert env.pulse.updates.count(f"{TODAY}:PULSE") == 2
     assert len([k for k in env.pulse.docs if k.endswith(":PULSE")]) == 1
 
 
 def test_frame_not_saved_intraday_or_holiday(env, monkeypatch):
-    """盘中不落帧；非交易日不落帧（frameSkip 披露判定来源）。"""
+    """非捕获窗不落帧；非交易日不落帧（frameSkip 披露判定来源）。"""
     monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
                         lambda d: (True, "weekday"))
-    p1 = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 14, 0, 0),
-                       quotes_fetcher=_fetch_ok)
-    assert p1["meta"]["framesSaved"] is False and env.pulse.replacements == []
+    p1 = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 14, 6, 0),
+                       quotes_fetcher=_fetch_ok)   # 14:06 帧窗已关（14:30 帧未开）
+    assert p1["meta"]["framesSaved"] is False and env.pulse.updates == []
     monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
                         lambda d: (False, "weekday"))
     p2 = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 10, 0),
                        quotes_fetcher=_fetch_ok)
     assert p2["meta"]["framesSaved"] is False
     assert "非交易日" in p2["meta"]["frameSkip"]
-    assert env.pulse.replacements == []
+    assert env.pulse.updates == []
 
 
 def test_frame_not_saved_between_1500_and_1505(env, monkeypatch):
@@ -253,8 +282,8 @@ def test_frame_not_saved_between_1500_and_1505(env, monkeypatch):
     p = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 2, 0),
                       quotes_fetcher=_fetch_ok)
     assert p["evidenceStage"] == "closed"
-    assert p["meta"]["framesSaved"] is False and env.pulse.replacements == []
-    assert "15:05" in p["meta"]["frameSkip"]
+    assert p["meta"]["framesSaved"] is False and env.pulse.updates == []
+    assert "非帧捕获窗" in p["meta"]["frameSkip"]
 
 
 def test_frame_write_failure_does_not_kill_payload(env, monkeypatch):
@@ -262,10 +291,10 @@ def test_frame_write_failure_does_not_kill_payload(env, monkeypatch):
     monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
                         lambda d: (True, "weekday"))
 
-    def boom(q, doc, upsert=False):
+    def boom(q, update, upsert=False):
         raise RuntimeError("mongo down")
 
-    env.pulse.replace_one = boom
+    env.pulse.update_one = boom
     p = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 6, 0),
                       quotes_fetcher=_fetch_ok)
     assert p["ok"] is True and len(p["all"]) == 2   # 展示数据完好
@@ -292,7 +321,7 @@ def test_non_trading_day_stage_forced_closed(env, monkeypatch):
                       quotes_fetcher=_fetch_ok)
     assert p["evidenceStage"] == "closed"
     assert "非交易日" in p["meta"]["tradingDayNote"]
-    assert p["meta"]["framesSaved"] is False and env.pulse.replacements == []
+    assert p["meta"]["framesSaved"] is False and env.pulse.updates == []
 
 
 def test_trading_day_check_failure_degrades_visibly(env, monkeypatch):

@@ -21,6 +21,7 @@ import contextlib
 import contextvars
 import datetime
 import json
+import math
 import os
 import re
 import threading
@@ -1397,7 +1398,9 @@ _TAIL_FAIL_TTL = 60.0
 _TAIL_MERGED: dict[str, str] = {}         # code → 合并进来的最后日期（溯源用）
 _TAIL_FAIL_CODES: set[str] = set()        # 补尾失败且线上也无该日期的 code（fail-visible 计数）
 _TAIL_VOL_SOURCE: dict[str, str] = {}     # code → 量纲校准来源（overlap=实测比值 / assumed=兜底 100）
+_TAIL_AMOUNT_SOURCE: dict[str, str] = {}  # code → amount 校准来源（同上；两源同单位时恒 overlap/1.0）
 _ONLINE_VOL_TO_LOCAL_DEFAULT = 100.0      # 线上 vol=手、本地 vipdoc vol=股（实测恒 100）
+_ONLINE_AMOUNT_TO_LOCAL_DEFAULT = 1.0     # amount 两源同单位（元）：2026-10-30 实测 600519/002242 重叠日逐值相同，factor 恒 1
 # 「本次叙事要用到的最新交易日」上下文：由 `bars_need_upto(date)` 在叙事组装期间声明。
 # 用上下文变量而非逐调用点传参：`_daily_bars` 在生产有 6+ 调用点、测试普遍把它打成
 # 单参 lambda（conftest 离线护栏）——加参数会同时改生产签名与全库测试夹具（2026-10-20 实测）。
@@ -1484,7 +1487,9 @@ def _local_daily_bars(code: str) -> list[dict] | None:
         if not recs:
             return None
         bars = [{"date": _iso(r[0]), "high": r[2] / 100.0, "close": r[4] / 100.0,
-                 "vol": float(r[6])} for r in recs]
+                 "vol": float(r[6]), "amount": float(r[5])} for r in recs]
+        # amount=index5（<IIIIIfII 布局，单位=元；V2d 量能锚影子列原料，
+        # sector-nodes-v2d-preregistration 条款 1；与线上 pytdx 同单位实测逐值相同）
     except Exception:
         return None
     bars.sort(key=lambda b: b["date"])
@@ -1511,7 +1516,9 @@ def bars_source_provenance() -> dict[str, Any]:
             "tailMergedUpTo": max(_TAIL_MERGED.values()) if _TAIL_MERGED else None,
             "tailMergedCodes": len(_TAIL_MERGED), "tailMissCodes": len(_TAIL_FAIL_CODES),
             "tailVolCalib": {"overlap": sum(1 for v in _TAIL_VOL_SOURCE.values() if v == "overlap"),
-                             "assumed": sum(1 for v in _TAIL_VOL_SOURCE.values() if v == "assumed")}}
+                             "assumed": sum(1 for v in _TAIL_VOL_SOURCE.values() if v == "assumed")},
+            "tailAmountCalib": {"overlap": sum(1 for v in _TAIL_AMOUNT_SOURCE.values() if v == "overlap"),
+                                "assumed": sum(1 for v in _TAIL_AMOUNT_SOURCE.values() if v == "assumed")}}
 
 
 def _tdx_hosts_path() -> Path:
@@ -1582,7 +1589,7 @@ def _tdx_daily_client():
 
 
 def _daily_bars(code: str) -> list[dict]:
-    """日线棒升序（date/high/close/vol）——**本地 vipdoc 优先，线上 mootdx 回退**（2026-10-18）。
+    """日线棒升序（date/high/close/vol/amount）——**本地 vipdoc 优先，线上 mootdx 回退**（2026-10-18）。
 
     线上补尾（2026-10-20 修复）：叙事组装期间由 `bars_need_upto(date)` 声明「本次要用到的
     最新交易日」；若本地末棒早于它（闭市后没跑通达信盘后下载），只从线上补「比本地末棒更新的
@@ -1641,11 +1648,18 @@ def _online_daily_bars(code: str) -> list[dict]:
                 df = client.bars(symbol=code, frequency=9, start=0, offset=offset)
             if df is not None and len(df) > 0:
                 for _, r in df.iterrows():
-                    bars.append({
+                    bar = {
                         "date": f"{int(r['year']):04d}-{int(r['month']):02d}-{int(r['day']):02d}",
                         "high": float(r["high"]), "close": float(r["close"]),
                         "vol": float(r.get("vol") or 0),
-                    })
+                    }
+                    # V2d 条款 1：amount 缺失/NaN **省略键**（保留缺失语义，绝不铸 0——
+                    # 铸 0 会让尾棒以伪 0 混入 amountSum，违反 §4.0；review P2-1）
+                    raw_amt = r.get("amount")
+                    if raw_amt is not None and not (
+                            isinstance(raw_amt, float) and math.isnan(raw_amt)):
+                        bar["amount"] = float(raw_amt)
+                    bars.append(bar)
                 bars.sort(key=lambda b: b["date"])
                 _bars_count(f"online:{offset}")
         except Exception:
@@ -1681,13 +1695,37 @@ def _merged_with_online_tail(code: str, local: list[dict], need_upto: str) -> li
         return None
     factor, src = _online_vol_factor(local, online_all)
     tail = [{**b, "vol": b["vol"] * factor} for b in tail]
+    # V2d 条款 1：尾部棒带 amount 合并（系数同 vol 机制，两源同单位时恒 1）。
+    # amount 缺失的棒**保留缺失**（不铸 0），由消费层 amountAbsentN 披露。
+    afactor, asrc = _online_amount_factor(local, online_all)
+    tail = [{**b, **({"amount": b["amount"] * afactor}
+                     if b.get("amount") is not None else {})} for b in tail]
     merged = local + tail
     _DAILY_BARS_CACHE[key] = merged
     with _BARS_LOCK:
         _BARS_SOURCE_COUNTS["local+onlineTail"] = _BARS_SOURCE_COUNTS.get("local+onlineTail", 0) + 1
         _TAIL_MERGED[code] = tail[-1]["date"]
         _TAIL_VOL_SOURCE[code] = src
+        _TAIL_AMOUNT_SOURCE[code] = asrc
     return merged
+
+
+def _online_amount_factor(local: list[dict], online: list[dict]) -> tuple[float, str]:
+    """线上 amount → 本地 amount 换算系数（重叠日期中位比值；2026-10-30 实测两源同单位恒 1）。
+
+    与 vol（手 vs 股 ×100）不同，pytdx amount 与 vipdoc amount 同为元且逐值相同；
+    机制保留 fail-visible（若未来数据源改单位，中位比值自动纠正并标 provenance），
+    兕底 1.0 标 assumed。
+    """
+    lo = {b["date"]: b for b in local}
+    ratios = sorted(lo[b["date"]]["amount"] / b["amount"] for b in online
+                    if b.get("date") in lo and b.get("amount")
+                    and lo[b["date"]].get("amount"))
+    if ratios:
+        med = ratios[len(ratios) // 2]
+        if 0.01 <= med <= 1000:
+            return round(med, 6), "overlap"
+    return _ONLINE_AMOUNT_TO_LOCAL_DEFAULT, "assumed"
 
 
 def _online_vol_factor(local: list[dict], online: list[dict]) -> tuple[float, str]:

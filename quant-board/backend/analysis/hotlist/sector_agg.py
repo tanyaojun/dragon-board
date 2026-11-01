@@ -12,13 +12,17 @@ operations/sector_nodes.py 取齐传入（final 池窗口 + `_daily_bars` 日线
 
 fail-visible：缺棒/无昨收成员剔除统计并计 missingN（不伪装）；全缺时统计值
 None 不落伪 0；窗口不足 N 日 windowDays 披露实际值。
+
+V2d 增量（2026-10-30，sector-nodes-v2d-preregistration 条款 1）：量能锚影子字段
+amountSum/amountQuotedN/amountAbsentN——只添字段不改既有统计口径，AGG_VERSION 升版。
 """
 from __future__ import annotations
 
 import statistics
 from typing import Any
 
-AGG_VERSION = "2026-10-24b"   # b=N 窗终裁单算（2026-10-24 用户裁决：题材炒作周期 5-10 天，N10 覆盖完整周期）
+AGG_VERSION = "2026-11-01b"   # b=V4-D 口径重测：增成员级量比中位 amountMemberRatio（每成员自比当日/前日，
+                              #   控制 N10 成员集日间漂移噪声；v2d 条款 1 + v4-criteria 候选原料）
 AGG_WINDOWS = (10,)           # 双算（5/10）影子对照取消；键名保留 aggN10 显式口径
 
 
@@ -45,8 +49,18 @@ def aggregate_day(*, target_date: str, members: set[str],
     bars_by_code：{code: 日线棒升序}，棒含 date/close；涨幅分母 = 棒序列前一根的
     close（最近收盘价口径，长期停牌取最近棒，不跳空补齐）。
     当日无棒（停牌）或首棒即当日（新上市无昨收）→ 剔除统计 + missingN 披露。
+
+    量能锚（V2d 条款 1，影子不进判据）：amountSum=当日有棒成员的当日成交额合计
+    （单位=元，前端换算亿元）；缺棒成员剔除并计 amountAbsentN（不伪装）；
+    棒无 amount 字段（历史旧数据/未来源缺失）→ amountSum=None 不伪 0，
+    amountAbsentN 如实计数。
     """
     pcts: list[float] = []
+    amounts: list[float] = []
+    ratio_now: list[float] = []
+    ratio_prev: list[float] = []
+    member_ratios: list[float] = []
+    amount_absent = 0
     missing = 0
     for code in sorted(members):
         bars = bars_by_code.get(code) or []
@@ -58,16 +72,47 @@ def aggregate_day(*, target_date: str, members: set[str],
             missing += 1
             continue
         pcts.append((float(close) / float(prev_close) - 1) * 100)
+        amt = bars[idx].get("amount")
+        if amt is None:
+            amount_absent += 1   # 棒在而 amount 缺（旧源/字段缺失）：fail-visible，不伪 0
+        else:
+            amounts.append(float(amt))
+            # 量能放大比样本：同一成员「当日 + 前一交易日」amount **配对齐全**才进
+            # （分子分母同集，缺一即整体剔除——不铸 0 不偏估；棒序前一根与 pct
+            # 分母同锚：长期停牌取最近棒，不跳空补齐）
+            prev_amt = bars[idx - 1].get("amount")
+            if prev_amt is not None and float(prev_amt) > 0:
+                ratio_now.append(float(amt))
+                ratio_prev.append(float(prev_amt))
+                member_ratios.append(float(amt) / float(prev_amt))
     quoted = len(pcts)
     stats: dict[str, Any] = {"memberN": len(members), "quotedN": quoted,
                              "missingN": missing, "windowDays": window_days}
     if quoted == 0:
-        stats.update({"pctMean": None, "pctMedian": None, "redRatio": None})
+        stats.update({"pctMean": None, "pctMedian": None, "redRatio": None,
+                      "amountSum": None, "amountQuotedN": 0, "amountAbsentN": amount_absent,
+                      "amountPrevSum": None, "amountRatio": None, "amountRatioQuotedN": 0})
         return stats
     stats["pctMean"] = round(sum(pcts) / quoted, 2)
     stats["pctMedian"] = round(statistics.median(pcts), 2)
     # redRatio 语义=「红盘率」（收盘>昨收的成员占比），非盘中绿转红——键名已定型不改
     stats["redRatio"] = round(sum(1 for p in pcts if p > 0) / quoted, 3)
+    # 量能锚（V2d 条款 1）：有棒成员的当日成交额合计；全缺 → None（不伪 0）
+    stats["amountQuotedN"] = len(amounts)
+    stats["amountSum"] = round(sum(amounts), 2) if amounts else None
+    stats["amountAbsentN"] = amount_absent
+    # 量能放大比（V4 条款候选原料，影子）：**配对成员**当日合计 / 前日合计
+    # （分子分母同集，缺前日 amount 的成员整体剔除并 ratioQuotedN 披露）；
+    # 样本不足或分母非正 → None（不伪 0、不伪装平量）
+    stats["amountRatioQuotedN"] = len(ratio_now)
+    stats["amountPrevSum"] = round(sum(ratio_prev), 2) if ratio_prev else None
+    stats["amountRatio"] = (round(sum(ratio_now) / sum(ratio_prev), 3)
+                            if ratio_prev and sum(ratio_prev) > 0 and ratio_now else None)
+    # V4-D 口径（2026-11-01 重测）：成员级量比中位——每成员自比当日/前日 amount，
+    # 合计口径混入 N10 成员集日间漂移噪声，逐成员自比消除之；前日 amount≤0 的
+    # 成员剔除（比值无定义，不铸 0）；配对样本 0 → None
+    stats["amountMemberRatio"] = (round(statistics.median(member_ratios), 3)
+                                  if member_ratios else None)
     return stats
 
 

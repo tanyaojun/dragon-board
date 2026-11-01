@@ -86,13 +86,17 @@ def test_settle_day_doc_carries_agg(monkeypatch):
                         lambda db, prev_date, date, ds: {"ok": False, "reason": "无昨日"})
     monkeypatch.setattr(ops, "_leader_states", lambda db, d, pr, ds: {})
     monkeypatch.setattr(ops, "board_count_history", lambda db, d, days, dataset_id=None: {})
+    monkeypatch.setattr(ops, "_member_ratio_history", lambda db, d, days=21, dataset_id=None: {})
     monkeypatch.setattr(ops, "_prev_nodes_of", lambda db, d: None)
     monkeypatch.setattr(ops, "assemble_rows", lambda **kw: {
         "rows": [{"board": "AI算力", "node": "normal", "basis": [], "notes": []}],
         "degraded": []})
     out = ops.settle_day(db, D0, "ds")
     doc = _Coll.saved
-    assert doc["meta"]["aggVersion"] == "2026-10-24b"
+    assert doc["meta"]["aggVersion"] == "2026-11-01b"
+    # V2d 条款 2：meta 影子键在场；prom 链不可算 → None（不伪 0，review P3-4）
+    assert doc["meta"]["promOutOfPoolTotal"] is None
+    assert doc["meta"]["promOutOfPoolUnattributed"] is None
     r = doc["rows"][0]
     assert r["aggN10"]["memberN"] == 1 and r["aggN10"]["pctMean"] == 2.0
     assert doc["aggExtraRows"] == []

@@ -1777,8 +1777,10 @@ def test_banner_errors_routed_to_status_bar(js: str):
         body = _fn(js, fn_name)
         assert 'sbLog(' in body and tag in body, f"{fn_name} 未挂接状态栏（缺 {tag} 前缀）"
     # render 类错误分支（读口异常/降级）同样透出（下跌/上涨复盘用 tag 常量 + sbLog 变量调用）
-    for tag in ('[题材龙头]', '[板块节点]', '[盘中红盘]'):
+    # 2026-11-01 V4-E2：盘中红盘卡（[盘中红盘]）已迁入连板行情表，降级路由走 [连板行情] tag
+    for tag in ('[题材龙头]', '[板块节点]'):
         assert f"sbLog('error', '{tag}" in js or f"sbLog('warn', '{tag}" in js, f"{tag} 报错分支未挂状态栏"
+    assert "[连板行情] 盘中读数读口失败" in js, "pulse 读口失败须随 lbLoad 挂状态栏"
     for tag in ('[下跌复盘]', '[上涨复盘]'):
         assert f"'{tag} '" in js and "sbLog('error', tag" in js, f"{tag} 报错分支未挂状态栏"
 
@@ -1804,5 +1806,5 @@ def test_error_banners_suppressed_page_side(js: str):
         assert "lf-warn" not in body and "✘" not in body, f"{fn_name} 不得再渲染报错横幅"
     tl = _fn(js, "tlRenderBanner")
     assert "题材龙头读口异常：" not in tl and "后台刷新失败（" not in tl, "tl 黄条须删除"
-    pulse = _fn(js, "pulseRender")
-    assert "读口异常：" not in pulse and "读口降级：" not in pulse, "pulse 黄条须删除"
+    # 2026-11-01 V4-E2：pulse 卡整个移除（涨幅/红盘率/量能三列迁连板行情板块目录）
+    assert "pulseRender" not in js and "pulseBox" not in js, "pulse 卡应已删除"

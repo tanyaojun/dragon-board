@@ -17,7 +17,7 @@ from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import percentile_fraction
 
-SECTOR_NODE_VERSION = "v2"   # v2=wzs 资金先手分支+防守注记（sector-nodes-v2-criteria-preregistration，用户逐条批准 2026-10-24）
+SECTOR_NODE_VERSION = "v4"   # v4=池外晋级并入 promN（V4 条款 1，用户批准进判据）+ 量能候选待批（sector-nodes-v4-criteria-preregistration）；v3=首板收紧（V2d 条款 3）
 
 # 节点枚举与优先级（预登记 §三：从高到低，命中即定档；改动须新代际）
 NODE_ORDER = ("wzs", "collapse", "ice", "weakening",
@@ -79,17 +79,21 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
         return {"node": "unknown", "basis": basis, "notes": notes,
                 "countPct": None, "prevCountPct": None, "pctDegraded": True}
 
-    # 1 弱转强：昨日∈{转弱,退潮} 且 家数回升 且 晋级>0 且（龙头续板 或 首板≥昨日×2）
+    # 1 弱转强：昨日∈{转弱,退潮} 且 家数回升 且 晋级>0 且（龙头续板 或 首板倍增收紧）
+    # V2d 条款 3：prev_first≥1（消除「昨日首板=0 恒真」平凡真）且
+    # 今日首板 ≥ max(2×prev_first, 3)（下限 3 保留实测两条健康换血样本：
+    # 09-30 机器人 / 10-13 大消费；sector-nodes-v2d-preregistration）
     if (prev_node in WEAK_NODES and n1 is not None and n0 >= n1
             and prom_n is not None and prom_n >= 1):
         leader_ok = leader_state == "sealed"
-        first_ok = prev_shape_first is not None and first >= 2 * prev_shape_first
+        first_ok = (prev_shape_first is not None and prev_shape_first >= 1
+                    and first >= max(2 * prev_shape_first, 3))
         if leader_ok or first_ok:
             basis.append(f"昨日节点={NODE_LABELS_CN[prev_node]}")
             basis.append(f"家数 {n1}→{n0} 回升")
             basis.append(f"晋级 {prom_n} 家")
             basis.append(f"龙头续板（{_leader_desc(leader)}）" if leader_ok
-                         else f"首板 {first} 家 ≥ 昨日 {prev_shape_first} 家×2")
+                         else f"首板 {first} 家 ≥ 昨日 {prev_shape_first} 家×2 且 ≥3（V2d 收紧）")
             return {"node": "wzs", "basis": basis, "notes": notes,
                     "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
 
@@ -189,7 +193,9 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
                   prom: dict[str, Any], leader_status: dict[str, str],
                   prev_nodes: dict[str, str] | None,
                   today_unavailable_reason: str | None = None,
-                  agg_by_board: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+                  agg_by_board: dict[str, dict[str, Any]] | None = None,
+                  vol_hist: dict[str, list[tuple[str, float]]] | None = None
+                  ) -> dict[str, Any]:
     """组装当日全部板块-日行（预登记 §三/§四；v2 起带聚合锚判档）。
 
     输入均为 operations 层从单源取齐的快照，本函数无 IO。板块覆盖=三日窗口并集
@@ -207,6 +213,10 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
     hist_by: dict[str, dict[str, int]] = {}
     for b, entries in (count_hist or {}).items():
         hist_by[str(b)] = {str(d): int(n) for d, n in entries}
+    # V4-E 前端观察位：成员级量比中位历史（缺档/缺聚合=缺口 None，不插值不铸 0）
+    vol_hist_by: dict[str, dict[str, float]] = {}
+    for b, entries in (vol_hist or {}).items():
+        vol_hist_by[str(b)] = {str(d): float(x) for d, x in entries}
 
     boards: list[str] = []
     for src in (today_by, prev_by, prev2_by):
@@ -249,6 +259,10 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
         # 是预登记 §六登记的已知局限，不在此伪装成「不可考」）
         prom_n = prom.get("byBoard", {}).get(b, 0) if prom.get("ok") else None
         prom_ge2 = prom.get("ge2ByBoard", {}).get(b, 0) if prom.get("ok") else None
+        # V2d 条款 2（影子，不进判据）：池外晋级（封板但未入昨日韭研池，按今日
+        # pool 首板块归属）；链不可考 → None 同 promN 惯例
+        prom_out_n = prom.get("outByBoard", {}).get(b, 0) if prom.get("ok") else None
+        prom_out_ge2 = prom.get("outGe2ByBoard", {}).get(b, 0) if prom.get("ok") else None
         leader_state = leader_status.get(b)
         prev_node = (prev_nodes or {}).get(b)
 
@@ -266,6 +280,8 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
                 notes.append("龙头续断不可考（停牌/日线数据洞，不算断板）")
         if not prom.get("ok"):
             notes.append(f"晋级链不可算（{prom.get('reason') or '昨日池缺失'}），涉晋级判据未命中")
+        elif (prom_out_n or 0) > 0:
+            notes.append(f"池外晋级 {prom_out_n} 家（封板但未入昨日韭研池，按今日池首板块归属）")
         if prev_nodes is None:
             notes.append("昨日节点不可考（昨日文档缺失），弱转强不贴标")
         if trow is None:
@@ -278,6 +294,18 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
             agg=(agg_by_board or {}).get(b))
         notes.extend(cls["notes"])
 
+        # V4 条款 2（量能注记透出，不改档；sector-nodes-v4-criteria-preregistration）。
+        # 实测（2026-11-01）：成员级量比中位对节点人群无判别性分离（资金先手中位 0.96 vs
+        # 对照 0.89；mainline 1.14 低于发酵 1.25）——改档候选被数据否决，只做矛盾/确认
+        # 透出：mainline 缩量提示复核；资金先手获量能同步放大则确认。其余行不注记。
+        member_ratio = ((agg_by_board or {}).get(b) or {}).get("amountMemberRatio") \
+            if isinstance((agg_by_board or {}).get(b), dict) else None
+        if member_ratio is not None:
+            if cls["node"] == "mainline" and member_ratio < 0.9:
+                notes.append(f"价升量缩（成员级量比中位 {member_ratio:.2f}），主升量能未确认，待复核")
+            elif cls["node"] == "wzs" and "资金先手分支" in cls["basis"] and member_ratio >= 1.5:
+                notes.append(f"量能同步放大（成员级量比中位 {member_ratio:.2f}），资金先手获量能确认")
+
         broken_n = None
         if trow is not None:
             pt, ps = trow.get("prevTotal"), trow.get("prevStill")
@@ -288,11 +316,17 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
             "count": n0, "prevCount": n1, "prev2Count": n2,
             "countSeries": [[d, n] for d, n in (count_hist or {}).get(b, [])]
                            + ([[date, n0]] if n0 is not None else []),
+            # V4-E 量能观察序列（与 countSeries 同日期轴逐日对齐；今日值=
+            # 当日 aggN10.amountMemberRatio，不可考=None 缺口）：展示投影非判据
+            "volSeries": [[d, vol_hist_by.get(b, {}).get(str(d))]
+                          for d, _n in (count_hist or {}).get(b, [])]
+                         + ([[date, member_ratio]] if n0 is not None else []),
             "countPct": round(cls["countPct"], 3) if cls["countPct"] is not None else None,
             "prevCountPct": round(cls["prevCountPct"], 3) if cls["prevCountPct"] is not None else None,
             "pctDegraded": cls["pctDegraded"],
             "leader": leader, "prevLeader": prev_leader, "leaderState": leader_state,
             "promN": prom_n, "promGe2": prom_ge2,
+            "promOutOfPoolN": prom_out_n, "promOutOfPoolGe2": prom_out_ge2,
             "ladderShape": shape,
             "secondStreak": (trow or {}).get("secondStreak"),
             "zhabanN": (trow or {}).get("zhabanN") if trow else (

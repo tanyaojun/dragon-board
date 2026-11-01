@@ -43,6 +43,32 @@ from backend.operations.theme_leader_baseline import (
 )
 
 COLLECTION = "hotlist_jev_sector_nodes"
+
+
+def _member_ratio_history(db: Any, date: str, days: int = 21,
+                          dataset_id: str = DEFAULT_DATASET_ID
+                          ) -> dict[str, list[tuple[str, float]]]:
+    """V4-E 前端观察位：近 days 个交易日各板块成员级量比中位序列。
+
+    日期集合与 board_count_history 同款（jiuyan final 交易日）；值取各日
+    nodes doc rows[].aggN10.amountMemberRatio（V2d 回填全史在档）；档缺/
+    聚合缺 → 该板块该日缺口（不插值不铸 0，fail-visible）。
+    """
+    prev_dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
+        {"kind": "jiuyan_action", "tradingDate": {"$lt": date},
+         "_id": {"$regex": ":final$"}}, {"tradingDate": 1}) if d.get("tradingDate")})[-days:]
+    out: dict[str, list[tuple[str, float]]] = {}
+    for d in prev_dates:
+        doc = db[COLLECTION].find_one({"_id": f"{d}:SECTOR_NODES"},
+                                      {"rows.board": 1,
+                                       "rows.aggN10.amountMemberRatio": 1})
+        if not doc:
+            continue
+        for r in doc.get("rows") or []:
+            ratio = ((r.get("aggN10") or {}).get("amountMemberRatio"))
+            if ratio is not None:
+                out.setdefault(str(r["board"]), []).append((d, float(ratio)))
+    return out
 _KIND = "sector_nodes"
 
 
@@ -63,25 +89,55 @@ def _promotion_by_board(db: Any, prev_date: str | None, date: str,
     """晋级链按板块归属（relay_structure 同款：prev pool 首个板块口径）。
 
     promGe2 = 晋级股中今日真连板 ≥2 的家数（主升判据「二板以上晋级」）。
+
+    V2d 条款 2：昨日封板但不在昨日韭研 pool 的「池外晋级」股按**今日韭研
+    cur_pool 首个板块**归属；今日池也无 → `unattributed`（fail-visible 披露）。
+
+    **V4 条款 1（用户批准进判据）**：byBoard/ge2ByBoard = in-pool + 池外
+    （今日池归属）**合并口径**——判据消费的 promN/promGe2 从此含池外晋级；
+    outByBoard/outGe2ByBoard 保留为拆分披露，unattributed 仍只披露不硬塞。
     """
     if not prev_date:
-        return {"ok": False, "reason": "无昨日交易日", "byBoard": {}, "ge2ByBoard": {}}
+        return {"ok": False, "reason": "无昨日交易日", "byBoard": {}, "ge2ByBoard": {},
+                "outByBoard": {}, "outGe2ByBoard": {}, "unattributed": []}
     stats = _promotion_stats(db, prev_date, date, dataset_id)
     if not stats.get("ok"):
         return {"ok": False, "reason": stats.get("reason") or "晋级率不可算",
-                "byBoard": {}, "ge2ByBoard": {}}
+                "byBoard": {}, "ge2ByBoard": {},
+                "outByBoard": {}, "outGe2ByBoard": {}, "unattributed": []}
     prev_pool = stats["prev_pool"]
+    cur_pool = stats.get("cur_pool") or {}
     streaks = jiuyan_streak_map(db, date, dataset_id)
     by_board: dict[str, int] = {}
     ge2_by_board: dict[str, int] = {}
+    out_by_board: dict[str, int] = {}
+    out_ge2_by_board: dict[str, int] = {}
+    unattributed: list[str] = []
     for c in stats["promoted"]:
-        board = (prev_pool.get(c) or {}).get("board")
-        if not board:
+        streak2 = isinstance(streaks.get(c), int) and streaks[c] >= 2
+        if c in prev_pool:
+            board = (prev_pool.get(c) or {}).get("board")
+            if not board:
+                unattributed.append(c)
+                continue
+            by_board[board] = by_board.get(board, 0) + 1
+            if streak2:
+                ge2_by_board[board] = ge2_by_board.get(board, 0) + 1
             continue
-        by_board[board] = by_board.get(board, 0) + 1
-        if isinstance(streaks.get(c), int) and streaks[c] >= 2:
-            ge2_by_board[board] = ge2_by_board.get(board, 0) + 1
-    return {"ok": True, "byBoard": by_board, "ge2ByBoard": ge2_by_board}
+        # V2d 条款 2 → V4 条款 1：池外晋级（封板但未入昨日韭研池）按今日 pool
+        # 首板块归属；V4 起合并进 byBoard/ge2ByBoard（判据消费），拆分另存披露
+        out_board = (cur_pool.get(c) or {}).get("board")
+        if not out_board:
+            unattributed.append(c)
+            continue
+        by_board[out_board] = by_board.get(out_board, 0) + 1
+        out_by_board[out_board] = out_by_board.get(out_board, 0) + 1
+        if streak2:
+            ge2_by_board[out_board] = ge2_by_board.get(out_board, 0) + 1
+            out_ge2_by_board[out_board] = out_ge2_by_board.get(out_board, 0) + 1
+    return {"ok": True, "byBoard": by_board, "ge2ByBoard": ge2_by_board,
+            "outByBoard": out_by_board, "outGe2ByBoard": out_ge2_by_board,
+            "unattributed": sorted(unattributed)}
 
 
 def _leader_states(db: Any, date: str, prev_rows: list[dict[str, Any]] | None,
@@ -234,6 +290,8 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
     prom = _promotion_by_board(db, prev_date, date, dataset_id)
     leader_status = _leader_states(db, date, prev_rows, dataset_id)
     count_hist = board_count_history(db, date, days=21, dataset_id=dataset_id)
+    # V4-E 量能观察序列（展示投影非判据）：与家数序列同日期轴
+    vol_hist = _member_ratio_history(db, date, days=21, dataset_id=dataset_id)
     prev_nodes = _prev_nodes_of(db, prev_date)
     # v2：聚合先行（判档消费 aggN10——条款 1 资金先手分支/条款 2 防守注记）
     agg_rows = _agg_rows_compute(db, date, dataset_id)
@@ -254,7 +312,7 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                           prom=prom, leader_status=leader_status,
                           prev_nodes=prev_nodes,
                           today_unavailable_reason=today_unavailable_reason,
-                          agg_by_board=agg_by_board)
+                          agg_by_board=agg_by_board, vol_hist=vol_hist)
     status = "degraded" if today_rows is None else "ok"
     # 聚合挂载（判档已用）+ 额外行（N10 独有板块，不进 nodeDist）
     agg_extra = _agg_mount(agg_rows, built["rows"])
@@ -281,6 +339,10 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
            "meta": {"thsFound": today_rows is not None,
                     "prevDate": prev_date, "prev2Date": prev2_date,
                     "promOk": bool(prom.get("ok")),
+                    # V2d 条款 2：Total = 板块归属 + 未归属（审阅 P3-4：unattributed 也是池外晋级）
+                    "promOutOfPoolTotal": (sum((prom.get("outByBoard") or {}).values())
+                                           + len(prom.get("unattributed") or [])) if prom.get("ok") else None,
+                    "promOutOfPoolUnattributed": (prom.get("unattributed") or []) if prom.get("ok") else None,
                     "aggVersion": AGG_VERSION,
                     "aggExtraCount": len(agg_extra),
                     "aggStaticVersion": AGG_STATIC_VERSION,

@@ -30,7 +30,8 @@ import json
 import os
 import subprocess
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1007,3 +1008,86 @@ def post_relay_band_refresh(payload: JevBandRefreshPayload | None = None) -> dic
 def get_relay_band_refresh() -> dict[str, Any]:
     """分带表刷新任务状态（页面 5s 轮询；纯读，零模型调用）。"""
     return _band_refresh_poll()
+
+
+_KPL_RANKING_EMPTY_MEMO: dict[str, float] = {}   # 空结果 10 分钟 memo（防非交易日反复打上游）
+
+@router.get("/sector-name-check")
+def get_sector_name_check(date: str | None = None) -> dict[str, Any]:
+    """韭研 ↔ KPL 板块名录每日匹配诊断（2026-11-01 用户需求）：
+
+    KPL 名录=当日板块排行全量（kpl_ranking_service，带上游缓存）；匹配规则
+    单一事实源=theme_event_digest（归一+ALIASES+后缀桥）。未匹配清单即
+    ALIASES 维护候选。fail-visible：任一侧不可用如实报错，不静默空表。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.operations.sector_name_check import check_sector_names
+        from backend.services import kpl_ranking_service
+    except Exception as exc:
+        return {"ok": False, "reason": f"import_failed: {exc}"}
+    target = (date or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    try:
+        datetime.strptime(target, "%Y-%m-%d")
+    except ValueError:
+        return {"ok": False, "reason": f"invalid_date: {target}"}
+    # 非交易日/盘前回退：目标日无数据 → 逐日回退最多 7 天找最近有数据交易日
+    # （与前端 kplFetchSectorUniverse 同哲学）；空结果短 memo 10 分钟，防反复打上游
+    now_ts = time.time()
+    if len(_KPL_RANKING_EMPTY_MEMO) > 256:   # 卫生：淘汰已过期条目防无界增长
+        for k in [k for k, v in _KPL_RANKING_EMPTY_MEMO.items() if v <= now_ts]:
+            _KPL_RANKING_EMPTY_MEMO.pop(k, None)
+    ranking = None
+    for i in range(8):
+        d = (datetime.strptime(target, "%Y-%m-%d")
+             - timedelta(days=i)).strftime("%Y-%m-%d")
+        if d in _KPL_RANKING_EMPTY_MEMO and _KPL_RANKING_EMPTY_MEMO[d] > now_ts:
+            continue
+        try:
+            r = kpl_ranking_service.get_sector_ranking(d)
+        except Exception:
+            # 单日上游抖动不整段失败：记空 memo 后继续回退更早日（review 2026-11-01）
+            _KPL_RANKING_EMPTY_MEMO[d] = time.time() + 600
+            continue
+        if (r or {}).get("items"):
+            ranking = r
+            break
+        _KPL_RANKING_EMPTY_MEMO[d] = time.time() + 600
+    if ranking is None:
+        return {"ok": False,
+                "reason": f"kpl_ranking_empty: 目标日 {target} 起 7 天内均无排行数据"}
+    try:
+        out = check_sector_names(db, target, kpl_ranking=ranking)
+    except Exception as exc:
+        return {"ok": False, "reason": f"sector_name_check_failed: {exc}"}
+    if out.get("ok"):
+        out["kplDate"] = ranking.get("date")
+        if out.get("kplDate") and out.get("date") and out["kplDate"] != out["date"]:
+            out["dateMixed"] = True   # 两侧名录日期不同，前端如实标注
+    return out
+
+
+@router.get("/watchlist")
+def get_watchlist_route(date: str | None = None) -> dict[str, Any]:
+    """V4-G 盯盘票清单读口（2026-11-01，预登记 v4f 文档 §六；提示层不进判据）：
+
+    板块=当日弱转强候选；票=昨日空间龙一（含断板反包候选）+ 昨日连板≥2 核心票。
+    仅支持当日（盘中工具：历史日无盘中报价，重算会拿当前价错标读数，不提供）。
+    fail-visible：候选空/龙一基线缺失/报价不可考逐层透出。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "reason": f"mongodb_unavailable: {exc}"}
+    from backend.operations.sector_pulse import get_watchlist
+    target = (date or "").strip() or datetime.now().strftime("%Y-%m-%d")
+    if target != datetime.now().strftime("%Y-%m-%d"):
+        return {"ok": False,
+                "reason": "watchlist_live_only: 盯盘清单仅支持当日（历史日无盘中报价，不重算错标）"}
+    try:
+        return get_watchlist(db, target)
+    except Exception as exc:
+        return {"ok": False, "reason": f"watchlist_failed: {exc}"}

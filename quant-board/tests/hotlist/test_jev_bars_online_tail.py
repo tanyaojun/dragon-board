@@ -54,6 +54,7 @@ def patched(monkeypatch):
         runner._TAIL_FAIL_CODES.clear()
         runner._TAIL_FAIL_UNTIL.clear()
         runner._TAIL_VOL_SOURCE.clear()
+        runner._TAIL_AMOUNT_SOURCE.clear()
         return calls
 
     yield _patched
@@ -124,3 +125,90 @@ def test_merged_bars_are_cached_per_code(patched):
         runner._daily_bars("002242")
         runner._daily_bars("002242")
     assert calls["online"] == 1, "同一 code 同一日期上下文内只补一次"
+
+# ── V2d 条款 1：amount 管道（sector-nodes-v2d-preregistration） ─────────────
+
+LOCAL_A = [{"date": "2026-10-16", "close": 17.79, "vol": 9.68e7, "amount": 1.7e9},
+           {"date": "2026-10-19", "close": 18.69, "vol": 1.5266e8, "amount": 2.8e9}]
+ONLINE_A = [{"date": "2026-10-16", "close": 17.79, "vol": 968439.6, "amount": 1.7e9},
+            {"date": "2026-10-19", "close": 18.69, "vol": 1526622.9, "amount": 2.8e9},
+            {"date": "2026-10-20", "close": 20.56, "vol": 1180000.0, "amount": 2.4e9}]
+
+
+def test_tail_merge_carries_amount_same_unit(patched):
+    """两源 amount 同单位（实测元，factor=1）：尾部棒 amount 原样并入（不缩放）。"""
+    calls = patched(LOCAL_A, ONLINE_A)
+    with runner.bars_need_upto("2026-10-20"):
+        bars = runner._daily_bars("002242")
+    assert bars[-1]["amount"] == 2.4e9
+    assert bars[-2]["amount"] == 2.8e9
+    prov = runner.bars_source_provenance()
+    assert prov["tailAmountCalib"] == {"overlap": 1, "assumed": 0}
+
+
+def test_tail_merge_preserves_amount_absence(patched):
+    """棒无 amount 字段（旧源）→ 尾棒保留缺失（不铸 0），由消费层 absentN 披露。"""
+    patched(LOCAL, ONLINE)   # LOCAL/ONLINE 均无 amount 键
+    with runner.bars_need_upto("2026-10-20"):
+        bars = runner._daily_bars("002242")
+    assert all("amount" not in b for b in bars)
+
+
+def test_online_amount_unit_drift_gets_normalized(patched):
+    """若未来源改单位（线上×100），重叠中位比值自动纠正并标 provenance。"""
+    drifted = [dict(b) for b in ONLINE_A]
+    for b in drifted:
+        b["amount"] = b["amount"] * 100.0
+    patched(LOCAL_A, drifted)
+    with runner.bars_need_upto("2026-10-20"):
+        bars = runner._daily_bars("002242")
+    assert bars[-1]["amount"] == 2.4e9
+    assert runner.bars_source_provenance()["tailAmountCalib"] == {"overlap": 1, "assumed": 0}
+
+
+def test_local_lday_amount_parsed_from_index5(monkeypatch, tmp_path):
+    """P2-2：本地 lday 解析缝——`<IIIIIfII` index5 必须是 amount（不是 vol/保留位）。"""
+    import struct
+    from backend.operations.market_dieban_tdx import _RECORD
+
+    lday = tmp_path / "vipdoc" / "sh" / "lday"
+    lday.mkdir(parents=True)
+    recs = b"".join([
+        _RECORD.pack(20261028, 140000, 141000, 139000, 140500, 1.7e9, 9680000, 0),
+        _RECORD.pack(20261030, 140500, 142000, 140000, 141800, 2.8e9, 8900000, 0)])
+    (lday / "sh600519.day").write_bytes(recs)
+    monkeypatch.setattr(runner, "_LOCAL_ROOT_CACHE", [str(tmp_path)])
+    runner._LOCAL_MISS.clear()
+    runner._DAILY_BARS_CACHE.clear()
+    bars = runner._local_daily_bars("600519")
+    assert bars and bars[-1]["date"] == "2026-10-30"
+    assert bars[-1]["amount"] == 2.8e9, f"index5 应为 amount：{bars[-1]}"
+    assert bars[-1]["vol"] == 8900000, "index6 应仍为 vol（布局不得错位）"
+    assert bars[-1]["close"] == 1418.0   # ×100 存储
+
+
+def test_online_df_amount_column_parsed_and_nan_omitted(monkeypatch):
+    """P2-2/P2-1：线上 df amount 列取值；缺失/NaN → 键省略（不铸 0、不透 NaN）。"""
+    import pandas as pd
+
+    df = pd.DataFrame([
+        {"year": 2026, "month": 10, "day": 29, "high": 10.5, "close": 10.4,
+         "vol": 100.0, "amount": 1.7e9},
+        {"year": 2026, "month": 10, "day": 30, "high": 10.8, "close": 10.6,
+         "vol": 120.0, "amount": float("nan")},   # NaN → 键省略
+        {"year": 2026, "month": 10, "day": 31, "high": 10.9, "close": 10.7,
+         "vol": 130.0},                            # 缺列 → 键省略
+    ])
+
+    class _FakeClient:
+        def bars(self, symbol, frequency, start, offset):
+            return df
+
+    monkeypatch.setattr(runner, "_tdx_daily_client", lambda: _FakeClient())
+    monkeypatch.setattr(runner, "_local_daily_bars", lambda code: None)
+    runner._DAILY_BARS_CACHE.clear()
+    bars = runner._online_daily_bars("600519")
+    by_date = {b["date"]: b for b in bars}
+    assert by_date["2026-10-29"]["amount"] == 1.7e9
+    assert "amount" not in by_date["2026-10-30"], "NaN amount 必须省略键（不铸 0 不透 NaN）"
+    assert "amount" not in by_date["2026-10-31"], "df 缺列必须省略键"

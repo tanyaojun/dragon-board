@@ -240,7 +240,7 @@ def test_index_anchor_placeholder():
 
 
 def test_labels_and_version():
-    assert SECTOR_NODE_VERSION == "v2"
+    assert SECTOR_NODE_VERSION == "v4"   # V4 条款 1 池外晋级并入 promN；v3=首板收紧（V2d）
     assert NODE_LABELS_CN["wzs"] == "弱转强" and NODE_LABELS_CN["collapse"] == "退潮"
 
 
@@ -333,8 +333,8 @@ def test_aggregate_day_empty_window_pool():
 
 
 def test_agg_version_frozen():
-    """版本戳冻结（影子列口径变更须新戳+用户批准；b=N 窗终裁单算）。"""
-    assert AGG_VERSION == "2026-10-24b"
+    """版本戳冻结（影子列口径变更须新戳+用户批准；a=V2d 量能锚影子列）。"""
+    assert AGG_VERSION == "2026-11-01b"
     from backend.analysis.hotlist.sector_agg import AGG_WINDOWS
     assert AGG_WINDOWS == (10,)
 
@@ -426,5 +426,246 @@ def test_v2_defense_note_on_collapse_and_ice():
 
 
 def test_v2_version_frozen():
-    """v2 版本戳冻结（判据表 sector-nodes-v2-criteria-preregistration 逐字对应）。"""
-    assert _V2 == "v2"
+    """v2 判据延续（V2d 仅收紧首板分支，资金先手/防守注记不变）。"""
+    assert _V2 == "v4"
+
+
+# ── V2d（sector-nodes-v2d-preregistration） ────────────────────────────────
+
+def test_v2d_first_board_trivial_true_blocked():
+    """条款 3：昨日首板=0 时 ×2 恒真的平凡真被消除——龙头断板不再贴 wzs。"""
+    out = _assemble(today_rows=[_row(n=6, streak=1, first=4)],
+                    prev_rows=[_row(n=5, first=0)],
+                    count_hist=_hist([(D2, 3), (D1, 5)]),
+                    leader_status={"AI算力": "broken"},
+                    prev_nodes={"AI算力": "collapse"})
+    assert _node_of(out)["node"] != "wzs"
+
+
+def test_v2d_first_board_floor_three():
+    """条款 3：prev_first=1 时 ×2=2 不再命中（下限 3）；今日首板=3 命中。"""
+    kw = dict(today_rows=[_row(n=6, streak=1, first=2)],
+              prev_rows=[_row(n=5, first=1)],
+              count_hist=_hist([(D2, 3), (D1, 5)]),
+              leader_status={"AI算力": "broken"},
+              prev_nodes={"AI算力": "collapse"})
+    assert _node_of(_assemble(**kw))["node"] != "wzs"
+    kw2 = dict(kw, today_rows=[_row(n=7, streak=1, first=3)])
+    r = _node_of(_assemble(**kw2))
+    assert r["node"] == "wzs"
+    assert any("V2d 收紧" in b for b in r["basis"])
+
+
+def test_v2d_leader_branch_unaffected_by_tightening():
+    """条款 3：龙头续板分支与收紧无关，照常命中。"""
+    out = _assemble(today_rows=[_row(n=6)], prev_rows=[_row(n=5, first=0)],
+                    count_hist=_hist([(D2, 3), (D1, 5)]),
+                    prom={"ok": True, "byBoard": {"AI算力": 2}, "ge2ByBoard": {"AI算力": 1}},
+                    leader_status={"AI算力": "sealed"},
+                    prev_nodes={"AI算力": "weakening"})
+    assert _node_of(out)["node"] == "wzs"
+
+
+def test_v2d_prom_out_of_pool_shadow():
+    """条款 2：池外晋级影子列进 rows + notes 注记；in-pool promN 不变。"""
+    prom = {"ok": True, "byBoard": {"AI算力": 2}, "ge2ByBoard": {"AI算力": 1},
+            "outByBoard": {"AI算力": 1}, "outGe2ByBoard": {"AI算力": 0},
+            "unattributed": ["800001"]}
+    out = _assemble(prom=prom)
+    r = _node_of(out)
+    assert r["promN"] == 2 and r["promGe2"] == 1
+    assert r["promOutOfPoolN"] == 1 and r["promOutOfPoolGe2"] == 0
+    assert any("池外晋级 1 家" in n for n in r["notes"])
+
+
+def test_v2d_prom_out_of_pool_zero_no_note():
+    """条款 2：无池外晋级不注记；prom 链不可考 → 影子列 None（同 promN 惯例）。"""
+    out = _assemble()
+    r = _node_of(out)
+    assert r["promOutOfPoolN"] == 0 and not any("池外晋级" in n for n in r["notes"])
+    out2 = _assemble(prom={"ok": False, "reason": "昨日 final 缺失", "byBoard": {},
+                           "ge2ByBoard": {}, "outByBoard": {}, "outGe2ByBoard": {},
+                           "unattributed": []})
+    r2 = _node_of(out2)
+    assert r2["promOutOfPoolN"] is None and r2["promOutOfPoolGe2"] is None
+
+
+def test_v2d_agg_amount_sum_handcheck():
+    """条款 1：amountSum 手算对拍（quoted 成员的当日 amount 合计）；缺棒成员剔除。"""
+    bars = {
+        "600001": [{"date": D1, "close": 10.0}, {"date": D0, "close": 10.2, "amount": 1.0e8}],
+        "600002": [{"date": D1, "close": 5.0}, {"date": D0, "close": 5.1, "amount": 2.0e8}],
+        "600003": [{"date": D0, "close": 8.0}],                    # 无昨收 → missing
+        "600004": [{"date": D1, "close": 20.0}, {"date": D0, "close": 20.5}],  # 棒在无 amount → absentN
+    }
+    out = aggregate_day(target_date=D0, members={"600001", "600002", "600003", "600004"},
+                        bars_by_code=bars, window_days=10)
+    assert out["quotedN"] == 3 and out["missingN"] == 1
+    assert out["amountQuotedN"] == 2
+    assert out["amountSum"] == 3.0e8
+    assert out["amountAbsentN"] == 1
+
+
+def test_v2d_agg_amount_all_absent_none():
+    """条款 1：amount 全缺 → amountSum=None 不伪 0（fail-visible）。"""
+    bars = {"600001": [{"date": D1, "close": 10.0}, {"date": D0, "close": 10.2}]}
+    out = aggregate_day(target_date=D0, members={"600001"},
+                        bars_by_code=bars, window_days=10)
+    assert out["amountSum"] is None and out["amountAbsentN"] == 1 and out["amountQuotedN"] == 0
+
+
+def test_v2d_agg_amount_all_missing_zero_quoted():
+    """条款 1：全成员缺棒 → amountSum=None、amountQuotedN=0（不落伪 0）。"""
+    out = aggregate_day(target_date=D0, members={"999999"}, bars_by_code={}, window_days=3)
+    assert out["amountSum"] is None and out["amountQuotedN"] == 0 and out["amountAbsentN"] == 0
+
+
+def test_v4_amount_ratio_handcheck():
+    """V4 候选原料：amountRatio = 当日成员合计 / 同成员前日合计（同锚前一根棒）。"""
+    bars = {
+        "600001": [{"date": D1, "close": 10.0, "amount": 1.0e8, "vol": 1.0},
+                   {"date": D0, "close": 10.2, "amount": 3.0e8, "vol": 1.0}],
+        "600002": [{"date": D1, "close": 5.0, "amount": 1.0e8, "vol": 1.0},
+                   {"date": D0, "close": 5.1, "amount": 1.0e8, "vol": 1.0}],
+    }
+    out = aggregate_day(target_date=D0, members={"600001", "600002"},
+                        bars_by_code=bars, window_days=10)
+    assert out["amountSum"] == 4.0e8 and out["amountPrevSum"] == 2.0e8
+    assert out["amountRatio"] == 2.0
+    assert out["amountRatioQuotedN"] == 2
+
+
+def test_v4_amount_ratio_missing_prev_amount_excluded():
+    """前日 amount 缺 → 该成员不进比值样本（ratioQuotedN 缩小），不铸 0；全缺 → None。"""
+    bars = {
+        "600001": [{"date": D1, "close": 10.0, "amount": 1.0e8},
+                   {"date": D0, "close": 10.2, "amount": 3.0e8}],
+        "600002": [{"date": D1, "close": 5.0},              # 前日无 amount
+                   {"date": D0, "close": 5.1, "amount": 1.0e8}],
+    }
+    out = aggregate_day(target_date=D0, members={"600001", "600002"},
+                        bars_by_code=bars, window_days=10)
+    assert out["amountRatioQuotedN"] == 1
+    assert out["amountRatio"] == 3.0
+    # 全缺
+    bars2 = {"600001": [{"date": D1, "close": 10.0}, {"date": D0, "close": 10.2, "amount": 3.0e8}]}
+    out2 = aggregate_day(target_date=D0, members={"600001"},
+                         bars_by_code=bars2, window_days=10)
+    assert out2["amountRatio"] is None and out2["amountRatioQuotedN"] == 0
+
+
+def test_v4_prom_merged_out_of_pool_counted_in_prom_n():
+    """V4 条款 1：promN 并入池外晋级（进判据）；notes 仍披露池外家数。"""
+    prom = {"ok": True, "byBoard": {"AI算力": 3}, "ge2ByBoard": {"AI算力": 1},
+            "outByBoard": {"AI算力": 1}, "outGe2ByBoard": {"AI算力": 0},
+            "unattributed": []}
+    out = _assemble(today_rows=[_row(n=6)], prev_rows=[_row(n=5)],
+                    count_hist=_hist([(D2, 3), (D1, 5)]),
+                    prom=prom, prev_nodes={"AI算力": "weakening"})
+    r = _node_of(out)
+    assert r["promN"] == 3 and r["promGe2"] == 1            # 合并口径
+    assert r["promOutOfPoolN"] == 1                          # 拆分披露
+    assert any("池外晋级 1 家" in n for n in r["notes"])
+
+
+def test_v4_amount_member_ratio_median():
+    """V4-D：成员级量比中位——每成员自比当日/前日，消除成员集漂移噪声。"""
+    bars = {
+        # 成员自比：3.0 与 1.0 → 中位 2.0；成员集合计口径会给 (4e8/2e8)=2.0 同值
+        "600001": [{"date": D1, "close": 10.0, "amount": 1.0e8},
+                   {"date": D0, "close": 10.2, "amount": 3.0e8}],
+        "600002": [{"date": D1, "close": 5.0, "amount": 2.0e8},
+                   {"date": D0, "close": 5.1, "amount": 2.0e8}],
+        # 区分两口径：自比 0.5 vs 合计受大成员主导
+        "600003": [{"date": D1, "close": 8.0, "amount": 10.0e8},
+                   {"date": D0, "close": 8.1, "amount": 5.0e8}],
+    }
+    out = aggregate_day(target_date=D0, members={"600001", "600002", "600003"},
+                        bars_by_code=bars, window_days=10)
+    assert out["amountMemberRatio"] == 1.0          # median(3.0, 1.0, 0.5)=1.0
+    assert out["amountRatio"] == round(10.0e8 / 13.0e8, 3)   # 合计口径（对照）
+
+
+def test_v4_amount_member_ratio_prev_zero_excluded():
+    """前日 amount≤0 → 比值无定义，成员剔除（不铸 0 不算爆量）；全缺 → None。"""
+    bars = {
+        "600001": [{"date": D1, "close": 10.0, "amount": 0.0},
+                   {"date": D0, "close": 10.2, "amount": 3.0e8}],
+        "600002": [{"date": D1, "close": 5.0, "amount": 2.0e8},
+                   {"date": D0, "close": 5.1, "amount": 4.0e8}],
+    }
+    out = aggregate_day(target_date=D0, members={"600001", "600002"},
+                        bars_by_code=bars, window_days=10)
+    assert out["amountMemberRatio"] == 2.0 and out["amountRatioQuotedN"] == 1
+    bars2 = {"600001": [{"date": D1, "close": 10.0, "amount": 0.0},
+                        {"date": D0, "close": 10.2, "amount": 3.0e8}]}
+    out2 = aggregate_day(target_date=D0, members={"600001"},
+                         bars_by_code=bars2, window_days=10)
+    assert out2["amountMemberRatio"] is None
+
+
+def test_v4_amount_notes_mainline_shrink_warning():
+    """V4 条款 2：mainline 但成员级量比<0.9 → 价升量缩待复核注记（不改档）。"""
+    out = _assemble(today_rows=[_row(n=8, streak=3)],
+                    prev_rows=[_row(n=7, streak=2)],
+                    count_hist=_hist([(D2, 6), (D1, 7)]),
+                    prom={"ok": True, "byBoard": {"AI算力": 2}, "ge2ByBoard": {"AI算力": 1}},
+                    leader_status={"AI算力": "sealed"},
+                    prev_nodes={"AI算力": "mainline"},
+                    agg_by_board={"AI算力": _agg(pct=9.0, red=0.9, amountMemberRatio=0.82)})
+    r = _node_of(out)
+    assert r["node"] == "mainline"   # 档位不变
+    assert any("价升量缩" in n and "0.82" in n for n in r["notes"])
+
+
+def test_v4_amount_notes_hand_confirmed():
+    """V4 条款 2：资金先手命中且量比≥1.5 → 量能确认注记；<1.5 不注记。"""
+    kw = _hand_kw(agg_by_board={"AI算力": _agg(pct=3.5, red=0.8, amountMemberRatio=1.72)})
+    r = _node_of(_assemble(**kw))
+    assert r["node"] == "wzs" and any("量能同步放大" in n and "1.72" in n for n in r["notes"])
+    kw2 = _hand_kw(agg_by_board={"AI算力": _agg(pct=3.5, red=0.8, amountMemberRatio=1.1)})
+    assert not any("量能同步放大" in n for n in _node_of(_assemble(**kw2))["notes"])
+
+
+def test_v4_amount_notes_no_ratio_no_note():
+    """memberRatio 不可考 → 不注记（不伪 0）。"""
+    out = _assemble(today_rows=[_row(n=8, streak=3)], prev_rows=[_row(n=7, streak=2)],
+                    count_hist=_hist([(D2, 6), (D1, 7)]),
+                    prom={"ok": True, "byBoard": {"AI算力": 2}, "ge2ByBoard": {"AI算力": 1}},
+                    leader_status={"AI算力": "sealed"}, prev_nodes={"AI算力": "mainline"},
+                    agg_by_board={"AI算力": _agg(pct=9.0, red=0.9, amountMemberRatio=None)})
+    assert not any("价升量缩" in n or "量能同步放大" in n for n in _node_of(out)["notes"])
+
+
+# ---- V4-E 量能观察序列（volSeries，展示投影非判据）----
+
+def test_vol_series_aligned_with_count_series_and_gaps():
+    """volSeries 与 countSeries 同日期轴逐日对齐；缺档日=None 缺口不插值；
+    今日值=当日 aggN10.amountMemberRatio。"""
+    out = _assemble(
+        count_hist=_hist([(D2, 2), (D1, 3)]),
+        vol_hist={"AI算力": [(D1, 1.25)]},          # D2 缺档 → 缺口
+        agg_by_board={"AI算力": _agg(pct=3.5, red=0.8, amountMemberRatio=1.4)})
+    r = _node_of(out)
+    assert [p[0] for p in r["countSeries"]] == [D2, D1, D0]
+    assert [p[0] for p in r["volSeries"]] == [D2, D1, D0]
+    assert r["volSeries"] == [[D2, None], [D1, 1.25], [D0, 1.4]]
+
+
+def test_vol_series_none_when_today_agg_missing():
+    """今日聚合缺 amountMemberRatio → 今日位=None（不铸 0）；无 vol_hist 全缺。"""
+    out = _assemble(agg_by_board={"AI算力": _agg(pct=3.5, red=0.8,
+                                                 amountMemberRatio=None)})
+    r = _node_of(out)
+    assert r["volSeries"][-1] == [D0, None]
+    assert all(p[1] is None for p in r["volSeries"])
+
+
+def test_vol_series_absent_board_keeps_none():
+    """vol_hist 未收录板块（历史档无该板块）→ 全序列 None，不报错。"""
+    out = _assemble(vol_hist={"其他板块": [(D1, 0.9)]},
+                    agg_by_board={"AI算力": _agg(pct=3.5, red=0.8,
+                                                 amountMemberRatio=1.1)})
+    r = _node_of(out)
+    assert r["volSeries"][-1] == [D0, 1.1]
+    assert r["volSeries"][0] == [D2, None] and r["volSeries"][1] == [D1, None]

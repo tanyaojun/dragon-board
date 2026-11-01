@@ -11,16 +11,27 @@
   16:20 正式判档链归位）。窗口池直查 `day_leader_rows`（**不走
   `_window_pool_of`**：其 `_POOL_CACHE` 无版本键，审计 2026-10-24 P3 约束
   长驻进程禁用，本模块常驻 8000 读口）。
-- 报价：mootdx `client.quotes` 批量（80/批，price/last_close 现成）；客户端复用
+- 报价：mootdx `client.quotes` 批量（80/批，price/last_close/amount 现成）；客户端复用
   `_tdx_daily_client`（内含 SetupCmd3 握手补丁）；60s 进程内缓存共享上游取数。
 - fail-visible：报价不可考（全节点负缓存 / quotes 全批次异常）→ pulse=None+原因；
   成员缺报价计 missingN；全缺统计值 None 不伪 0。
 - 15:00 帧：交易日 ≥15:05 首次请求幂等 upsert `hotlist_jev_sector_pulse`
   （`_id={date}:PULSE`），攒前向校准样本；非交易日 / 报价不可考不落帧。
+- V4-E 日内量能（2026-11-01，用户 A 拍板，预登记
+  sector-nodes-v4e-intraday-vol-preregistration.md）：quotes 增抓当日累计
+  成交额 amount（元）；30 分钟机会式帧序列（帧末+5 分钟捕获窗）落
+  `doc.frames[frameKey]`（帧内板块红盘读数+成员级 amount 明细）；量比=
+  成员级「今日帧累计/昨日同帧累计」配对中位（V4-D 教训：合计比混成员漂移
+  噪声不用；昨日同帧缺/成员缺任一侧则剔除，不铸 0）；候选层 volTag
+  「量能确认/缩量翻红」提示（回放实测 102 日翻红&量比≥1.0 命中率 47% vs
+  翻红基线 38%、全程缩量 27%）——**提示层不进节点判定、不改收盘档**
+  （V2c §六 冻结延续）。历史帧经 lc5 回填（src=lc5_backfill，量比基线
+  立即可用）。
 """
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, time
 from typing import Any, Callable
@@ -29,16 +40,23 @@ from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.operations.jev_label_jiuyan import (
     _POSITION_LOCK,
     _tdx_daily_client,
+    jiuyan_streak_map,
     trading_dates_before,
 )
 from backend.operations.theme_leader_baseline import day_leader_rows
 
-PULSE_VERSION = "2026-10-25a"
+PULSE_VERSION = "2026-11-02a"   # v4f: 核心票翻红率（昨日连板≥2 子集）+ 成交额量级分位
 COLLECTION_PULSE = "hotlist_jev_sector_pulse"
 COLLECTION_NODES = "hotlist_jev_sector_nodes"
 _QUOTES_BATCH = 80          # tdxpy get_security_quotes 单批上限
 _CACHE_TTL_SECONDS = 60
 _WEAK_CANDIDATE_NODES = {"weakening", "collapse"}
+
+# V4-E 30 分钟帧序列：帧键=帧末时标；捕获窗=帧末~+5 分钟内的请求幂等落该帧
+# （保证帧读数≈帧末累计语义）；15:00 帧沿用 V2c ≥15:05 条款。
+_FRAME_KEYS = ("10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00")
+_FRAME_TOLERANCE_MIN = 5
+_VOL_CONFIRM_RATIO = 1.0    # 回放实测分离界（≥1.0 命中率 47% vs 基线 38%）
 
 # 60s 读口缓存 {date: (ts, payload)}——多端轮询共享一次上游取数；键含日期，
 # 历史日走 stored 帧不进本缓存。窗口池不走 `_POOL_CACHE`（无版本键，审计
@@ -102,18 +120,75 @@ def _prev_nodes(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID
             if r.get("board") and r.get("node")}
 
 
-def _fetch_quotes(codes: set[str]) -> dict[str, tuple[float, float]] | None:
-    """批量实时报价 {code: (price, last_close)}；不可考 → None。
+def _amount_sum_history(db: Any, today: str, days: int = 60,
+                        dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, list[float]]:
+    """V4-F 量级分位基线：近 days 个交易日各板块活跃股聚合成交额序列
+    （历史 nodes doc rows[].aggN10.amountSum，V2d 回填全史在档）。
+    口径注意：历史值=全天累计，盘中实时额对比全天分位早盘天然偏低（随时间
+    逼近真实分位），调用方 tooltip 如实标注。档缺=该日缺口，不插值。
+    """
+    dates = trading_dates_before(db, today, days, dataset_id=dataset_id)
+    out: dict[str, list[float]] = {}
+    for d in dates:
+        try:
+            doc = db[COLLECTION_NODES].find_one(
+                {"_id": f"{d}:SECTOR_NODES"},
+                {"rows.board": 1, "rows.aggN10.amountSum": 1})
+        except Exception:
+            continue
+        if not doc:
+            continue
+        for r in doc.get("rows") or []:
+            v = ((r.get("aggN10") or {}).get("amountSum"))
+            if v is not None:
+                out.setdefault(str(r["board"]), []).append(float(v))
+    return out
+
+
+def _amount_pct(hist: list[float], value: float | None,
+                min_n: int = 20) -> tuple[float | None, int]:
+    """量级分位（值在历史序列中的占比位置，0~1）；样本 <min_n / 值不可考 →
+    (None, n) 如实（不硬算不铸 0）。"""
+    if value is None or value <= 0 or len(hist) < min_n:
+        return None, len(hist)
+    below = sum(1 for v in hist if v < value)
+    return round(below / len(hist), 3), len(hist)
+
+
+def _strong_stats(quotes_map: dict[str, tuple[float, float, float | None]] | None,
+                  codes: set[str]) -> dict[str, Any]:
+    """V4-F 核心票子集实时翻红率（方法论：强势股集体翻红才是信号，全体红盘率
+    混入普通跟风票；子集=昨日连板≥2，连板高度取 jiuyan_streak_map 单一事实源）。
+    口径与 _pulse_stats 同（price/last_close−1>0 计红盘）。空子集=全 None。"""
+    pcts: list[float] = []
+    for code in sorted(codes):
+        q = (quotes_map or {}).get(code)
+        if q is None:
+            continue
+        pcts.append((q[0] / q[1] - 1) * 100)
+    quoted = len(pcts)
+    out: dict[str, Any] = {"strongN": len(codes), "strongQuotedN": quoted,
+                           "strongRedN": None, "strongRedRatio": None}
+    if quoted:
+        out["strongRedN"] = sum(1 for p in pcts if p > 0)
+        out["strongRedRatio"] = round(out["strongRedN"] / quoted, 3)
+    return out
+
+
+def _fetch_quotes(codes: set[str]) -> dict[str, tuple[float, float, float | None]] | None:
+    """批量实时报价 {code: (price, last_close, amount)}；不可考 → None。
 
     None 两种成因（调用方合并披露）：客户端不可用（全节点负缓存）/ 全批次
     quotes 异常且零成交（网络/主站断）。price/last_close ≤0（退市/无效/未开盘
     无昨收）不入表，调用方按缺报价披露；部分批次异常按缺报价披露不整段判死。
+    amount=当日累计成交额（元，TDX quotes 现成）：缺列/NaN → None（fail-visible，
+    不铸 0）；0 是真读数（冷门股盘中零成交）保留，量比配对时 >0 要求自然剔除。
     """
     client = _tdx_daily_client()
     if client is None:
         return None
     ordered = sorted(codes)
-    out: dict[str, tuple[float, float]] = {}
+    out: dict[str, tuple[float, float, float | None]] = {}
     batch_error = False
     for i in range(0, len(ordered), _QUOTES_BATCH):
         batch = ordered[i:i + _QUOTES_BATCH]
@@ -131,29 +206,80 @@ def _fetch_quotes(codes: set[str]) -> dict[str, tuple[float, float]] | None:
             except (KeyError, TypeError, ValueError):
                 continue
             if price > 0 and last_close > 0:
-                out[str(r["code"])] = (price, last_close)
+                try:
+                    amt = float(r["amount"])
+                    if amt != amt:      # NaN
+                        amt = None
+                except (KeyError, TypeError, ValueError):
+                    amt = None
+                out[str(r["code"])] = (price, last_close, amt)
     if not out and batch_error:
         return None
     return out
 
 
-def _pulse_stats(quotes_map: dict[str, tuple[float, float]] | None,
+def _member_amounts(quotes_map: dict[str, tuple[float, float, float | None]] | None,
+                    codes: set[str]) -> dict[str, float]:
+    """帧内成员 amount 明细 {code: 元}；amount 不可考的成员不入表（由
+    amountMissingN 披露），不铸 0（fail-visible）。"""
+    if quotes_map is None:
+        return {}
+    out: dict[str, float] = {}
+    for code in sorted(codes):
+        q = quotes_map.get(code)
+        if q is not None and q[2] is not None:
+            out[code] = q[2]
+    return out
+
+
+def _board_vol_ratio(prev_boards: dict[str, Any] | None, board: str,
+                     amounts: dict[str, float]) -> tuple[float | None, int]:
+    """成员级量比中位（V4-D 口径）：今日帧累计 / 昨日同帧累计，配对样本。
+
+    配对要求两侧均存在且 >0（昨日缺该成员/缺帧/零成交 → 该成员整体剔除，
+    不铸 0 不偏估）；配对空 → (None, 0)（调用方透出 volBasis 原因）。
+    """
+    prev_amounts = (((prev_boards or {}).get(board) or {}).get("amounts")) or {}
+    ratios: list[float] = []
+    for code, amt in amounts.items():
+        pa = prev_amounts.get(code)
+        if pa is not None and pa > 0 and amt > 0:
+            ratios.append(amt / pa)
+    if not ratios:
+        return None, 0
+    ratios.sort()
+    n = len(ratios)
+    med = ratios[n // 2] if n % 2 else (ratios[n // 2 - 1] + ratios[n // 2]) / 2
+    return round(med, 3), n
+
+
+def _pulse_stats(quotes_map: dict[str, tuple[float, float, float | None]] | None,
                  codes: set[str]) -> dict[str, Any]:
     """单板块盘中统计（与回放研究 §三 同口径：price/last_close−1）。
 
     quotes_map=None → 整板块不可考（pulse 本体 None 由调用方置）；全成员缺报价
     → 统计值 None 不伪 0。红盘率=price>last_close 占比（收盘红盘率语义，
-    非盘中绿转红——键名沿用落库 redRatio）。
+    非盘中绿转红——键名沿用落库 redRatio）。V4-E 增 amountSum/amountQuotedN/
+    amountMissingN（当日累计成交额聚合，元；amount 不可考成员不计入，
+    amountQuotedN+amountMissingN=quotedN 对账）。
     """
     pcts: list[float] = []
+    amount_sum = 0.0
+    amount_quoted = 0
     for code in sorted(codes):
         q = (quotes_map or {}).get(code)
         if q is None:
             continue
         pcts.append((q[0] / q[1] - 1) * 100)
+        if q[2] is not None:
+            amount_sum += q[2]
+            amount_quoted += 1
     quoted = len(pcts)
     stats: dict[str, Any] = {"memberN": len(codes), "quotedN": quoted,
-                             "missingN": len(codes) - quoted}
+                             "missingN": len(codes) - quoted,
+                             "amountSum": round(amount_sum, 2) if amount_quoted else None,
+                             "amountQuotedN": amount_quoted,
+                             "amountMissingN": quoted - amount_quoted}
     if quoted == 0:
         stats.update({"pctMean": None, "pctMedian": None, "redRatio": None})
         return stats
@@ -184,26 +310,75 @@ _EVIDENCE_CN = {"pre_open": "盘前（报价=昨收，读数无意义）",
                 "closed": "收盘读数（15:00 后）"}
 
 
+def _frame_key_of(now: datetime) -> str | None:
+    """V4-E 机会式帧捕获窗：请求落在帧末~+5 分钟内 → 落该帧（帧读数≈帧末累计）。
+
+    15:00 帧沿用 V2c ≥15:05 条款。窗外的请求不落帧（frameSkip 披露，不污染
+    帧末语义）；午休（11:35~13:30）与 14:35~15:05 天然无窗。
+    """
+    minutes = now.hour * 60 + now.minute
+    for key in _FRAME_KEYS:
+        end_h, end_m = key.split(":")
+        end = int(end_h) * 60 + int(end_m)
+        if key == "15:00":
+            lo, hi = 15 * 60 + 5, 10 ** 9
+        else:
+            lo, hi = end, end + _FRAME_TOLERANCE_MIN
+        if lo <= minutes <= hi:
+            return key
+    return None
+
+
+def _latest_frame_stats(db: Any, today: str) -> tuple[str | None, dict[str, Any] | None]:
+    """当日 doc 中最近已落帧（含 lc5 回填帧）：供候选层 volTag 装配。"""
+    try:
+        doc = db[COLLECTION_PULSE].find_one({"_id": f"{today}:PULSE"},
+                                            {"frames": 1})
+    except Exception:
+        return None, None
+    frames = (doc or {}).get("frames") or {}
+    for key in reversed(_FRAME_KEYS):
+        if key in frames:
+            return key, frames[key]
+    return None, None
+
+
+def _vol_tag_of(frame_board: dict[str, Any] | None) -> str | None:
+    """帧内红盘 & 量比可考 → vol_confirm（≥界）/ vol_thin（<界）；
+    缺帧/帧内不红/量比不可考 → None（不注记，fail-visible）。"""
+    if not frame_board:
+        return None
+    pct_mean, red_ratio, vr = frame_board.get("pctMean"), frame_board.get("redRatio"), \
+        frame_board.get("volRatioMedian")
+    if pct_mean is None or pct_mean <= 0 or (red_ratio or 0) < 0.5:
+        return None
+    if vr is None:
+        return None
+    return "vol_confirm" if vr >= _VOL_CONFIRM_RATIO else "vol_thin"
+
+
 def compute_pulse(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
                   *, now: datetime | None = None,
                   quotes_fetcher: Callable[[set[str]],
-                                           dict[str, tuple[float, float]] | None]
+                                           dict[str, tuple[float, float, float | None]] | None]
                   | None = None) -> dict[str, Any]:
     """盘中读数全量计算（routes 唯一入口；quotes_fetcher 注入供测试/重放）。
 
     候选层=昨日节点∈{转弱,退潮}（弱转强候选，置顶）；全量层=封窗 N10 全部板块。
-    交易日 ≥15:05 幂等落 15:00 帧（预登记 §五=A 拍板）。
+    V4-E：候选层 volTag「量能确认/缩量翻红」基于当日最近已落帧（live/回填），
+    提示层不进节点判定；帧捕获窗内幂等落帧（盘中帧+15:00 帧）。
     非交易日当日读数=最近交易日收盘口径（报价停留在收盘价），证据段强制
     closed 并注记——不按钟表误标「早盘/盘前」（2026-10-25 用户验收反馈）。
     """
     now = now or datetime.now()
     stage = _evidence_stage(now)
     meta: dict[str, Any] = {"reason": None, "framesSaved": False}
+    is_trading_day = True
     try:
         import datetime as _dt
         from backend.snapshot_collector.trading_calendar import is_trading_day_cached
-        is_td, td_source = is_trading_day_cached(_dt.date.fromisoformat(today))
-        if not is_td:
+        is_trading_day, td_source = is_trading_day_cached(_dt.date.fromisoformat(today))
+        if not is_trading_day:
             stage = "closed"
             meta["tradingDayNote"] = f"今日非交易日（{td_source}），读数为最近交易日收盘口径"
     except Exception as exc:   # 判定不可用：按钟表分段 + 注记（fail-visible）
@@ -223,7 +398,30 @@ def compute_pulse(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
         payload["meta"]["reason"] = "昨日封窗无任何池 ok 日，成员集为空"
         return payload
     prev_nodes = _prev_nodes(db, today, dataset_id)
+    # V4-E 量比基线：昨日同帧 boards（live/回填均可，口径同为帧末累计）
+    prev_frame_boards: dict[str, Any] | None = None
+    prevs = trading_dates_before(db, today, 1, dataset_id=dataset_id)
+    if prevs:
+        try:
+            prev_doc = db[COLLECTION_PULSE].find_one(
+                {"_id": f"{prevs[-1]}:PULSE"}, {"frames": 1})
+            prev_frame_boards = (prev_doc or {}).get("frames") or {}
+        except Exception:
+            prev_frame_boards = None
     fetch = quotes_fetcher or _fetch_quotes
+    # V4-F 原料：核心票子集（昨日连板≥2，jiuyan_streak_map 单一事实源）+
+    # 量级分位基线（近 60 日 aggN10.amountSum）；不可考时如实空（fail-visible）
+    streak_map: dict = {}
+    if prevs:
+        try:
+            streak_map = jiuyan_streak_map(db, prevs[-1],
+                                           dataset_id=dataset_id) or {}
+        except Exception:
+            streak_map = {}
+    try:
+        amt_hist = _amount_sum_history(db, today, days=60)
+    except Exception:
+        amt_hist = {}
     all_codes: set[str] = set()
     for codes in members.values():
         all_codes |= codes
@@ -241,6 +439,15 @@ def compute_pulse(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
         entry: dict[str, Any] = {"board": board,
                                  "yesterdayNode": prev_nodes.get(board),
                                  "pulse": pulse}
+        strong_codes = {c for c in codes
+                        if (streak_map.get(c) or 0) >= 2}
+        entry.update(_strong_stats(quotes_map, strong_codes))
+        # V4-G 盯盘票清单：核心票明细（code→昨日连板高度），缺 3 子集的展开
+        entry["strongCodes"] = sorted(strong_codes)
+        entry["strongStreaks"] = {c: streak_map[c] for c in strong_codes}
+        apct, apct_n = _amount_pct(amt_hist.get(board) or [],
+                                   (pulse or {}).get("amountSum") if pulse else None)
+        entry["amountPct"], entry["amountPctN"] = apct, apct_n
         payload["all"].append(entry)
         if prev_nodes.get(board) in _WEAK_CANDIDATE_NODES:
             cand = dict(entry)
@@ -256,46 +463,84 @@ def compute_pulse(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
     if quotes_map is None:
         # 报价不可考不落帧：全 None 帧进校准样本集是污染；TDX 恢复后同日再请求
         # 即可正常落帧（幂等同键）。
-        payload["meta"]["frameSkip"] = "报价不可考，不落 15:00 帧（校准样本不入 null 帧）"
+        payload["meta"]["frameSkip"] = "报价不可考，不落帧（校准样本不入 null 帧）"
     else:
-        _maybe_save_frame(db, payload, now)
+        _maybe_save_frame(db, payload, now, is_trading_day, prev_frame_boards,
+                          members, quotes_map)
+    # V4-E volTag：落帧后取当日最近帧（含本请求刚落的 live 帧/回填帧）
+    # 全部行透出量比数值（用户观察位：直显放量/缩量，不只候选 chip）
+    latest_key, latest_frame = _latest_frame_stats(db, today)
+    for e in payload["all"]:
+        fb = (latest_frame or {}).get("boards", {}).get(e["board"])
+        vr = (fb or {}).get("volRatioMedian")
+        e["volRatioMedian"] = vr
+        e["volFrame"] = latest_key if vr is not None else None
+    for cand in payload["candidates"]:
+        fb = (latest_frame or {}).get("boards", {}).get(cand["board"])
+        cand["volTag"] = _vol_tag_of(fb)
+        cand["volTagFrame"] = latest_key if cand["volTag"] else None
+        # 量比数值无条件透出（与 all 行同款；review 2026-11-01：条件赋值导致
+        # 量比可考但不红的候选在盯盘清单显示「量能 --」，与 all 行不一致）
+        cand["volRatioMedian"] = (fb or {}).get("volRatioMedian")
     return payload
 
 
-def _maybe_save_frame(db: Any, payload: dict[str, Any], now: datetime) -> None:
-    """15:00 帧落库（预登记 §五=A）：交易日 ≥15:05 幂等 upsert；非交易日不落。
+def _maybe_save_frame(db: Any, payload: dict[str, Any], now: datetime,
+                      is_trading_day: bool,
+                      prev_frame_boards: dict[str, Any] | None,
+                      members: dict[str, set[str]],
+                      quotes_map: dict[str, tuple[float, float, float | None]]) -> None:
+    """V4-E 帧落库：帧捕获窗内幂等落帧（盘中 30 分钟帧 + 15:00 帧）。
 
-    收盘后报价停留在收盘价（TDX 行为），computedAt 如实记录取数时刻。
-    写库失败不抛（读口展示数据不因次要写库连坐降级），frameSkip 如实披露。
+    - 帧捕获窗：_frame_key_of（帧末+5 分钟；15:00 帧 ≥15:05）；窗外请求
+      frameSkip 披露不落帧（保帧末语义）；非交易日不落帧。
+    - 帧数据：板块红盘读数 + 成员级 amount 明细 + 量比（昨日同帧配对中位，
+      volBasis 披露基线成因）；与 lc5 回填帧同结构（src 区分）。
+    - 写入：update_one $set upsert——顶层字段仅 15:00 帧更新（保留盘中帧
+      与其他帧键），盘中帧只写 frames.{key}；写库失败不抛（读口展示数据
+      不因次要写库连坐降级），frameSkip 如实披露。
     """
-    if payload["evidenceStage"] != "closed":
+    key = _frame_key_of(now)
+    if key is None:
+        payload["meta"]["frameSkip"] = "非帧捕获窗（帧末+5 分钟），不落帧"
         return
-    if now.time() < time(15, 5):
-        payload["meta"]["frameSkip"] = "15:05 前不落帧（预登记 §五）"
+    if not is_trading_day:
+        payload["meta"]["framesSaved"] = False
+        payload["meta"]["frameSkip"] = "非交易日不落帧"
         return
+    vol_basis = "prev_frame" if prev_frame_boards else "prev_frame_missing"
+    # 昨日同帧 boards（同帧自比，控日内节奏）；昨日无该帧 → 基线缺失如实降级
+    prev_same_frame_boards = (prev_frame_boards or {}).get(key, {}).get("boards")
+    boards: dict[str, Any] = {}
+    for board in sorted(members):
+        codes = members[board]
+        if quotes_map is None:
+            continue
+        stats = _pulse_stats(quotes_map, codes)
+        amounts = _member_amounts(quotes_map, codes)
+        vol_med, vol_n = _board_vol_ratio(prev_same_frame_boards, board, amounts)
+        boards[board] = {**stats, "amounts": amounts,
+                         "volRatioMedian": vol_med, "volRatioQuotedN": vol_n}
+    frame_data: dict[str, Any] = {
+        "at": now.isoformat(timespec="seconds"), "src": "live",
+        "volBasis": vol_basis, "boards": boards,
+    }
+    # 乐观值先行（写库失败则回滚，update_one 抛异常=未写入）
+    payload["meta"]["framesSaved"] = True
+    payload["meta"]["frameSavedKey"] = key
+    set_doc: dict[str, Any] = {f"frames.{key}": frame_data}
+    if key == "15:00":   # 顶层语义=收盘读数，仅 15:00 帧更新（保留 frames 其他键）
+        for k in ("kind", "version", "date", "computedAt", "evidenceStage",
+                  "candidates", "all", "hintAny", "meta"):
+            if k in payload:
+                set_doc[k] = payload[k]
     try:
-        from backend.snapshot_collector.trading_calendar import is_trading_day_cached
-        import datetime as _dt
-        is_td, td_source = is_trading_day_cached(
-            _dt.date.fromisoformat(payload["date"]))
-        if not is_td:
-            payload["meta"]["framesSaved"] = False
-            payload["meta"]["frameSkip"] = f"非交易日（{td_source}）不落帧"
-            return
-    except Exception as exc:
-        payload["meta"]["frameSkip"] = f"交易日判定不可用：{exc}"
-        return
-    frame = {k: payload[k] for k in ("kind", "version", "date", "computedAt",
-                                     "evidenceStage", "candidates", "all",
-                                     "hintAny", "meta") if k in payload}
-    frame["_id"] = f"{payload['date']}:PULSE"
-    try:
-        db[COLLECTION_PULSE].replace_one({"_id": frame["_id"]}, frame, upsert=True)
+        db[COLLECTION_PULSE].update_one({"_id": f"{payload['date']}:PULSE"},
+                                        {"$set": set_doc}, upsert=True)
     except Exception as exc:
         payload["meta"]["framesSaved"] = False
         payload["meta"]["frameSkip"] = f"帧写入失败：{exc}"
         return
-    payload["meta"]["framesSaved"] = True
 
 
 def get_pulse_cached(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
@@ -328,6 +573,149 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(get_pulse_cached(db, day), ensure_ascii=False, default=str))
     return 0
 
+
+
+
+# ══════════ V4-G 盯盘票清单（第 5 课缺口 4；Q1a/Q2a/Q3a/Q4a 用户拍板）══════════
+
+def _code6(code: str | None) -> str:
+    """code 归一（与前端 lbCode 同规则）：剥交易所前缀取尾 6 位；无法归一返回原串。"""
+    m = re.search(r"(\d{6})\s*$", str(code or ""))
+    return m.group(1) if m else str(code or "")
+
+
+def _jiuyan_name_map(db: Any, dates: list[str | None]) -> dict[str, str]:
+    """韭研档 stocks → {6位code: name}（龙一/核心票名称单一来源；档缺失日跳过）。"""
+    from backend.operations.jiuyan_store import get_action_doc
+    out: dict[str, str] = {}
+    for d in dates:
+        if not d:
+            continue
+        doc = get_action_doc(db, d, "final") or get_action_doc(db, d, "midday")
+        for f in (doc or {}).get("fields") or []:
+            for s in f.get("stocks") or []:
+                c6 = _code6(s.get("code"))
+                if c6 and s.get("name"):
+                    out.setdefault(c6, str(s["name"]))
+    return out
+
+
+def _watch_ticket(code: str, name: str | None, role: str, *, streak=None,
+                  segment=None, gain10=None, leader_sealed=None,
+                  quotes_map: dict | None = None) -> dict[str, Any]:
+    """票行：实时 pct/red 由 TDX 报价现算；报价不可考 → 全 None（fail-visible）。"""
+    c6 = _code6(code)
+    price = last_close = pct = None
+    red: bool | None = None
+    q = (quotes_map or {}).get(code) or (quotes_map or {}).get(c6)
+    if q:
+        price, last_close = q[0], q[1]
+        if price and last_close:
+            pct = round((price / last_close - 1) * 100, 2)
+            red = pct > 0
+    return {"code": c6, "name": name, "role": role, "streak": streak,
+            "segment": segment, "gain10": gain10,
+            "leaderSealedToday": leader_sealed,
+            "price": price, "lastClose": last_close, "pct": pct, "red": red}
+
+
+def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
+                  now: datetime | None = None,
+                  quotes_fetcher: Callable[[set[str]],
+                                           dict[str, tuple[float, float, float | None]] | None]
+                  | None = None) -> dict[str, Any]:
+    """V4-G 盯盘票清单读口（提示层，不进判据；预登记 v4f 文档 §六）。
+
+    板块=当日弱转强候选（pulse candidates，Q2a）；票=①昨日空间龙一（space_mode
+    含断板反包候选、segment 分轨，Q4a）②昨日连板≥2 的 N10 冻结成员（缺口 3
+    核心票子集展开，Q1a）。方法论：炒作中预纳入自选，盘中看强势股集体翻红博弈
+    收盘涨停数增多（第 5 课）。fail-visible：候选空/龙一基线缺失/报价不可考逐层
+    如实透出，不伪 0 不静默。
+    """
+    now = now or datetime.now()
+    pulse = get_pulse_cached(db, today, dataset_id, now=now)
+    if not pulse.get("ok"):
+        return {"ok": False, "reason": f"pulse_unavailable: {pulse.get('reason')}"}
+    cand_rows = pulse.get("candidates") or []
+    if not cand_rows:
+        return {"ok": True, "today": today, "groups": [],
+                "reason": "今日无弱转强候选板块（candidates 空，非异常）"}
+    prevs = trading_dates_before(db, today, 3, dataset_id=dataset_id)
+    prev_date = prevs[-1] if prevs else None
+    leader_reason = None
+    leader_rows: list[dict] = []
+    leader_errors: list[dict[str, Any]] = []   # space 模式板块级缺料披露（review 2026-11-01）
+    if prev_date:
+        pool_dates = trading_dates_before(db, prev_date, 3, dataset_id=dataset_id)
+        rows, meta = day_leader_rows(
+            db, prev_date, dataset_id,
+            prev_date=pool_dates[-1] if pool_dates else None,
+            space_mode=True, pool_dates=pool_dates)
+        if rows is None:
+            leader_reason = f"昨日({prev_date}) THS 池缺失，龙一不可算（fail-visible）"
+        else:
+            leader_rows = rows
+            # space 模式「单板块 10 日涨幅全缺→板块跳过」的静默缺位如实透出
+            # （meta["spaceErrors"] = {board: reason}，theme_leader_baseline 同源）
+            for se_board, se_reason in ((meta or {}).get("spaceErrors") or {}).items():
+                leader_errors.append({"board": se_board, "reason": se_reason})
+    else:
+        leader_reason = "无前一交易日，龙一不可算"
+    name_by_code = _jiuyan_name_map(db, [prev_date, today])
+    fetch = quotes_fetcher or _fetch_quotes
+    # 票全集（原始 code 形式传 fetch，与 compute_pulse 同口径）
+    raw_codes: set[str] = set()
+    for e in cand_rows:
+        raw_codes.update(e.get("strongCodes") or [])
+        for lr in leader_rows:
+            if lr.get("board") == e["board"]:
+                raw_codes.add(str(lr.get("code") or ""))
+    raw_codes.discard("")
+    quotes_map = fetch(raw_codes) if raw_codes else None
+    groups: list[dict[str, Any]] = []
+    for e in cand_rows:
+        board = e["board"]
+        tickets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for lr in leader_rows:
+            if lr.get("board") != board:
+                continue
+            c6 = _code6(lr.get("code"))
+            if c6 in seen:
+                continue
+            seen.add(c6)
+            tickets.append(_watch_ticket(
+                lr.get("code"), lr.get("name") or name_by_code.get(c6), "leader",
+                streak=lr.get("streak"), segment=lr.get("segment"),
+                gain10=lr.get("gain10"), leader_sealed=lr.get("leaderSealedToday"),
+                quotes_map=quotes_map))
+        for c in e.get("strongCodes") or []:
+            c6 = _code6(c)
+            if c6 in seen:
+                continue   # 龙一同时也是连板≥2 成员 → 只保留 leader 角色
+            seen.add(c6)
+            tickets.append(_watch_ticket(
+                c, name_by_code.get(c6), "strong",
+                streak=(e.get("strongStreaks") or {}).get(c),
+                quotes_map=quotes_map))
+        groups.append({
+            "board": board, "hint": e.get("hint"),
+            "yesterdayNode": e.get("yesterdayNode"),
+            "strongN": e.get("strongN"), "strongQuotedN": e.get("strongQuotedN"),
+            "strongRedN": e.get("strongRedN"),
+            "strongRedRatio": e.get("strongRedRatio"),
+            "amountPct": e.get("amountPct"), "amountPctN": e.get("amountPctN"),
+            "volRatioMedian": e.get("volRatioMedian"),
+            "volFrame": e.get("volFrame"), "tickets": tickets})
+    out: dict[str, Any] = {"ok": True, "today": today, "prevDate": prev_date,
+                           "groups": groups}
+    if leader_reason:
+        out["leaderReason"] = leader_reason
+    if leader_errors:
+        out["leaderErrors"] = leader_errors
+    if not quotes_map and raw_codes:
+        out["reason"] = "盘中报价不可考（TDX 全批次异常/空结果），票涨幅不可考（fail-visible）"
+    return out
 
 if __name__ == "__main__":
     import sys
