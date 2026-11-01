@@ -2899,7 +2899,7 @@ function tlRowHtml(r, f){
     + '<td>' + esc(r.name || '') + '</td>'
     + '<td>' + esc(r.board || '-') + tlSegBadge(r) + '</td>'
     + '<td class="num">' + (r.leaderSealedToday === false
-        ? '<span class="tl-ev" title="龙一复合排序（v12 用户三轮裁决）：高度≥2 空间板组整体优先、组内 10 日涨幅最高；全首板按当日首封最早。当日未封板=断板反包候选（未跌停才可候选），仍按 10 日涨幅参与组内排序；10日涨幅 '
+        ? '<span class="tl-ev" title="龙一复合排序（v12 用户三轮裁决）：高度≥2 空间板组整体优先、组内 10 日涨幅最高；全首板按当日首封最早。当日未封板=断板反包候选（须真连板高度≥2 且未跌停；首板断板=跟风/板块统计口径，2026-11-01 用户裁决），仍按 10 日涨幅参与组内排序；10日涨幅 '
           + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '">未封板</span>'
         : (r.streak == null ? '-' : esc(String(r.streak)))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
@@ -4561,7 +4561,7 @@ function wlRender(){
       + `</td></tr>`;
     const tks = (g.tickets || []).map(t => {
       const role = t.role === 'leader'
-        ? '<span class="badge b-red">龙一' + (t.leaderSealedToday === false ? '·断板反包' : '') + '</span>'
+        ? '<span class="badge b-red">龙一' + (t.leaderSealedToday === false ? '·断板反包候选' : '') + '</span>'
         : '<span class="badge b-gray">核心</span>';
       const streak = t.streak != null ? (t.streak + '板') : '--';
       const seg = t.segment === 'growth' ? '双创' : t.segment === 'main' ? '主板' : '--';

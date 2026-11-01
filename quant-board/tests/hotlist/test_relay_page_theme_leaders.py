@@ -492,9 +492,11 @@ def test_segment_audit_badges_and_seal_tooltip(html: str) -> None:
 
 
 def test_seal_tooltip_mentions_limit_down_rule(html: str) -> None:
-    """tooltip 覆盖断板反包候选的未跌停条件（v12 规则的一部分，页面可读）。"""
+    """tooltip 覆盖断板反包候选的未跌停条件（v12 规则的一部分，页面可读）。
+
+    2026-11-01 用户裁决同步：候选另须真连板高度≥2，首板断板=跟风/统计口径。"""
     row = _fn(html, "tlRowHtml")
-    assert "未跌停才可候选" in row
+    assert "须真连板高度≥2 且未跌停" in row
 
 
 def test_kpl_live_stock_table_meta_columns(html):

@@ -510,11 +510,16 @@ def leaders_for(db: Any, date: str,
                 dataset_id: str = DEFAULT_DATASET_ID) -> tuple[list[dict] | None, dict]:
     """当日各板块龙头结构事实行；None = 当日 THS 池缺失（不可二分，fail-visible）。
 
-    2026-10-27 空间龙一规则（用户裁决，预登记 §21.6）：space_mode=True + 近 3 个交易日
-    封板池并入候选（断板反包入口，如 10-26 大业），排序=10日涨幅→连板高度→首封；
-    基线/历史窗口仍走默认 streak 口径（样本人群不随规则换代漂移）。
+    2026-10-27 空间龙一规则（用户裁决，预登记 §21.6）：space_mode=True，排序=
+    10日涨幅→连板高度→首封；基线/历史窗口仍走默认 streak 口径（样本人群不随规则
+    换代漂移）。
+    2026-11-01 用户裁决（龙头弱转强口径收紧，同步盯盘清单）：断板反包候选=隔日
+    弱转强，候选池只并入 P-1 一日封板池（昨日封板、今日断板），不再用近 3 日池——
+    更早断板股的反包观察窗已过，跨期滞留会误标（10-30 襄阳轴承实证：10-29 断板、
+    10-30 已失败仍入下期清单）；断板候选另须真连板高度≥2（首板断板=跟风/板块
+    统计口径，见 day_leader_rows 过滤与 lowHeightBrokenExcluded 披露）。
     """
-    prev_dates = trading_dates_before(db, date, 3, dataset_id)
+    prev_dates = trading_dates_before(db, date, 1, dataset_id)
     return day_leader_rows(db, date, dataset_id,
                            prev_date=prev_dates[-1] if prev_dates else None,
                            space_mode=True, pool_dates=prev_dates)

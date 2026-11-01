@@ -825,8 +825,10 @@ def test_band_panel_labels_sample_scope_as_within_range(js: str):
 
 # ── v6（2026-10-19）：板块与龙头子视图（预注册 jev-relay-sector-leader-preregistration.md）─
 def test_leaders_view_wired_as_own_subview(html: str, js: str):
-    """新增「板块与龙头」为独立子视图（≤ 2 卡），且在 renderRelayTab 周期内渲染。"""
-    assert "['leaders', '板块与龙头'" in _const(js, "RELAY_VIEWS"), "RELAY_VIEWS 缺 leaders 子视图"
+    """「板块与龙头」为独立子视图（≤ 2 卡），且在 renderRelayTab 周期内渲染。
+
+    页名 2026-10-30 改为「板块龙头」（d0ebf5f9，热榜行情页退役同轮）。"""
+    assert "['leaders', '板块龙头'" in _const(js, "RELAY_VIEWS"), "RELAY_VIEWS 缺 leaders 子视图"
     seg = html[html.index('id="rv-leaders"'):]
     seg = seg[: seg.index('id="rv-detail"')]
     assert seg.count('<div class="card"') == 2, "该子页应守「每页 ≤2 卡」规则"
@@ -1311,11 +1313,13 @@ def test_band_refresh_adopts_already_running(js: str, tmp_path):
 
 # ── 2026-10-19 用户裁决：页名「判定明细」→「涨停分析」+ 表计数改分页（每页 ≤20 条）──
 def test_detail_view_renamed_to_limitup_analysis(js: str, html: str):
-    """子页名改为「涨停分析」（导航/面包屑/tab 共用 RELAY_VIEWS，故一处即全改）。"""
+    """子页名改名链：判定明细→涨停分析（2026-10-19）→连板情绪（2026-10-30 d0ebf5f9）
+    导航/面包屑/tab 共用 RELAY_VIEWS，故一处即全改；行内展开的判定明细卡（单日七题
+    全文）沿用最初原名：不得连卡片一起改名。"""
     rv = _const(js, "RELAY_VIEWS")
-    assert "'detail', '涨停分析'" in rv, "子页名应为「涨停分析」"
+    assert "'detail', '连板情绪'" in rv, "子页名应为「连板情绪」"
     assert "'判定明细'" not in rv, "页名不应再叫「判定明细」"
-    assert "<!-- ⑤ 涨停分析" in html, "页区块注释应同步改名"
+    assert "<!-- ⑤ 连板情绪" in html, "页区块注释应同步改名"
     assert "RELAY_VIEWS.map" in _const(js, "NAV") or "RELAY_VIEWS" in js
     # 行内展开的判定明细卡（单日七题全文）沿用原名：不得连卡片一起改名
     assert "判定明细" in js, "行内判定明细卡（题面/判据）应保留原名，只改页名"
@@ -1669,7 +1673,8 @@ def test_lianban_board_dir_columns(html: str, js: str):
 
 def test_lianban_layout_left_dir_right_stocks(html: str):
     """左栏板块目录表 + 右栏成分股表（.kpl-layout 左目录右列表，参照 KPL 板块行情）。"""
-    assert 'class="kpl-layout"' in html.split('tab-lianban')[1].split('</section>')[0]
+    # 锚点必须用 id=（style 块里的 #tab-lianban CSS 选择器会抢先 split，2026-11 教训）
+    assert 'class="kpl-layout"' in html.split('id="tab-lianban"')[1].split('</section>')[0]
     assert 'id="lbBoardTable"' in html and 'id="lbStockTable"' in html
     assert 'id="lbBoardSearch"' in html, "左栏缺板块搜索"
 

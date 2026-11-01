@@ -210,6 +210,25 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 hs = [h for h in (c.get("streak") if c["code"] in today_codes else None,
                                   hist_by_code.get(c["code"])) if isinstance(h, int)]
                 c["height"] = max(hs) if hs else None
+            # 龙头弱转强口径（2026-11-01 用户裁决）：断板反包候选须真连板高度≥2——
+            # 「近池有板」只作跟风股与板块总体弱转强统计口径（反包个股数>昨日数），
+            # 首板断板股不构成龙头反包候选（实证：邵阳液压 10-29 首板、10-30 断板
+            # 被标断板反包候选，用户判定不对）；高度不可考 → 剔除+披露（不猜）
+            kept_cands: list[dict] = []
+            low_height_broken: list[str] = []
+            for c in cands:
+                if c["code"] in today_codes:
+                    kept_cands.append(c)
+                    continue
+                h = c.get("height")
+                if isinstance(h, int) and h >= 2:
+                    kept_cands.append(c)
+                else:
+                    low_height_broken.append(
+                        f"{c.get('name') or c['code']}(高度{h if h is not None else '不可考'})")
+            if low_height_broken:
+                meta.setdefault("lowHeightBrokenExcluded", {})[board] = low_height_broken
+            cands = kept_cands
             # v12 分轨：主板/双创各取龙一（同一排序键，space_leaders_by_segment 单一实现）
             leaders_iter = [(seg, ld, ld["code"] in sealed)
                             for seg, ld in space_leaders_by_segment(cands)]

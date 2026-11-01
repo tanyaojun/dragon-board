@@ -627,8 +627,8 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
     """V4-G 盯盘票清单读口（提示层，不进判据；预登记 v4f 文档 §六）。
 
     板块=当日弱转强候选（pulse candidates，Q2a）；票=①昨日空间龙一（space_mode
-    含断板反包候选、segment 分轨，Q4a）②昨日连板≥2 的 N10 冻结成员（缺口 3
-    核心票子集展开，Q1a）。方法论：炒作中预纳入自选，盘中看强势股集体翻红博弈
+    含断板反包候选、segment 分轨，Q4a；候选窗=P-1 一日封板池严格隔日弱转强，
+    断板候选须真连板高度≥2）②昨日连板≥2 的 N10 冻结成员（缺口 3 核心票子集展开，Q1a）。方法论：炒作中预纳入自选，盘中看强势股集体翻红博弈
     收盘涨停数增多（第 5 课）。fail-visible：候选空/龙一基线缺失/报价不可考逐层
     如实透出，不伪 0 不静默。
     """
@@ -646,7 +646,11 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
     leader_rows: list[dict] = []
     leader_errors: list[dict[str, Any]] = []   # space 模式板块级缺料披露（review 2026-11-01）
     if prev_date:
-        pool_dates = trading_dates_before(db, prev_date, 3, dataset_id=dataset_id)
+        # 断板反包候选=隔日弱转强：候选池只取 P-1 一日封板池（昨日封板、今日断板），
+        # 不沿用判定链的近 3 日池——3 日窗会让更早断板、反包观察窗已失败的股跨期滞留候选
+        # （2026-11-01 用户报障：襄阳轴承 10-29 断板、10-30 -3.57% 未触即反包窗已败，
+        #   却经 10-27/28 池进入下期清单仍标断板反包候选）
+        pool_dates = trading_dates_before(db, prev_date, 1, dataset_id=dataset_id)
         rows, meta = day_leader_rows(
             db, prev_date, dataset_id,
             prev_date=pool_dates[-1] if pool_dates else None,
