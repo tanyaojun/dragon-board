@@ -843,6 +843,10 @@ def _label_one(db, col, date: str, built: dict,
         "evidenceState": built["evidence"]["state"],
         "evidenceIndustry": (built["evidence"].get("industry") or {}).get("name"),
         "evidenceEventTitles": [e.get("title") for e in built["evidence"].get("events") or []],
+        # 2026-11-02 用户报障：题材新闻命中只活在叙事文本里，结构化层不可见
+        # （KPL 研讨会新闻含亚玛顿关联股，evidenceEventTitles=[]/kwordTags=[] 看似「没关联」）
+        # ——镜像题材新闻命中标题（含 Kword 空、标题锚命中的条目），与事件徽章同口径
+        "evidenceNewsTitles": [n.get("title") for n in built["evidence"].get("news") or []],
         # v3/v4：L2 板内解析可用性 + Kword 题材标签（开盘啦新闻流），前端分层展示用
         "evidenceBoardResolved": bool(built["evidence"].get("boardResolved")),
         "evidenceKwordTags": list(built["evidence"].get("kwordTags") or []),

@@ -2893,9 +2893,15 @@ function tlRowHtml(r, f){
   //（名称与「板块」列重复，占宽）；完整题材驱动事件文字描述进 tooltip。
   const evTitles = r.evidenceEventTitles || [];
   const evTags = r.evidenceKwordTags || [];
+  // 题材新闻命中镜像（2026-11-02：此前只活在叙事文本里，结构化层/徽章层不可见）
+  const evNews = r.evidenceNewsTitles || [];
   const evTitleBadge = evTitles.length
     ? ' <span class="tl-ev" title="' + esc(evTitles.join('\n')) + '">+' + evTitles.length
       + '事件</span>'
+    : '';
+  const evNewsBadge = evNews.length
+    ? ' <span class="tl-ev" title="' + esc(evNews.join('\n')) + '">+' + evNews.length
+      + '新闻</span>'
     : '';
   const evTagBadge = evTags.length
     ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length
@@ -2909,8 +2915,8 @@ function tlRowHtml(r, f){
       || '板内解析在场但摘要未存档（旧档无叙事原文，展开行可查看投喂语料）') + '">+板内解析</span>'
     : '';
   const evid = r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
-      ? (evTitleBadge + evTagBadge + l2Tag
-        || '<span class="badge b-gray" title="产业树已映射但无事件/标签证据">-</span>')
+      ? (evTitleBadge + evNewsBadge + evTagBadge + l2Tag
+        || '<span class="badge b-gray" title="产业树已映射但无事件/新闻/标签证据">-</span>')
       : (r.evidenceMissingReason
         ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
         : '<span class="badge b-gray">-</span>');

@@ -294,6 +294,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 "evidenceMissingReason": d.get("evidenceMissingReason"),
                 "evidenceIndustry": d.get("evidenceIndustry"),
                 "evidenceEventTitles": d.get("evidenceEventTitles") or [],
+                # 2026-11-02：题材新闻命中标题镜像（结构化层可见，与事件徽章同口径）
+                "evidenceNewsTitles": d.get("evidenceNewsTitles") or [],
                 # v3/v4：板内解析可用性 + Kword 题材标签（开盘啦新闻流）
                 # （v5 起 status=skipped 不落库，读口无排除行）
                 "evidenceBoardResolved": d.get("evidenceBoardResolved"),

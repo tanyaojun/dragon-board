@@ -537,3 +537,14 @@ def test_kpl_live_stock_table_meta_columns(html):
     # LIVE 状态带 stockMeta（构建态/签名节流/失败呈现记账）
     assert "stockMeta" in html[html.index("const LIVE ="):html.index("const LIVE_SRCS")]
     assert "errShown" in html[html.index("const LIVE ="):html.index("const LIVE_SRCS")]
+
+
+def test_event_column_news_badge(html: str) -> None:
+    """题材新闻命中徽章（2026-11-02 用户报障）：KPL 研讨会新闻含亚玛顿关联股，
+    但 evidenceEventTitles/kwordTags 均空——新闻命中此前只活在叙事文本里，
+    结构化层与徽章层不可见。镜像字段 evidenceNewsTitles 必须接到 +N新闻 徽章
+    （tooltip=标题全文，与事件徽章同口径）。"""
+    row = _fn(html, "tlRowHtml")
+    assert "r.evidenceNewsTitles" in row, "新闻徽章必须消费 evidenceNewsTitles"
+    assert "esc(evNews.join" in row and "新闻</span>" in row, \
+        "新闻徽章必须带 tooltip 全文（title=完整新闻标题）"
