@@ -523,3 +523,50 @@ def test_match_kpl_news_zsname_official_board_channel():
            "kword": "", "zsName": "", "eventDate": "2026-11-02", "stocks": []}
     hits4 = D.match_kpl_news([it4], "光伏")
     assert [h["matchHow"] for h in hits4] == ["包含"], "无 ZSName 时标题锚仍命中"
+
+
+def test_match_kpl_news_content_anchor_weak_hit():
+    """正文锚兜底（2026-11-02 正文预登记 §五.1）：标题/Kword/ZSName 全空时，
+    正文剥 HTML 后确定性命中，标 titleHit=False 弱匹配；叙事行带弱匹配标注。"""
+    import re as _re
+    from backend.analysis.hotlist import theme_event_digest as _D
+    body_html = "<p>财联社11月2日讯 商业航天再提速：2029 年轨道算力将超过地面。</p>"
+    it = {"cid": "9", "title": "马斯克重磅预测", "kword": "", "zsName": "",
+          "contentHtml": body_html, "eventDate": "2026-11-02", "stocks": []}
+    hits = _D.match_kpl_news([it], "商业航天")
+    assert len(hits) == 1
+    h = hits[0]
+    assert h["matchHow"].startswith("正文锚"), f"got {h['matchHow']}"
+    assert h["titleHit"] is False, "正文锚命中必须标弱匹配"
+    # 标题命中路径不受影响：不带 titleHit 字段（默认弱匹配不触发）
+    it2 = {"cid": "10", "title": "商业航天发射新进展", "kword": "", "zsName": "",
+           "contentHtml": body_html, "eventDate": "2026-11-02", "stocks": []}
+    h2 = _D.match_kpl_news([it2], "商业航天")[0]
+    assert "titleHit" not in h2 and h2["matchHow"] == "包含"
+    # 正文不命中则整条不进（不加噪声）
+    it3 = {"cid": "11", "title": "完全无关通稿", "kword": "", "zsName": "",
+           "contentHtml": "<p>今天天气不错</p>", "eventDate": "2026-11-02", "stocks": []}
+    assert _D.match_kpl_news([it3], "商业航天") == []
+    # 剥 HTML：标签不算词符（<p> 与词之间不形成假锚），替换为空格后首尾含空白
+    assert _re.sub(r"\s+", " ", _D._strip_html(body_html)).strip().startswith("财联社")
+
+
+def test_news_line_renders_weak_match_badge_for_content_anchor():
+    """叙事行：正文锚命中条目带「弱匹配（标题未命中，仅正文级关联）」；标题命中不带。"""
+    news = [
+        {"_id": "news:1", "kind": "kpl_theme_news", "cid": "1",
+         "title": "马斯克重磅预测", "kword": "", "zsName": "",
+         "contentHtml": "<p>商业航天又一里程碑，卫星互联网提速。</p>",
+         "source": "开盘啦", "eventDate": "2026-10-22", "timeStamp": None,
+         "stocks": [], "lastFetchDate": "2026-10-22"},
+        {"_id": "news:2", "kind": "kpl_theme_news", "cid": "2",
+         "title": "商业航天发射计划公布", "kword": "", "zsName": "",
+         "source": "开盘啦", "eventDate": "2026-10-22", "timeStamp": None,
+         "stocks": [], "lastFetchDate": "2026-10-22"},
+    ]
+    out = D.build_theme_evidence_block(_db(news=news, calendar=[]),
+                                       board_name="商业航天", date="2026-10-22")
+    weak_lines = [ln for ln in out["text"].splitlines() if "弱匹配（标题未命中，仅正文级关联）" in ln]
+    assert len(weak_lines) == 1, weak_lines
+    assert "马斯克重磅预测" in weak_lines[0] and "正文锚" in weak_lines[0]
+    assert "商业航天发射计划公布（包含）" in out["text"]

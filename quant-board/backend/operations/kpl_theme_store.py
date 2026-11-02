@@ -87,14 +87,22 @@ def save_topic_events(db: Any, *, fetch_date: str, events: list[dict],
     return {"written": written, "detailFetched": detail_fetched}
 
 
-def save_news_items(db: Any, *, fetch_date: str, items: list[dict]) -> dict:
+def save_news_items(db: Any, *, fetch_date: str, items: list[dict],
+                    details: dict[str, dict] | None = None) -> dict:
+    """news 流落库；`details`（2026-11-02 预登记 §三）为 cid→详情正文映射，
+    空详情不覆盖已存内容（同事件详情惯例）。"""
     written = 0
+    details_merged = 0
     for it in items:
         cid = str(it.get("cid") or "")
         if not cid:
             continue
         _id = f"news:{cid}"
-        existing = db[COLLECTION_NEWS].find_one({"_id": _id}, {"firstSeenAt": 1, "firstSeenDate": 1}) or {}
+        existing = db[COLLECTION_NEWS].find_one(
+            {"_id": _id},
+            {"firstSeenAt": 1, "firstSeenDate": 1, "contentHtml": 1,
+             "kwordDesc": 1, "zsCode": 1, "isChoice": 1}) or {}
+        det = (details or {}).get(cid) or {}
         doc = {
             "_id": _id, "kind": "kpl_theme_news", "cid": cid,
             "title": it.get("title") or "", "kword": it.get("kword") or "",
@@ -102,11 +110,18 @@ def save_news_items(db: Any, *, fetch_date: str, items: list[dict]) -> dict:
             "zsName": it.get("zsName") or "",
             "source": it.get("source") or "", "eventDate": it.get("eventDate") or "",
             "timeStamp": it.get("timeStamp"), "stocks": it.get("stocks") or [],
+            # 2026-11-02 预登记 §三：正文原文（HTML 单主链，消费端剥标签）；只存不用字段
+            "contentHtml": str(det.get("content") or "") or existing.get("contentHtml") or "",
+            "kwordDesc": det.get("kwordDesc") or existing.get("kwordDesc") or "",
+            "zsCode": det.get("zsCode") or existing.get("zsCode") or "",
+            "isChoice": det.get("isChoice", existing.get("isChoice")),
             **_base_doc(existing, fetch_date),
         }
+        if det.get("content") and not existing.get("contentHtml"):
+            details_merged += 1
         db[COLLECTION_NEWS].replace_one({"_id": _id}, doc, upsert=True)
         written += 1
-    return {"written": written}
+    return {"written": written, "newDetails": details_merged}
 
 
 def save_calendar_items(db: Any, *, fetch_date: str, items: list[dict]) -> dict:
@@ -157,6 +172,7 @@ def get_news_items(db: Any, *, date: str, include_past_recent: int = 2,
     docs = db[COLLECTION_NEWS].find(
         {"eventDate": _window(date, include_past_recent, window_days)},
         {"eventDate": 1, "cid": 1, "title": 1, "kword": 1, "zsName": 1, "source": 1, "stocks": 1,
+         "contentHtml": 1, "kwordDesc": 1, "zsCode": 1, "isChoice": 1,
          "timeStamp": 1},
     )
     return sorted(docs, key=lambda d: -(d.get("timeStamp") or 0))

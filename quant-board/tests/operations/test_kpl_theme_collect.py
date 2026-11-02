@@ -250,7 +250,7 @@ def test_collect_once_persists_all_three(monkeypatch):
     assert out["ok"] is True and out["degraded"] == []
     assert out["topic"]["written"] == 3 and out["topic"]["newDetails"] == 3
     assert out["news"]["written"] == 2 and out["calendar"]["written"] == 1
-    assert out["callsUsedTodayAfter"] == 6, "3 主源 + 3 新事件详情"
+    assert out["callsUsedTodayAfter"] == 8, "3 主源 + 3 新事件详情 + 2 新题正文（2026-11-02 正文预登记）"
     # 事件详情落库
     assert db[S.COLLECTION_TOPIC].docs["2026-10-21:2498"]["source"] == "央视新闻"
 
@@ -326,3 +326,88 @@ def test_budget_tight_skips_details_but_keeps_main_sources(monkeypatch):
     out = C.collect_once(db=db, fetch_date="2026-10-22", budget=5)
     assert out["skippedByBudget"] == ["topic_detail"]
     assert out["topic"]["newDetails"] == 0 and out["topic"]["written"] == 3
+
+
+NEWS_DETAIL_PAYLOAD = {"Info": {"CID": 7954, "Content": "<p>财联社11月2日讯 马斯克预测轨道算力。</p>",
+                                "KwordDesc": "卫星算力", "ZSCode": "899501", "IsChoice": 1}}
+
+
+def test_parse_news_detail_keeps_content_and_extras():
+    d = F.parse_news_detail(NEWS_DETAIL_PAYLOAD)
+    assert d["cid"] == "7954" and "<p>" in d["content"]
+    assert d["kwordDesc"] == "卫星算力" and d["zsCode"] == "899501" and d["isChoice"] == 1
+
+
+def test_fetch_news_detail_empty_shell_is_structured_failure(monkeypatch):
+    # InfoID/CID/ID 型空壳 {Info:{Coll:0}} 必须结构化失败，不是 ok:True 空正文
+    monkeypatch.setattr(F, "_get_json", lambda url: {"Info": {"Coll": 0}, "errcode": 0})
+    res = F.fetch_news_detail("7954")
+    assert res["ok"] is False and res["errorCode"] == "empty_detail"
+
+
+def test_save_news_items_merges_details_and_empty_never_overwrites():
+    db = FakeDb()
+    items = F.parse_news_list(NEWS_PAYLOAD)
+    S.save_news_items(db, fetch_date="2026-10-22", items=items)
+    cid = items[1]["cid"]
+    got = S.save_news_items(db, fetch_date="2026-10-22", items=items,
+                            details={cid: {"content": "<p>正文</p>", "kwordDesc": "d",
+                                           "zsCode": "1", "isChoice": 0}})
+    assert got["newDetails"] == 1
+    row = db[S.COLLECTION_NEWS].find_one({"_id": f"news:{cid}"})
+    assert "<p>正文</p>" in row["contentHtml"] and row["kwordDesc"] == "d" and row["zsCode"] == "1"
+    # 空详情不覆盖
+    S.save_news_items(db, fetch_date="2026-10-22", items=items, details={})
+    row2 = db[S.COLLECTION_NEWS].find_one({"_id": f"news:{cid}"})
+    assert row2["contentHtml"] == row["contentHtml"]
+    # 读口投影透出
+    projected = S.get_news_items(db, date="2026-10-22")
+    assert any(n.get("contentHtml") for n in projected)
+
+
+def test_collect_once_fetches_news_details_for_today_items(monkeypatch):
+    db = FakeDb()
+    evs = F.parse_topic_list(TOPIC_LIST_PAYLOAD)
+
+    def fake_news_list(*, news_type=-1, st=50, index=0):
+        if news_type == 3:
+            return {"ok": True, "items": F.parse_calendar_list(CAL_PAYLOAD)}
+        return {"ok": True, "items": F.parse_news_list(NEWS_PAYLOAD)}
+
+    monkeypatch.setattr(F, "fetch_topic_list", lambda **kw: {"ok": True, "events": evs})
+    monkeypatch.setattr(F, "fetch_topic_detail",
+                        lambda event_id: {"ok": True, "detail": F.parse_topic_detail(TOPIC_DETAIL_PAYLOAD)})
+    monkeypatch.setattr(F, "fetch_news_list", fake_news_list)
+    detail_calls = []
+
+    def fake_news_detail(cid):
+        detail_calls.append(cid)
+        return {"ok": True, "detail": {"cid": cid, "content": "<p>x</p>",
+                                       "kwordDesc": "", "zsCode": "", "isChoice": None}}
+    monkeypatch.setattr(F, "fetch_news_detail", fake_news_detail)
+    stats = C.collect_once(db=db, fetch_date="2026-10-22", budget=99)
+    assert stats["ok"] is True
+    news = S.get_news_items(db, date="2026-10-22")
+    assert news, "NEWS_PAYLOAD 条目 eventDate 应落在 2026-10-22"
+    assert set(detail_calls) == {n["cid"] for n in news}, "只对当日条目补正文"
+    assert stats["news"]["newDetails"] == len(detail_calls)
+
+
+def test_collect_once_budget_tight_skips_news_details(monkeypatch):
+    db = FakeDb()
+    evs = F.parse_topic_list(TOPIC_LIST_PAYLOAD)
+
+    def fake_news_list(*, news_type=-1, st=50, index=0):
+        if news_type == 3:
+            return {"ok": True, "items": F.parse_calendar_list(CAL_PAYLOAD)}
+        return {"ok": True, "items": F.parse_news_list(NEWS_PAYLOAD)}
+
+    monkeypatch.setattr(F, "fetch_topic_list", lambda **kw: {"ok": True, "events": evs})
+    monkeypatch.setattr(F, "fetch_topic_detail",
+                        lambda event_id: {"ok": True, "detail": F.parse_topic_detail(TOPIC_DETAIL_PAYLOAD)})
+    monkeypatch.setattr(F, "fetch_news_list", fake_news_list)
+    monkeypatch.setattr(F, "fetch_news_detail",
+                        lambda cid: (_ for _ in ()).throw(AssertionError("预算紧张不应调正文端点")))
+    stats = C.collect_once(db=db, fetch_date="2026-10-22", budget=2)
+    # budget=2：topic+news 两主源即用尽 → 正文剩余额度 0，不得调端点
+    assert "news_detail" in stats["skippedByBudget"]

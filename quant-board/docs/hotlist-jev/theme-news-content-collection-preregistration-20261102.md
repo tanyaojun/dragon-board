@@ -16,9 +16,13 @@
 ## 三、采集方案（预算制，同 topic_detail 模式）
 
 1. `fetch_news_detail(cid)` → `{ok, detail:{content, kwordDesc, zsCode, isChoice, ...}}`；失败结构化、计入 `detailFailures`（fail-visible，同事件详情）。
-2. `collect_once` 中 detail 阶段：对**当日窗内 news 条目**（`eventDate==fetch_date`）逐条拉 detail；预算不足整节跳过并 `skippedByBudget` 标注（现行为：`topic_detail` 同款）。
+2. `collect_once` 中 detail 阶段：对**读窗内**（当日+近 2 日，同消费窗口径修订 2026-11-02）缺正文条目
+   逐条拉 detail，按实际剩余额度截取（总调用 ≤ 预算，截剩部分显式 `skippedByBudget: news_detail`）；
+   预算耗尽整节跳过并 `skippedByBudget` 标注（同 `topic_detail` 惯例，但不再进预留上限，
+   避免 3+8+30=41>40 误伤默认路径）。
 3. 存储：`kpl_theme_news` 文档新增 `contentHtml`（原始 HTML 单主链，消费端剥标签）、`kwordDesc`、`zsCode`、`isChoice`；空详情不覆盖已存内容（同 `test_empty_detail_never_overwrites_content` 惯例）。
-4. 回填：一次性脚本对存量近 3 日条目回填 detail（确定性重放，零 jev token）。
+4. 回填：一次性脚本 `scripts/backfill_news_content.py` 对存量近 3 日条目回填 detail
+   （确定性重放，零 jev token；调用计入当日 `kpl_api_calls`，`--budget` 可覆盖）。
 
 ## 四、预算
 

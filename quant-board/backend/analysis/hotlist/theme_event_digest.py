@@ -337,10 +337,17 @@ def match_kpl_events(events: list[dict], board_name: str | None,
     return out
 
 
+def _strip_html(s: str) -> str:
+    """新题正文（HTML 单主链）→ 匹配用文本（2026-11-02 正文预登记 §五.1）。"""
+    return re.sub(r"<[^>]+>", " ", str(s or ""))
+
+
 def match_kpl_news(items: list[dict], board_name: str | None,
                    *, limit: int = MAX_EVENTS) -> list[dict]:
     """题材新闻 → 板块：**Kword 题材标签优先**，**ZSName 官方板块次之**（2026-11-02
-    用户裁决①：KPL 新题自带板块归属，确定性互认，消大部分别名维护），回落标题锚。"""
+    用户裁决①：KPL 新题自带板块归属，确定性互认，消大部分别名维护），回落标题锚，
+    最后正文锚兑底（2026-11-02 正文预登记 §五.1：命中标弱匹配「仅正文级关联」，
+    同 2026-10-28 事件通道语义，防泛科技通稿误配）。"""
     base = normalize_name(board_name)
     if not base:
         return []
@@ -365,8 +372,20 @@ def match_kpl_news(items: list[dict], board_name: str | None,
                 hit = {"how": f"ZSName板块「{str(it.get('zsName'))}」", "anchor": zs if len(zs) <= len(base) else base}
         if not hit:
             hit = _anchor_hit(base, keys, str(it.get("title") or ""))
+        if not hit:
+            # ④ 正文锚兑底（2026-11-02 正文预登记 §五.1）：HTML 剩标签后确定性关联；
+            # 标题未命中 → 弱匹配（titleHit=False），同事件通道语义
+            body = _strip_html(str(it.get("contentHtml") or ""))
+            if body:
+                hit = _anchor_hit(base, keys, body, anchor_text=str(it.get("title") or ""))
+                if hit:
+                    hit = {**hit, "how": f"正文锚{'' if hit['how'] == '包含' else '·' + hit['how']}",
+                           "titleHit": False}
         if hit:
-            out.append({**it, "matchHow": hit["how"]})
+            rec = {**it, "matchHow": hit["how"]}
+            if "titleHit" in hit:
+                rec["titleHit"] = hit["titleHit"]
+            out.append(rec)
         if len(out) >= limit:
             break
     return out
@@ -599,8 +618,10 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                         f"{s.get('name')}{s.get('rate'):+.2f}%"
                         if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
                         for s in top) if top else ""
+                    # 正文锚命中 = 标题未命中（仅正文级关联），显式标弱匹配（同事件通道语义）
+                    weak = "" if it.get("titleHit", True) else "；弱匹配（标题未命中，仅正文级关联）"
                     lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
-                                 f"（{it.get('matchHow')}{st_txt}）")
+                                 f"（{it.get('matchHow')}{st_txt}）{weak}")
         if cal_section:
             if cal_no_match:
                 lines.append(f"未来 {window_days} 日既定事件：无匹配")

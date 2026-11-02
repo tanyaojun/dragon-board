@@ -2,10 +2,13 @@
 """开盘啦题材语料采集编排（2026-10-23，v4 换源：事件层唯一权威源）。
 
 流程：topic_list(1 次) → 识别新事件 → 新事件逐条 InfoGet 补详情（**只补缺失**，单轮上限
-`DETAIL_CAP_PER_RUN`）→ news 流(1 次) → calendar(1 次)。三个集合幂等 upsert。
+`DETAIL_CAP_PER_RUN`）→ news 流(1 次) → 当日新条目逐条 GetInfo 补正文（**只补缺失**，
+单轮上限 `NEWS_DETAIL_CAP_PER_RUN`，2026-11-02 正文预登记 §三）→ calendar(1 次)。
+三个集合幂等 upsert。
 
 额度护栏（沿用韭研 §5.3 纪律，参数按 KPL 特性放宽——实测单发 3s 间隔无限流）：
-1. 调用计数落地 `kpl_api_calls`（失败同样计数）；日预算 `KPL_THEME_DAILY_CALL_BUDGET`（默认 20）；
+1. 调用计数落地 `kpl_api_calls`（失败同样计数）；日预算 `KPL_THEME_DAILY_CALL_BUDGET`
+   （默认 40，2026-11-02 正文预登记 §四：20→40）；
 2. 串行 + 源间间隔 `INTER_CALL_DELAY_SECONDS`（3s）+ 失败退避重试 1 次（20s）；
 3. **空载荷 = 降级不是成功**（errcode=0 但 0 条 → `emptySources` + `degraded`，§4.0）；
 4. `--dry-run` 不写业务库，只打印统计（仍计 HTTP 调用数，与韭研同口径）。
@@ -20,7 +23,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from backend.operations import kpl_theme_fetch as F
@@ -34,8 +37,9 @@ NEWS_ST = 50
 CALENDAR_ST = 50
 TOPIC_LIST_ST = 15          # InfoList 上限（实测覆盖 ~16 日）
 DETAIL_CAP_PER_RUN = 8      # 单轮新事件详情补拉上限（防首日冷启动连发）
+NEWS_DETAIL_CAP_PER_RUN = 30  # 单轮新题正文补拉上限（2026-11-02 预登记 §三；当日新条目实测 10-30/日）
 
-DEFAULT_DAILY_CALL_BUDGET = 20
+DEFAULT_DAILY_CALL_BUDGET = 40
 INTER_CALL_DELAY_SECONDS = 3.0
 RETRY_SLEEP_SECONDS = 20.0
 RETRY_MAX = 1
@@ -60,12 +64,14 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
     budget = daily_call_budget() if budget is None else int(budget)
     used = S.calls_recorded(db, fetch_date)
     # 计划调用：1(topic list) + 1(news) + 1(calendar) + 新事件详情数（运行中才知道，
-    # 先按上限预留判额——不够就只拉列表不补详情，fail-visible）
+    # 先按上限预留判额——不够就只拉列表不补详情，fail-visible）；
+    # news 正文不进预留上限：③阶段按实际剩余额度截取（2026-11-02 正文预登记 §三，
+    # 避免预留上限 41>40 误伤默认路径；总调用仍 ≤ 预算，超出部分显式 skippedByBudget）
     planned_max = 3 + DETAIL_CAP_PER_RUN
     skipped_by_budget: list[str] = []
     if used + planned_max > budget:
         skipped_by_budget = ["topic_detail"]
-        logger.warning("KPL 采集额度紧张：已用 %d + 预留 %d > 预算 %d，本轮只拉三主源不补详情",
+        logger.warning("KPL 采集额度紧张：已用 %d + 预留 %d > 预算 %d，本轮只拉三主源不补详情/正文",
                        used, planned_max, budget)
 
     degraded: list[str] = []
@@ -128,13 +134,44 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
         topic_stats = S.save_topic_events(db, fetch_date=fetch_date, events=events,
                                           details=details)
 
-    # ③ 题材新闻流（Kword 标签 + 关联个股）
+    # ③ 题材新闻流（Kword 标签 + 关联股）→ 当日新条目补正文（只补缺失，同事件详情惯例）
     news_res = _call("theme_news", F.fetch_news_list, news_type=-1, st=NEWS_ST)
     news_items = (news_res or {}).get("items") or []
     _note("theme_news", news_res, news_items)
+    news_details: dict[str, dict] = {}
+    if news_items and "news_detail" not in skipped_by_budget:
+        new_detail_ids = []
+        # 正文补拉窗 = 消费读窗（当日+近 2 日，2026-11-02 预登记 §三.2 同口径修订）；
+        # 更老条目不回溯，防冷启动连发
+        _d = datetime.strptime(fetch_date, "%Y-%m-%d")
+        since = (_d - timedelta(days=2)).strftime("%Y-%m-%d")
+        for it in news_items:
+            cid = str(it.get("cid") or "")
+            ed = str(it.get("eventDate") or "")
+            if not cid or not (since <= ed <= fetch_date):
+                continue
+            doc = db[S.COLLECTION_NEWS].find_one({"_id": f"news:{cid}"}, {"contentHtml": 1}) or {}
+            if not doc.get("contentHtml"):
+                new_detail_ids.append(cid)
+        # 按实际剩余额度截取（总调用 ≤ 预算）；截剩部分显式 skippedByBudget（fail-visible）
+        remaining = budget - S.calls_recorded(db, fetch_date)
+        take = new_detail_ids[:max(0, min(NEWS_DETAIL_CAP_PER_RUN, remaining))]
+        if len(take) < len(new_detail_ids):
+            skipped_by_budget.append("news_detail")
+            logger.warning("KPL 额度不足以补全部新题正文：%d/%d（预算 %d）",
+                           len(take), len(new_detail_ids), budget)
+        for cid in take:
+            dres = _call("news_detail", F.fetch_news_detail, cid=cid)
+            if dres and dres.get("ok") and (dres.get("detail") or {}).get("content"):
+                news_details[cid] = dres["detail"]
+            else:
+                # 正文失败单列（不进 degraded）：只影响该条补充进度，不代表采集轮失败
+                detail_failures.append(
+                    f"news_detail[{cid}]: {(dres or {}).get('error') or '空详情'}")
     news_stats = {"written": 0}
     if not dry_run and news_items:
-        news_stats = S.save_news_items(db, fetch_date=fetch_date, items=news_items)
+        news_stats = S.save_news_items(db, fetch_date=fetch_date, items=news_items,
+                                       details=news_details)
 
     # ④ 前瞻日历
     cal_res = _call("theme_calendar", F.fetch_news_list, news_type=3, st=CALENDAR_ST)
@@ -145,7 +182,7 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
         cal_stats = S.save_calendar_items(db, fetch_date=fetch_date, items=cal_items)
 
     stats["topic"] = {**topic_stats, "newDetails": len(details)}
-    stats["news"] = {**news_stats, "fetched": len(news_items)}
+    stats["news"] = {**news_stats, "fetched": len(news_items), "newDetails": len(news_details)}
     stats["calendar"] = {**cal_stats, "fetched": len(cal_items)}
     stats["degraded"] = degraded
     stats["emptySources"] = empty_sources

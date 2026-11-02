@@ -168,3 +168,36 @@ def fetch_news_list(*, news_type: int = -1, st: int = 50, index: int = 0) -> dic
     else:
         items = parse_news_list(data)
     return {"ok": True, "items": items, "empty": not items}
+
+
+def parse_news_detail(data: dict) -> dict:
+    """`c=ThemeNews&a=GetInfo&NewsID=` → {cid, content(HTML), kwordDesc, zsCode, isChoice}。
+
+    实证（2026-11-02）：参数名必须是 `NewsID`（InfoID/CID/ID 均只返回空壳 {Info:{Coll:0}}）。
+    正文为 HTML（财联社等），存储保留原文、消费端剥标签（单一事实源）。
+    """
+    info = data.get("Info") or {}
+    return {
+        "cid": str(info.get("CID") or ""),
+        "content": str(info.get("Content") or ""),
+        "kwordDesc": str(info.get("KwordDesc") or ""),
+        "zsCode": str(info.get("ZSCode") or ""),
+        "isChoice": info.get("IsChoice"),
+    }
+
+
+def fetch_news_detail(cid: str) -> dict:
+    params = {**_NEWS_BASE, "c": "ThemeNews", "a": "GetInfo",
+              "NewsID": str(cid), "st": "1"}
+    try:
+        data = _get_json(f"{KPL_NEWS_HOST}?{urlencode(params)}")
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return {"ok": False, "errorCode": "http_error", "error": f"{type(exc).__name__}: {exc}"[:160]}
+    err = _check_errcode(data)
+    if err:
+        return err
+    detail = parse_news_detail(data)
+    if not detail.get("content"):
+        # 空壳响应（参数名错误/条目无正文）也结构化——与空载荷=降级同款纪律
+        return {"ok": False, "errorCode": "empty_detail", "error": "Info 无 Content"}
+    return {"ok": True, "detail": detail}
