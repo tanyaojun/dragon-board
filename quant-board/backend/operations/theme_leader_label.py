@@ -102,6 +102,13 @@ def fetch_driver_label(db: Any, date: str, code: str) -> dict | None:
 
 # ── v12 新原料（AMMO 2026-10-28a；预登记 §4.1/§4.3） ──
 
+# 强度行专属桥（与 digest.ALIASES 分离：强度行只匹配 KPL 一级，语料匹配用层2 标签）。
+# 仅实测定 verified 条目可入（预登记 §9），key=归一后的韭研板块名。
+_STRENGTH_BOARD_ALIASES: dict[str, tuple[str, ...]] = {
+    # 2026-11-02 用户裁决（KPL 板块行情实证，见 match_board_strength 内注释）
+    "AI影视传媒": ("AI应用",),
+}
+
 def fetch_plate_strength(date: str) -> dict:
     """KPL 板块强度排行（G2，预登记 §4.3）：一次取数全板块共用（与 market_line 同哲学）。
 
@@ -157,6 +164,14 @@ def match_board_strength(strength_payload: dict, board: str) -> dict:
     # ③ 别名（单一事实源=digest.ALIASES，仅用户裁决过的等价对；行内披露「别名表」）
     alias_keys = [a for a in digest.board_keywords(board)
                   if a not in (base, base_stripped)]
+    # 强度行专属桥（2026-11-02 用户裁决，KPL 板块行情实证）：韭研「AI影视/传媒」
+    # 32 家（AI漫剧/短剧）归 KPL **一级**「AI应用」——其层2「AI视频」23 家（+9.19%）
+    # 即这批股；而「文化传媒」仅 2 家涨停，旧④共享子串「传媒」为误配（读数失真）。
+    # 强度行只匹配一级（2026-10-28 裁决），层2「AI视频」不可作强度锚；
+    # 语料匹配仍走 digest.ALIASES→AI视频（层2 标签粒度），两桥粒度不同互不冲突。
+    alias_keys = list(alias_keys) + [
+        a for a in _STRENGTH_BOARD_ALIASES.get(base_stripped, ())
+        if a not in alias_keys]
     for rank, it, nm in pool:
         if any(len(a) >= 2 and (a in nm or nm in a) for a in alias_keys):
             return _strength_hit(rank, items, it, alias_used=True)

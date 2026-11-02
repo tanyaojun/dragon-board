@@ -1376,3 +1376,26 @@ def test_v14_no_wzs_doc_zero_rebound_question(env):
     for did in ("2026-10-19:603278", "2026-10-19:603188"):
         assert L.REBOUND_QUESTION not in db[L.COLLECTION].docs[did]["questionsRaw"]
     assert all(len(q) == 2 for _n, q in calls)
+
+
+# ---------- v14 配套：强度行专属桥（AI影视/传媒 → KPL 一级「AI应用」） ----------
+
+def test_strength_alias_ai_yingshi_maps_to_ai_yingyong():
+    """2026-11-02 用户裁决（KPL 板块行情实证）：韭研 AI影视/传媒 32 家（AI漫剧/短剧）
+    归 KPL 一级「AI应用」（层2 AI视频 23 家即这批股）；旧④共享子串「传媒」把
+    「文化传媒」（仅 2 家涨停）误配上、读数失真——别名③必须先于④命中。"""
+    items = [  # 按今日实测形状（序位=排行 1 起）
+        {"name": "AI应用", "strength": 31762, "pct": 4.886, "plate_id": "803023"},
+        {"name": "三季报增长", "strength": 29095, "pct": 2.308, "plate_id": "x"},
+        {"name": "游戏", "strength": 11228, "pct": 6.962, "plate_id": "x"},
+        {"name": "文化传媒", "strength": 10198, "pct": 6.206, "plate_id": "801031"},
+    ]
+    m = L.match_board_strength({"ok": True, "items": items}, "AI影视/传媒")
+    assert m["ok"] is True and m["name"] == "AI应用", "强度行归一级 AI应用（非文化传媒）"
+    assert m["rank"] == 1 and m["aliasUsed"] is True
+    assert m["strength"] == 31762 and m["pct"] == 4.886
+    # 语料桥不受影响：digest 侧仍展开 AI视频（层2 标签粒度）
+    assert "AI视频" in L.digest.board_keywords("AI影视/传媒")
+    # 其他板块零影响：既有尾缀剥离匹配保持
+    m2 = L.match_board_strength({"ok": True, "items": items}, "机器人")
+    assert m2["ok"] is False and m2["reason"] == "unmatched", "夹具无机器人概念行，不得猜配"
