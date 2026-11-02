@@ -151,7 +151,7 @@ def test_gated_row_shows_model_answer_and_reason(html: str) -> None:
     row = _fn(html, "tlRowHtml")
     assert "r.modelChoice" not in row, "表格行不得再拼模型原答单元格"
     assert "r.baselineKey" not in row, "表格行不得再拼同桶基线单元格"
-    assert "colspan=\"15\"" in row, "展开明细行跨列数须跟表头（15，含溢价列）"
+    assert "colspan=\"16\"" in row, "展开明细行跨列数须跟表头（16，P2 新增周期列）"
     # 门/排除原因仍可见（档位/证据列）+ 展开卡里保留原答审计
     assert "TL_GATE_CN" in html
     assert "r.modelChoice" in _fn(html, "tlEntryResp")
@@ -345,18 +345,18 @@ def test_silent_background_refresh(html: str) -> None:
 
 # ── 回归（2026-10-23 截图实测列错位）：行拼装丢 contCell → 表头 13 列/行 12 格 ──
 def test_header_and_row_column_counts_match(html: str) -> None:
-    """表头加「延续性」「溢价」列后，tlRowHtml 必须同步发出 15 格——少一格后续列整体左移
+    """表头加「周期」（P2 状态机）列后，tlRowHtml 必须同步发出 16 格——少一格后续列整体左移
     （延续性空、证据/结局错位一格）。"""
     # 表头块限定在 tlRenderRows 函数体内（避免匹配到页面其他表的「结局」列）
     block = _fn(html, "tlRenderRows")
     import re as _re
     n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z0-9]+'\)", block)) + block.count("<th>")
     row = _fn(html, "tlRowHtml")
-    # 展开明细行的 colspan 单独算：数据行 15 格（含空间列与溢价列）+ 明细跨 15 列
+    # 展开明细行的 colspan 单独算：数据行 16 格（含周期/空间/溢价列）+ 明细跨 16 列
     n_td = row.count("<td") - row.count("<td colspan")
-    assert n_th == 15, f"表头应 15 列，实为 {n_th}"
-    assert n_td == 15, f"数据行应 15 格，实为 {n_td}（丢格 → 列错位）"
-    assert 'colspan="15"' in row, "展开明细行必须跨 15 列（跟表头同步）"
+    assert n_th == 16, f"表头应 16 列，实为 {n_th}"
+    assert n_td == 16, f"数据行应 16 格，实为 {n_td}（丢格 → 列错位）"
+    assert 'colspan="16"' in row, "展开明细行必须跨 16 列（跟表头同步）"
     assert "+ contCell +" in row or "+ contCell" in row, "延续性单元格必须拼进行"
     assert "+ headCell +" in row, "空间列（leaderHeadroom）必须拼进行——v5/v6 核心产出不得只在明细 JSON 里可见"
     assert "+ premHtml +" in row, "溢价单元格必须拼进行（2026-10-26 用户需求）"

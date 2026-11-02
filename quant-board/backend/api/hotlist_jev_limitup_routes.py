@@ -327,6 +327,42 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
             if d.get("leaderSuperseded"):
                 row["_superseded"] = True   # 内部标记：下行过滤掉，不出响应
             rows.append(row)
+        # P2（题材周期状态机，Q8/Q9 裁决）：join 热点周期状态与新龙事件——只加字段
+        # 不改既有合同（根前端 JevNarrativePanel 不受影响）。
+        # - cycleState：该行 (tradingDate, board, segment) 的状态机当 state；
+        # - leaderRebound：该行 code 是否当日 leaderRebound 事件股（Q9:A 只标反包，
+        #   benchmarkAdvance 属板块层事件不落到龙一行）；
+        # - 状态机未覆盖的日期/板块（cycle 未回填）如实缺省，不伪态。
+        cycle_keys = {(str(r.get("tradingDate")), str(r.get("board")),
+                       str(r.get("segment") or "main")) for r in rows}
+        cycle_map: dict[tuple[str, str, str], dict] = {}
+        rebound_map: set[tuple[str, str, str, str]] = set()
+        if cycle_keys:
+            cd_dates = sorted({k[0] for k in cycle_keys})
+            for cd in db["hotlist_jev_theme_cycle"].find(
+                    {"tradingDate": {"$in": cd_dates}},
+                    {"tradingDate": 1, "board": 1, "segment": 1, "state": 1,
+                     "stateCn": 1, "migrated": 1, "transition": 1}):
+                cycle_map[(str(cd.get("tradingDate")), str(cd.get("board")),
+                           str(cd.get("segment") or "main"))] = cd
+            for wd in db["hotlist_jev_leader_wzs"].find(
+                    {"_id": {"$in": cd_dates}}, {"events": 1}):
+                for e in wd.get("events") or []:
+                    if e.get("type") == "leaderRebound":
+                        rebound_map.add((str(wd["_id"]), str(e.get("board")),
+                                         str(e.get("segment") or "main"),
+                                         str(e.get("code"))))
+        for r in rows:
+            key = (str(r.get("tradingDate")), str(r.get("board")),
+                   str(r.get("segment") or "main"))
+            cd = cycle_map.get(key)
+            if cd is not None:
+                r["cycleState"] = cd.get("state")
+                r["cycleStateCn"] = cd.get("stateCn")
+                r["cycleMigrated"] = cd.get("migrated")
+                r["cycleTrigger"] = ((cd.get("transition") or {}) or {}).get("trigger")
+            r["leaderRebound"] = ((key[0], key[1], key[2], str(r.get("code")))
+                                  in rebound_map) or None
         # 单一龙头对账（2026-10-24）：退位行（推导已不再指向的旧任龙头）默认不出——
         # 同 (date, board) 只出现任推导龙一；数量显式披露，审计直接查库
         superseded_count = sum(1 for d in docs if d.get("leaderSuperseded"))
@@ -367,6 +403,37 @@ class ThemeLeaderRerunPayload(BaseModel):
     date: str
     code: str
     datasetId: str | None = None
+
+
+@router.get("/theme-cycle")
+def get_theme_cycle(date: str | None = None, start: str | None = None,
+                    end: str | None = None) -> Any:
+    """题材周期状态机读口（P2，每板块×轨每日一文档 hotlist_jev_theme_cycle）。
+
+    - `date=YYYY-MM-DD`：单日；`start`/`end`：闭区间（与 theme-leaders 同形态）。
+    - 迁移落痕（from/to/trigger/evidence）随行透出（fail-visible）。
+    - 与 jev 深度三层的联立在【题材龙头】台账行内并列披露（Q8:A），本读口只出结构态。"""
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        query: dict[str, Any] = {}
+        if date:
+            query["tradingDate"] = date
+        else:
+            rng: dict[str, Any] = {}
+            if start:
+                rng["$gte"] = start
+            if end:
+                rng["$lte"] = end
+            if rng:
+                query["tradingDate"] = rng
+        docs = list(db["hotlist_jev_theme_cycle"].find(query).sort(
+            [("tradingDate", -1), ("board", 1), ("segment", 1)]))
+        return {"ok": True, "date": date,
+                "range": None if date else {"start": start, "end": end},
+                "rows": docs, "count": len(docs)}
+    except Exception as exc:   # noqa: BLE001 — 读口统一 502 范式
+        return JSONResponse(status_code=502, content={
+            "ok": False, "error": f"theme-cycle 读口异常：{exc}"})
 
 
 @router.post("/theme-leaders/rerun")

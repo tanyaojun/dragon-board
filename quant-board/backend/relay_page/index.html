@@ -2277,6 +2277,14 @@ const TL_STAGE_CN = { new_today: '今日新增', ongoing: '持续发酵', stale:
 // v5 题材层三层判断
 const TL_DEPTH_CN = { igniting: '启动期', fermenting: '发酵期', climax: '高潮期', ebbing: '退潮期',
                       insufficient: '证据不足' };
+// P2 题材周期状态机四态（与 jev 深度三层并列披露不仲裁，Q8:A；颜色语义：
+// 主升=红最强 / 弱转强=绿崛起（与「续板」同语）/ 转弱=琥珀 / 终结=冷灰）
+const TL_CYCLE_CN = { mainrise: '主升', weakening: '转弱', wzs: '弱转强', terminal: '终结' };
+const TL_CYCLE_BADGE = { mainrise: 'b-red', weakening: 'b-amber', wzs: 'b-green', terminal: 'b-gray' };
+const TL_CYCLE_TIP = { mainrise: '节点回暖/龙一续板晋级/gain10 创新高',
+                       weakening: '空间龙一断板（开启 3 日观察窗）或节点转弱',
+                       wzs: '弱转强事件命中（新龙再崛起，收盘封板确认）',
+                       terminal: '观察窗满（窗内无反包）且当日节点=冰点（N=1 即终结，终态本期只回看）' };
 const TL_CONT_CN = { strong_extend: '强延续', weak_extend: '弱延续', ending: '临近结束',
                      insufficient: '证据不足' };
 // 2026-10-27 用户裁决：徽章值精简——列头已是「空间」，删固定前缀「空间」两字与「=」符号
@@ -2775,11 +2783,11 @@ function tlRenderRows(){
   const th = (label, key) => '<th class="sortable" onclick="tlSortBy(\'' + key + '\')">'
     + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
-    + th('板块', 'board') + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
+    + th('板块', 'board') + '<th>周期</th>' + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
     + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th><th>事件</th>'
     + '<th>结局</th>' + th('溢价', 'day2') + '</tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
-      : '<tr><td class="empty" colspan="15">无匹配龙头（调整区间或筛选条件）</td></tr>');
+      : '<tr><td class="empty" colspan="16">无匹配龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('tlPagerHost'); if (ph) ph.innerHTML = tlPager(pg.page, pg.total);
 }
 function tlPager(page, total){
@@ -2820,6 +2828,21 @@ function tlAuditBadge(r){
   if (!r.auditFlag) return '';
   return '<span class="badge b-amber" title="' + esc(r.auditNote || '复盘标记案例行')
     + '">复盘</span>';
+}
+function tlCycleBadge(r){
+  // P2 周期状态列：状态机当态 + 新龙反包标记（Q9:A 只标 leaderRebound）；
+  // 状态机未覆盖（cycle 未回填）如实 '-',不伪态；jev 深度三层（左邻列）并列不仲裁
+  if (!r.cycleState) return '<span style="color:var(--muted2)">-</span>';
+  const tip = '周期状态机（P2，结构事实：节点序列+事件流）'
+    + (r.cycleMigrated ? '；今日迁移' : '')
+    + (r.cycleTrigger ? '（触发：' + esc(r.cycleTrigger) + '）' : '')
+    + '；' + (TL_CYCLE_TIP[r.cycleState] || '');
+  const cls = TL_CYCLE_BADGE[r.cycleState] || 'b-gray';
+  const st = '<span class="badge ' + cls + '" title="' + esc(tip) + '">'
+    + esc(TL_CYCLE_CN[r.cycleState] || r.cycleState) + '</span>';
+  const reb = r.leaderRebound
+    ? ' <span class="badge b-red" title="当日新龙反包（弱转强事件①：观察池内空间龙一收盘封板，v5 预登记裁决 5/6）">新龙</span>' : '';
+  return st + reb;
 }
 function tlRowHtml(r, f){
   const p = tlProb(r);
@@ -2898,6 +2921,7 @@ function tlRowHtml(r, f){
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
     + '<td>' + esc(r.board || '-') + tlSegBadge(r) + '</td>'
+    + '<td>' + tlCycleBadge(r) + '</td>'
     + '<td class="num">' + (r.leaderSealedToday === false
         ? '<span class="tl-ev" title="龙一复合排序（v12 用户三轮裁决）：高度≥2 空间板组整体优先、组内 10 日涨幅最高；全首板按当日首封最早。当日未封板=断板反包候选（须真连板高度≥2 且未跌停；首板断板=跟风/板块统计口径，2026-11-01 用户裁决），仍按 10 日涨幅参与组内排序；10日涨幅 '
           + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '">未封板</span>'
@@ -2908,7 +2932,7 @@ function tlRowHtml(r, f){
     + '<td>' + choice + '</td>'
     + '<td>' + stage + '</td><td>' + contCell + '</td><td>' + headCell + '</td>'
     + '<td>' + evid + '</td><td>' + outcome + '</td><td class="num">' + premHtml + '</td></tr>'
-    + (open ? '<tr class="lg-detail"><td colspan="15">' + tlDetailHtml(r) + '</td></tr>' : '');
+    + (open ? '<tr class="lg-detail"><td colspan="16">' + tlDetailHtml(r) + '</td></tr>' : '');
 }
 
 // ── 明细卡：jev 调用日志卡（lg-card 范式，与连板情绪同构） ──
