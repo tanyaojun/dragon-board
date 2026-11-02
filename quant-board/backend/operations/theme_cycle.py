@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database  # noqa: E402
 from backend.analysis.hotlist.theme_cycle import STATE_LABELS_CN, step_day
 from backend.operations.jev_label_jiuyan import trading_dates_before
 from backend.operations.leader_wzs import (bars_covering,
@@ -232,3 +233,27 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
         print(f"[theme-cycle] {day} rows={summary['rows']} migrated={summary['migrated']} "
               f"done={summary['dates'] and dates.index(day) + 1}/{len(dates)}", flush=True)
     return summary
+
+
+if __name__ == "__main__":   # pragma: no cover — CLI（schedule themeCycle advisory 步）
+    import argparse
+    import json as _json
+    import sys as _sys
+
+    _ap = argparse.ArgumentParser(description="题材周期状态机单日步进（升序链，读前一日库态）")
+    _ap.add_argument("--day", help="YYYY-MM-DD（缺省=最近韭研 final 日）")
+    _args = _ap.parse_args()
+    _db = get_runtime_mongodb_database()
+    _day = _args.day
+    if not _day:
+        _docs = _db["jiuyan_action"].find({"_id": {"$regex": ":final$"}},
+                                          {"tradingDate": 1})
+        _days = sorted(str(d["tradingDate"]) for d in _docs if d.get("tradingDate"))
+        _day = _days[-1] if _days else None
+    if not _day:
+        print(_json.dumps({"ok": False, "error": "无韭研 final，且未给 --day"}))
+        _sys.exit(1)
+    _summary = build_and_save_theme_cycle(_db, [_day])
+    print(_json.dumps({"ok": True, "date": _day, "rows": _summary["rows"],
+                       "migrated": _summary["migrated"],
+                       "gaps": len(_summary["gaps"])}, ensure_ascii=False))

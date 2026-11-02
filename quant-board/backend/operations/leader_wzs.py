@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database  # noqa: E402
 from backend.analysis.hotlist.leader_wzs import build_leader_wzs
 from backend.analysis.hotlist.theme_leader_ammo import segment_of
 from backend.operations.jev_label_jiuyan import (jiuyan_streak_map,
@@ -185,3 +186,28 @@ def window_changes_for(code: str, pool_day: str, date: str) -> list[dict]:
     from backend.analysis.hotlist.leader_wzs import _pct_from_bars
     return [{"date": d, "pct": _pct_from_bars(bars, d)}
             for d in sorted(bars) if pool_day < d < date]
+
+
+if __name__ == "__main__":   # pragma: no cover — CLI（schedule leaderWzs advisory 步）
+    import argparse
+    import json as _json
+    import sys as _sys
+
+    _ap = argparse.ArgumentParser(description="龙头弱转强单日落库（盘后口径）")
+    _ap.add_argument("--day", help="YYYY-MM-DD（缺省=最近韭研 final 日）")
+    _args = _ap.parse_args()
+    _db = get_runtime_mongodb_database()
+    _day = _args.day
+    if not _day:
+        _docs = _db["jiuyan_action"].find({"_id": {"$regex": ":final$"}},
+                                          {"tradingDate": 1})
+        _days = sorted(str(d["tradingDate"]) for d in _docs if d.get("tradingDate"))
+        _day = _days[-1] if _days else None
+    if not _day:
+        print(_json.dumps({"ok": False, "error": "无韭研 final，且未给 --day"}))
+        _sys.exit(1)
+    _doc = build_and_save_leader_wzs(_db, _day)
+    print(_json.dumps({"ok": True, "date": _day, "status": _doc.get("status"),
+                       "poolRows": len(_doc.get("poolRows") or []),
+                       "events": len(_doc.get("events") or [])},
+                      ensure_ascii=False))

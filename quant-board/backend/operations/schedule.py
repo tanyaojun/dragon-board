@@ -712,7 +712,64 @@ def _run_sector_nodes_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return {"ok": True, "date": today, "summary": summary}
 
 
-_RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 ×约3000 只（实测 5–9 分钟），15min 冗余
+_LEADER_WZS_TIMEOUT_SECONDS = 900    # 龙头弱转强单日：TDX 覆盖式日线首拉数百 code，15min 冗余
+_THEME_CYCLE_TIMEOUT_SECONDS = 600   # 状态机单日步进：重算龙一行（日线缓存大部分命中）
+
+
+def _run_leader_wzs_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """龙头弱转强单日落库（advisory 步，P2 Q6:A 挂链，预登记 v5 P1）。
+
+    - 纯本地确定性（观察池+①②事件流，零 token，hotlist_jev_leader_wzs）；
+    - 链序在 jiuyanLabel 之后（当日 final + THS 池已落）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok；回填脚本可随时
+      幂等补齐（--refresh）。"""
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.leader_wzs", "--day", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_LEADER_WZS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "leader_wzs_timeout",
+                                       "message": f"timeout {_LEADER_WZS_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "leader_wzs_failed",
+                                       "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    try:
+        summary = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001 — 摘要解析失败不影响步成功（advisory）
+        summary = {"ok": True, "parseWarning": "stdout 摘要不可解析"}
+    return {"ok": True, "date": today, "summary": summary}
+
+
+def _run_theme_cycle_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """题材周期状态机单日步进（advisory 步，P2 立项 v2 Q6:A 挂链）。
+
+    - 链序硬约束：在 sectorNodes 之后（消费当日节点）且 leaderWzs 之后
+      （消费当日 leaderRebound/benchmarkAdvance 事件）；
+    - 纯本地确定性（零 token，hotlist_jev_theme_cycle，升序链读前一日库态）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok。"""
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.theme_cycle", "--day", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_THEME_CYCLE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "theme_cycle_timeout",
+                                       "message": f"timeout {_THEME_CYCLE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "theme_cycle_failed",
+                                       "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    try:
+        summary = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001 — 摘要解析失败不影响步成功（advisory）
+        summary = {"ok": True, "parseWarning": "stdout 摘要不可解析"}
+    return {"ok": True, "date": today, "summary": summary}
 
 
 def _run_relay_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
@@ -1169,6 +1226,10 @@ def run_after_market_once(
         relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
         # 板块节点（advisory，2026-10-24 v1）：纯本地确定性判定，昨日节点读昨日文档成链
         sector_nodes_result = _run_sector_nodes_step(today, dry_run=dry_run)
+        # 龙头弱转强（advisory，P2 Q6:A）：观察池+①②事件流单日落库（零 token）
+        leader_wzs_result = _run_leader_wzs_step(today, dry_run=dry_run)
+        # 题材周期状态机（advisory，P2）：链序在 sectorNodes/leaderWzs 之后
+        theme_cycle_result = _run_theme_cycle_step(today, dry_run=dry_run)
         # 分带表重算（advisory）：链序在 relayIndex 之后——门控比对「最新 ok 判定日」与
         # 产物 window.end，当日新判定刚落库时自愈补齐（零模型调用，产物原子替换）
         relay_band_result = _run_relay_band_step(today, dry_run=dry_run)
@@ -1181,7 +1242,7 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -1191,6 +1252,8 @@ def run_after_market_once(
                 "zhabanLabel": zhaban_label_result,
                 "relayIndex": relay_index_result,
                 "sectorNodes": sector_nodes_result,
+                "leaderWzs": leader_wzs_result,
+                "themeCycle": theme_cycle_result,
                 "relayBand": relay_band_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
