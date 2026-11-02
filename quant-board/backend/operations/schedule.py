@@ -560,11 +560,28 @@ def run_theme_corpus_collect_once(today: str | None = None, *,
                                             "message": (proc.stderr or proc.stdout or "")[-400:]}}
             ok_all = False
             continue
-        try:
-            result = json.loads(proc.stdout[proc.stdout.index("{"):])
-        except (ValueError, json.JSONDecodeError) as exc:
+        # 结果 JSON 提取（2026-11-02 加固，与 theme_leader 同模式）：子进程以
+        # THEME_COLLECT_RESULT_JSON: 标记行输出；兼容回退=倒序找首行可解析 dict。
+        # 防「首个 { 截取」被未来含 { 的诊断行截中（theme_leader 10-29/10-30 结局
+        # 漏回填的同类隐患，此处预防性关闭）。
+        result = None
+        parse_error = "result JSON line not found in stdout"
+        for line in reversed((proc.stdout or "").splitlines()):
+            cand = line.strip()
+            if cand.startswith("THEME_COLLECT_RESULT_JSON:"):
+                cand = cand[len("THEME_COLLECT_RESULT_JSON:"):].strip()
+            if not cand.startswith("{"):
+                continue
+            try:
+                result = json.loads(cand)
+                break
+            except json.JSONDecodeError as exc:
+                parse_error = str(exc)
+                continue
+        if result is None:
             results[parse_key] = {"ok": False,
-                                  "error": {"code": "theme_collect_parse_failed", "message": str(exc)}}
+                                  "error": {"code": "theme_collect_parse_failed",
+                                            "message": parse_error}}
             ok_all = False
             continue
         results[parse_key] = {"ok": bool(result.get("ok")),

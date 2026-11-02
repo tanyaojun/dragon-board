@@ -29,6 +29,8 @@ from typing import Any
 
 from backend.operations import jiuyan_auth, jiuyan_theme_fetch as F, jiuyan_theme_store as S
 
+THEME_COLLECT_RESULT_MARKER = "THEME_COLLECT_RESULT_JSON:"   # stdout 机读接口标记（2026-11-02）
+
 logger = logging.getLogger(__name__)
 
 # 每源一次调用的标识（额度计数键）——v4 换源后只剩产业树
@@ -166,7 +168,9 @@ def main(argv: list[str] | None = None) -> int:
         result = collect_once(fetch_date=args.date, dry_run=args.dry_run,
                               budget=args.budget)
     text = json.dumps(result, ensure_ascii=False, indent=1, default=str)
-    print(text)
+    # stdout 机读接口=标记行单行 JSON（2026-11-02）：同 kpl_theme_collect，防未来
+    # 诊断行含 { 时截中披露文本导致调度侧 parse_failed 静默断链。
+    print(THEME_COLLECT_RESULT_MARKER + json.dumps(result, ensure_ascii=False, default=str))
     if args.json:
         from pathlib import Path
         Path(args.json).write_text(text, encoding="utf-8")

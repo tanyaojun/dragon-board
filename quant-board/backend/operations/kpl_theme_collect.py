@@ -26,6 +26,8 @@ from typing import Any
 from backend.operations import kpl_theme_fetch as F
 from backend.operations import kpl_theme_store as S
 
+THEME_COLLECT_RESULT_MARKER = "THEME_COLLECT_RESULT_JSON:"   # stdout 机读接口标记（2026-11-02）
+
 logger = logging.getLogger(__name__)
 
 NEWS_ST = 50
@@ -169,7 +171,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     result = collect_once(fetch_date=args.date, dry_run=args.dry_run, budget=args.budget)
     text = json.dumps(result, ensure_ascii=False, indent=1, default=str)
-    print(text)
+    # stdout 机读接口=标记行单行 JSON（2026-11-02）：调度侧不再用「首个 { 截取」，
+    # 防未来诊断行含 { 时截中披露文本导致 parse_failed → 结局/语料链静默断链。
+    print(THEME_COLLECT_RESULT_MARKER + json.dumps(result, ensure_ascii=False, default=str))
     if args.json:
         from pathlib import Path
         Path(args.json).write_text(text, encoding="utf-8")
