@@ -55,7 +55,10 @@ SEMANTIC_BRIDGES: dict[str, dict[str, Any]] = {
 # 名可命中；无完整名录接口前以白名单并入匹配全集（有据收录，不猜名），
 # 当日读口与历史覆盖脚本同源共用（单一事实源）。
 KPL_EXTRA_BOARDS: tuple[str, ...] = ("冰雪产业", "美伊战争", "俄乌重建",
-                                     "厄尔尼诺", "AI硬件")
+                                     "厄尔尼诺", "AI硬件",
+                                     "AI视频")  # 2026-11-02：层2 板块不在 Type=1 排行名录，
+# 韭研「AI影视/传媒」语料桥（digest.ALIASES）指向它（用户裁决：语料匹配用层2 粒度；
+# 强度行仍走一级 AI应用，theme_leader_label._STRENGTH_BOARD_ALIASES，两桥互不影响）
 
 
 def check_sector_names(db: Any, date: str | None = None,

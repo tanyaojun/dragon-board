@@ -124,3 +124,17 @@ def test_real_reverse_coverage_reported(out):
     """KPL 反向未覆盖如实计数（241 细分名对韭研粗桶天然大量未覆盖，不静默省略）。"""
     assert out["uncoveredKplN"] > 0
     assert len(out["uncoveredKpl"]) == out["uncoveredKplN"]
+
+
+def test_ai_video_whitelist_matches_ai_yingshi_alias(db):
+    """2026-11-02 报障回归：韭研「AI影视/传媒」名录对照显示未匹配——KPL「AI视频」
+    是层2 板块、不在 Type=1 活跃排行名录，别名桥写了也查无此名。并入
+    KPL_EXTRA_BOARDS 白名单后应经 alias 桥命中（用户裁决：语料桥用层2 粒度，
+    强度行仍走一级 AI应用，两桥互不影响）。"""
+    out = snc.check_sector_names(db, CHECK_DATE, kpl_names=["AI应用", "文化传媒"])
+    assert out["ok"] is True
+    row = {r["board"]: r for r in out.get("rows", [])}.get("AI影视/传媒")
+    if row is None:
+        pytest.skip("2026-10-30 韭研档无 AI影视/传媒 板块行")
+    assert row["matched"] is True and row["way"] == "alias"
+    assert "AI视频" in (row.get("kplNames") or [])
