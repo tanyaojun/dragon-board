@@ -78,15 +78,21 @@ def main() -> int:
     event_n: Counter[str] = Counter()
     pool_n = 0
     degraded: list[str] = []
+    failed: list[str] = []
     for d in dates:
         if not args.refresh and not args.force \
                 and db[COLLECTION].find_one({"_id": d}, {"_id": 1}):
             status_n["skipped"] += 1
             continue
-        doc = build_and_save_leader_wzs(db, d, gain_fetcher=_gain,
-                                        day_change_fetcher=_day_change,
-                                        bars_fetcher=_bars,
-                                        force=args.force)
+        try:
+            doc = build_and_save_leader_wzs(db, d, gain_fetcher=_gain,
+                                            day_change_fetcher=_day_change,
+                                            bars_fetcher=_bars,
+                                            force=args.force)
+        except Exception as exc:   # 逐日容错：单日异常不中断整批（fail-visible 汇总）
+            failed.append(f"{d}: {type(exc).__name__}: {exc}")
+            print(f"[backfill] {d} FAILED {type(exc).__name__}: {exc}", flush=True)
+            continue
         status_n[doc["status"]] += 1
         if doc["status"] == "degraded":
             degraded.append(f"{d}: {doc['meta'].get('reason')}")
@@ -99,12 +105,16 @@ def main() -> int:
               f"events={len(doc['events'])} done={sum(status_n.values())}/{len(dates)}",
               flush=True)
     summary = {"days": len(dates), "status": dict(status_n), "poolRows": pool_n,
-               "events": dict(event_n), "degraded": degraded}
+               "events": dict(event_n), "degraded": degraded, "failed": failed}
     print(json.dumps({k: v for k, v in summary.items() if k != "degraded"},
                      ensure_ascii=False, indent=2))
     if degraded:
         print(f"degraded days ({len(degraded)}):", file=sys.stderr)
         for line in degraded:
+            print(" ", line, file=sys.stderr)
+    if failed:
+        print(f"FAILED days ({len(failed)}):", file=sys.stderr)
+        for line in failed:
             print(" ", line, file=sys.stderr)
     return 0
 

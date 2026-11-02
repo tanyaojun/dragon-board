@@ -79,8 +79,15 @@ def collect_materials(db: Any, date: str, dataset_id: str,
     pool_members: dict[str, dict[str, dict[str, str | None]]] = {}
     streaks_by_day: dict[str, dict[str, int]] = {}
     codes: set[str] = set()
+    gaps: list[str] = []
     for s in pool_days:
         sealed, _info, _meta = sealed_and_info(db, s, dataset_id)
+        if sealed is None:
+            # 池回溯日 THS 缺失：该日封板不可二分 → 空成员+披露（不伪 0，不中断）
+            pool_members[s] = {}
+            streaks_by_day[s] = {}
+            gaps.append(f"{s} THS 池缺失，该回溯日成员不可考")
+            continue
         pool_members[s] = _pool_members(db, s, dataset_id, sealed)
         streaks_by_day[s] = jiuyan_streak_map(db, s, dataset_id) or {}
         codes |= {c for m in pool_members[s].values() for c in m}
@@ -91,6 +98,10 @@ def collect_materials(db: Any, date: str, dataset_id: str,
         prev_date=pool_days[-1] if pool_days else None,
         space_mode=True, pool_dates=pool_days,
         gain_fetcher=gain_fetcher, day_change_fetcher=day_change_fetcher)
+    if gaps:
+        leader_meta = dict(leader_meta or {})
+        leader_meta.setdefault("dataGaps", [])
+        leader_meta["dataGaps"] = list(leader_meta["dataGaps"]) + gaps
     bars_by_code = {c: bar_fn(c, date) for c in sorted(codes)}
     return {"pool_days": pool_days, "pool_members": pool_members,
             "streaks_by_day": streaks_by_day, "streaks_today": streaks_today,
