@@ -156,7 +156,8 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
         if prev_dates:
             for d in db[COLLECTION].find({"tradingDate": prev_dates[0]},
                                          {"board": 1, "segment": 1, "state": 1,
-                                          "windowOpenedOn": 1, "terminatedOn": 1}):
+                                          "windowOpenedOn": 1, "terminatedOn": 1,
+                                          "cycleRound": 1}):
                 pre_states[(str(d["board"]), str(d.get("segment") or "main"))] = d
 
     inputs = [collect_day_inputs(db, d, dataset_id) for d in dates]
@@ -173,6 +174,9 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
     terminated: dict[tuple[str, str], str] = {
         k: v["terminatedOn"] for k, v in pre_states.items()
         if v.get("terminatedOn")}
+    # P3 周期轮次（R4 落痕）：0 起始，cycle_restart 迁移日 +1
+    rounds: dict[tuple[str, str], int] = {
+        k: int(v.get("cycleRound") or 0) for k, v in pre_states.items()}
     for day, inp in zip(dates, inputs):
         if inp is None:
             summary["gaps"].append(f"{day}: 原料不可得（异常）")
@@ -207,7 +211,8 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
                     leader_advanced=bool(ld) and ld.get("leaderSealedToday") is True
                     and isinstance(ld.get("streak"), int) and ld["streak"] >= 2,
                     gain10_new_high=bool(ld and ld.get("gain10NewHigh")),
-                    window_open=window_open, window_full=window_full)
+                    window_open=window_open, window_full=window_full,
+                    board_present=bool(ld) or in_pool)
                 if (bool(ld) and ld.get("leaderSealedToday") is False)                         and new_state == "weakening":
                     windows[key] = day    # 断板开窗（含已在转弱态的再断板）
                 if new_state in ("wzs", "mainrise"):
@@ -216,6 +221,9 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
                 # 供前端标注「上轮周期」时效语义（重启判据已并入 P3 立项）
                 if new_state == "terminal" and transition is not None:
                     terminated[key] = day
+                if transition is not None \
+                        and transition.get("trigger") == "cycle_restart":
+                    rounds[key] = rounds.get(key, 0) + 1
                 states[key] = new_state
                 doc = {"_id": f"{day}:{board}:{segment}",
                        "tradingDate": day, "board": board, "segment": segment,
@@ -234,6 +242,7 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
                        "windowOpenedOn": windows.get(key)
                            if new_state != "terminal" else None,
                        "terminatedOn": terminated.get(key),
+                       "cycleRound": rounds.get(key, 0),
                        "cycleReconcileGaps": inp["reconcile_gaps"] or None,
                        "generatedAt": datetime.now(timezone.utc).isoformat()}
                 db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)

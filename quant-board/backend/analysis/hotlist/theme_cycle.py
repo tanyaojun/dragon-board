@@ -7,6 +7,13 @@
 与【题材龙头】打标链同源——P2 立项 §三.1 零新增口径）+ P1 观察池在位（Q4:A
 窗满复用 P1 池窗）。确定性、零 token、全历史可重放。
 
+P3 增补（2026-11-02 用户裁决 R1-R4 全 A，docs/.../theme-cycle-leader-wzs-p3-plan-20261102.md）：
+- R1:A 重启触发=节点回暖/龙一晋级/gain10 新高/弱转强事件（与主升判据同源）；
+- R2:A 需板块在场佐证（当日有龙一行或在观察池，防节点噪声误重启）；
+- R3:A N=1 即重启（与冰点 N=1 即终结对称）；事件命中→wzs，其余→mainrise；
+- R4:A 前端徽标内轮次（如「主升·第2轮」，round≥1 才显）。
+cycleRound 逐日落痕（0 起始，重启 +1）；终结行 terminatedOn 保留上一轮记录。
+
 九条裁决锚（2026-11-02 用户逐条闭合，docs/.../theme-cycle-leader-wzs-p2-plan-20261102.md）：
 - Q1=B 初始态按首日节点直接定态（映射见 `initial_state`；ice 首日归转弱——终态
   只能由「窗满+ice」迁移产生，Q3:A 终态吸收性约束下首日定终态=死锁）；
@@ -42,6 +49,7 @@ TRIG_LEADER_BROKEN = "leader_broken"    # 空间龙一断板（开启 3 日观�
 TRIG_NODE_UPTREND = "node_uptrend"      # 节点∈{brewing, fermenting, mainline}
 TRIG_LEADER_ADVANCE = "leader_advance"  # 空间龙一续板晋级（streak≥2 续板）
 TRIG_GAIN10_HIGH = "gain10_new_high"    # 龙一 10 日涨幅创近 20 日新高（Q2:A）
+TRIG_CYCLE_RESTART = "cycle_restart"    # P3：终态重启新周期（cycleRound+1）
 
 
 def initial_state(node: str | None) -> str:
@@ -60,12 +68,18 @@ def initial_state(node: str | None) -> str:
 def step_day(prev_state: str | None, *, node: str | None,
              event_types: list[str], leader_broken: bool,
              leader_advanced: bool, gain10_new_high: bool,
-             window_open: bool, window_full: bool) -> tuple[str, dict | None]:
+             window_open: bool, window_full: bool,
+             board_present: bool = False) -> tuple[str, dict | None]:
     """单日单板块×轨状态迁移（纯函数）。
 
     prev_state=None 表示首见（Q1=B 按节点定态，transition 记 init）。
     返回 (new_state, transition)；transition=None 表示未迁移。
-    """
+
+    P3 周期重启（2026-11-02 用户裁决 R1-R4 全 A）：终态不再是死吸收——
+    R1:A 触发判据=节点回暖/龙一晋级/gain10 新高/弱转强事件（与主升判据同源）；
+    R2:A 需板块在场佐证（当日有龙一行或在观察池，防单首板噪声误重启）；
+    R3:A N=1 即重启（与冰点 N=1 即终结对称）；事件命中→wzs，其余→mainrise。
+    board_present 缺省 False：不传即维持旧吸收语义（兼容旧用例）。"""
     event_hit = bool(event_types) and prev_state != "terminal"
 
     if prev_state is None:
@@ -74,7 +88,29 @@ def step_day(prev_state: str | None, *, node: str | None,
                     "evidence": {"node": node}}
 
     if prev_state == "terminal":
-        return prev_state, None   # Q3:A：终态吸收，本期不可迁出
+        # P3 周期重启（R1-R4 全 A）：吸收仅限「无重启证据」；触发判据与主升
+        # 同源（不新增第三套口径），另加弱转强事件（新龙反包=新周期最直接证据）；
+        # R2:A 板块在场佐证（有龙一行或在池）防节点噪声误重启
+        triggers: list[str] = []
+        if node in UPTREND_NODES:
+            triggers.append(TRIG_NODE_UPTREND)
+        if leader_advanced:
+            triggers.append(TRIG_LEADER_ADVANCE)
+        if gain10_new_high:
+            triggers.append(TRIG_GAIN10_HIGH)
+        if event_types:
+            triggers.append(TRIG_EVENT)
+        if triggers and board_present:
+            target = "wzs" if event_types else "mainrise"
+            return target, {"from": prev_state, "to": target,
+                            "trigger": TRIG_CYCLE_RESTART,
+                            "evidence": {"node": node,
+                                         "events": list(event_types),
+                                         "leaderAdvanced": leader_advanced,
+                                         "gain10NewHigh": gain10_new_high,
+                                         "boardPresent": True,
+                                         "triggers": triggers}}
+        return prev_state, None   # 无重启证据：吸收维持（Q3:A 残余语义）
 
     # 1) 弱转强事件（优先级最高：新龙再崛起=本阶段使命完成）
     if event_hit:
@@ -139,6 +175,7 @@ def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
     迁移优先级自动成立。"""
     states: dict[tuple[str, str], str] = {}
     windows: dict[tuple[str, str], int] = {}   # 开窗日 idx（断板日）；无窗不在字典
+    rounds: dict[tuple[str, str], int] = {}    # P3 周期轮次（0 起始，重启 +1）
     out: list[dict[str, Any]] = []
 
     for i, day in enumerate(days):
@@ -183,7 +220,8 @@ def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     states.get(key), node=node, event_types=ev_types,
                     leader_broken=leader_broken, leader_advanced=leader_advanced,
                     gain10_new_high=gain10_high,
-                    window_open=opened is not None, window_full=window_full)
+                    window_open=opened is not None, window_full=window_full,
+                    board_present=bool(ld) or in_pool)
 
                 if leader_broken and new_state == "weakening":
                     # 断板开窗（预登记 §五「龙一断板开启 3 日观察窗」）：无论断板
@@ -191,6 +229,9 @@ def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     windows[key] = i
                 if new_state in ("wzs", "mainrise"):
                     windows.pop(key, None)   # 反包完成/证据回暖，窗使命结束
+                if transition is not None \
+                        and transition.get("trigger") == TRIG_CYCLE_RESTART:
+                    rounds[key] = rounds.get(key, 0) + 1
                 states[key] = new_state
 
                 rows.append({
@@ -198,6 +239,7 @@ def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "state": new_state, "prev": transition["from"] if transition else None,
                     "migrated": transition is not None,
                     "transition": transition,
+                    "cycleRound": rounds.get(key, 0),
                     "evidence": {"node": node, "events": ev_types,
                                  "leaderSealedToday": (ld or {}).get("leaderSealedToday"),
                                  "streak": (ld or {}).get("streak"),

@@ -2846,8 +2846,11 @@ function tlCycleBadge(r){
       + '；' + (TL_CYCLE_TIP[r.cycleState] || '');
   }
   const cls = TL_CYCLE_BADGE[r.cycleState] || 'b-gray';
-  const st = '<span class="badge ' + cls + '" title="' + esc(tip) + '">'
-    + esc(TL_CYCLE_CN[r.cycleState] || r.cycleState) + '</span>';
+  // R4:A 轮次入徽标（cycleRound 0 起始，≥1 显「·第N+1轮」）
+  const roundN = Number(r.cycleRound || 0);
+  const label = (TL_CYCLE_CN[r.cycleState] || r.cycleState)
+    + (roundN >= 1 ? '·第' + (roundN + 1) + '轮' : '');
+  const st = '<span class="badge ' + cls + '" title="' + esc(tip) + '">' + esc(label) + '</span>';
   const reb = r.leaderRebound
     ? ' <span class="badge b-red" title="当日新龙反包（弱转强事件①：观察池内空间龙一收盘封板，v5 预登记裁决 5/6）">新龙</span>' : '';
   return st + reb;

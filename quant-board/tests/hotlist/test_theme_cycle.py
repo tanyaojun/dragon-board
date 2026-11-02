@@ -210,8 +210,8 @@ class _FakeDb:
 
 
 def test_ops_resume_from_terminal_no_window_and_terminated_on(monkeypatch):
-    """终态续跑：不恢复窗（窗满判定失效）+ terminatedOn 沿用——终结后
-    板块新行情不回溯改判（重启判据已并入 P3 立项）。"""
+    """终态续跑：重启命中（节点回暖+龙一在场，R1/R2/R3:A）→ cycleRound+1；
+    上一轮 terminatedOn 保留为上轮终态记录；终态不恢复窗。"""
     import backend.operations.theme_cycle as ops
 
     db = _FakeDb()
@@ -219,11 +219,12 @@ def test_ops_resume_from_terminal_no_window_and_terminated_on(monkeypatch):
     col.docs["2026-11-01:大消费:main"] = {
         "_id": "2026-11-01:大消费:main", "tradingDate": "2026-11-01",
         "board": "大消费", "segment": "main", "state": "terminal",
-        "windowOpenedOn": None, "terminatedOn": "2026-06-16"}
+        "windowOpenedOn": None, "terminatedOn": "2026-06-16",
+        "cycleRound": 0}
 
     monkeypatch.setattr(ops, "trading_dates_before",
                         lambda db_, date, n, ds: ["2026-11-01"])
-    # 当日节点回暖+龙一晋级：若非吸收态会迁主升，吸收态必须停留 terminal
+    # 当日节点回暖+龙一在场：P3 重启判据命中 → mainrise（第 2 轮）
     monkeypatch.setattr(ops, "collect_day_inputs", lambda *a, **k: {
         "date": "2026-11-02", "nodes": {"大消费": "brewing"},
         "events": [], "pool_boards": set(), "reconcile_gaps": [],
@@ -233,9 +234,36 @@ def test_ops_resume_from_terminal_no_window_and_terminated_on(monkeypatch):
     summary = ops.build_and_save_theme_cycle(db, ["2026-11-02"])
     doc = col.docs["2026-11-02:大消费:main"]
     assert summary["rows"] == 1
-    assert doc["state"] == "terminal"            # Q3:A 吸收
-    assert doc["terminatedOn"] == "2026-06-16"   # 终结日落痕沿用
-    assert doc["windowOpenedOn"] is None         # 终态不恢复窗
+    assert doc["state"] == "mainrise"              # P3 重启
+    assert doc["transition"]["trigger"] == "cycle_restart"
+    assert doc["cycleRound"] == 1                  # 第 2 轮
+    assert doc["terminatedOn"] == "2026-06-16"     # 上一轮终结日保留
+    assert doc["windowOpenedOn"] is None           # 新周期窗全新
+
+
+def test_ops_terminal_absorbs_without_restart_evidence(monkeypatch):
+    """终态+无重启证据（节点 ice、无龙一）→ 吸收维持，terminatedOn 沿用。"""
+    import backend.operations.theme_cycle as ops
+
+    db = _FakeDb()
+    col = db[ops.COLLECTION]
+    col.docs["2026-11-01:某板块:main"] = {
+        "_id": "2026-11-01:某板块:main", "tradingDate": "2026-11-01",
+        "board": "某板块", "segment": "main", "state": "terminal",
+        "windowOpenedOn": None, "terminatedOn": "2026-06-16",
+        "cycleRound": 0}
+
+    monkeypatch.setattr(ops, "trading_dates_before",
+                        lambda db_, date, n, ds: ["2026-11-01"])
+    monkeypatch.setattr(ops, "collect_day_inputs", lambda *a, **k: {
+        "date": "2026-11-02", "nodes": {"某板块": "ice"},
+        "events": [], "pool_boards": set(), "reconcile_gaps": [],
+        "leaders": []})
+    ops.build_and_save_theme_cycle(db, ["2026-11-02"])
+    doc = col.docs["2026-11-02:某板块:main"]
+    assert doc["state"] == "terminal"
+    assert doc["cycleRound"] == 0
+    assert doc["terminatedOn"] == "2026-06-16"
 
 
 def test_ops_terminal_transition_records_day_and_clears_window(monkeypatch):
@@ -263,3 +291,86 @@ def test_ops_terminal_transition_records_day_and_clears_window(monkeypatch):
     assert doc["transition"]["trigger"] == "window_full_ice"
     assert doc["terminatedOn"] == "2026-11-02"
     assert doc["windowOpenedOn"] is None
+
+
+# ---------- P3 周期重启（R1-R4 全 A，2026-11-02） ----------
+
+def test_restart_node_uptrend_with_board_present():
+    """R1:A+R2:A：终态+节点回暖+板块在场→重启 mainrise（cycle_restart）。"""
+    st, tr = step_day("terminal", node="brewing", event_types=[],
+                      leader_broken=False, leader_advanced=False,
+                      gain10_new_high=False, window_open=False,
+                      window_full=False, board_present=True)
+    assert st == "mainrise" and tr["trigger"] == "cycle_restart"
+    assert tr["from"] == "terminal" and tr["evidence"]["boardPresent"] is True
+
+
+def test_restart_blocked_without_board_presence():
+    """R2:A 反例：节点回暖但无龙一行、不在池→吸收维持（防节点噪声误重启）。"""
+    st, tr = step_day("terminal", node="fermenting", event_types=[],
+                      leader_broken=False, leader_advanced=False,
+                      gain10_new_high=False, window_open=False,
+                      window_full=False, board_present=False)
+    assert st == "terminal" and tr is None
+
+
+def test_restart_leader_advanced_and_gain10_and_event_target():
+    """R1:A：龙一晋级/新高均可触发；事件命中→wzs（事件语义优先）。"""
+    st, tr = step_day("terminal", node="weakening", event_types=[],
+                      leader_broken=False, leader_advanced=True,
+                      gain10_new_high=True, window_open=False,
+                      window_full=False, board_present=True)
+    assert st == "mainrise" and tr["trigger"] == "cycle_restart"
+
+    st, tr = step_day("terminal", node="ice", event_types=["leaderRebound"],
+                      leader_broken=False, leader_advanced=False,
+                      gain10_new_high=False, window_open=False,
+                      window_full=False, board_present=True)
+    assert st == "wzs" and tr["trigger"] == "cycle_restart"
+
+
+def test_terminal_absorbs_without_evidence():
+    """无重启证据（节点 ice/normal+无龙一）→ 吸收维持（Q3:A 残余语义）。"""
+    st, tr = step_day("terminal", node="normal", event_types=[],
+                      leader_broken=False, leader_advanced=False,
+                      gain10_new_high=False, window_open=False,
+                      window_full=False, board_present=True)
+    assert st == "terminal" and tr is None
+
+
+def test_replay_restart_rounds_and_fresh_window():
+    """replay：重启后 cycleRound+1 且逐日沿用；新周期窗全新（旧窗不复用）。"""
+    days = [
+        # 第 0 轮：断板开窗→冰点终结
+        {"date": "D1", "nodes": {"甲": "fermenting"}, "events": [],
+         "leaders": [{"board": "甲", "segment": "main", "code": "1",
+                      "leaderSealedToday": True, "streak": 2}]},
+        {"date": "D2", "nodes": {"甲": "weakening"}, "events": [],
+         "leaders": [{"board": "甲", "segment": "main", "code": "1",
+                      "leaderSealedToday": False, "streak": 2}]},
+        {"date": "D3", "nodes": {"甲": "ice"}, "events": [], "leaders": []},
+        {"date": "D4", "nodes": {"甲": "ice"}, "events": [], "leaders": []},
+        {"date": "D5", "nodes": {"甲": "ice"}, "events": [], "leaders": []},
+        # D6=开窗后第 3 交易日+ice → 终结
+        {"date": "D6", "nodes": {"甲": "ice"}, "events": [], "leaders": []},
+        # D7：节点回暖+龙一在场 → 重启（round=1）
+        {"date": "D7", "nodes": {"甲": "brewing"}, "events": [],
+         "leaders": [{"board": "甲", "segment": "main", "code": "9",
+                      "leaderSealedToday": True, "streak": 1}]},
+        # D8：round 沿用
+        {"date": "D8", "nodes": {"甲": "brewing"}, "events": [],
+         "leaders": [{"board": "甲", "segment": "main", "code": "9",
+                      "leaderSealedToday": True, "streak": 2}]},
+    ]
+    recs = replay(days)
+    by_date = {r["date"]: r for r in recs}
+    rows_d6 = [r for r in by_date["D6"]["rows"] if r["board"] == "甲"]
+    assert rows_d6[0]["state"] == "terminal"
+    assert rows_d6[0]["cycleRound"] == 0
+    rows_d7 = [r for r in by_date["D7"]["rows"] if r["board"] == "甲"]
+    assert rows_d7[0]["state"] == "mainrise"
+    assert rows_d7[0]["transition"]["trigger"] == "cycle_restart"
+    assert rows_d7[0]["cycleRound"] == 1
+    rows_d8 = [r for r in by_date["D8"]["rows"] if r["board"] == "甲"]
+    assert rows_d8[0]["state"] == "mainrise"
+    assert rows_d8[0]["cycleRound"] == 1
