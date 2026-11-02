@@ -204,9 +204,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
-    assert doc["questionSetVersion"] == "v13"
-    assert doc["questionSetHash"] == "5d50645e5dc8"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-30g"   # 直播收窄+来源注记删（2026-10-30f）；题集 hash 不变
+    assert doc["questionSetVersion"] == "v14"
+    assert doc["questionSetHash"] == "510d1110c0a7"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-11-02a"   # 直播收窄+来源注记删（2026-10-30f）；题集 hash 不变
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -254,7 +254,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v13", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v14", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -1303,3 +1303,76 @@ def test_market_summary_entry_and_narrative_placement(monkeypatch):
                                market_summary=line, structure="结构行", baseline="基线行",
                                evidence_block="【题材证据】")
     assert s.index("涨停 46 家") < s.index("盘面总结（KPL 15:00）") < s.index("交易日轴")
+
+
+# ---------- v14：新龙人气成色题事件门（P3 工作流 B，B1:A） ----------
+
+def test_v14_event_gate_wires_rebound_question_only_for_event_stock(env, monkeypatch):
+    """事件门：命中弱转强事件的龙头 doc 判答第 5 题+叙事含人气证据链行；
+    同日未命中事件的龙头 doc 仍 2 题、叙事不含链行（零额外调用，预登记 §四）。"""
+    calls, db = env
+    # 单源 wzs 文档：仅大业股份（603278）命中形式①事件
+    db[L.WZS_COLLECTION].docs["2026-10-19"] = {
+        "_id": "2026-10-19", "tradingDate": "2026-10-19",
+        "poolRows": [{"code": "603278", "name": "大业股份", "board": "机器人",
+                      "windowK": 1, "height": 3,
+                      "windowChanges": [{"date": "2026-10-16", "pct": -2.5}]}],
+        "events": [{"type": "leaderRebound", "date": "2026-10-19",
+                    "board": "机器人", "segment": None, "code": "603278",
+                    "name": "大业股份", "windowK": 1, "height": 3,
+                    "gain10": 45.2}]}
+    # 周期背景（可缺；本例给主升第2轮）
+    db[L.CYCLE_COLLECTION].docs["2026-10-19:机器人:main"] = {
+        "_id": "2026-10-19:机器人:main", "tradingDate": "2026-10-19",
+        "board": "机器人", "segment": "main", "state": "mainrise", "cycleRound": 1}
+    # 模型对第 5 题也给答（answer dict 原样透传；事件股 expected_keys 含新题）
+    env2 = {**ENVELOPE, "result": {**ENVELOPE["result"], "result": {
+        **ENVELOPE["result"]["result"],
+        "answers": {**ENVELOPE["result"]["result"]["answers"],
+                    "leader_rebound_popularity": {"type": "choice",
+                                                  "choice": "dragon_confirm",
+                                                  "confidence": 0.7}}}}}
+
+    def fake_dispatch2(narrative, questions):
+        calls.append((narrative, questions))
+        # 模拟真实行为：模型只答被问的题——非事件 doc（2 题）不含第 5 题答案
+        if L.REBOUND_QUESTION in questions:
+            return env2, 12
+        return ENVELOPE, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", fake_dispatch2)
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["ok"] == 4
+    doc_hit = db[L.COLLECTION].docs["2026-10-19:603278"]
+    doc_miss = db[L.COLLECTION].docs["2026-10-19:603188"]
+    # 事件股：3 题判答（续板/空间/人气成色）
+    qs_hit = doc_hit["questionsRaw"]
+    assert set(L.LEADER_QUESTIONS) <= set(qs_hit)
+    assert L.REBOUND_QUESTION in qs_hit, "事件股判答人气成色题"
+    assert doc_hit["leaderReboundPopularity"] == "insufficient", \
+        "夹具无语料→证据门覆盖新题（v5 起全题门，v14 新题同规）；真实事件日语料在场时走模型答"
+    assert L.REBOUND_QUESTION in (doc_hit.get("gate") or {}).get("forcedKeys", []), \
+        "证据门 forcedKeys 含人气成色题（按 questions 子集门）"
+    assert doc_hit["modelAnswers"][L.REBOUND_QUESTION]["choice"] == "dragon_confirm", \
+        "模型原答在 modelAnswers 审计（不得被消费端当口径）"
+    assert "人气证据链" in doc_hit["narrative"], "事件股叙事含人气证据链行组"
+    assert "形式①人气股反包" in doc_hit["narrative"]
+    assert "主升·第2轮" in doc_hit["narrative"], "周期背景只披露"
+    # 非事件股：2 题判答（B1:A 零额外调用）
+    assert L.REBOUND_QUESTION not in doc_miss["questionsRaw"]
+    assert "人气证据链" not in doc_miss["narrative"]
+    assert doc_miss["leaderReboundPopularity"] is None
+    # 调用次数不变：4 次（2 龙头 + 2 板块），事件门只换题集不增调用
+    assert len(calls) == 4
+    nq = {len(q) for _n, q in calls}
+    assert nq == {2, 3}, "事件股 3 题、其余 2 题"
+
+
+def test_v14_no_wzs_doc_zero_rebound_question(env):
+    """wzs 文档缺失（当日未跑弱转强链）→ 全部龙头 2 题，不报错不硬造事件。"""
+    calls, db = env
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["ok"] == 4
+    for did in ("2026-10-19:603278", "2026-10-19:603188"):
+        assert L.REBOUND_QUESTION not in db[L.COLLECTION].docs[did]["questionsRaw"]
+    assert all(len(q) == 2 for _n, q in calls)

@@ -278,6 +278,11 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 "choiceConfidence": ans.get("confidence"),
                 "leaderHeadroomConfidence": ((d.get("answers") or {}).get(
                     "leader_headroom") or {}).get("confidence"),
+                # v14（P3 工作流 B）：新龙人气成色（仅弱转强事件股判答；非事件日/旧代=None）
+                "reboundPopularity": ((d.get("answers") or {}).get(
+                    "leader_rebound_popularity") or {}).get("choice"),
+                "reboundPopularityConfidence": ((d.get("answers") or {}).get(
+                    "leader_rebound_popularity") or {}).get("confidence"),
                 # v12 复盘 audit 标记（2026-10-28 两案：read口透传，页面徽章展示）
                 "auditFlag": d.get("auditFlag"),
                 "auditNote": d.get("auditNote"),

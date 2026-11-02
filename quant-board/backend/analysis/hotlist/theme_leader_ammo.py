@@ -71,7 +71,18 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # 任一在场必须按①给档，锚缺失仅强制降置信 ≤0.6」；②空间题规则③补未封板分支默认档
 # =空间锚最细出率桶起判，锚行整体缺席才允许自判；③两题 insufficient criteria 补
 # 对称禁令（10-28 首批实证：上海九百双题证据在场仍答 insufficient）。
-QUESTION_SET_VERSION_THEME_LEADER = "v13"
+# **v14 = 2026-11-02 新龙人气成色题（P3 工作流 B，预登记
+# theme-leader-v14-rebound-popularity-preregistration-20261102，用户裁决 B1-B5 全 A
+# + 预算批 ≤60 calls/月）**：①新增事件驱动题 `leader_rebound_popularity`（三档：
+# dragon_confirm 新龙确立/one_day_pop 单日反抽/insufficient；B2:A 低置信用
+# confidence 表达不新增档位）；②B1:A 事件门——仅当日命中弱转强事件
+# （leaderRebound/benchmarkAdvance，事件股=当日分轨空间龙一）的叙事判答本题，
+# 非事件日叙事不含本题零额外调用（程序门在 operations 层）；③人气证据链叙事行
+# （AMMO 2026-11-02a，`rebound_popularity_line`）：全部复用已落地结构证据零新采集
+# （B3:A）——事件行/窗内逐日表现（观察池 windowChanges）/板内跟随（当日板内上板
+# 家数）/周期背景（theme_cycle 当日态，只披露不进判档硬判据）；④四题题面一字不改
+# （v13 §2.4 纪律），hash 随换代变更跨代不可比。
+QUESTION_SET_VERSION_THEME_LEADER = "v14"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -151,7 +162,11 @@ QUESTION_SET_VERSION_THEME_LEADER = "v13"
 # 直播头「实时流·仅标注时点可得」、打标交叉行「打标链+题集版本」、证据块头部与
 # 催化/事件/新闻/日历/板内解析行的「韭研产业树/开盘啦/韭研异动」字样；口径与降级
 # 披露（真连板口径、采集池回退、右删失、龙虎榜主力净额口径）全保留。
-AMMO_VERSION_THEME_LEADER = "2026-10-30g"
+# 2026-11-02a（P3 工作流 B 人气证据链行，2026-11-02 用户裁决 B1-B5 全 A）：新增
+# rebound_popularity_line——弱转强事件股专属证据行组（事件行/窗内逐日表现/板内跟随/
+# 周期背景），全部复用已落地数据零新采集；仅事件日出行，与 v14 事件门同源。原四题
+# 判据引用源未变，不构成题面改动。
+AMMO_VERSION_THEME_LEADER = "2026-11-02a"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -502,6 +517,34 @@ QUESTIONS_THEME_LEADER = {
                     "当前高度大概率就是顶部（锚行读数参照：同高度再走≥1板率不足三成）",
             "insufficient": "证据不足：仅当语料未采集或三层证据（产业树/事件·新闻/板内解析）"
                             "同时无痕迹；叙事含空间锚行（有率值）时不得选本档（v13）",
+        },
+    },
+    "leader_rebound_popularity": {
+        "type": "choice",
+        "instructions": "仅依据所给证据（人气证据链行、板块结构、空间锚行、题材证据），"
+                        "判断该板块龙头的弱转强反包（人气股反包/标杆晋级，当日收盘封板"
+                        "确认）的**人气聚合成色**：是真聚合（新龙确立）还是存量情绪脉冲"
+                        "（单日反抽）。只判当次反包的性质，不预测价格、不给买卖建议。"
+                        "硬规则：①「空间锚」行若在场，它是必须先对的概率中枢——你的"
+                        "理由仅为「身位强/题材强」等与锚同源的结构特征时，应选与锚"
+                        "一致的档位；无论上调或下调，偏离锚的档位都必须在理由中点名"
+                        "锚行具体数字，并给出锚未覆盖的新证据；②人气证据链行是本题"
+                        "专属判据源：判档必须在理由中点名链行具体事实（窗内逐日表现/"
+                        "板内跟随/板块家数方向）；③跨题一致性：同一叙事的「题材延续性」"
+                        "若判 ending，本题默认不得判 dragon_confirm，除非点名锚行数字"
+                        "并给锚外新证据；④关键证据缺失判 insufficient：仅当窗内逐日"
+                        "表现缺失**且**板块结构不可考两者同时成立；证据部分缺位（如无"
+                        "跟随数/无周期背景）不是 insufficient 理由，按在场证据判档并"
+                        "降低置信；⑤若叙事标注分轨（主板/双创），待判龙头为其轨内龙一，"
+                        "判档以轨内身位为准。",
+        "criteria": {
+            "dragon_confirm": "新龙确立：人气聚合——板内跟随在场（当日板内上板≥2 家，"
+                              "含龙头自身）或窗内表现稳住高位（反包前未深度溃散），"
+                              "或题材延续信号支撑",
+            "one_day_pop": "单日反抽：封板但人气未聚——板内无跟随（当日仅龙头自身上板）、"
+                           "题材无新增催化，或窗内表现已深度走弱",
+            "insufficient": "证据不足：仅当窗内逐日表现缺失且板块结构不可考两者同时成立；"
+                            "证据部分缺位按在场证据判档并降低置信，不得硬填",
         },
     },
 }
@@ -1285,6 +1328,69 @@ def market_summary_line(entry: dict | None) -> str | None:
     return f"盘面总结（KPL 15:00）：{comment}"
 
 
+def rebound_popularity_line(event: dict | None, pool_row: dict | None,
+                            board_n: Any = None,
+                            cycle: dict | None = None) -> str | None:
+    """v14 人气证据链行组（AMMO 2026-11-02a，事件股专属，纯函数零 DB）。
+
+    入参（全部已落地数据，零新采集；B3:A）：
+      event     弱转强事件行（hotlist_jev_leader_wzs.events）；None → 非事件日
+                不出行（调用方同时不判答本题，事件门同源）
+      pool_row  观察池行（poolRows 按 code 匹配，含 windowChanges 窗内逐日 pct）
+      board_n   当日板内上板家数（含龙头自身；None=不可考）
+      cycle     周期背景（hotlist_jev_theme_cycle 当日行：state/cycleRound）
+                只披露不进判档硬判据（预登记 §三）
+
+    fail-visible：窗内序列/跟随数/周期背景缺位如实标注，不伪 0；缺位不自动
+    insufficient（题面 ④：窗内序列与板块结构同时缺失才够档）。
+    """
+    if not event:
+        return None
+    form_cn = {"leaderRebound": "形式①人气股反包",
+               "benchmarkAdvance": "形式②标杆晋级"}.get(str(event.get("type")),
+                                                        str(event.get("type")))
+    lines = [f"人气证据链（弱转强事件：{form_cn}，事件股=当日分轨空间龙一，"
+             f"收盘封板确认）"]
+    ev_bits = []
+    if event.get("windowK") is not None:
+        ev_bits.append(f"窗位 k={event['windowK']}")
+    if event.get("height") is not None:
+        ev_bits.append(f"断板日高度 {event['height']} 板")
+    if event.get("streak") is not None:
+        ev_bits.append(f"今日连板 {event['streak']} 板")
+    if event.get("prevStreak") is not None:
+        ev_bits.append(f"昨日 {event['prevStreak']} 板")
+    if event.get("gain10") is not None:
+        ev_bits.append(f"10日涨幅 +{event['gain10']}%")
+    lines.append("事件事实：" + ("；".join(ev_bits) if ev_bits else "不可考"))
+    wc = (pool_row or {}).get("windowChanges") or []
+    if wc:
+        seg = " → ".join(
+            (f"{d.get('date')} {d.get('pct'):+.2f}%"
+             if isinstance(d.get('pct'), (int, float))
+             else f"{d.get('date')} 不可考")
+            for d in wc)
+        lines.append(f"窗内逐日表现（逆势观察，断板日起）：{seg}")
+    else:
+        lines.append("窗内逐日表现：缺失（日线不可考，fail-visible）")
+    if isinstance(board_n, int):
+        lines.append(f"板内跟随：当日板内上板 {board_n} 家（含龙头自身；"
+                     f"{'>=2 有跟随' if board_n >= 2 else '仅龙头 1 家无跟随'}）")
+    else:
+        lines.append("板内跟随：当日板内上板家数不可考")
+    if cycle:
+        st_cn = {"mainrise": "主升", "weakening": "转弱", "wzs": "弱转强",
+                 "terminal": "终结"}.get(str(cycle.get("state")),
+                                          str(cycle.get("state")))
+        rnd = cycle.get("cycleRound")
+        lines.append("周期背景：" + (st_cn or "不可考")
+                     + (f"·第{int(rnd) + 1}轮" if isinstance(rnd, int) and rnd >= 1 else "")
+                     + "（状态机事实，只披露）")
+    else:
+        lines.append("周期背景：不可考（无当日状态机行）")
+    return "\n".join(lines)
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
@@ -1295,6 +1401,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            driver_cross: str | None = None,
                            reason_line: str | None = None,
                            lhb_facts_line: str | None = None,
+                           rebound_line: str | None = None,
                            plate_strength: str | None = None,
                            series_line: str | None = None,
                            live_line: str | None = None,
@@ -1348,6 +1455,10 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(reason_line)
     if lhb_facts_line:
         lines.append(lhb_facts_line)
+    if rebound_line:
+        # v14（P3 工作流 B）：人气证据链行组，事件股专属；仅事件日出行，
+        # 与本题判答条件（事件门）同源。None（非事件日）不出行，旧行为不变
+        lines.append(rebound_line)
     lines.append(evidence_block)
     return "\n".join(lines)
 

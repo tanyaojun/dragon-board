@@ -2852,7 +2852,16 @@ function tlCycleBadge(r){
     + (roundN >= 1 ? '·第' + (roundN + 1) + '轮' : '');
   const st = '<span class="badge ' + cls + '" title="' + esc(tip) + '">' + esc(label) + '</span>';
   const reb = r.leaderRebound
-    ? ' <span class="badge b-red" title="当日新龙反包（弱转强事件①：观察池内空间龙一收盘封板，v5 预登记裁决 5/6）">新龙</span>' : '';
+    ? ' <span class="badge b-red" title="'
+      + esc('当日新龙反包（弱转强事件①：观察池内空间龙一收盘封板，v5 预登记裁决 5/6）'
+        + (r.reboundPopularity
+           ? '；jev 成色：'
+             + ({dragon_confirm: '新龙确立', one_day_pop: '单日反抽'}[r.reboundPopularity]
+                || r.reboundPopularity)
+             + (r.reboundPopularityConfidence != null
+                ? '（置信 ' + r.reboundPopularityConfidence + '）' : '')
+             + '——v14 人气成色题判答' : ''))
+      + '">新龙</span>' : '';
   return st + reb;
 }
 function tlRowHtml(r, f){

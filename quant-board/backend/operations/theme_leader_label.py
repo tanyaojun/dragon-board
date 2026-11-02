@@ -60,9 +60,12 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     plate_series_line,
     limitup_reason_line,
     plate_strength_line,
+    rebound_popularity_line,
     structure_line,
     structure_line_dual,
 )
+from backend.operations.leader_wzs import COLLECTION as WZS_COLLECTION
+from backend.operations.theme_cycle import COLLECTION as CYCLE_COLLECTION
 from backend.operations.theme_leader_baseline import (
     board_count_history, build_rows, day_leader_rows)
 from backend.services.jev.jev_client import parse_jev_response
@@ -74,6 +77,10 @@ ORIGIN = "theme_leader_label_v1"
 # v12 A2 拆题：板块级/个股级题面子集与 docKind（预登记 §2.3）
 SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
 LEADER_QUESTIONS = ("leader_nextday_continue", "leader_headroom")
+# v14（P3 工作流 B，B1:A 事件门）：人气成色题仅弱转强事件股判答——非事件日叙事
+# 不含本题零额外调用（预算预登记 §四）；事件门数据单源 hotlist_jev_leader_wzs
+REBOUND_QUESTION = "leader_rebound_popularity"
+LEADER_QUESTIONS_REBOUND = LEADER_QUESTIONS + (REBOUND_QUESTION,)
 DOC_KIND_SECTOR = "sector"
 DOC_KIND_LEADER = "leader"
 
@@ -616,7 +623,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               segment: str | None = None,
               live_line: str | None = None,
               market_summary: str | None = None,
-              lhb_facts: dict | None = None) -> dict:
+              lhb_facts: dict | None = None,
+              rebound_line: str | None = None) -> dict:
     """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。"""
     from backend.operations.jev_label_jiuyan import market_facts_line
 
@@ -657,6 +665,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         reason_line=limitup_reason_line(reason_entries or []),
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
                         if lhb_facts is not None else None),
+        rebound_line=rebound_line,
         evidence_block=block["text"],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
@@ -837,6 +846,9 @@ def _label_one(db, col, date: str, built: dict,
         "themeSpeculationDepth": depth.get("choice") if doc_kind == DOC_KIND_SECTOR else None,
         "themeContinuation": contn.get("choice") if doc_kind == DOC_KIND_SECTOR else None,
         "leaderHeadroom": head.get("choice") if doc_kind == DOC_KIND_LEADER else None,
+        # v14（P3 工作流 B）：人气成色便捷字段（全答仍在 answers；非事件日/旧代=None）
+        "leaderReboundPopularity": ((answers.get(REBOUND_QUESTION) or {}).get("choice")
+                                    if doc_kind == DOC_KIND_LEADER else None),
         "status": "ok" if parsed["ok"] else "degraded",
         "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
         "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
@@ -953,6 +965,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     live_cache: dict[str, tuple[list[dict], dict]] = {}
     series_cache: dict[str, str | None] = {}
     rank_hist_cache: dict[str, dict] = {}
+    # v14 事件门缓存（每交易日一份弱转强文档，个股循环共用；B1:A）
+    wzs_cache: dict[str, dict] = {}
 
     def _live(board: str) -> tuple[list[dict], dict]:
         if board not in live_cache:
@@ -1024,6 +1038,23 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         rb = str(row["board"])
         le, lm = _live(rb)
         smatch = match_board_strength(strength_payload, rb)
+        # v14 事件门（B1:A）：当日弱转强事件单源 hotlist_jev_leader_wzs（按日缓存，
+        # 缺文档/缺事件=非事件日，本题不判答零额外调用）；周期背景单源 theme_cycle
+        ev_doc = wzs_cache.get(date)
+        if ev_doc is None:
+            ev_doc = db[WZS_COLLECTION].find_one({"tradingDate": date}) or {}
+            wzs_cache[date] = ev_doc
+        events_hit = [e for e in (ev_doc.get("events") or [])
+                      if str(e.get("code")) == str(row.get("code"))
+                      and str(e.get("board")) == rb]
+        pool_row_hit = next((p for p in (ev_doc.get("poolRows") or [])
+                             if str(p.get("code")) == str(row.get("code"))), None)
+        cyc = db[CYCLE_COLLECTION].find_one(
+            {"tradingDate": date, "board": rb,
+             "segment": row.get("segment") or "main"}) or {}
+        event = events_hit[0] if events_hit else None
+        rebound_line = rebound_popularity_line(
+            event, pool_row_hit, board_n=row.get("boardN"), cycle=cyc or None)
         built = build_one(
             db, date, row, rows_baseline, dataset_id, market_line,
             board_history=board_history,
@@ -1035,9 +1066,14 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),
             market_summary=market_summary,
-            lhb_facts=lhb_facts)
+            lhb_facts=lhb_facts,
+            rebound_line=rebound_line)
         built["row"] = row
-        built["questions"] = {k: QUESTIONS_THEME_LEADER[k] for k in LEADER_QUESTIONS}
+        built["questions"] = {k: QUESTIONS_THEME_LEADER[k]
+                              for k in (LEADER_QUESTIONS_REBOUND
+                                        if event else LEADER_QUESTIONS)}
+        if event:
+            built["reboundEvent"] = event
         built_all.append(built)
     tokens = sum(b["estimatedTokens"]["budgetGuard"] for b in built_all)
     plan = {"ok": True, "date": date, "leaders": len(rows),

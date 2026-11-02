@@ -53,7 +53,13 @@ def test_question_set_frozen_hash_and_versions():
     theme-leader-v13-unsealed-insufficient-preregistration-20261029）**：①续板题规则⑤补
     「锚缺失≠可判 insufficient，证据行任一在场必须按①给档并强制降置信 ≤0.6」；
     ②空间题规则③补未封板分支默认档=空间锚最细出率桶起判，锚行整体缺席才允许自判；
-    ③两题 insufficient criteria 补对称禁令。AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
+    ③两题 insufficient criteria 补对称禁令。
+    **v14 = 2026-11-02 新龙人气成色题（P3 工作流 B，hash 见断言，预登记
+    theme-leader-v14-rebound-popularity-preregistration-20261102，用户裁决
+    B1-B5 全 A）**：①新增事件驱动题 leader_rebound_popularity（三档：新龙确立/
+    单日反抽/insufficient，事件门=当日弱转强事件股，B1:A）；②人气证据链叙事行
+    （AMMO 2026-11-02a，rebound_popularity_line，零新采集 B3:A）；③四题题面
+    一字不改。AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
     **2026-10-24d review 处置**（断板改同名成员口径 prevStill，迁移场景不出负数；
@@ -69,13 +75,15 @@ def test_question_set_frozen_hash_and_versions():
     事实源，龙一+板内并列；板块强度行 plate_strength_line：KPL 层1 名称桥，未匹配
     fail-visible）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v13"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-30g"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "5d50645e5dc8"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v14"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-02a"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "510d1110c0a7"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
-    # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
+    # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
+    # v14：+leader_rebound_popularity（事件驱动题，事件门在 operations 层）
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
-                                   "leader_nextday_continue", "leader_headroom")
+                                   "leader_nextday_continue", "leader_headroom",
+                                   "leader_rebound_popularity")
     for key in A.THEME_LEADER_KEYS:
         q = A.QUESTIONS_THEME_LEADER[key]
         assert q["type"] == "choice" and q["instructions"] and q["criteria"]
@@ -518,14 +526,15 @@ def test_gate_holds_when_previously_gated_answer_reruns():
         {"evidenceMissing": True, "evidenceMissingReason": "no_content_no_event"})
     assert gate["applied"] is True and gate["modelChoice"] == "insufficient"
     assert out["leader_nextday_continue"]["choice"] == "insufficient"
-    # 模型已自判不足的题不重复覆盖（forcedKeys 不含它）；未作答的其余三题补强制 insufficient
+    # 模型已自判不足的题不重复覆盖（forcedKeys 不含它）；未作答的其余题补强制 insufficient
+    # （v14 起全题=5，含事件驱动题 leader_rebound_popularity）
     assert gate["forcedKeys"] == ["theme_speculation_depth", "theme_continuation",
-                                  "leader_headroom"]
+                                  "leader_headroom", "leader_rebound_popularity"]
 
 
-def test_gate_forces_all_four_questions_in_v5():
-    """v5 四题全门：证据缺失时四题全部强制 insufficient（模型已自判不足的题不重复覆盖）；
-    forcedKeys 留痕，原答在 modelAnswers 审计。"""
+def test_gate_forces_all_questions_in_v5_plus_v14():
+    """全题门：证据缺失时全部判定题强制 insufficient（模型已自判不足的题不重复覆盖）；
+    v14 起全题=5（含事件驱动题）。forcedKeys 留痕，原答在 modelAnswers 审计。"""
     answers = {"leader_nextday_continue": {"choice": "mid_45_65",
                                           "probabilities": {"mid_45_65": 0.55}},
                "theme_speculation_depth": {"choice": "fermenting"},
@@ -534,7 +543,8 @@ def test_gate_forces_all_four_questions_in_v5():
     out, gate = A.apply_evidence_gate(answers, {"evidenceMissing": True,
                                                 "evidenceMissingReason": "industry_tree_unmapped"})
     assert gate["forcedKeys"] == ["theme_speculation_depth", "leader_nextday_continue",
-                                  "leader_headroom"], "模型已自判 insufficient 的题不重复覆盖"
+                                  "leader_headroom", "leader_rebound_popularity"], \
+        "模型已自判 insufficient 的题不重复覆盖"
     assert out["theme_speculation_depth"]["choice"] == "insufficient"
     assert out["leader_headroom"]["choice"] == "insufficient"
     assert out["theme_continuation"]["choice"] == "insufficient", "原判保留"
@@ -1002,3 +1012,48 @@ def test_narrative_lhb_line_placement_after_reason_line():
     s = A.build_sector_narrative(**base, board="机器人", reason_line="涨停原因行",
                                  lhb_facts_line=lhb)
     assert s.index("涨停原因行") < s.index("龙虎榜：") < s.index("【题材证据】")
+
+
+# ---------- v14：新龙人气成色题 + 人气证据链行（P3 工作流 B，B1-B5 全 A） ----------
+
+def test_v14_rebound_question_shape():
+    """v14 新题判据冻结：三档、事件驱动、insufficient 窄口径（预登记 §2.2）。"""
+    q = A.QUESTIONS_THEME_LEADER["leader_rebound_popularity"]
+    assert q["type"] == "choice" and "人气聚合成色" in q["instructions"]
+    assert "空间锚」行若在场" in q["instructions"], "锚先对齐规则沿 v9/v13 哲学"
+    assert "两者同时成立" in q["instructions"], "insufficient 窄口径（部分缺位不硬填）"
+    crit = q["criteria"]
+    assert set(crit) == {"dragon_confirm", "one_day_pop", "insufficient"}, "B2:A 三档"
+    assert "≥2 家" in crit["dragon_confirm"] and "跟随" in crit["dragon_confirm"]
+    assert "无跟随" in crit["one_day_pop"]
+
+
+def test_v14_rebound_popularity_line_builder():
+    """人气证据链行组：事件/窗内序列/跟随/周期背景 + fail-visible 缺位披露。"""
+    ln = A.rebound_popularity_line(
+        {"type": "leaderRebound", "windowK": 1, "height": 3, "gain10": 45.2},
+        {"windowChanges": [{"date": "2026-10-28", "pct": -3.2},
+                           {"date": "2026-10-29", "pct": 10.01}]},
+        board_n=4, cycle={"state": "mainrise", "cycleRound": 1})
+    assert "形式①人气股反包" in ln and "窗位 k=1" in ln
+    assert "2026-10-28 -3.20%" in ln, "窗内逐日表现逐日披露"
+    assert "当日板内上板 4 家" in ln and ">=2 有跟随" in ln
+    assert "主升·第2轮" in ln, "周期背景只披露（P3 工作流 A 落痕）"
+    ln2 = A.rebound_popularity_line(
+        {"type": "benchmarkAdvance", "streak": 5, "prevStreak": 4},
+        None, board_n=None, cycle=None)
+    assert "形式②标杆晋级" in ln2
+    assert "窗内逐日表现：缺失" in ln2, "缺位 fail-visible 不伪 0"
+    assert "不可考" in ln2
+    assert A.rebound_popularity_line(None, None) is None, "非事件日不出行（事件门同源）"
+
+
+def test_v14_rebuild_leader_narrative_wires_rebound_line():
+    """叙事接线：rebound_line 在证据块前；None 不出行（旧行为不变）。"""
+    kw = dict(date="2026-11-02", market_line="市场线", structure="结构行",
+              baseline="基线行", evidence_block="证据块",
+              leader_name="青岛食品", leader_code="001219")
+    n1 = A.build_leader_narrative(rebound_line="人气证据链（事件）", **kw)
+    assert n1.index("人气证据链（事件）") < n1.index("证据块"), "链行在证据块前"
+    n0 = A.build_leader_narrative(**kw)
+    assert "人气证据链" not in n0, "非事件日叙事不含链行"
