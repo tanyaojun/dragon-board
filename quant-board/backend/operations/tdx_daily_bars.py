@@ -56,6 +56,10 @@ def fetch_daily_bars(code: str, offset: int = 15, max_probe: int = 15,
         try:
             if not api.connect(h["ip"], int(h.get("port") or 7709), time_out=5):
                 continue
+            # 连接成功 ≠ 可用：get_security_bars 无内置超时，坏节点 recv 可永久
+            # 挂起（实测 2026-11-02 回填整链卡死）。socket 级超时兜底，超时抛异常
+            # 走下一节点（与 connect 失败同路）。
+            api.client.settimeout(10)
             try:
                 bars = api.get_security_bars(9, market, str(code), 0, offset)
             finally:

@@ -33,10 +33,14 @@ _BAR_OFFSET_LADDER = (15, 40, 80, 160, 250)
 
 
 def bars_covering(code: str, end_date: str,
-                  min_dates: int = 1) -> dict[str, dict] | None:
-    """覆盖 `end_date` 的日线（含其前至少 min_dates 根）；不覆盖 → 最后一次结果。"""
+                  min_dates: int = 1,
+                  offsets: tuple[int, ...] | None = None) -> dict[str, dict] | None:
+    """覆盖 `end_date` 的日线（含其前至少 min_dates 根）；不覆盖 → 最后一次结果。
+
+    offsets 缺省阶梯式（15→…→250，逐档重试，每档一次 TDX 连接）；深历史
+    全量回填应传单档大 offset（如 (250,)），一次拉取进程内缓存跨日复用。"""
     last: dict[str, dict] | None = None
-    for off in _BAR_OFFSET_LADDER:
+    for off in (offsets or _BAR_OFFSET_LADDER):
         bars = fetch_daily_bars(str(code)[-6:], offset=off)
         last = bars
         if bars:
@@ -47,10 +51,34 @@ def bars_covering(code: str, end_date: str,
 
 
 def covering_gain_fetcher(codes, end_date: str,
-                          window: int = 10) -> dict[str, float | None]:
+                          window: int = 10,
+                          offsets: tuple[int, ...] | None = None) -> dict[str, float | None]:
     """深历史回填用 gain_fetcher：覆盖式取日线再算 10 日涨幅（fail-visible None）。"""
-    return {c: gain10_from_bars(bars_covering(c, end_date, min_dates=window + 1),
+    return {c: gain10_from_bars(bars_covering(c, end_date, min_dates=window + 1,
+                                              offsets=offsets),
                                 end_date, window) for c in codes}
+
+
+def covering_day_change_fetcher(codes, date: str,
+                                offsets: tuple[int, ...] | None = None) -> dict[str, float | None]:
+    """深历史回填用 day_change_fetcher：当日涨跌幅%（close vs 前收，覆盖式）。
+
+    默认实现只拉最近 15 根日线，老日期当日不在轴 → None（调用方不剔除，
+    断板候选跌停过滤失效）。与 covering_gain_fetcher 同一 (code, offset) 缓存。"""
+    out: dict[str, float | None] = {}
+    for c in codes:
+        out[c] = None
+        bars = bars_covering(c, date, min_dates=2, offsets=offsets)
+        if not bars or date not in bars:
+            continue
+        ds = sorted(bars)
+        i = ds.index(date)
+        if i == 0:
+            continue
+        pc, cc = bars[ds[i - 1]].get("close"), bars[date].get("close")
+        if pc and cc:
+            out[c] = round((cc / pc - 1) * 100, 2)
+    return out
 
 
 def _pool_members(db: Any, day: str, dataset_id: str,

@@ -13,7 +13,8 @@
 - Q2=A 创高度新高=个股 10 日 gain10 创近 20 日新高（由操作层以日线计算传入，
   本层只消费布尔）；
 - Q3=A 终结=终态（吸收态，本期不可迁出）；
-- Q4=A 观察窗满复用 P1 池窗：板块×轨当日观察池无 k∈{0,1,2} 行即窗满；
+- Q4=A 观察窗满复用 P1 池窗时点：断板开窗后第 3 个交易日起记窗满
+  （k≥3 出池当日）；不以池在位判窗满（池含任意断板股，热门板块池永非空）；
 - 迁移优先级：弱转强事件 > 终结（窗满+ice）> 转弱 > 主升（事件=新龙再崛起，
   语义最具体优先；同日事件与转弱不可能并存——事件要求龙一今日封板）。
 
@@ -81,7 +82,10 @@ def step_day(prev_state: str | None, *, node: str | None,
                        "trigger": TRIG_EVENT,
                        "evidence": {"events": list(event_types), "node": node}}
 
-    # 2) 终结：观察窗满且当日节点=ice（仅转弱态；裁决 7 N=1 即终结）
+    # 2) 终结：观察窗满且当日节点=ice（仅转弱态；裁决 7 N=1 即终结）。
+    #    观察窗只由「空间龙一断板」开启（预登记 §五原文）：节点驱动入转弱
+    #    不开窗不可终结（否则首见 weakening 板任意 ice 日即终结，Q3:A 吸收
+    #    下全局塌向终结态——2026-11-02 实测 49% 终结，已回退）。
     if prev_state == "weakening" and window_open and window_full \
             and node == TERMINAL_NODE:
         return "terminal", {"from": prev_state, "to": "terminal",
@@ -129,13 +133,15 @@ def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
      "pool_boards": set[(board, segment)]}         # 当日观察池在位的板块×轨（k∈{0,1,2}）
 
     返回逐日记录列表（升序）：每元素 {"date", "rows": [逐板块×轨行]}。
-    行含 state/prev/migrated/transition/evidence；窗口状态机内部维护。
-    """
+    行含 state/prev/migrated/transition/evidence；窗口状态机内部维护：
+    窗=开窗日（断板日 D0）后 3 个交易日，窗满=开窗后交易日差 ≥3（Q4:A：
+    k≥3 出池当日记窗满）；事件命中即入 wzs 关窗，「窗内无①②事件」由
+    迁移优先级自动成立。"""
     states: dict[tuple[str, str], str] = {}
-    windows: dict[tuple[str, str], bool] = {}   # 观察窗开启中（转弱因龙一断板开启）
+    windows: dict[tuple[str, str], int] = {}   # 开窗日 idx（断板日）；无窗不在字典
     out: list[dict[str, Any]] = []
 
-    for day in days:
+    for i, day in enumerate(days):
         date = day["date"]
         nodes: dict[str, str | None] = day.get("nodes") or {}
         events = day.get("events") or []
@@ -167,23 +173,24 @@ def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     and isinstance(ld.get("streak"), int) and ld["streak"] >= 2
                 gain10_high = bool(ld and ld.get("gain10NewHigh"))
                 in_pool = key in pool_boards
-                # Q4:A：窗满=转弱中且观察池无本板块×轨行（k≥3 出池即池空）
-                window_full = bool(window_open := windows.get(key)) and not in_pool
+                opened = windows.get(key)
+                # Q4:A：窗满=断板开窗后交易日差 ≥3（k≥3 出池当日记窗满）。
+                # 注意不以「池在位」判窗满：池含板块内任意断板股（height≥2），
+                # 热门板块池几乎永非空，会永不终结
+                window_full = opened is not None and (i - opened) >= 3
 
                 new_state, transition = step_day(
                     states.get(key), node=node, event_types=ev_types,
                     leader_broken=leader_broken, leader_advanced=leader_advanced,
                     gain10_new_high=gain10_high,
-                    window_open=window_open, window_full=window_full)
+                    window_open=opened is not None, window_full=window_full)
 
-                if transition and transition["trigger"] == TRIG_LEADER_BROKEN:
-                    windows[key] = True      # 断板开窗
-                if new_state == "weakening":
-                    # 节点驱动入转弱（非断板）同样视为开窗：无断板则池本就空，
-                    # 窗满即真（若连日无反包且节点冰点可终结），避免死锁
-                    windows[key] = True
+                if leader_broken and new_state == "weakening":
+                    # 断板开窗（预登记 §五「龙一断板开启 3 日观察窗」）：无论断板
+                    # 是否为转弱迁移的触发（节点先行转弱时龙一随后断板同样开窗/重开）
+                    windows[key] = i
                 if new_state in ("wzs", "mainrise"):
-                    windows[key] = False     # 反包完成/证据回暖，窗使命结束
+                    windows.pop(key, None)   # 反包完成/证据回暖，窗使命结束
                 states[key] = new_state
 
                 rows.append({
