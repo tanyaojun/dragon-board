@@ -46,7 +46,7 @@ NEWS_PAYLOAD = {"List": [
      "Stocks": [{"Code": "603019", "Name": "中科曙光", "Rate": 0.29, "SetTop": 1},
                 {"Code": "000988", "Name": "华工科技", "Rate": -5.23, "SetTop": 0}]},
     {"CID": 7939, "Title": "泽连斯基表态推动和平协议预期，基建出口链异动",
-     "TimeStamp": 1792600000, "Source": "开盘啦", "Kword": "俄乌重建", "Statu": "0",
+     "ZSName": "俄乌重建", "TimeStamp": 1792600000, "Source": "开盘啦", "Kword": "俄乌重建", "Statu": "0",
      "Stocks": [{"Code": "001360", "Name": "南矿集团", "Rate": 10.0, "SetTop": 1}]},
 ]}
 
@@ -76,6 +76,8 @@ def test_parse_news_keeps_kword_and_stocks_normalized():
     assert items[0]["stocks"][0] == {"code": "603019", "name": "中科曙光",
                                      "rate": 0.29, "setTop": 1}
     assert items[1]["kword"] == "俄乌重建"
+    # 2026-11-02 用户裁决①：ZSName 官方板块归属透传（空/非空两态）
+    assert items[0]["zsName"] == "" and items[1]["zsName"] == "俄乌重建"
 
 
 def test_parse_calendar_keeps_date_and_tag():
@@ -203,6 +205,7 @@ def test_window_getters_use_event_date():
     assert all("2026-10-19" <= e["day"] <= "2026-10-23" for e in got)
     news = S.get_news_items(db, date="2026-10-22")
     assert {n["kword"] for n in news} == {"AI算力基建", "俄乌重建"}
+    assert any(n.get("zsName") == "俄乌重建" for n in news), "读口投影必须带 zsName"
     cal = S.get_calendar_items(db, date="2026-10-22", window_days=3)
     assert ["ESMO" in c["brief"] for c in cal] == [True]
 

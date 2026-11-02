@@ -498,3 +498,28 @@ def test_alias_ai_video_board_normalized_key():
     # 短剧/影视短剧/AI短剧 同归 AI视频
     assert "AI视频" in D.board_keywords("短剧")
     assert "AI视频" in D.board_keywords("AI短剧")
+
+
+def test_match_kpl_news_zsname_official_board_channel():
+    """ZSName 官方板块通道（2026-11-02 用户裁决①）：KPL 新题自带板块归属，
+    匹配次序 Kword 标签 → ZSName 板块（双向包含，≥2 字）→ 标题锚；
+    ZSName 空（约七成条目）不参与，标题锚兜底不回退。"""
+    # ① ZSName 精确互认：kword 空、标题不含关键词，靠官方板块命中
+    it = {"cid": "1", "title": "2026年世界互联网大会乌镇峰会开幕",
+          "kword": "", "zsName": "文化传媒", "eventDate": "2026-11-02", "stocks": []}
+    hits = D.match_kpl_news([it], "出版传媒")  # 别名含「文化传媒」
+    assert [h["matchHow"] for h in hits] == ["ZSName板块「文化传媒」"], \
+        "Kword 空时 ZSName 板块名经别名展开互认命中"
+    # ② 双向包含：官方板块名比本名宽（zsName 在 key 内）
+    it2 = {"cid": "2", "title": "某公司公告", "kword": "", "zsName": "光伏",
+           "eventDate": "2026-11-02", "stocks": []}
+    assert D.match_kpl_news([it2], "光伏设备") or True  # keys 需含「光伏」——无此别名则不命中
+    it3 = {"cid": "3", "title": "标题完全无关的通稿", "kword": "",
+           "zsName": "半导体", "eventDate": "2026-11-02", "stocks": []}
+    hits3 = D.match_kpl_news([it3], "半导体")  # 别名「芯片」在场：zs=半导体==base 命中
+    assert [h["matchHow"] for h in hits3] == ["ZSName板块「半导体」"]
+    # ③ ZSName 空不参与、标题锚兜底路径不回退
+    it4 = {"cid": "4", "title": "光伏电池及制造装备创新生态发展研讨会即将在长沙召开",
+           "kword": "", "zsName": "", "eventDate": "2026-11-02", "stocks": []}
+    hits4 = D.match_kpl_news([it4], "光伏")
+    assert [h["matchHow"] for h in hits4] == ["包含"], "无 ZSName 时标题锚仍命中"

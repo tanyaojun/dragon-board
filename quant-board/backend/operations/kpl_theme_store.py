@@ -98,6 +98,8 @@ def save_news_items(db: Any, *, fetch_date: str, items: list[dict]) -> dict:
         doc = {
             "_id": _id, "kind": "kpl_theme_news", "cid": cid,
             "title": it.get("title") or "", "kword": it.get("kword") or "",
+            # 2026-11-02 用户裁决①：KPL 官方板块归属（确定性板块↔新闻链接第二通道）
+            "zsName": it.get("zsName") or "",
             "source": it.get("source") or "", "eventDate": it.get("eventDate") or "",
             "timeStamp": it.get("timeStamp"), "stocks": it.get("stocks") or [],
             **_base_doc(existing, fetch_date),
@@ -154,7 +156,7 @@ def get_news_items(db: Any, *, date: str, include_past_recent: int = 2,
     """题材新闻流（按事件日取窗，时间降序）——Kword 题材标签 + 关联个股。"""
     docs = db[COLLECTION_NEWS].find(
         {"eventDate": _window(date, include_past_recent, window_days)},
-        {"eventDate": 1, "cid": 1, "title": 1, "kword": 1, "source": 1, "stocks": 1,
+        {"eventDate": 1, "cid": 1, "title": 1, "kword": 1, "zsName": 1, "source": 1, "stocks": 1,
          "timeStamp": 1},
     )
     return sorted(docs, key=lambda d: -(d.get("timeStamp") or 0))

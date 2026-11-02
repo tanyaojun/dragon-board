@@ -339,7 +339,8 @@ def match_kpl_events(events: list[dict], board_name: str | None,
 
 def match_kpl_news(items: list[dict], board_name: str | None,
                    *, limit: int = MAX_EVENTS) -> list[dict]:
-    """题材新闻 → 板块：**Kword 题材标签优先**（开盘啦现成的关联），回落标题锚。"""
+    """题材新闻 → 板块：**Kword 题材标签优先**，**ZSName 官方板块次之**（2026-11-02
+    用户裁决①：KPL 新题自带板块归属，确定性互认，消大部分别名维护），回落标题锚。"""
     base = normalize_name(board_name)
     if not base:
         return []
@@ -356,6 +357,12 @@ def match_kpl_news(items: list[dict], board_name: str | None,
                 a = _shared_anchor(base, kn)
                 if a:
                     hit = {"how": f"Kword共享子串「{a}」", "anchor": a}
+        if not hit:
+            # ② ZSName 官方板块归属（2026-11-02 用户裁决①）：归一后与 keys 双向包含（≥2 字），
+            # 同 Kword 通道口径；ZSName 为空（约七成条目）不参与
+            zs = normalize_name(str(it.get("zsName") or ""))
+            if len(zs) >= 2 and any(k and (k in zs or zs in k) for k in keys):
+                hit = {"how": f"ZSName板块「{str(it.get('zsName'))}」", "anchor": zs if len(zs) <= len(base) else base}
         if not hit:
             hit = _anchor_hit(base, keys, str(it.get("title") or ""))
         if hit:

@@ -87,7 +87,11 @@ def _ts_to_date(ts: Any) -> str:
 
 
 def parse_news_list(data: dict) -> list[dict]:
-    """`c=ThemeNews&a=GetList` → [{cid, title, kword, source, timeStamp, eventDate, stocks}]。"""
+    """`c=ThemeNews&a=GetList` → [{cid, title, kword, zsName, source, timeStamp, eventDate, stocks}]。
+
+    `zsName`（2026-11-02 用户裁决①）：KPL 官方板块归属（实测近 50 条覆盖 15 条，
+    如光伏研讨会带「光伏」、Neuralink 带「脑机接口」）——确定性板块↔新闻链接第二通道。
+    """
     out: list[dict] = []
     for it in data.get("List") or []:
         stocks = [{"code": str(s.get("Code") or "")[-6:], "name": s.get("Name"),
@@ -98,6 +102,7 @@ def parse_news_list(data: dict) -> list[dict]:
             "cid": str(it.get("CID") or ""),
             "title": str(it.get("Title") or ""),
             "kword": str(it.get("Kword") or ""),
+            "zsName": str(it.get("ZSName") or ""),
             "source": str(it.get("Source") or ""),
             "timeStamp": ts,
             "eventDate": _ts_to_date(ts),
