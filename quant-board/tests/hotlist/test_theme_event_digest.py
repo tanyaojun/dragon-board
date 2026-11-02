@@ -475,3 +475,26 @@ def test_board_keywords_suffix_bridge_econ_industry():
     assert D.board_keywords("消费经济") == ["消费经济"], "词干=泛词（消费）不桥，防伪造关联"
     assert D.board_keywords("机器人") == ["机器人"], "非后缀板块零变化"
     assert D.board_keywords("半导体") == ["半导体", "芯片"], "2026-10-30e 清点实证别名"
+
+
+def test_alias_ai_video_board_normalized_key():
+    """韭研「AI影视/传媒」→ KPL「AI视频」（用户裁决 2026-11-02）。
+
+    锁两点：①ALIASES key 必须用**归一形式**「AI影视传媒」（normalize_name 去斜杠，
+    带斜杠 key 永远查不到——2026-11-02 实测首次落表未生效的根因）；
+    ②别名展开后 Kword 标签/标题锚/日历 brief 三条匹配路径全通。
+    """
+    assert D.board_keywords("AI影视/传媒") == ["AI影视传媒", "AI视频"]
+    news = {"kword": "AI视频", "title": "PineDrama下载破亿，字节想在海外再造一个红果",
+            "eventDate": "2026-10-11"}
+    hits = D.match_kpl_news([news], "AI影视/传媒")
+    assert [h["matchHow"] for h in hits] == ["Kword标签"]
+    ev = {"title": "AI视频概念异动：红果短剧流量新高", "content": "",
+          "day": "2026-11-02", "hotVal": 88}
+    ev_hits = D.match_kpl_events([ev], "AI影视/传媒")
+    assert ev_hits and ev_hits[0]["titleHit"] is True, "标题级命中=强关联"
+    cal = {"tagName": "会议", "brief": "AI视频产业大会将于11月5日举行", "date": "2026-11-05"}
+    assert D.match_kpl_calendar([cal], "AI影视/传媒"), "日历 brief 包含锚命中"
+    # 短剧/影视短剧/AI短剧 同归 AI视频
+    assert "AI视频" in D.board_keywords("短剧")
+    assert "AI视频" in D.board_keywords("AI短剧")
