@@ -256,3 +256,38 @@ def test_ok_but_empty_payload_is_not_silent_success(monkeypatch, fake_auth):
     assert out["degraded"] == ["ai_industry: 空载荷（errCode=0 但 0 节点，疑服务端限流/降级）"]
     assert out["ok"] is False, "唯一源空载荷 → 本次采集算失败，不得报成功"
     assert out["industry"]["written"] == 0 and not db.cols.get("jiuyan_ai_industry")
+
+
+# ── KPL 标记行机读接口（2026-11-02 f4e65402 主路径回归，review 2026-11-02 Nit） ──
+def test_schedule_kpl_marker_line_parse(monkeypatch):
+    """kpl_theme_collect stdout 用 THEME_COLLECT_RESULT_JSON: 标记行承载机读 JSON；
+    调度侧必须按标记提取（前面有降级披露行也不得截错），解析失败结构化 theme_collect_parse_failed。"""
+    from backend.operations import schedule as sch
+
+    payload = '{"ok": true, "date": "2026-11-02", "news": {"written": 50}, "degraded": []}'
+    noisy = ("2026-11-02 降级披露: {'some': 'dict-text'}\n"
+             "THEME_COLLECT_RESULT_JSON:" + payload + "\n")
+    monkeypatch.setattr(sch, "is_trading_day_cached", lambda d: (True, "weekday"))
+    captured = {}
+
+    def fake_run(*a, **k):
+        captured["cmd"] = a[0] if a else k.get("args")
+        return type("P", (), {"returncode": 0, "stdout": noisy, "stderr": ""})()
+    monkeypatch.setattr(sch.subprocess, "run", fake_run)
+    out = sch.run_theme_corpus_collect_once("2026-11-02", collectors=("kpl",))
+    assert out["ok"] is True
+    kpl = (out.get("collectors") or {}).get("kpl") or {}
+    assert kpl.get("ok") is True and kpl.get("stats", {}).get("news", {}).get("written") == 50, \
+        "标记行分支：披露行在前也不得解析失败"
+
+
+def test_schedule_kpl_unparseable_stdout_is_structured_failure(monkeypatch):
+    """stdout 无标记行且无可解析 JSON → 结构化 theme_collect_parse_failed，不得静默成功。"""
+    from backend.operations import schedule as sch
+
+    monkeypatch.setattr(sch, "is_trading_day_cached", lambda d: (True, "weekday"))
+    monkeypatch.setattr(sch.subprocess, "run", lambda *a, **k: type("P", (), {
+        "returncode": 0, "stdout": "Traceback-free 但全是人类可读文本", "stderr": ""})())
+    out = sch.run_theme_corpus_collect_once("2026-11-02", collectors=("kpl",))
+    kpl = (out.get("collectors") or {}).get("kpl") or {}
+    assert kpl.get("ok") is False and kpl.get("error", {}).get("code") == "theme_collect_parse_failed"

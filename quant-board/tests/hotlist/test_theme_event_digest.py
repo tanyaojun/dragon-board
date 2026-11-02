@@ -510,10 +510,11 @@ def test_match_kpl_news_zsname_official_board_channel():
     hits = D.match_kpl_news([it], "出版传媒")  # 别名含「文化传媒」
     assert [h["matchHow"] for h in hits] == ["ZSName板块「文化传媒」"], \
         "Kword 空时 ZSName 板块名经别名展开互认命中"
-    # ② 双向包含：官方板块名比本名宽（zsName 在 key 内）
-    it2 = {"cid": "2", "title": "某公司公告", "kword": "", "zsName": "光伏",
+    # ② 双向包含：官方板块名比本名宽（k ⊂ zs，review 2026-11-02 Nit：原 or True 恒真零断言）
+    it2 = {"cid": "2", "title": "某公司公告", "kword": "", "zsName": "光伏玻璃",
            "eventDate": "2026-11-02", "stocks": []}
-    assert D.match_kpl_news([it2], "光伏设备") or True  # keys 需含「光伏」——无此别名则不命中
+    hits2 = D.match_kpl_news([it2], "光伏")
+    assert [h["matchHow"] for h in hits2] == ["ZSName板块「光伏玻璃」"], "key「光伏」⊂ zs 命中"
     it3 = {"cid": "3", "title": "标题完全无关的通稿", "kword": "",
            "zsName": "半导体", "eventDate": "2026-11-02", "stocks": []}
     hits3 = D.match_kpl_news([it3], "半导体")  # 别名「芯片」在场：zs=半导体==base 命中
@@ -570,3 +571,14 @@ def test_news_line_renders_weak_match_badge_for_content_anchor():
     assert len(weak_lines) == 1, weak_lines
     assert "马斯克重磅预测" in weak_lines[0] and "正文锚" in weak_lines[0]
     assert "商业航天发射计划公布（包含）" in out["text"]
+
+
+def test_match_kpl_news_content_only_shared_substring_hits():
+    """review 2026-11-02 Minor：仅存在于正文的共享子串关联也要命中
+    （正文锚两步：标题短锚未中 → 正文全文共享子串），仍标弱匹配。"""
+    it = {"cid": "20", "title": "盘前必读丨产业风向标", "kword": "", "zsName": "",
+          "contentHtml": "<p>协会数据显示，上周商业航天领域发射任务环比增加。</p>",
+          "eventDate": "2026-11-02", "stocks": []}
+    hits = D.match_kpl_news([it], "商业航天")
+    assert len(hits) == 1 and hits[0]["matchHow"].startswith("正文锚")
+    assert hits[0]["titleHit"] is False

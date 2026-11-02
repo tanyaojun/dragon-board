@@ -374,10 +374,14 @@ def match_kpl_news(items: list[dict], board_name: str | None,
             hit = _anchor_hit(base, keys, str(it.get("title") or ""))
         if not hit:
             # ④ 正文锚兑底（2026-11-02 正文预登记 §五.1）：HTML 剩标签后确定性关联；
+            # 两步：先用标题做共享子串短锚，未中再对正文全文共享子串（review 2026-11-02
+            # Minor：仅存在于正文的关联也要能命中，同事件通道 content 无 anchor_text 口径）；
             # 标题未命中 → 弱匹配（titleHit=False），同事件通道语义
             body = _strip_html(str(it.get("contentHtml") or ""))
             if body:
                 hit = _anchor_hit(base, keys, body, anchor_text=str(it.get("title") or ""))
+                if not hit:
+                    hit = _anchor_hit(base, keys, body)
                 if hit:
                     hit = {**hit, "how": f"正文锚{'' if hit['how'] == '包含' else '·' + hit['how']}",
                            "titleHit": False}

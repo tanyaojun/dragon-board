@@ -98,23 +98,30 @@ def save_news_items(db: Any, *, fetch_date: str, items: list[dict],
         if not cid:
             continue
         _id = f"news:{cid}"
+        # existing 投影必须含全部合并保护字段（review 2026-11-02 Blocker：
+        # 回填/详情补拉传裁剪 item 时，replace_one 全量替换会把投影外字段抹成空值）
         existing = db[COLLECTION_NEWS].find_one(
             {"_id": _id},
-            {"firstSeenAt": 1, "firstSeenDate": 1, "contentHtml": 1,
-             "kwordDesc": 1, "zsCode": 1, "isChoice": 1}) or {}
+            {"firstSeenAt": 1, "firstSeenDate": 1, "title": 1, "kword": 1,
+             "zsName": 1, "source": 1, "eventDate": 1, "timeStamp": 1,
+             "stocks": 1, "contentHtml": 1, "kwordDesc": 1, "zsCode": 1, "isChoice": 1}) or {}
         det = (details or {}).get(cid) or {}
         doc = {
             "_id": _id, "kind": "kpl_theme_news", "cid": cid,
-            "title": it.get("title") or "", "kword": it.get("kword") or "",
+            "title": it.get("title") or existing.get("title") or "",
+            "kword": it.get("kword") or existing.get("kword") or "",
             # 2026-11-02 用户裁决①：KPL 官方板块归属（确定性板块↔新闻链接第二通道）
-            "zsName": it.get("zsName") or "",
-            "source": it.get("source") or "", "eventDate": it.get("eventDate") or "",
-            "timeStamp": it.get("timeStamp"), "stocks": it.get("stocks") or [],
+            "zsName": it.get("zsName") or existing.get("zsName") or "",
+            "source": it.get("source") or existing.get("source") or "",
+            "eventDate": it.get("eventDate") or existing.get("eventDate") or "",
+            "timeStamp": it.get("timeStamp") if it.get("timeStamp") is not None else existing.get("timeStamp"),
+            "stocks": it.get("stocks") or existing.get("stocks") or [],
             # 2026-11-02 预登记 §三：正文原文（HTML 单主链，消费端剥标签）；只存不用字段
             "contentHtml": str(det.get("content") or "") or existing.get("contentHtml") or "",
             "kwordDesc": det.get("kwordDesc") or existing.get("kwordDesc") or "",
             "zsCode": det.get("zsCode") or existing.get("zsCode") or "",
-            "isChoice": det.get("isChoice", existing.get("isChoice")),
+            # 缺字段（None）不覆盖已存值（review 2026-11-02 Minor，同空不覆盖纪律）
+            "isChoice": det.get("isChoice") if det.get("isChoice") is not None else existing.get("isChoice"),
             **_base_doc(existing, fetch_date),
         }
         if det.get("content") and not existing.get("contentHtml"):

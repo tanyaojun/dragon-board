@@ -30,7 +30,7 @@ _MIDDAY_LABEL_TIMEOUT_SECONDS = 1800
 # 实测 errCode=9 是短时限流，退避太短等于白打；见 theme-leader-nextday-preregistration §5.3
 _THEME_COLLECT_TIMEOUT_SECONDS = 480
 # KPL 采集子进程超时（最坏 11 调用 × (3s 间隔+请求) + 1 次退避 20s ≈ 80s，留 3 倍余量）
-_KPL_COLLECT_TIMEOUT_SECONDS = 240
+_KPL_COLLECT_TIMEOUT_SECONDS = 480  # 最坏 41 调用×(3s 间隔+RTT)+20s 退避（review 2026-11-02 Nit：240 贴限）
 # 龙头级投喂（每日 1 call/龙头，实测 13 只 13 次调用 <2s/次 + 基线/取数）：1800s 冗余
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
 _THEME_LEADER_RESULT_MARKER = "THEME_LEADER_RESULT_JSON:"   # 子进程结果行标记（机读接口，2026-11-02）
@@ -502,11 +502,13 @@ def run_theme_corpus_collect_once(today: str | None = None, *,
                                   collectors: tuple[str, ...] = ("kpl", "jiuyan")) -> dict[str, Any]:
     """题材语料采集调度入口（2026-10-23 v4 换源：事件层唯一权威源=开盘啦）。
 
-    - `kpl`：开盘啦题材事件（InfoList+新事件详情）+ 题材新闻流（Kword 标签）+ 前瞻日历
-      （`kpl_theme_collect`，日预算 `KPL_THEME_DAILY_CALL_BUDGET`，默认 20）；
+    - `kpl`：开盘啦题材事件（InfoList+新事件详情）+ 题材新闻流（Kword 标签+ZSName 板块
+      +新题正文补拉）+ 前瞻日历（`kpl_theme_collect`，日预算
+      `KPL_THEME_DAILY_CALL_BUDGET`，默认 40，2026-11-02 正文预登记 §四）；
     - `jiuyan`：韭研产业树正文刷新（`jiuyan_theme_collect`，无 KPL 对应物，保留）。
 
     时点（snapshot_collector/scheduler 挂链）：盘前 08:45 事件层（kpl）；
+    盘中 11:45 KPL 刷新（2026-11-02 用户裁决 B，午盘投喂前补盲区）；
     收盘后 16:10 kpl 刷新 + 韭研产业树正文。门控 = 开关 → 交易日；
     各采集器互相独立，任一失败只降级该采集器（§4.0 fail-visible）。advisory 步。
     """

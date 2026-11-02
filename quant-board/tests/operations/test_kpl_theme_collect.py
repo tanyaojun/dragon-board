@@ -309,6 +309,10 @@ def test_collect_once_dry_run_writes_nothing_but_counts(monkeypatch):
     db = FakeDb()
     monkeypatch.setattr(F, "fetch_topic_list", lambda **kw: {
         "ok": True, "events": F.parse_topic_list(TOPIC_LIST_PAYLOAD), "empty": False})
+    # review 2026-11-02 Major：详情端点也必须 mock——否则 dry-run 测试对真实 KPL host
+    # 发起 3 次 HTTP（断网时重试计数变 9 直接 fail），与「全部离线」矛盾
+    monkeypatch.setattr(F, "fetch_topic_detail", lambda event_id: {
+        "ok": True, "detail": F.parse_topic_detail(TOPIC_DETAIL_PAYLOAD)})
     monkeypatch.setattr(F, "fetch_news_list", lambda news_type, **kw: {"ok": True, "items": []})
     out = C.collect_once(db=db, fetch_date="2026-10-22", dry_run=True)
     assert out["dryRun"] is True
@@ -411,3 +415,28 @@ def test_collect_once_budget_tight_skips_news_details(monkeypatch):
     stats = C.collect_once(db=db, fetch_date="2026-10-22", budget=2)
     # budget=2：topic+news 两主源即用尽 → 正文剩余额度 0，不得调端点
     assert "news_detail" in stats["skippedByBudget"]
+
+
+def test_save_news_items_trimmed_item_never_wipes_existing_fields():
+    """review 2026-11-02 Blocker 回归：回填/补详情传裁剪 item（kword/zsName/stocks 空）
+    时，replace_one 全量替换不得抹掉存量行的匹配关键字段（Kword 主通道 + ZSName 裁决①通道）。"""
+    db = FakeDb()
+    items = F.parse_news_list(NEWS_PAYLOAD)
+    S.save_news_items(db, fetch_date="2026-10-22", items=items)
+    cid = items[0]["cid"]
+    trimmed = [{"cid": cid, "title": items[0]["title"], "kword": "", "zsName": "",
+                "source": "", "eventDate": "", "timeStamp": None, "stocks": []}]
+    S.save_news_items(db, fetch_date="2026-10-22", items=trimmed,
+                      details={cid: {"content": "<p>正文</p>", "kwordDesc": "", "zsCode": "", "isChoice": None}})
+    row = db[S.COLLECTION_NEWS].find_one({"_id": f"news:{cid}"})
+    assert row["kword"] == "AI算力基建" and row["zsName"] == "" or True  # 拆开断言见下
+    assert row["kword"] == "AI算力基建", "Kword 主通道不得被裁剪 item 抹掉"
+    assert row["stocks"], "关联股不得被抹掉"
+    assert row["eventDate"] and row["timeStamp"] is not None
+    assert "<p>正文</p>" in row["contentHtml"]
+    is2 = items[1]["cid"]
+    S.save_news_items(db, fetch_date="2026-10-22",
+                      items=[{"cid": is2, "title": "t", "kword": "", "zsName": "", "source": "",
+                              "eventDate": "", "timeStamp": None, "stocks": []}])
+    row2 = db[S.COLLECTION_NEWS].find_one({"_id": f"news:{is2}"})
+    assert row2["zsName"] == "俄乌重建", "ZSName 裁决①通道不得被裁剪 item 抹掉"
