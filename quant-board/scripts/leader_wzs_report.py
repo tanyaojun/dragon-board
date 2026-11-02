@@ -8,6 +8,10 @@
 - 与 sector_nodes 弱转强节点（wzs）的一致率/分歧清单
 - 数据缺口（degraded 日、日线不可考计数）
 
+数据源声明：TDX 日线**未复权**——次日溢价/窗内涨跌在除权除息日会失真
+（连板/高位股为高送转高发群体），溢价表 |pct| 异常极端（如 <−25%）大概率
+为除权失真而非真实亏幅，不伪装精确；复权口径待接入后统一重算。
+
 用法：python scripts/leader_wzs_report.py [--out docs/hotlist-jev/leader-wzs-backfill-report-YYYYMMDD.md]
 """
 from __future__ import annotations
@@ -78,7 +82,7 @@ def main() -> int:
                  else f"streak{e['streak']}")
         lines.append(f"| {d} | {e['type']} | {e['board']} | {e.get('segment') or '--'} "
                      f"| {code} | {e.get('name') or '--'} | {extra} "
-                     f"| {'--' if np_ is None else f'{np_:+.2f}'} |")
+                     f"| {'--' if np_ is None else (f'{np_:+.2f}（疑似除权失真）' if np_ <= -25 else f'{np_:+.2f}')} |")
 
     lines.append("\n## 与 sector_nodes 弱转强节点的一致率\n")
     node_by_date_board: dict[tuple[str, str], str] = {}

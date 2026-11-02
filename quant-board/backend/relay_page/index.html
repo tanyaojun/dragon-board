@@ -4566,7 +4566,10 @@ function wlRender(){
         ? (t.windowK === 0 ? '·窗位0·待开窗' : '·窗位' + t.windowK) : '';
       const wcTip = (t.windowK != null && Array.isArray(t.windowChanges) && t.windowChanges.length)
         ? '\n窗内逆势表现：' + t.windowChanges.map(w => w.date + ' ' + (w.pct == null ? '--' : (w.pct > 0 ? '+' : '') + w.pct + '%')).join('，')
-        : (t.leaderSealedToday === false ? '\n窗内逆势表现：不可考（日线缺失，fail-visible）' : '');
+        : (t.leaderSealedToday === false && t.windowK >= 1
+            ? '\n窗内逆势表现：不可考（日线缺失，fail-visible；TDX 未复权，除权日失真如实声明）'
+            : (t.leaderSealedToday === false && t.windowK === 0
+                ? '\n窗未开：今日断板（D0），反包观察自下一交易日始' : ''));
       const role = t.role === 'leader'
         ? '<span class="badge b-red" title="断板反包候选=隔日弱转强（v5 预登记：严格回溯 3 个封板日，height≥2 且断板日未跌停；收盘回封为完成态）'
           + wcTip + '">龙一' + (t.leaderSealedToday === false ? '·断板反包候选' + wkTxt : '') + '</span>'

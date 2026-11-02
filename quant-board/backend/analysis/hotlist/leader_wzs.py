@@ -10,6 +10,11 @@ THS 池确认收盘封板为唯一完成态（裁决 6）；盘中疑似态属 P
 （候选提示、今日不可反包）；k=1/2 断板后第 1/2 日（可反包，k=2 末窗）；k≥3 出池。
 候选池=3 个封板日回溯（S∈{T-3,T-2,T-1}）。
 
+数据源声明：TDX 日线为**未复权原始价**——断板日 D0 跌停判定按轨设除权哨兵
+（main <−12% / growth <−25% 的更极端跌幅判「疑似除权失真」：不剔除、不入
+limitDownExcluded，落 dataGaps 注记如实声明）；窗内逐日涨跌幅与报告次日溢价
+同样未复权，除权日失真不伪装精确。
+
 裁决锚：断板候选须真连板高度≥2（裁决 2/5，首板断板=跟风口径不入池）；断板日
 未跌停（裁决 8）；新龙只认当日分轨空间龙一（裁决 5，非龙一反封=reboundState
 "follower" 披露，不出事件）。fail-visible：原料缺失逐项披露，不伪 0 不静默。
@@ -18,8 +23,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-# 断板日跌停阈值（沿用 v12「未跌停」条件，按轨）
+# 断板日跌停阈值（沿用 v12「未跌停」条件，按轨）；除权哨兵见模块 docstring
 LIMIT_DOWN_THRESHOLD = {"main": -9.9, "growth": -19.9}
+EX_RIGHTS_SENTINEL = {"main": -12.0, "growth": -25.0}
 
 
 def _pct_from_bars(bars: dict[str, dict] | None, date: str) -> float | None:
@@ -114,11 +120,16 @@ def build_leader_wzs(
                 bars = bars_by_code.get(code6)
                 if not bars:
                     no_bars += 1
-                # 裁决 8：断板日（D0=S 次一交易日）跌停不入池（真金已崩），披露
+                # 裁决 8：断板日（D0=S 次一交易日）跌停不入池（真金已崩），披露；
+                # 未复权价除权哨兵（main<−12/growth<−25）：疑似除权失真不剔除，如实注记
                 d0 = _next_bar_day(bars, s) if bars else None
                 d0_pct = _pct_from_bars(bars, d0) if d0 else None
                 thr = LIMIT_DOWN_THRESHOLD.get(seg or "main", -9.9)
-                if isinstance(d0_pct, (int, float)) and d0_pct <= thr:
+                sent = EX_RIGHTS_SENTINEL.get(seg or "main", -12.0)
+                if isinstance(d0_pct, (int, float)) and d0_pct <= sent:
+                    gaps.append(f"{code6} {name or ''}(D0 {d0_pct:+.1f}%): "
+                                "疑似除权/停牌复牌失真，跌停判定不可考，保留观察")
+                elif isinstance(d0_pct, (int, float)) and d0_pct <= thr:
                     limit_down.append(
                         f"{code6} {name or ''}(D0 {d0_pct:+.1f}%)")
                     continue
@@ -211,8 +222,14 @@ def build_leader_wzs(
         meta["lowHeightExcluded"] = low_height
     if limit_down:
         meta["limitDownExcluded"] = limit_down
+    if (streaks_today
+            and not any(isinstance(st, int) and st - 1 >= 3
+                        for st in streaks_today.values())):
+        # 预登记 §4.3：全场无可考标杆（当日封板股中无昨日真连板≥3 者）如实注记，不伪 0
+        meta.setdefault("notes", []).append(
+            "今日无可考标杆：封板股中无昨日真连板≥3 者，benchmarkAdvance 无产出")
 
     rows = sorted(pool_by_code.values(),
-                  key=lambda r: (r["board"], -(r["windowK"] if r["windowK"]
-                                                 is not None else 9), r["code"]))
+                  key=lambda r: (r["board"], (r["windowK"] if r["windowK"]
+                                              is not None else 99), r["code"]))
     return rows, events, meta

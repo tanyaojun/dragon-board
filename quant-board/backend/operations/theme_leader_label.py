@@ -876,8 +876,10 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     rows = sorted(rows, key=lambda r: (-(r["boardN"]), str(r.get("time") or "99:99")))
     rows_full = list(rows)           # 全量推导行（对账用，不受 codes/boards 过滤影响）
     # P2-6/P0 伴生（review）：空间模式降级披露进 stdout（spaceErrors=整板块跳过、
-    # spaceTrackGaps=整轨降级、limitDownExcluded=断板跌停剔除）——不让降级静默
-    for _k in ("spaceErrors", "spaceTrackGaps", "limitDownExcluded"):
+    # spaceTrackGaps=整轨降级、limitDownExcluded=断板跌停剔除、
+    # lowHeightBrokenExcluded=首板断板跟风剔除）——不让降级静默
+    for _k in ("spaceErrors", "spaceTrackGaps", "limitDownExcluded",
+               "lowHeightBrokenExcluded"):
         if meta.get(_k):
             print(f"{date} {_k}: {meta[_k]}")
     plan_leaders_total = len(rows)   # 过滤前总数（codes/boards 过滤后 leaders 仅选中数，P2 修复防误读）

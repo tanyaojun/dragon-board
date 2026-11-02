@@ -661,7 +661,9 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
         pool_dates = trading_dates_before(db, prev_date, 3, dataset_id=dataset_id)
         rows, meta = day_leader_rows(
             db, prev_date, dataset_id,
-            prev_date=prevs[-1],
+            # review P2：prev_date 须为 prev_date 的前一交易日（prevs[-2]），传 prevs[-1]
+            # 会自指（prevPeers/prevTotal/prevStill 全部自比，事实行错误）
+            prev_date=prevs[-2] if len(prevs) >= 2 else None,
             space_mode=True, pool_dates=pool_dates)
         if rows is None:
             leader_reason = f"昨日({prev_date}) THS 池缺失，龙一不可算（fail-visible）"

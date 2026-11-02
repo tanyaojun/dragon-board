@@ -128,7 +128,7 @@ def test_leader_rebound_vs_follower():
 def test_low_height_and_limit_down_excluded():
     """裁决 5/8：height<2 不入池（披露）；断板日跌停不入池（披露）。"""
     bars = dict(_bars_window())
-    bars["2026-10-30"] = {"close": 6.5}   # 对 10-29 收 9.2 → -29.3%（主板阈值 -9.9 触发）
+    bars["2026-10-30"] = {"close": 8.19}   # 对 10-29 收 9.2 → −11.0%（主板跌停阈值 −9.9 触发，未到 −12 除权哨兵）
     rows, events, meta = _call(
         today_sealed=set(),
         streaks_by_day={
@@ -215,3 +215,63 @@ def test_broken_leader_row_window():
     r = by_code["600111"]
     assert r["isLeader"] and r["windowK"] == 0 and r["leaderSealedToday"] is False
     assert r["height"] == 3   # 断板龙一高度取最近封板日 streak 映射
+
+
+
+def test_out_of_window_via_pool_days_exclusion():
+    """k≥3 出池实质口径：pool_days 不含 S=T−4 → 该股根本不进回溯，不在行内。"""
+    base_kw = dict(
+        date=TODAY, pool_days=list(POOL_DAYS),
+        today_sealed=set(), streaks_today={},
+        pool_members={
+            "2026-10-24": {"机器人": {"600333": "旧断板"}},   # S=T−4（窗外）
+            "2026-10-28": {"机器人": {"600999": "中马"}},
+            "2026-10-29": {"机器人": {"600555": "海工"}},
+        },
+        streaks_by_day={"2026-10-28": {"600999": 2}, "2026-10-29": {"600555": 2}},
+        leader_rows=[],
+        bars_by_code={"600333": _bars_window(), "600999": _bars_window(),
+                      "600555": _bars_window()},
+        segment_fn=segment_fn)
+    rows, _e, _m = build_leader_wzs(**base_kw)
+    codes = {r["code"] for r in rows}
+    assert "600333" not in codes, "S=T−4（k≥3）必须出池"
+    assert {"600999", "600555"} <= codes
+
+
+def test_growth_limit_down_positive_exclusion():
+    """review：growth ≤−19.9% 断板日跌停剔除正例（此前只有不触发反例）。"""
+    bars = _bars({"2026-10-28": 20.0, "2026-10-29": 15.5, "2026-10-30": 15.8})
+    rows, _e, meta = _call(
+        pool_members={"2026-10-27": {"双创": {}}, "2026-10-28": {"双创": {"300222": "创断"}},
+                      "2026-10-29": {"双创": {}}},
+        streaks_by_day={"2026-10-28": {"300222": 2}},
+        bars_by_code={"300222": bars})
+    assert all(r["code"] != "300222" for r in rows)
+    assert any("300222" in x for x in meta["limitDownExcluded"])
+
+
+def test_ex_rights_sentinel_keeps_stock_with_gap_note():
+    """review P1-2：未复权 D0 极端跌幅（−50%，疑似除权）不剔除，落 dataGaps 注记。"""
+    bars = _bars({"2026-10-28": 20.0, "2026-10-29": 10.0, "2026-10-30": 10.2})
+    rows, _e, meta = _call(
+        pool_members={"2026-10-27": {"双创": {}}, "2026-10-28": {"双创": {"300333": "除权股"}},
+                      "2026-10-29": {"双创": {}}},
+        streaks_by_day={"2026-10-28": {"300333": 2}},
+        bars_by_code={"300333": bars})
+    by_code = {r["code"]: r for r in rows}
+    assert "300333" in by_code, "疑似除权失真不得当跌停剔除"
+    assert not any("300333" in x for x in meta.get("limitDownExcluded") or [])
+    assert any("300333" in g and "除权" in g for g in meta["dataGaps"])
+
+
+def test_no_benchmark_note_disclosed():
+    """review P2：当日封板股无昨日真连板≥3 → meta notes 如实注记（不伪 0）。"""
+    _r, _e, meta = _call(streaks_today={"600111": 1})
+    assert any("无可考标杆" in n for n in meta.get("notes") or [])
+
+
+def test_benchmark_note_absent_when_benchmark_exists():
+    """有昨日真连板≥3 的封板股 → 不出无标杆注记。"""
+    _r, _e, meta = _call(streaks_today={"600111": 4})   # 昨日 3 板 → 有标杆
+    assert not any("无可考标杆" in n for n in meta.get("notes") or [])

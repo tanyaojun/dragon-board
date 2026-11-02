@@ -133,10 +133,18 @@ def build_and_save_leader_wzs(db: Any, date: str,
     doc = {"_id": date, "tradingDate": date, "status": meta.get("status"),
            "poolRows": rows, "events": events, "meta": meta,
            "generatedAt": datetime.now(timezone.utc).isoformat()}
-    if not force:
-        old = db[COLLECTION].find_one({"_id": date}, {"generatedAt": 1})
-        if old:
-            doc["generatedAt"] = old.get("generatedAt")   # 重跑不改时间戳（幂等可对账）
+    old = None if force else db[COLLECTION].find_one(
+        {"_id": date}, {"generatedAt": 1, "poolRows": 1, "events": 1, "meta": 1})
+    if old:
+        # 重跑保留首次生成时间（幂等可对账）；内容变化时补 recomputedAt（review P2：
+        # 避免改了数据也对账不出「何时重算」）
+        doc["generatedAt"] = old.get("generatedAt")
+        changed = ([(r.get("code"), r.get("windowK")) for r in rows]
+                   != [(r.get("code"), r.get("windowK")) for r in old.get("poolRows") or []]
+                   or [(e.get("type"), e.get("code")) for e in events]
+                   != [(e.get("type"), e.get("code")) for e in old.get("events") or []])
+        if changed:
+            doc["recomputedAt"] = datetime.now(timezone.utc).isoformat()
     db[COLLECTION].replace_one({"_id": date}, doc, upsert=True)
     return doc
 
