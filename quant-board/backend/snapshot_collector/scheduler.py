@@ -508,9 +508,12 @@ _JIUYAN_ATTEMPTS = (
 # 题材语料采集时点（2026-10-23 v4 换源）：事件层唯一权威源=开盘啦（韭研 timeline/早报退役，
 # 重叠实测见 theme-corpus-extra-sources-survey-20261023.md §8）。
 # 盘前 08:45：开盘啦题材事件+新闻流+日历（当日炒事件池 + 前瞻）；
+# 盘中 11:45（2026-11-02 用户裁决 B）：KPL 刷新——补掉午盘投喂 12:30 的证据盲区
+#（盘中新出题材新闻如 10:41 研讨会此前要等 16:10 才进语料，午盘打标看不到）；
 # 收盘后 16:10：开盘啦刷新（当日新闻流收全）+ 韭研产业树正文（无 KPL 对应物，保留）。
 _THEME_CORPUS_ATTEMPTS = (
     (datetime.time(8, 45), "preopen", ("kpl",)),
+    (datetime.time(11, 45), "midday", ("kpl",)),
     (datetime.time(16, 10), "postclose", ("kpl", "jiuyan")),
 )
 
@@ -594,6 +597,7 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                                     json.dumps(result, ensure_ascii=False, default=str)[:200])
                         break
                 # 题材/事件语料（L3，2026-10-20）：盘前 08:45 取当日+未来事件日历，
+                # 盘中 11:45 KPL 刷新（2026-11-02 用户裁决 B，午盘投喂 12:30 前补盲区），
                 # 收盘后 16:10 刷新板块催化正文。失败只记状态，不影响异动采集与打标。
                 if jiuyan_theme_collect_enabled():
                     for theme_time, theme_kind, theme_collectors in _THEME_CORPUS_ATTEMPTS:
