@@ -1162,7 +1162,11 @@ def main() -> None:
               boards={b.strip() for b in args.boards.split(",") if b.strip()} if args.boards else None,
               codes={c.strip() for c in args.codes.split(",") if c.strip()} if args.codes else None)
     if not args.dry_run:
-        print(json.dumps(out, ensure_ascii=False, indent=1))
+        # 结果行加唯一标记（2026-11-02 修复）：stdout 前部有降级披露行（P2-6，含 Python
+        # dict 单引号文本，如 `limitDownExcluded: {'其他': ...}`）——调度侧旧的「首个 {
+        # 截取」会截到披露行 → JSON 解析失败 → 结局回填（settle）被整体跳过
+        # （10-29/10-30 两日结局漏回填的根因）。标记行=调度侧唯一机读接口。
+        print("THEME_LEADER_RESULT_JSON:" + json.dumps(out, ensure_ascii=False))
 
 
 if __name__ == "__main__":

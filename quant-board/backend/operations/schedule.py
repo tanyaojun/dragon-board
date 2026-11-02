@@ -33,6 +33,7 @@ _THEME_COLLECT_TIMEOUT_SECONDS = 480
 _KPL_COLLECT_TIMEOUT_SECONDS = 240
 # 龙头级投喂（每日 1 call/龙头，实测 13 只 13 次调用 <2s/次 + 基线/取数）：1800s 冗余
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
+_THEME_LEADER_RESULT_MARKER = "THEME_LEADER_RESULT_JSON:"   # 子进程结果行标记（机读接口，2026-11-02）
 _THEME_LEADER_SETTLE_TIMEOUT_SECONDS = 300   # 结局回填：纯读库+写字段
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
@@ -397,11 +398,27 @@ def run_theme_leader_label_once(today: str | None = None, *,
         return {"ok": False, "date": today,
                 "error": {"code": "theme_leader_failed",
                           "message": (proc.stderr or proc.stdout or "")[-400:]}}
-    try:
-        result = json.loads(proc.stdout[proc.stdout.index("{"):])
-    except (ValueError, json.JSONDecodeError) as exc:
+    # 结果 JSON 提取（2026-11-02 修复）：子进程以 `THEME_LEADER_RESULT_JSON:` 标记行
+    # 输出结果（单行）；旧逻辑「首个 { 截取」会被 stdout 前部的降级披露行（P2-6，
+    # 含 Python dict 单引号文本）截中 → parse_failed → 结局回填被整体跳过
+    # （10-29/10-30 两日结局漏回填的根因）。兼容回退：从后往前找首行可解析 dict。
+    result = None
+    parse_error = "result JSON line not found in stdout"
+    for line in reversed((proc.stdout or "").splitlines()):
+        cand = line.strip()
+        if cand.startswith(_THEME_LEADER_RESULT_MARKER):
+            cand = cand[len(_THEME_LEADER_RESULT_MARKER):].strip()
+        if not cand.startswith("{"):
+            continue
+        try:
+            result = json.loads(cand)
+            break
+        except json.JSONDecodeError as exc:
+            parse_error = str(exc)
+            continue
+    if result is None:
         return {"ok": False, "date": today,
-                "error": {"code": "theme_leader_parse_failed", "message": str(exc)}}
+                "error": {"code": "theme_leader_parse_failed", "message": parse_error}}
     out: dict[str, Any] = {"ok": bool(result.get("ok")), "date": today,
                            "leaders": result.get("leaders"), "labeled": result.get("labeled"),
                            "degraded": result.get("degraded"), "tokensUsed": result.get("tokensUsed"),
