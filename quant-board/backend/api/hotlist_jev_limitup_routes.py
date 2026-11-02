@@ -342,7 +342,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
             for cd in db["hotlist_jev_theme_cycle"].find(
                     {"tradingDate": {"$in": cd_dates}},
                     {"tradingDate": 1, "board": 1, "segment": 1, "state": 1,
-                     "stateCn": 1, "migrated": 1, "transition": 1}):
+                     "stateCn": 1, "migrated": 1, "transition": 1,
+                     "terminatedOn": 1}):
                 cycle_map[(str(cd.get("tradingDate")), str(cd.get("board")),
                            str(cd.get("segment") or "main"))] = cd
             for wd in db["hotlist_jev_leader_wzs"].find(
@@ -361,6 +362,7 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 r["cycleStateCn"] = cd.get("stateCn")
                 r["cycleMigrated"] = cd.get("migrated")
                 r["cycleTrigger"] = ((cd.get("transition") or {}) or {}).get("trigger")
+                r["cycleTerminatedOn"] = cd.get("terminatedOn")
             r["leaderRebound"] = ((key[0], key[1], key[2], str(r.get("code")))
                                   in rebound_map) or None
         # 单一龙头对账（2026-10-24）：退位行（推导已不再指向的旧任龙头）默认不出——

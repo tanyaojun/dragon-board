@@ -183,3 +183,83 @@ def test_replay_first_seen_node_state_and_absent_boards():
     assert out[1]["rows"] == []
     assert out[2]["rows"][0]["prev"] == "mainrise"       # 从记忆态迁移
     assert out[2]["rows"][0]["state"] == "weakening"
+
+
+# ---------- 操作层：终态吸收的续跑语义（Q3:A + 2026-11-02 展示清理裁决） ----------
+
+class _FakeCol:
+    def __init__(self):
+        self.docs = {}
+
+    def find(self, query, projection=None):
+        td = query.get("tradingDate")
+        rows = [d for d in self.docs.values()
+                if td is None or d.get("tradingDate") == td]
+        return list(rows)
+
+    def replace_one(self, q, doc, upsert=False):
+        self.docs[doc["_id"]] = doc
+
+
+class _FakeDb:
+    def __init__(self):
+        self._cols = {}
+
+    def __getitem__(self, name):
+        return self._cols.setdefault(name, _FakeCol())
+
+
+def test_ops_resume_from_terminal_no_window_and_terminated_on(monkeypatch):
+    """终态续跑：不恢复窗（窗满判定失效）+ terminatedOn 沿用——终结后
+    板块新行情不回溯改判（重启判据已并入 P3 立项）。"""
+    import backend.operations.theme_cycle as ops
+
+    db = _FakeDb()
+    col = db[ops.COLLECTION]
+    col.docs["2026-11-01:大消费:main"] = {
+        "_id": "2026-11-01:大消费:main", "tradingDate": "2026-11-01",
+        "board": "大消费", "segment": "main", "state": "terminal",
+        "windowOpenedOn": None, "terminatedOn": "2026-06-16"}
+
+    monkeypatch.setattr(ops, "trading_dates_before",
+                        lambda db_, date, n, ds: ["2026-11-01"])
+    # 当日节点回暖+龙一晋级：若非吸收态会迁主升，吸收态必须停留 terminal
+    monkeypatch.setattr(ops, "collect_day_inputs", lambda *a, **k: {
+        "date": "2026-11-02", "nodes": {"大消费": "brewing"},
+        "events": [], "pool_boards": set(), "reconcile_gaps": [],
+        "leaders": [{"board": "大消费", "segment": "main", "code": "001219",
+                     "leaderSealedToday": True, "streak": 6,
+                     "gain10NewHigh": True}]})
+    summary = ops.build_and_save_theme_cycle(db, ["2026-11-02"])
+    doc = col.docs["2026-11-02:大消费:main"]
+    assert summary["rows"] == 1
+    assert doc["state"] == "terminal"            # Q3:A 吸收
+    assert doc["terminatedOn"] == "2026-06-16"   # 终结日落痕沿用
+    assert doc["windowOpenedOn"] is None         # 终态不恢复窗
+
+
+def test_ops_terminal_transition_records_day_and_clears_window(monkeypatch):
+    """终结发生日：落 terminatedOn=当日，windowOpenedOn 清空。"""
+    import backend.operations.theme_cycle as ops
+
+    db = _FakeDb()
+    col = db[ops.COLLECTION]
+    col.docs["2026-11-01:某板块:main"] = {
+        "_id": "2026-11-01:某板块:main", "tradingDate": "2026-11-01",
+        "board": "某板块", "segment": "main", "state": "weakening",
+        "windowOpenedOn": "2026-10-28", "terminatedOn": None}
+
+    def _dates(db_, date, n, ds):
+        return ["2026-10-30", "2026-11-01"][-n:]
+
+    monkeypatch.setattr(ops, "trading_dates_before", _dates)
+    monkeypatch.setattr(ops, "collect_day_inputs", lambda *a, **k: {
+        "date": "2026-11-02", "nodes": {"某板块": "ice"},
+        "events": [], "pool_boards": set(), "reconcile_gaps": [],
+        "leaders": []})
+    ops.build_and_save_theme_cycle(db, ["2026-11-02"])
+    doc = col.docs["2026-11-02:某板块:main"]
+    assert doc["state"] == "terminal"
+    assert doc["transition"]["trigger"] == "window_full_ice"
+    assert doc["terminatedOn"] == "2026-11-02"
+    assert doc["windowOpenedOn"] is None

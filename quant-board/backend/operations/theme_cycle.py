@@ -155,7 +155,8 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
         prev_dates = trading_dates_before(db, dates[0], 1, dataset_id)
         if prev_dates:
             for d in db[COLLECTION].find({"tradingDate": prev_dates[0]},
-                                         {"board": 1, "segment": 1, "state": 1}):
+                                         {"board": 1, "segment": 1, "state": 1,
+                                          "windowOpenedOn": 1, "terminatedOn": 1}):
                 pre_states[(str(d["board"]), str(d.get("segment") or "main"))] = d
 
     inputs = [collect_day_inputs(db, d, dataset_id) for d in dates]
@@ -163,10 +164,15 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
     summary = {"dates": len(dates), "rows": 0, "migrated": 0, "gaps": []}
     states: dict[tuple[str, str], str] = {k: v["state"]
                                           for k, v in pre_states.items()}
-    # 续跑恢复窗态：开窗日随文档落痕（windowOpenedOn），无则视为无窗
+    # 续跑恢复窗态：开窗日随文档落痕（windowOpenedOn），无则视为无窗；
+    # 终态（Q3:A 吸收）不恢复窗——终结后窗已失效，续跑不再参与窗满判定
+    #（否则 terminal 行 evidence.windowFull 恒 True 误导展示）；同时沿用 terminatedOn
     windows: dict[tuple[str, str], Any] = {
         k: v["windowOpenedOn"] for k, v in pre_states.items()
-        if v.get("windowOpenedOn")}
+        if v.get("windowOpenedOn") and v.get("state") != "terminal"}
+    terminated: dict[tuple[str, str], str] = {
+        k: v["terminatedOn"] for k, v in pre_states.items()
+        if v.get("terminatedOn")}
     for day, inp in zip(dates, inputs):
         if inp is None:
             summary["gaps"].append(f"{day}: 原料不可得（异常）")
@@ -206,6 +212,10 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
                     windows[key] = day    # 断板开窗（含已在转弱态的再断板）
                 if new_state in ("wzs", "mainrise"):
                     windows.pop(key, None)
+                # Q3:A 吸收态：终结后窗失效（不再参与窗满判定）；终结日随行落痕，
+                # 供前端标注「上轮周期」时效语义（重启判据已并入 P3 立项）
+                if new_state == "terminal" and transition is not None:
+                    terminated[key] = day
                 states[key] = new_state
                 doc = {"_id": f"{day}:{board}:{segment}",
                        "tradingDate": day, "board": board, "segment": segment,
@@ -221,7 +231,9 @@ def build_and_save_theme_cycle(db: Any, dates: list[str],
                                     "gain10NewHigh": bool(ld and ld.get("gain10NewHigh")) or None,
                                     "inPool": in_pool or None,
                                     "windowFull": window_full or None},
-                       "windowOpenedOn": windows.get(key),
+                       "windowOpenedOn": windows.get(key)
+                           if new_state != "terminal" else None,
+                       "terminatedOn": terminated.get(key),
                        "cycleReconcileGaps": inp["reconcile_gaps"] or None,
                        "generatedAt": datetime.now(timezone.utc).isoformat()}
                 db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)

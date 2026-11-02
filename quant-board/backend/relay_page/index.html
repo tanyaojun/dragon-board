@@ -2831,12 +2831,20 @@ function tlAuditBadge(r){
 }
 function tlCycleBadge(r){
   // P2 周期状态列：状态机当态 + 新龙反包标记（Q9:A 只标 leaderRebound）；
-  // 状态机未覆盖（cycle 未回填）如实 '-',不伪态；jev 深度三层（左邻列）并列不仲裁
+  // 状态机未覆盖（cycle 未回填）如实 '-',不伪态；jev 深度三层（左邻列）并列不仲裁；
+  // 终结态标「上轮周期」时效语义（2026-11-02 用户裁决：重启判据并入 P3 立项，
+  // Q3:A 吸收态维持，终结后新行情不回溯改判）
   if (!r.cycleState) return '<span style="color:var(--muted2)">-</span>';
-  const tip = '周期状态机（P2，结构事实：节点序列+事件流）'
-    + (r.cycleMigrated ? '；今日迁移' : '')
-    + (r.cycleTrigger ? '（触发：' + esc(r.cycleTrigger) + '）' : '')
-    + '；' + (TL_CYCLE_TIP[r.cycleState] || '');
+  let tip = '周期状态机（P2，结构事实：节点序列+事件流）';
+  if (r.cycleState === 'terminal'){
+    tip = '上一轮周期终态（终结于 ' + esc(String(r.cycleTerminatedOn || '?'))
+      + '，窗满+冰点；此后板块新行情属新一轮周期，本期状态机不回溯重启'
+      + '——重启判据已并入 P3 立项）';
+  } else {
+    tip += (r.cycleMigrated ? '；今日迁移' : '')
+      + (r.cycleTrigger ? '（触发：' + esc(r.cycleTrigger) + '）' : '')
+      + '；' + (TL_CYCLE_TIP[r.cycleState] || '');
+  }
   const cls = TL_CYCLE_BADGE[r.cycleState] || 'b-gray';
   const st = '<span class="badge ' + cls + '" title="' + esc(tip) + '">'
     + esc(TL_CYCLE_CN[r.cycleState] || r.cycleState) + '</span>';
