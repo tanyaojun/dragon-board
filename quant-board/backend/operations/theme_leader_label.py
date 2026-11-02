@@ -513,13 +513,13 @@ def leaders_for(db: Any, date: str,
     2026-10-27 空间龙一规则（用户裁决，预登记 §21.6）：space_mode=True，排序=
     10日涨幅→连板高度→首封；基线/历史窗口仍走默认 streak 口径（样本人群不随规则
     换代漂移）。
-    2026-11-01 用户裁决（龙头弱转强口径收紧，同步盯盘清单）：断板反包候选=隔日
-    弱转强，候选池只并入 P-1 一日封板池（昨日封板、今日断板），不再用近 3 日池——
-    更早断板股的反包观察窗已过，跨期滞留会误标（10-30 襄阳轴承实证：10-29 断板、
-    10-30 已失败仍入下期清单）；断板候选另须真连板高度≥2（首板断板=跟风/板块
-    统计口径，见 day_leader_rows 过滤与 lowHeightBrokenExcluded 披露）。
+    2026-11-01 用户裁决：早间 T+1 收紧由 v5 预登记裁决 4 取代——候选池严格回溯
+    3 个封板日（窗位 k=T−S−1，k∈{0,1,2}，k≥3 出池），与盯盘清单同窗（单一事实
+    源，龙一是同一批事实行）；height≥2 与未跌停条件保留（day_leader_rows 内过
+    滤）。断板反包候选=隔日弱转强的实质根因修复（首板混入/徽标措辞/窗外滞留）
+    均不受影响。
     """
-    prev_dates = trading_dates_before(db, date, 1, dataset_id)
+    prev_dates = trading_dates_before(db, date, 3, dataset_id)
     return day_leader_rows(db, date, dataset_id,
                            prev_date=prev_dates[-1] if prev_dates else None,
                            space_mode=True, pool_dates=prev_dates)

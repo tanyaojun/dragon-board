@@ -4560,8 +4560,16 @@ function wlRender(){
       + `　<span style="color:var(--muted2)" title="成员级量比中位（V4-E 帧读数，仅观察）">量能 ${g.volRatioMedian == null ? '--' : g.volRatioMedian.toFixed(2) + (g.volRatioMedian >= 1.0 ? ' 放量' : ' 缩量')}</span>`
       + `</td></tr>`;
     const tks = (g.tickets || []).map(t => {
+      // v5 预登记 P1：断板龙一带窗位（严格 3 日回溯 k=T−S−1；k=0 今日断板候选提示，
+      // k=1/2 可反包末窗 k=2），窗内逐日涨跌幅入 tooltip（逆势表现，缺日如实缺失）
+      const wkTxt = t.leaderSealedToday === false && t.windowK != null
+        ? (t.windowK === 0 ? '·窗位0·待开窗' : '·窗位' + t.windowK) : '';
+      const wcTip = (t.windowK != null && Array.isArray(t.windowChanges) && t.windowChanges.length)
+        ? '\n窗内逆势表现：' + t.windowChanges.map(w => w.date + ' ' + (w.pct == null ? '--' : (w.pct > 0 ? '+' : '') + w.pct + '%')).join('，')
+        : (t.leaderSealedToday === false ? '\n窗内逆势表现：不可考（日线缺失，fail-visible）' : '');
       const role = t.role === 'leader'
-        ? '<span class="badge b-red">龙一' + (t.leaderSealedToday === false ? '·断板反包候选' : '') + '</span>'
+        ? '<span class="badge b-red" title="断板反包候选=隔日弱转强（v5 预登记：严格回溯 3 个封板日，height≥2 且断板日未跌停；收盘回封为完成态）'
+          + wcTip + '">龙一' + (t.leaderSealedToday === false ? '·断板反包候选' + wkTxt : '') + '</span>'
         : '<span class="badge b-gray">核心</span>';
       const streak = t.streak != null ? (t.streak + '板') : '--';
       const seg = t.segment === 'growth' ? '双创' : t.segment === 'main' ? '主板' : '--';

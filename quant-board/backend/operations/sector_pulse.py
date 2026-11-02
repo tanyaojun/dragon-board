@@ -44,6 +44,7 @@ from backend.operations.jev_label_jiuyan import (
     trading_dates_before,
 )
 from backend.operations.theme_leader_baseline import day_leader_rows
+from backend.operations.leader_wzs import window_changes_for
 
 PULSE_VERSION = "2026-11-02a"   # v4f: 核心票翻红率（昨日连板≥2 子集）+ 成交额量级分位
 COLLECTION_PULSE = "hotlist_jev_sector_pulse"
@@ -602,8 +603,13 @@ def _jiuyan_name_map(db: Any, dates: list[str | None]) -> dict[str, str]:
 
 def _watch_ticket(code: str, name: str | None, role: str, *, streak=None,
                   segment=None, gain10=None, leader_sealed=None,
-                  quotes_map: dict | None = None) -> dict[str, Any]:
-    """票行：实时 pct/red 由 TDX 报价现算；报价不可考 → 全 None（fail-visible）。"""
+                  quotes_map: dict | None = None,
+                  window_k: int | None = None,
+                  window_changes: list[dict] | None = None) -> dict[str, Any]:
+    """票行：实时 pct/red 由 TDX 报价现算；报价不可考 → 全 None（fail-visible）。
+
+    v5 预登记 P1：断板龙一带窗位 k（严格 3 日回溯）与窗内逐日涨跌幅
+    （逆势表现，缺日如实缺失）。"""
     c6 = _code6(code)
     price = last_close = pct = None
     red: bool | None = None
@@ -616,6 +622,7 @@ def _watch_ticket(code: str, name: str | None, role: str, *, streak=None,
     return {"code": c6, "name": name, "role": role, "streak": streak,
             "segment": segment, "gain10": gain10,
             "leaderSealedToday": leader_sealed,
+            "windowK": window_k, "windowChanges": window_changes,
             "price": price, "lastClose": last_close, "pct": pct, "red": red}
 
 
@@ -626,9 +633,10 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                   | None = None) -> dict[str, Any]:
     """V4-G 盯盘票清单读口（提示层，不进判据；预登记 v4f 文档 §六）。
 
-    板块=当日弱转强候选（pulse candidates，Q2a）；票=①昨日空间龙一（space_mode
-    含断板反包候选、segment 分轨，Q4a；候选窗=P-1 一日封板池严格隔日弱转强，
-    断板候选须真连板高度≥2）②昨日连板≥2 的 N10 冻结成员（缺口 3 核心票子集展开，Q1a）。方法论：炒作中预纳入自选，盘中看强势股集体翻红博弈
+    板块=当日弱转强候选（pulse candidates，Q2a）；票=①观察窗内分轨空间龙一
+    （space_mode 含断板反包候选、segment 分轨，Q4a；候选窗=v5 预登记裁决 4：
+    严格回溯 3 个封板日，窗位 k=T−S−1 随行披露，断板候选须真连板高度≥2、
+    断板日未跌停）②昨日连板≥2 的 N10 冻结成员（缺口 3 核心票子集展开，Q1a）。方法论：炒作中预纳入自选，盘中看强势股集体翻红博弈
     收盘涨停数增多（第 5 课）。fail-visible：候选空/龙一基线缺失/报价不可考逐层
     如实透出，不伪 0 不静默。
     """
@@ -646,14 +654,14 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
     leader_rows: list[dict] = []
     leader_errors: list[dict[str, Any]] = []   # space 模式板块级缺料披露（review 2026-11-01）
     if prev_date:
-        # 断板反包候选=隔日弱转强：候选池只取 P-1 一日封板池（昨日封板、今日断板），
-        # 不沿用判定链的近 3 日池——3 日窗会让更早断板、反包观察窗已失败的股跨期滞留候选
-        # （2026-11-01 用户报障：襄阳轴承 10-29 断板、10-30 -3.57% 未触即反包窗已败，
-        #   却经 10-27/28 池进入下期清单仍标断板反包候选）
-        pool_dates = trading_dates_before(db, prev_date, 1, dataset_id=dataset_id)
+        # v5 预登记裁决 4（2026-11-01）：盯盘池同步 3 日窗（严格回溯 3 个封板日），
+        # 窗位 k=T−S−1 随行披露（k=0 今日断板候选提示；k=1/2 可反包末窗 k=2）；
+        # 早间 T+1 收紧裁决被取代——实质根因修复均保留：height≥2 过滤、徽标措辞、
+        # 窗外股不再滞留（k≥3 出池）。day_leader_rows 内部仍做 height≥2/未跌停过滤
+        pool_dates = trading_dates_before(db, prev_date, 3, dataset_id=dataset_id)
         rows, meta = day_leader_rows(
             db, prev_date, dataset_id,
-            prev_date=pool_dates[-1] if pool_dates else None,
+            prev_date=prevs[-1],
             space_mode=True, pool_dates=pool_dates)
         if rows is None:
             leader_reason = f"昨日({prev_date}) THS 池缺失，龙一不可算（fail-visible）"
@@ -688,11 +696,19 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
             if c6 in seen:
                 continue
             seen.add(c6)
+            # 窗位（v5 预登记裁决 4）：pool_dates 升序 [P-3,P-2,P-1]，
+            # k=(len-1)-index；k=0 今日断板候选提示，k=1/2 可反包（k=2 末窗）
+            wk: int | None = None
+            wchg: list[dict] | None = None
+            pd_ = lr.get("poolDay")
+            if not lr.get("leaderSealedToday") and pd_ in (pool_dates or []):
+                wk = (len(pool_dates) - 1) - pool_dates.index(pd_)
+                wchg = window_changes_for(c6, pd_, prev_date)
             tickets.append(_watch_ticket(
                 lr.get("code"), lr.get("name") or name_by_code.get(c6), "leader",
                 streak=lr.get("streak"), segment=lr.get("segment"),
                 gain10=lr.get("gain10"), leader_sealed=lr.get("leaderSealedToday"),
-                quotes_map=quotes_map))
+                quotes_map=quotes_map, window_k=wk, window_changes=wchg))
         for c in e.get("strongCodes") or []:
             c6 = _code6(c)
             if c6 in seen:

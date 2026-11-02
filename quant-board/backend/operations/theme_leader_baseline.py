@@ -154,7 +154,10 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                     if pcode in p_sealed and pcode not in have:
                         pool_prev[bname].append({"code": pcode, "name": st.get("name"),
                                                  "time": None, "streak": None,
-                                                 "histStreak": p_streaks.get(pcode)})
+                                                 "histStreak": p_streaks.get(pcode),
+                                                 # v5 预登记 P1（题材周期·龙头弱转强）：最近封板日透出，
+                                                 # 消费侧据此算窗位 k=T−S−1（严格 3 日回溯口径）
+                                                 "poolDay": pd})
                         have.add(pcode)
 
     rows: list[dict] = []
@@ -292,6 +295,8 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 # 2026-10-27 空间龙一规则：10 日涨幅（排序依据）+ 未封板标记（断板反包候选）
                 "gain10": (leader.get("gain10") if space_mode else None),
                 "leaderSealedToday": sealed_today,
+                # v5 预登记 P1：断板龙一最近封板日（窗位由消费侧算）；续板/默认口径为 None
+                "poolDay": (leader.get("poolDay") if space_mode else None),
             })
     if space_mode:
         meta["leaderMode"] = "space"
