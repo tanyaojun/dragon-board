@@ -68,11 +68,10 @@ class SnapshotCollectorScheduler:
         # timer can skip already-persisted slots without a round-trip to Mongo.
         self._completed_today: set[str] = set()
         self._completed_date: str | None = None
-        # 韭研公社异动支线（交易日 12:05 midday / 15:35 final，每日各 ≤1 次）
-        # + 午盘投喂（12:30，2026-10-20 用户裁决：午盘名单投喂 jev，收盘链幂等跳过）
+        # 韭研公社异动支线（交易日 12:05 midday / 15:35 final，每日各 ≤1 次；
+        # 2026-11-03 用户裁决：午盘只采名单，不投喂不打标，盘后链全量投喂）
         self._jiuyan_task: asyncio.Task[None] | None = None
         self._jiuyan_last: dict[str, Any] | None = None
-        self._jiuyan_label_last: dict[str, Any] | None = None
         self._jiuyan_theme_last: dict[str, Any] | None = None
         # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时：龙虎榜榜约 17:00 盘后生成，
         # 晚于旧 16:20 挂链；每日 ≈29k tokens 包络，幂等）
@@ -146,7 +145,6 @@ class SnapshotCollectorScheduler:
             "error_count": self._error_count,
             "in_flight_slots": sorted(self._in_flight_slots),
             "jiuyan": self._jiuyan_last,
-            "jiuyanLabel": self._jiuyan_label_last,
             "jiuyanTheme": self._jiuyan_theme_last,
             "themeLeader": self._theme_leader_last,
         }
@@ -508,8 +506,8 @@ _JIUYAN_ATTEMPTS = (
 # 题材语料采集时点（2026-10-23 v4 换源）：事件层唯一权威源=开盘啦（韭研 timeline/早报退役，
 # 重叠实测见 theme-corpus-extra-sources-survey-20261023.md §8）。
 # 盘前 08:45：开盘啦题材事件+新闻流+日历（当日炒事件池 + 前瞻）；
-# 盘中 11:45（2026-11-02 用户裁决 B）：KPL 刷新——补掉午盘投喂 12:30 的证据盲区
-#（盘中新出题材新闻如 10:41 研讨会此前要等 16:10 才进语料，午盘打标看不到）；
+# 盘中 11:45（2026-11-02 用户裁决 B）：KPL 刷新——当日新闻流尽早进语料
+#（盘中新出题材新闻如 10:41 研讨会此前要等 16:10 才进语料）；
 # 收盘后 16:10：开盘啦刷新（当日新闻流收全）+ 韭研产业树正文（无 KPL 对应物，保留）。
 _THEME_CORPUS_ATTEMPTS = (
     (datetime.time(8, 45), "preopen", ("kpl",)),
@@ -517,10 +515,7 @@ _THEME_CORPUS_ATTEMPTS = (
     (datetime.time(16, 10), "postclose", ("kpl", "jiuyan")),
 )
 
-# 午盘投喂时点（2026-10-20 用户裁决）：12:05 午盘名单落库后隔 25 分钟再喂 jev
-# （名单覆盖稳定 + 避免与采集抢网络）；16:00 收盘链对已投喂个股幂等跳过。
-_JIUYAN_MIDDAY_LABEL_AT = datetime.time(12, 30)
-
+# 午盘投喂已于 2026-11-03 用户裁决移除：午盘只采名单不投喂不打标，盘后链全量投喂。
 # 题材层龙头投喂时点（2026-10-20 用户裁决「每日自动投喂、累积到 20 交易日」；
 # **2026-10-30 用户裁决改 17:30**：龙虎榜榜约 17:00 盘后生成，17:30 挂链使当日龙虎榜
 # 事实行（AMMO 2026-10-30a lhb_line）当日可得；仍晚于 16:10 题材语料刷新 + 15:35 收盘名单；
@@ -551,13 +546,6 @@ def jiuyan_theme_collect_enabled() -> bool:
     return os.environ.get("JIUYAN_THEME_COLLECT_ENABLED", "1") != "0"
 
 
-def jiuyan_midday_label_enabled() -> bool:
-    """午盘投喂开关（2026-10-20 用户裁决挂链；默认开，`JIUYAN_MIDDAY_LABEL_ENABLED=0` 关闭）。"""
-    import os
-
-    return os.environ.get("JIUYAN_MIDDAY_LABEL_ENABLED", "1") != "0"
-
-
 async def run_jiuyan_attempt(date: str, kind: str) -> dict:
     from backend.operations.jiuyan_collect import collect_and_store
 
@@ -568,8 +556,8 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
     """交易日 12:05 采 midday、15:35 采 final（每日各 ≤1 次）；authFailed 自愈重试一次
     （清缓存重新解析，可触发浏览器铸造/登录，见 jiuyan_auth），仍失败如实记状态。
 
-    12:30 追加「午盘投喂」一步（2026-10-20 用户裁决）：调 `run_jiuyan_midday_label_once`
-    把午盘涨停名单喂给 jev 打标；午盘已投喂的个股在 16:00 收盘链幂等跳过（单日每股一次）。
+    2026-11-03 用户裁决：午盘只采名单（落 `jiuyan_action` 供盘中读口），不投喂不打标；
+    投喂打标统一在 16:00 盘后链 `jiuyanLabel` 步全量执行（单日每股一次幂等保留）。
 
     与主采集循环互不阻塞（collect 走 asyncio.to_thread）。60s 轮询足够（时点粒度=分钟）。
     """
@@ -597,7 +585,7 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                                     json.dumps(result, ensure_ascii=False, default=str)[:200])
                         break
                 # 题材/事件语料（L3，2026-10-20）：盘前 08:45 取当日+未来事件日历，
-                # 盘中 11:45 KPL 刷新（2026-11-02 用户裁决 B，午盘投喂 12:30 前补盲区），
+                # 盘中 11:45 KPL 刷新（2026-11-02 用户裁决 B：当日新闻流尽早进语料），
                 # 收盘后 16:10 刷新板块催化正文。失败只记状态，不影响异动采集与打标。
                 if jiuyan_theme_collect_enabled():
                     for theme_time, theme_kind, theme_collectors in _THEME_CORPUS_ATTEMPTS:
@@ -616,8 +604,6 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                                         json.dumps(theme_result, ensure_ascii=False,
                                                    default=str)[:200])
                             break
-                # 午盘投喂（2026-10-20 用户裁决）：12:30 用当日午盘名单喂 jev；
-                # 子进程内部再卡一次「午盘名单 fetchedAt 窗口」，重启补跑时不会拿收盘数据冒充午盘
                 # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时）：独立集合/独立题集代际。
                 # **限次退避重试**：失败（通道/取数/子进程）不一次判死——否则 8001 重启撞上
                 # 通道短暂不可用就会让那一天永远补不上（2026-10-20 实测：代理挂 → 9/9 degraded）。
@@ -651,16 +637,6 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                             logger.info("theme leader label %s: %s", trading_date,
                                         json.dumps(leader_result, ensure_ascii=False,
                                                    default=str)[:200])
-                if ("midday_label" not in state["done"] and jiuyan_midday_label_enabled()
-                        and now.time() >= _JIUYAN_MIDDAY_LABEL_AT):
-                    state["done"].add("midday_label")
-                    from backend.operations.schedule import run_jiuyan_midday_label_once
-                    label_result = await asyncio.to_thread(
-                        run_jiuyan_midday_label_once, trading_date)
-                    sched._jiuyan_label_last = {**label_result,
-                                                "at": now.isoformat(timespec="seconds")}
-                    logger.info("jiuyan midday label %s: %s", trading_date,
-                                json.dumps(label_result, ensure_ascii=False, default=str)[:200])
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             raise

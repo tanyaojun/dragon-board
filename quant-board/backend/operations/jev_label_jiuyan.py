@@ -10,7 +10,7 @@
 用法（Git Bash，JEV_CF_TOKEN 取自 .env.local）：
   ./.venv/Scripts/python.exe -m backend.operations.jev_label_jiuyan \
       --start 2026-09-04 --end 2026-09-29 [--dry-run] [--workers 2]
-  # 午盘槽位（12:30 调度投喂午盘名单，收盘链幂等跳过）：
+  # 午盘槽位（手动/回填用；12:30 调度投喂已于 2026-11-03 用户裁决移除，盘后链 final 全量投喂）：
   ./.venv/Scripts/python.exe -m backend.operations.jev_label_jiuyan \
       --start 2026-10-20 --end 2026-10-20 --slot midday --confirm-budget
 """
@@ -1949,7 +1949,7 @@ def board_position(jiuyan_doc, code: str, db=None, date: str | None = None,
             f'该股板块内 {pos}')
 
 
-# ── 投喂槽位（2026-10-20 用户裁决：12:30 午盘投喂 + 16:00 收盘幂等跳过） ──────────
+# ── 投喂槽位（2026-11-03 裁决：12:30 调度投喂已移除，盘后链 final 全量投喂；槽位保留供手动/回填） ──────────
 # 单日每股只投喂一次：两个槽位共用 `_id={date}:{code}` 与同一 `done` 判据（status=ok），
 # 午盘已投喂的股票在收盘链自动跳过（幂等），不靠额外状态表。
 SLOT_FINAL = "final"
@@ -1966,7 +1966,7 @@ def midday_source_state(db, date: str) -> dict:
 
     实测缺陷（2026-10-14/10-16/10-19）：采集进程若在收盘后才启动，当日「午盘尝试」会用
     **收盘数据**补写 `midday` 文档（fetchedAt=15:20/20:04/20:23，名单与 final 逐字相同）。
-    拿这种文档做「12:30 午盘投喂」等于把收盘数据冒充午盘证据，因此按 fetchedAt 窗口判定：
+    拿这种文档做午盘口径（盘中读口兑底/手动回填）等于把收盘数据冒充午盘证据，因此按 fetchedAt 窗口判定：
     窗口外一律 fail-visible 拒绝（交收盘链投喂），不靠「文档存在」冒充时点。
     """
     doc = db["jiuyan_action"].find_one({"_id": f"{date}:{SLOT_MIDDAY}"}, {"fetchedAt": 1})
@@ -1989,7 +1989,8 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
                            dataset_id: str = DEFAULT_DATASET_ID,
                            jiuyan_doc: dict | None = None,
                            expound_trace: bool = True) -> str:
-    """午盘投喂弹药（12:30 槽位）：只写午盘确实拿得到的证据，缺的明确标注不可得。
+    """午盘口径弹药（midday 槽位，手动/回填；12:30 调度投喂已于 2026-11-03 移除）：
+    只写午盘确实拿得到的证据，缺的明确标注不可得。
 
     午盘（11:30-13:00）与收盘的可得证据差：
     - 盘面事实行（market_facts_line/market_metrics）依赖 15:00 帧 → 午盘不存在；
@@ -2078,8 +2079,8 @@ def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, ran
     批次C I10（顺手）：jiuyan_doc 由调用方传入（day_population 已读过同一文档），
     缺省时兼容旧路径自行读取——消除每股一次整日文档的 N+1 查询。
 
-    2026-10-20（用户裁决「12:30 午盘投喂 + 收盘幂等跳过」）：`slot=midday` 分流到
-    `build_midday_narrative`。
+    2026-10-20 裁决引入 midday 槽位分流；2026-11-03 裁决移除 12:30 调度投喂（盘后链
+    final 全量投喂），midday 槽位仅存手动/回填：`slot=midday` 分流到 `build_midday_narrative`。
     """
     if slot == SLOT_MIDDAY:
         jy_mid = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
@@ -2391,7 +2392,7 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
         answers = {**carried_answers, **answers}
     doc = {"_id": f"{date}:{code}", "origin": "driver_label_jiuyan_v3_pilot", "tradingDate": date,
            "code": code, "name": stock.get("name"), "ammoVersion": AMMO_VERSION,
-           # 投喂槽位（2026-10-20）：midday=12:30 午盘投喂（收盘幂等不重复投喂）、final=收盘投喂；
+           # 投喂槽位（2026-10-20）：midday=午盘名单口径（12:30 调度投喂已于 2026-11-03 移除，仅手动/回填写入）、final=收盘投喂（当日唯一自动投喂口）；
            # jiuyanSourceId/jiuyanFetchedAt 记原料文档与抓取时点，追溯「标签用的哪一版名单」
            "labelSlot": slot, "jiuyanSourceId": f"{date}:{slot}",
            "jiuyanFetchedAt": (jiuyan_doc or {}).get("fetchedAt"),
@@ -2469,7 +2470,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
 
     slot（2026-10-20 用户裁决）：
     - `final`（默认）：收盘链（16:00 盘后链）投喂收盘涨停名单；
-    - `midday`：12:30 午盘投喂午盘涨停名单，叙事走午盘口径（build_midday_narrative），
+    - `midday`：午盘涨停名单口径（手动/回填；12:30 调度投喂已于 2026-11-03 移除），
+      叙事走午盘口径（build_midday_narrative），
       并以 `midday_source_state` 卡住「收盘后才补写的伪午盘文档」。
     **两个槽位共用 `_id={date}:{code}` 与同一 done 判据（status=ok）** → 午盘已投喂的
     个股在收盘运行时自动跳过（幂等），单日每股只烧一次 token。`force=True`（口径代际
@@ -2504,8 +2506,9 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         if not pop:
             print(f"[{di + 1}/{len(dates)}] {date} 无韭研 {slot} 文档，跳过（披露）")
             continue
-        # 反包板池一日两更（2026-10-21 用户裁决）：每个 date 先更池再打标——12:30 午盘链
-        # 自然更新 `{date}:midday`（触板口径）、16:00 盘后链更新 `{date}:final`（封板口径）；
+        # 反包板池随打标更新（2026-10-21 用户裁决）：每个 date 先更池再打标——16:00 盘后链更新
+        # `{date}:final`（封板口径）；slot=midday（手动/回填）更新 `{date}:midday`（触板口径），
+        # 12:30 调度投喂已于 2026-11-03 移除，midday 池不再自动日更；
         # dry-run 零写入纪律：不落库，池内股免投喂跳过同样不生效（dry-run 只看叙事）。
         rewrap_codes: set[str] = set()
         if not dry_run:
@@ -3132,8 +3135,8 @@ if __name__ == "__main__":
                     help="只打指定股票（逗号分隔，如 600825,002343）。口径修正只影响个别股时"
                          "用——避免为改一行共享语料把整日 100+ 只全部重烧一遍")
     ap.add_argument("--slot", dest="slot", choices=list(_SLOTS), default=SLOT_FINAL,
-                    help="投喂槽位（2026-10-20 用户裁决）：final=收盘链（默认，名单取 "
-                         "{date}:final）；midday=12:30 午盘投喂（名单取 {date}:midday，叙事午盘口径）。"
+                    help="投喂槽位：final=收盘链（默认，名单取 "
+                         "{date}:final）；midday=午盘口径（手动/回填，12:30 调度投喂已于 2026-11-03 移除；名单取 {date}:midday）。"
                          "两槽位共享 _id={date}:{code} + status=ok 幂等判据：午盘已投喂的个股在"
                          "收盘运行自动跳过，单日每股只投喂一次")
     args = ap.parse_args()

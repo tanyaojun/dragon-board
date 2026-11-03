@@ -90,7 +90,7 @@ def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[s
                 "board": ctx.get("board"),
                 "inHotlist": bool(ctx.get("inHotlist")),
                 "rank": rank,
-                # 投喂槽位（2026-10-20）：midday=12:30 午盘投喂（收盘幂等不重复投喂）/final=收盘投喂；
+                # 投喂槽位（2026-10-20）：midday=午盘名单口径（12:30 调度投喂已于 2026-11-03 移除，存量档保留）/final=收盘投喂（当日唯一自动投喂口）；
                 # 旧档无此字段 → None（前端不伪造槽位，也不当收盘档冒充）
                 "labelSlot": d.get("labelSlot"),
                 "jiuyanFetchedAt": d.get("jiuyanFetchedAt"),

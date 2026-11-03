@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
-"""午盘投喂槽位（2026-10-20 用户裁决）：12:30 午盘名单投喂 jev，16:00 收盘幂等跳过。
+"""午盘槽位（2026-11-03 用户裁决修订）：午盘只采名单（12:05 落 `jiuyan_action`），
+不投喂不打标；投喂打标统一在 16:00 盘后链 `jiuyanLabel` 步全量执行。
 
-需求原文：
-  1) 12:00 从 jiuyangongshe.com 拿到的午盘涨停数据，设 12:30 调度任务投喂给 jev 打标；
-  2) 16:00 收盘涨停投喂时幂等跳过——**一只涨停股票数据单日不能重复投喂**。
-
-锁定口径（全部假 db/假 dispatch，零真实 jev 调用，AGENTS §1.2-7）：
+本文件锁定的是**存留能力**的口径（全部假 db/假 dispatch，零真实 jev 调用，AGENTS §1.2-7）：
 - `midday_source_state`：午盘名单必须「中午抓的」；收盘后才补写的伪午盘文档（实测
-  2026-10-14/16/19 的 fetchedAt=15:20/20:04/20:23）一律拒绝，交收盘链投喂；
+  2026-10-14/16/19 的 fetchedAt=15:20/20:04/20:23）一律拒绝（盘中读口兑底/手动回填同受控）；
 - `build_midday_narrative`：只用午盘确实拿得到的证据，收盘口径弹药显式标不可得（§4.0）；
-- `run(slot=...)`：午盘与收盘共用 `_id={date}:{code}` + status=ok 幂等判据 → 单日每股一次；
-- `run_jiuyan_midday_label_once`：开关/交易日/名单时点三道门，任一不满足即 skipped 且不开火。
+- `run(slot=...)`：午盘与收盘共用 `_id={date}:{code}` + status=ok 幂等判据 → 单日每股一次
+  （手动/回填兼容；调度器已无 12:30 午盘投喂步，`run_jiuyan_midday_label_once` 随裁决删除）。
 """
 from __future__ import annotations
 
@@ -23,7 +20,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import backend.operations.jev_label_jiuyan as runner
-from backend.operations import schedule as sched
 from backend.operations.jev_label_jiuyan import (
     SLOT_FINAL,
     SLOT_MIDDAY,
@@ -294,62 +290,3 @@ def test_run_midday_budget_guard(monkeypatch, no_tdx):
         run(DATE, DATE, False, "tok", "acc", workers=1, slot=SLOT_MIDDAY)
     assert "--confirm-budget" in str(exc.value)
     assert "midday" in str(exc.value)
-
-
-# ── 调度步（12:30）：三道门 + 开火参数 ────────────────────────────────────
-class _Proc:
-    returncode = 0
-    stdout = "FINAL: ok"
-    stderr = ""
-
-
-def _patch_schedule(monkeypatch, db, run_calls):
-    monkeypatch.setattr(sched, "is_trading_day_cached", lambda d: (True, "weekday"))
-    monkeypatch.setattr(sched.repository_factory, "get_runtime_mongodb_database", lambda: db)
-
-    def fake_run(cmd, **kwargs):
-        run_calls.append(cmd)
-        return _Proc()
-
-    monkeypatch.setattr(sched.subprocess, "run", fake_run)
-
-
-def test_midday_label_step_fires_with_slot_flags(monkeypatch):
-    db = _db_with()
-    run_calls: list[list[str]] = []
-    _patch_schedule(monkeypatch, db, run_calls)
-    monkeypatch.delenv("JIUYAN_MIDDAY_LABEL_ENABLED", raising=False)
-    result = sched.run_jiuyan_midday_label_once(DATE)
-    assert result["ok"] is True and result["sourceFetchedAt"] == "2026-10-20T12:06:00"
-    assert len(run_calls) == 1
-    cmd = run_calls[0]
-    assert "--slot" in cmd and cmd[cmd.index("--slot") + 1] == "midday"
-    assert "--confirm-budget" in cmd
-    assert cmd[cmd.index("--start") + 1] == DATE and cmd[cmd.index("--end") + 1] == DATE
-
-
-def test_midday_label_step_disabled_by_env(monkeypatch):
-    run_calls: list[list[str]] = []
-    _patch_schedule(monkeypatch, _db_with(), run_calls)
-    monkeypatch.setenv("JIUYAN_MIDDAY_LABEL_ENABLED", "0")
-    result = sched.run_jiuyan_midday_label_once(DATE)
-    assert result["skipped"] is True and result["reason"] == "disabled"
-    assert run_calls == []
-
-
-def test_midday_label_step_skips_stale_source(monkeypatch):
-    run_calls: list[list[str]] = []
-    _patch_schedule(monkeypatch, _db_with(midday_fetched="2026-10-19T20:23:07"), run_calls)
-    monkeypatch.delenv("JIUYAN_MIDDAY_LABEL_ENABLED", raising=False)
-    result = sched.run_jiuyan_midday_label_once(DATE)
-    assert result["skipped"] is True and result["reason"] == "midday_doc_not_noon"
-    assert run_calls == []
-
-
-def test_midday_label_step_dry_run_and_non_trading_day(monkeypatch):
-    run_calls: list[list[str]] = []
-    _patch_schedule(monkeypatch, _db_with(), run_calls)
-    assert sched.run_jiuyan_midday_label_once(DATE, dry_run=True)["reason"] == "dry_run"
-    monkeypatch.setattr(sched, "is_trading_day_cached", lambda d: (False, "cache"))
-    assert sched.run_jiuyan_midday_label_once(DATE)["reason"] == "non_trading_day"
-    assert run_calls == []

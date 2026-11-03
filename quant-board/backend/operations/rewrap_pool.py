@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""反包板池持久层——一日两更（午盘 12:30 触板口径 / 盘后 16:00 封板口径）。
+"""反包板池持久层——随打标更新（盘后 16:00 封板口径在役；午盘 12:30 触板口径随 2026-11-03
+午盘投喂移除停更，仅手动/回填写入）。
 
 2026-10-21 用户裁决（jev-rewrap-factor-preregistration.md §6-R2 + 补充需求）：
 - 池更新挂在打标主循环入口（`jev_label_jiuyan.run()` 每个 date 先更池再打标）：
-  12:30 午盘链自然更新 `{date}:midday`、16:00 盘后链自然更新 `{date}:final`——
-  一日两次、幂等可重入；`--dry-run` 不写（零写入纪律）。
+  16:00 盘后链自然更新 `{date}:final`；12:30 午盘链更新 `{date}:midday` 已随 2026-11-03
+  午盘投喂移除停更——幂等可重入；`--dry-run` 不写（零写入纪律）。
 - 集合 `hotlist_rewrap_pool` 是**落库快照/审计口径**（含 generatedAt，可追溯「当时看到的池」）；
   计算单一事实源 = `analysis/hotlist/rewrap_pool.build_rewrap_pool`（读方随时可现算，
   快照缺失/陈旧不阻断读口，fail-visible 注记）。

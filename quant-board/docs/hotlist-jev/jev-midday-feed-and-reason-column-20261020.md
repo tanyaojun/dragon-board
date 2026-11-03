@@ -1,5 +1,14 @@
 # 涨停复盘【原因】列 + 午盘投喂槽位 + 连板股重复打标取证（2026-10-20）
 
+> **2026-11-03 状态注记**：本文 §2 的「12:30 午盘投喂」已由用户裁决**移除**——午盘只采
+> 名单（12:05 落 `jiuyan_action`，供盘中读口兑底），不投喂不打标；投喂打标统一在 16:00
+> 盘后链 `jiuyanLabel` 步全量执行（单日每股一次幂等保留，供手动/回填兼容）。调度层
+> `run_jiuyan_midday_label_once` / `jiuyan_midday_label_enabled` / `_JIUYAN_MIDDAY_LABEL_AT` /
+> `_MIDDAY_LABEL_TIMEOUT_SECONDS` 已删除，`JIUYAN_MIDDAY_LABEL_ENABLED` 开关随删除一并失效；
+> 随投喂移除，盘中 `ratePct20d` 读的存量 midday 反包板池不再自动日更（如需重算走
+> `rewrap-pool-backfill --slot midday`）；其余内容（【原因】列、
+> 伪午盘拒绝口径）仍然有效。下文按 2026-10-20 当时口径阅读。
+
 > 用户需求三条（原文）：
 > 1. 涨停复盘表格增加【原因】字段，取值是异动解析第一行（例：大业股份 603278 →
 >    「人形机器人(金属腱绳)+商业航天+光伏+轮胎」）；

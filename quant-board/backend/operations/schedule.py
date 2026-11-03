@@ -25,8 +25,6 @@ _RELAY_INDEX_TIMEOUT_SECONDS = 600  # 连板指数：单次 jev 调用（七题�
 _RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 ×约3000 只（实测 5–9 分钟），15min 冗余
 # 2026-11-03 修复：d4b8de5a 误删该常量定义但 _run_relay_band_step 仍在使用，
 # 当日 16:00 盘后链 NameError 中断；按 ee3bc290 原值恢复。
-# 午盘投喂（12:30）：单日 ≈65 只串行 2 workers，实测 3-6 分钟；留 30 分钟给 TDX/网络拖尾
-_MIDDAY_LABEL_TIMEOUT_SECONDS = 1800
 # 480s 覆盖最坏情况：每源 = 间隔 20s + HTTP 20s + 退避 60s + 重试间隔 20s + HTTP 20s = 140s，
 # 3 源 = 420s（2026-10-20 review P1：原 300s 核算漏了重试迭代内的间隔，限流日会撞穿），
 # +60s 落库/拼装冗余。逐段先落库（jiuyan_theme_collect），超时被杀只丢未抓的源。
@@ -212,79 +210,6 @@ def _run_phase_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         result["mongoWarning"] = "PHASE 文档 computedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
     if mongo_error:
         result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
-    return result
-
-
-def jiuyan_midday_label_enabled() -> bool:
-    """午盘投喂开关（2026-10-20 用户裁决挂链；默认开，`JIUYAN_MIDDAY_LABEL_ENABLED=0` 可关）。"""
-    return os.environ.get("JIUYAN_MIDDAY_LABEL_ENABLED", "1") != "0"
-
-
-def run_jiuyan_midday_label_once(today: str | None = None, *,
-                                 dry_run: bool = False) -> dict[str, Any]:
-    """午盘涨停打标（12:30 调度，2026-10-20 用户裁决）：午盘名单投喂 jev，收盘不重复投喂。
-
-    门控：开关（`JIUYAN_MIDDAY_LABEL_ENABLED`）→ 交易日 → `{date}:midday` 存在且 `fetchedAt`
-    落在午盘窗（`midday_source_state`）。最后一道是防「伪午盘」：实测 2026-10-14/16/19 采集
-    进程在收盘后才启动，当日的 midday 文档是用收盘数据补写的（fetchedAt 15:20/20:04/20:23），
-    拿它做午盘投喂等于把收盘数据冒充午盘证据 → 一律拒绝，交收盘链投喂。
-
-    子进程=`jev_label_jiuyan --slot midday --confirm-budget`：
-    - 幂等=当日已 status=ok 的个股自动跳过 → 16:00 收盘链不会重复投喂同一只股票；
-    - advisory 语义：失败/跳过不翻转调用方整体 ok（研判证据链，非生产数据链）。
-    """
-    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
-    if dry_run:
-        return {"ok": True, "skipped": True, "reason": "dry_run", "date": today}
-    if not jiuyan_midday_label_enabled():
-        return {"ok": True, "skipped": True, "reason": "disabled", "date": today}
-    try:
-        # 非抛错日历：python-bridge 宕机时降级为 cache/周内启发，不把「桥不可用」变成「今天不投喂」
-        trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
-        if not trading:
-            return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
-                    "calendarSource": cal_source}
-        db = repository_factory.get_runtime_mongodb_database()
-        from backend.operations.jev_label_jiuyan import midday_source_state
-        state = midday_source_state(db, today)
-    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
-        return {"ok": False, "date": today,
-                "error": {"code": "midday_gate_failed", "message": f"{type(exc).__name__}: {exc}"}}
-    if not state["ok"]:
-        return {"ok": True, "skipped": True, "date": today, "reason": state["reason"],
-                "detail": state["detail"], "fetchedAt": state["fetchedAt"]}
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
-             "--start", today, "--end", today, "--slot", "midday",
-             # 挂链常态预算批准（2026-10-20 用户裁决：午盘投喂 ≈65 只/日）
-             "--confirm-budget"],
-            cwd=str(Path(__file__).resolve().parents[2]),
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=_MIDDAY_LABEL_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "date": today,
-                "error": {"code": "midday_label_timeout",
-                          "message": f"timeout {_MIDDAY_LABEL_TIMEOUT_SECONDS}s"}}
-    if proc.returncode != 0:
-        return {"ok": False, "date": today,
-                "error": {"code": "midday_label_failed",
-                          "message": (proc.stderr or proc.stdout or "")[-400:]}}
-    labeled = degraded = None
-    verify_error: str | None = None
-    try:
-        docs = list(db["hotlist_jev_driver_labels"].find(
-            {"tradingDate": today, "labelSlot": "midday",
-             "origin": {"$ne": "phase_band_daily"}}, {"status": 1}))
-        labeled = sum(1 for d in docs if d.get("status") == "ok")
-        degraded = len(docs) - labeled
-    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
-        verify_error = f"verify_failed: {exc}"
-    result: dict[str, Any] = {"ok": True, "date": today, "labeledMidday": labeled,
-                              "degradedMidday": degraded, "sourceFetchedAt": state["fetchedAt"]}
-    if verify_error:
-        result["verifyError"] = verify_error
     return result
 
 
@@ -511,7 +436,7 @@ def run_theme_corpus_collect_once(today: str | None = None, *,
     - `jiuyan`：韭研产业树正文刷新（`jiuyan_theme_collect`，无 KPL 对应物，保留）。
 
     时点（snapshot_collector/scheduler 挂链）：盘前 08:45 事件层（kpl）；
-    盘中 11:45 KPL 刷新（2026-11-02 用户裁决 B，午盘投喂前补盲区）；
+    盘中 11:45 KPL 刷新（2026-11-02 用户裁决 B：当日新闻流尽早进语料）；
     收盘后 16:10 kpl 刷新 + 韭研产业树正文。门控 = 开关 → 交易日；
     各采集器互相独立，任一失败只降级该采集器（§4.0 fail-visible）。advisory 步。
     """
@@ -606,7 +531,8 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
 
     - 门控与相位哨兵同源（当日 jiuyan final + 15:00 盘面帧）；
     - 子进程=jev_label_jiuyan --start/--end 当日（幂等：已 ok 标签自动跳过，≈21 万 tokens/交易日，用户裁决挂链）；
-    - 午盘已投喂的个股（labelSlot=midday，2026-10-20 起）在本步**幂等跳过**：单日每股只投喂一次。
+    - 2026-11-03 用户裁决：午盘只采名单不投喂不打标，本步=当日唯一投喂口（final 全量）；
+      「单日每股只投喂一次」幂等判据保留，供历史 midday 档回填与手动重跑兼容。
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（证据链积累，非生产数据链）。
     """
     if dry_run:

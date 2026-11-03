@@ -56,7 +56,8 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
         # 2026-10-10 增补：个股高度/封板时间/板块 + 漏标连板标记
         # （join 抽 jev_label_jiuyan.jiuyan_board_info，与 _jiuyan_ladder 同口径；
         #   失败/降级置结构化旗标，不阻断主读口，前端据旗标注记高度口径状态）
-        # 2026-10-21 用户报障修复：盘中只有 {date}:midday 午盘名单（12:30 投喂槽），
+        # 2026-10-21 用户报障修复：盘中只有 {date}:midday 午盘名单（12:05 采集落库；
+        # 原 12:30 投喂槽已于 2026-11-03 移除，名单仍供读口兑底），
         # final 缺失导致封板时间/原因/高度/领涨四列恒空 → 开启午盘兑底，
         # 并以 boardJoinSlot=midday 显式注记口径（不冒充收盘，§4.0）
         try:
