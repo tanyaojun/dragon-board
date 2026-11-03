@@ -22,6 +22,9 @@ _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
 _PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
 _JEV_DAILY_LINE_TIMEOUT_SECONDS = 600  # 日度一句话：单次 jev 调用（client 内部 60s）+ 规则/落库，600s 冗余
 _RELAY_INDEX_TIMEOUT_SECONDS = 600  # 连板指数：单次 jev 调用（七题一 call，实测 <1s）+ 原料拼装/落库，600s 冗余
+_RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 ×约3000 只（实测 5–9 分钟），15min 冗余
+# 2026-11-03 修复：d4b8de5a 误删该常量定义但 _run_relay_band_step 仍在使用，
+# 当日 16:00 盘后链 NameError 中断；按 ee3bc290 原值恢复。
 # 午盘投喂（12:30）：单日 ≈65 只串行 2 workers，实测 3-6 分钟；留 30 分钟给 TDX/网络拖尾
 _MIDDAY_LABEL_TIMEOUT_SECONDS = 1800
 # 480s 覆盖最坏情况：每源 = 间隔 20s + HTTP 20s + 退避 60s + 重试间隔 20s + HTTP 20s = 140s，
