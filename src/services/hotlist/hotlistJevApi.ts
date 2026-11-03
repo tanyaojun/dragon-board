@@ -2,8 +2,6 @@
 // 薄 API client：jev 热榜情绪观察轨道读口（GET /api/hotlist-jev/series）。
 // 只做 fetch + 类型化，无兜底计算（结论唯一来源 = QuantBoard 后端 jev 轨道落库）。
 import type {
-  HotlistJevLimitUpDay,
-  HotlistJevThemeLeaderDay,
   HotlistJevDoc,
   HotlistJevDayEntry,
   HotlistJevMissingDay,
@@ -353,103 +351,5 @@ export async function fetchHotlistSentimentOverview(date?: string): Promise<Hotl
       degraded: true,
       reason: err instanceof Error ? err.message : 'fetch failed',
     }
-  }
-}
-
-/** 涨停打标轨道中文映射（研究↔展示同步 2026-10-03，题目判据见 docs/hotlist-jev/jev-driver-label-v3-questionset.md） */
-export const JEV_DRIVER_NAMES: Record<string, string> = {
-  policy: '政策驱动',
-  order_earnings: '订单业绩',
-  product_event: '产品事件',
-  ma_restructure: '重组并购',
-  industry_cycle: '行业周期',
-  capital_flow: '资金接力',
-  concept_stretch: '蹭概念',
-  insufficient_evidence: '信息不足',
-}
-
-export const JEV_DEPTH_NAMES: Record<string, string> = {
-  core_main_business: '核心主业',
-  new_business_scaling: '放量承接',
-  new_business_early: '早期承接',
-  equity_or_affiliate: '股权关联',
-  concept_assembly: '概念组装',
-  insufficient_evidence: '信息不足',
-}
-
-export const JEV_FRESHNESS_NAMES: Record<string, string> = {
-  fresh_catalyst: '新催化',
-  continuing: '老催化续命',
-  none: '无明确催化',
-  unclear: '信息不足',
-}
-
-export const JEV_BUYSIDE_NAMES: Record<string, string> = {
-  independent_catalyst: '独立催化',
-  sector_follow: '板块跟随',
-  high_board_relay: '高位卡位',
-  pure_sentiment: '纯情绪修复',
-  insufficient: '信息不足',
-}
-
-export const JEV_PHASE_BAND_NAMES: Record<string, string> = {
-  cold_lt40: '冷带(<40)',
-  weak_40_60: '弱势带(40-60)',
-  strong_ge60: '强势带(60+)',
-  insufficient: '信息不足',
-}
-
-/** 个股相位分线（stock_phase_position 五档，2026-10-04 试点冻结稿；个股自身生命周期位，与市场三带不同层不混词） */
-export const JEV_STOCK_PHASE_NAMES: Record<string, string> = {
-  start: '低位启动',
-  ferment: '中位发酵',
-  climax: '高位高潮',
-  divergence: '分歧',
-  insufficient: '信息不足',
-}
-
-/** 涨停打标单日读口（GET /api/hotlist-jev/limitup-labels，纯读 fail-visible） */
-export async function fetchHotlistJevLimitUpLabels(
-  date: string,
-): Promise<{ ok: boolean; degraded: boolean; day: HotlistJevLimitUpDay | null; reason: string | null }> {
-  if (!date) return { ok: false, degraded: true, day: null, reason: '缺日期' }
-  try {
-    const response = await fetch(`/api/hotlist-jev/limitup-labels?date=${encodeURIComponent(date)}`)
-    if (!response.ok) {
-      return { ok: false, degraded: true, day: null, reason: `HTTP ${response.status}` }
-    }
-    const body = (await response.json()) as HotlistJevLimitUpDay
-    if (!body.ok) {
-      return { ok: false, degraded: true, day: null, reason: body.reason || 'degraded' }
-    }
-    return { ok: true, degraded: false, day: body, reason: null }
-  } catch (error) {
-    return { ok: false, degraded: true, day: null, reason: String(error) }
-  }
-}
-
-/**
- * 题材层龙头投喂单日读口（GET /api/hotlist-jev/theme-leaders，纯读 fail-visible）。
- * `withNarrative=true` 时附带叙事全文与题目集原文（前端「投喂语料」抽屉用）。
- */
-export async function fetchHotlistJevThemeLeaders(
-  date: string,
-  withNarrative = false,
-): Promise<{ ok: boolean; degraded: boolean; day: HotlistJevThemeLeaderDay | null; reason: string | null }> {
-  if (!date) return { ok: false, degraded: true, day: null, reason: '缺日期' }
-  try {
-    const params = new URLSearchParams({ date })
-    if (withNarrative) params.set('with_narrative', '1')
-    const response = await fetch(`/api/hotlist-jev/theme-leaders?${params.toString()}`)
-    if (!response.ok) {
-      return { ok: false, degraded: true, day: null, reason: `HTTP ${response.status}` }
-    }
-    const body = (await response.json()) as HotlistJevThemeLeaderDay
-    if (!body.ok) {
-      return { ok: false, degraded: true, day: null, reason: (body as { reason?: string }).reason || 'degraded' }
-    }
-    return { ok: true, degraded: false, day: body, reason: null }
-  } catch (error) {
-    return { ok: false, degraded: true, day: null, reason: String(error) }
   }
 }

@@ -1,4 +1,7 @@
 # GLM-5.3 研讨存档 · 提示词 3 周期摆动锚两小题立项论证（模板 B）· **最终稿**
+> **2026-11-03 注**：文中引用的根前端 `JevNarrativePanel.vue`（JEV 叙事面板）已随 2026-11-03
+> 用户裁决退役删除，涨停复盘/jev 叙事现役展示载体为 relay_page（`backend/relay_page`）；
+> 本文中该面板相关引用按当时口径阅读。
 
 - 模型：glm-5.3（zai），thinking=high；通道=pi 含工具自读文件（jev_driver_ammo.py / jev_label_jiuyan.py / detect_ecosystem_break.py / 战报 §十二-§十六）
 - 会话：2026-10-05T10-37-25-531Z_66ac4d78-8dd9-498e-9d7f-3b7eb688199e.jsonl；审定：全部引用逐字核验通过（含 §十二 line 177/188/207/236），判决采纳——见 §十六续三
