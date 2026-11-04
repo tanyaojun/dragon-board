@@ -186,8 +186,8 @@ def test_backfill_warning_display_removed(html: str) -> None:
     row = _fn(html, "tlRowHtml")
     assert "sampleOrigin === 'backfill'" not in row, "名称旁「回填」标必须删除"
     assert "tl-backfill" not in html and "tl-origin" not in html, "行高亮/回填标样式必须删除"
-    # 审计层保留：来源筛选 + 明细卡页脚仍可见来源（fail-visible 的替代出口）
-    assert "TL_ORIGIN_CN" in _fn(html, "tlRenderBar")
+    # 审计层保留：来源已不在筛选条（2026-11-04 用户裁决删「来源」筛控件），明细卡页脚仍可见（fail-visible 出口）
+    assert "TL_ORIGIN_CN" not in _fn(html, "tlRenderBar"), "「来源」筛控件已删，不得回潮"
     assert "TL_ORIGIN_CN" in _fn(html, "tlDetailHtml")
 
 
@@ -385,7 +385,7 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
     rows_fn = _fn(html, "tlRenderRows")
     assert "<th>事件</th>" in rows_fn, "列名必须为「事件」"
     bar = _fn(html, "tlRenderBar")
-    assert "tlSel('事件'" in bar, "筛选条标签同步改名"
+    assert "tlSel('事件'" not in bar, "「事件」筛控件已删（2026-11-04 用户裁决），列/徽章保留"
     row = _fn(html, "tlRowHtml")
     assert "r.evidenceEventTitles" in row and "r.evidenceKwordTags" in row, \
         "徽章计数与 tooltip 全文必须消费标题/标签"
@@ -548,3 +548,27 @@ def test_event_column_news_badge(html: str) -> None:
     assert "r.evidenceNewsTitles" in row, "新闻徽章必须消费 evidenceNewsTitles"
     assert "esc(evNews.join" in row and "新闻</span>" in row, \
         "新闻徽章必须带 tooltip 全文（title=完整新闻标题）"
+
+
+# ── 2026-11-04 筛选条定稿 ─────────────────────────────────────
+
+def test_filter_bar_final_control_set(html: str) -> None:
+    """筛选条定稿（2026-11-04 用户三轮裁决）：删「结局」后恢复、删「仅看被证据门覆盖」
+    （gate.applied=0/61 从未触发，归因文档 §4）与「来源」；新增「周期」「延续性」「空间」。
+    定稿渲染顺序：搜索框/板块/周期/档位/题材深度/延续性/空间/结局/清除筛选。"""
+    bar = _fn(html, "tlRenderBar")
+    for sel in ("tlSel('板块'", "tlSel('档位'", "tlSel('题材深度'", "tlSel('结局'",
+                "tlSel('周期'", "tlSel('延续性'", "tlSel('空间'"):
+        assert sel in bar, f"筛选条必须有 {sel}"
+    assert "tlSel('来源'" not in bar, "「来源」筛控件必须删除"
+    assert "tlSel('事件'" not in bar, "「事件」筛控件必须删除"
+    assert "gateOnly" not in bar and "仅看被证据门覆盖" not in bar, \
+        "「仅看被证据门覆盖」复选框必须删除（证据门从未触发）"
+    # 匹配层与状态初始化同步：无 gateOnly/outcome 之外的新增键残留
+    matches = _fn(html, "tlMatches")
+    assert "f.outcome" in matches and "f.cycle" in matches and "f.cont" in matches \
+        and "f.head" in matches, "结局/周期/延续性/空间四键必须接入 tlMatches"
+    assert "f.gateOnly" not in matches and "f.origin" not in matches \
+        and "f.industry" not in matches, "已删筛控件的匹配键不得残留"
+    assert "cycle: ''" in html and "cont: ''" in html and "head: ''" in html, \
+        "tlUi 初始化/清除筛选必须含新键"

@@ -917,8 +917,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
   // 题材龙头台账 UI（对齐涨停复盘 labelFilter/labelSort/labelUi 三分法）：
   // tlUi=筛选+展开+分页, tlSort=表头排序, tlNarr=投喂语料懒拉缓存
-  tlUi: { q: '', board: '', industry: '', origin: '', choice: '', stage: '',
-          outcome: '', gateOnly: false, openKey: null, page: 1,
+  tlUi: { q: '', board: '', choice: '', stage: '',
+          outcome: '', cycle: '', cont: '', head: '', openKey: null, page: 1,
           // 明细卡（对齐连板情绪 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
           mode: 'detail', q1: '', q2: '' },
   tlSort: { key: 'date', dir: -1 },   // 区间台账默认最新在前（同 relay/detail 的日期列）
@@ -2333,12 +2333,12 @@ function tlOutcomeKey(row){
 }
 function tlMatches(row, f){
   if (f.board && (row.board || '未分板块') !== f.board) return false;
-  if (f.origin && (row.sampleOrigin || 'live') !== f.origin) return false;
+  if (f.head && (row.leaderHeadroom || '') !== f.head) return false;
   if (f.choice && (row.choice || '') !== f.choice) return false;
   if (f.stage && (row.themeSpeculationDepth || '') !== f.stage) return false;
   if (f.outcome && tlOutcomeKey(row) !== f.outcome) return false;
-  if (f.industry && (row.evidenceIndustry || '') !== f.industry) return false;
-  if (f.gateOnly && !(row.gate && row.gate.applied)) return false;
+  if (f.cycle && (row.cycleState || '') !== f.cycle) return false;
+  if (f.cont && (row.themeContinuation || '') !== f.cont) return false;
   if (f.q){
     const q = f.q.toLowerCase();
     const hay = String(row.code || '') + String(row.name || '') + String(row.board || '');
@@ -2372,8 +2372,8 @@ function tlSortBy(key){
   tlRefresh();
 }
 function tlClear(){
-  STATE.tlUi = { q: '', board: '', industry: '', origin: '', choice: '', stage: '',
-                 outcome: '', gateOnly: false, openKey: null, page: 1,
+  STATE.tlUi = { q: '', board: '', choice: '', stage: '',
+                 outcome: '', cycle: '', cont: '', head: '', openKey: null, page: 1,
                  mode: STATE.tlUi.mode, q1: '', q2: '' };
   tlRefresh();
 }
@@ -2728,20 +2728,18 @@ function tlRenderBar(){
   if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
   const rows = tlRows();
   if (!rows.length){ bar.innerHTML = ''; return; }
-  const uniq = key => Array.from(new Set(rows.map(r => r[key]).filter(Boolean))).sort();
   const boards = Array.from(new Set(rows.map(r => r.board || '未分板块')))
     .sort((a, b) => a.localeCompare(b)).map(v => [v, v]);
   bar.innerHTML =
     '<input class="lf-q" placeholder="搜代码 / 名称 / 板块…" value="' + esc(STATE.tlUi.q)
       + '" oninput="tlQ(this.value)">'
     + tlSel('板块', 'board', boards)
-    + tlSel('事件', 'industry', uniq('evidenceIndustry').map(v => [v, v]))
+    + tlSel('周期', 'cycle', Object.entries(TL_CYCLE_CN))
     + tlSel('档位', 'choice', Object.entries(TL_CHOICE_CN))
     + tlSel('题材深度', 'stage', Object.entries(TL_DEPTH_CN))
+    + tlSel('延续性', 'cont', Object.entries(TL_CONT_CN))
+    + tlSel('空间', 'head', Object.entries(TL_HEAD_CN))
     + tlSel('结局', 'outcome', [['sealed', '续板'], ['broken', '未续'], ['pending', '待结算（等次日）']])
-    + tlSel('来源', 'origin', uniq('sampleOrigin').map(v => [v, TL_ORIGIN_CN[v] || v]))
-    + '<label class="lf-chk"><input type="checkbox"' + (STATE.tlUi.gateOnly ? ' checked' : '')
-      + ' onchange="tlSet(\'gateOnly\', this.checked)"> 仅看被证据门覆盖</label>'
     + '<button onclick="tlClear()">清除筛选</button>'
     // 分页控件挂筛选条右端（2026-10-27 用户裁决：右上角分页；右上计数/左下图例文本已删）
     + '<span id="tlPagerHost" style="margin-left:auto;display:inline-flex;align-items:center;gap:10px"></span>';
@@ -2835,7 +2833,7 @@ function tlCycleBadge(r){
   // 终结态标「上轮周期」时效语义（2026-11-02 用户裁决：重启判据并入 P3 立项，
   // Q3:A 吸收态维持，终结后新行情不回溯改判）
   if (!r.cycleState) return '<span style="color:var(--muted2)">-</span>';
-  let tip = '周期状态机（P2，结构事实：节点序列+事件流）';
+  let tip = '周期状态机';
   if (r.cycleState === 'terminal'){
     tip = '上一轮周期终态（终结于 ' + esc(String(r.cycleTerminatedOn || '?'))
       + '，窗满+冰点；此后板块新行情属新一轮周期，本期状态机不回溯重启'
@@ -3213,6 +3211,9 @@ async function tlLoadNarrative(r){
 // 范围二分（方案A，2026-10-11 用户裁决）：韭研触板名单经 THS 炸板池二分——
 // 涨停=触板-炸板（官方简图口径）再剔 ST/北交所；漏标连板判定已按「昨日涨停池」修正
 const SCOPE_CN = { zt: '涨停', zhaban: '炸板', excluded: 'ST·北交所', all: '触板全部', rewrap: '反包' };
+// 名单可见性与打标解偶（2026-11-04 用户需求）：后端把韭研名单未打标股以 unlabeled=True
+// 行并入 stocks（labelSlot/jiuyanFetchedAt 注记源），打标行在前、未打标行沉底；
+// KPI 首卡「名单/打标」透出名单源/抓取时刻/进度。未打标行无调用日志，不响应展开。
 // 反包=反包板池命中股（昨日断板/昨日炸板，今日回封；2026-10-21 立项 jev-rewrap-factor-preregistration.md）
 const REWRAP_PRED = s => !!s.rewrap;
 const SCOPE_PRED = { zt: s => !s.zhaban && !s.excluded, zhaban: s => s.zhaban,
@@ -3303,8 +3304,20 @@ function lfRenderKpi(stocks, f){
     ? `<div class="kpi click${f.scope === 'rewrap' ? ' on' : ''}" title="反包=昨日断板（近5交易日在板、昨日未板）今日回封；弱转强信号。点击筛选反包股" onclick="lfScope('rewrap')"><div class="k">反包</div><div class="v">${R.count}</div><div class="s">反包率 ${rwRate} · 候选 ${R.candidate} · ${rwPct} · 炸板回封 ${rwSeal}${rwCaliber}</div></div>`
     : '';
   const zbCard = `<div class="kpi click${f.scope === 'zhaban' ? ' on' : ''}" title="炸板率=名单内炸板/触板总数；反复开板=THS 开板次数≥2。点击筛选炸板范围" onclick="lfScope('zhaban')"><div class="k">炸板</div><div class="v">${zhaban.length}</div><div class="s">${zbSub}</div></div>`;
+  // 名单/打标进度卡（2026-11-04 用户需求：名单可见性与打标解偶）——韭研名单抓到多少
+  // 就展示多少（unlabeled 行已入表，打标行带徽标），本卡透出名单源/抓取时刻/打标进度
+  const COV = L.labelCoverage || {}, SRC = L.source;
+  const SRC_CN = { final: '收盘名单', midday: '午盘名单' };
+  const srcTime = SRC && SRC.fetchedAt ? String(SRC.fetchedAt).slice(11, 16) : '';
+  const covCard = (SRC && SRC.listTotal != null)
+    ? card('名单/打标', `${COV.fetched ?? '-'} / ${COV.labeled ?? '-'}`,
+        `${SRC_CN[SRC.slot] || SRC.slot || '名单'}${srcTime ? ' · 抓取 ' + srcTime : ''}`
+        + (COV.unlabeled ? ` · 未打标 ${COV.unlabeled}` : ' · 打标完成')
+        + (SRC.ok === false ? ' · 名单读失败' : ''))
+    : '';
   $('labelKpi').innerHTML =
-    card('涨停家数', zt.length, `触板 ${stocks.length} · 炸板 ${zhaban.length} · 剔ST/北交所 ${excluded.length}`
+    covCard
+    + card('涨停家数', zt.length, `触板 ${stocks.length} · 炸板 ${zhaban.length} · 剔ST/北交所 ${excluded.length}`
       + (bum ? ` · 漏标连板 ${bum}` : '') + joinNote + (deg ? ` · degraded ${deg}` : ''))
     + rwCard
     + zbCard
@@ -3383,8 +3396,8 @@ function lfRenderRows(){
     const reasonCell = reasonTxt
       ? `<td class="lg-reason" title="${esc(reasonTxt)}">${esc(reasonTxt)}</td>`
       : '<td class="lg-reason" title="韭研异动解析首行缺失">-</td>';
-    return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
-    <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
+    return `<tr class="lg-row${open ? ' open' : ''}"${s.unlabeled ? '' : ` onclick="lgRow('lab', '${js(entry.key)}')"`}>
+    <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}${s.unlabeled ? ' ' + badge('未打标', 'b-amber') : ''}</td><td>${esc(labelBoardOf(s))}</td>
     <td style="font-size:12px">${dragons || '-'}</td>
     <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>${reasonCell}
     <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
@@ -3404,7 +3417,7 @@ function renderLabels(){
     $('labelKpi').innerHTML = ''; $('labelBoardRow').innerHTML = ''; $('labelFilterBar').innerHTML = '';
     STATE.labelEntries = [];
     $('labelHint').textContent = (L && L.reason) || '';
-    $('labelTable').innerHTML = '<tr><td class="empty">当日无打标存档</td></tr>';
+    $('labelTable').innerHTML = '<tr><td class="empty">当日无涨停名单与打标存档（非交易日或未采集）</td></tr>';
     return;
   }
   const pool = scopePool(stocks, STATE.labelFilter);

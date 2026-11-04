@@ -305,6 +305,16 @@ def _after_market_log_summary(result: dict[str, Any]) -> dict[str, Any]:
     }
     if result.get("stoppedAt"):
         summary["stoppedAt"] = result.get("stoppedAt")
+    if steps.get("jiuyanPreflight"):
+        pf = steps["jiuyanPreflight"]
+        summary["jiuyanPreflight"] = {
+            "ok": bool(pf.get("ok")), "checked": bool(pf.get("checked")),
+            "remoteCountsAll": pf.get("remoteCountsAll"),
+            "storedCountsAll": pf.get("storedCountsAll"),
+            "repairs": len(pf.get("repairs") or []),
+            **({"warning": pf["warning"]} if pf.get("warning") else {}),
+            **({"error": pf["error"]} if pf.get("error") else {}),
+        }
     return summary
 
 

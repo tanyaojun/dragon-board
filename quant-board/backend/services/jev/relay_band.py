@@ -6,7 +6,7 @@
 Mongo + 本地通达信日线，全窗约 5–9 分钟）。本模块统一三件事，供两个调用方共用：
 
 1. `backend/api/hotlist_jev_routes.py`：页面【分带观察】一键刷新（异步 `Popen` + 轮询）；
-2. `backend/operations/schedule.py`：16:00 盘后链 advisory 步（同步 `subprocess.run`）。
+2. `backend/operations/schedule.py`：17:00 盘后链 advisory 步（同步 `subprocess.run`）。
 
 统一的内容 = ①产物/日志路径解析（env 可覆盖，默认落 `quant-board/data/backups/`）；
 ②刷新命令拼装（**写临时文件 → 成功退出才 `os.replace` 原子替换**，刷新期间旧表始终
@@ -119,7 +119,7 @@ def _log_tail(log: Path) -> str:
 
 
 def run_band_refresh_sync(*, days: int = 0, timeout: int = 900) -> dict[str, Any]:
-    """同步重算分带表（16:00 盘后链 advisory 步用）。
+    """同步重算分带表（17:00 盘后链 advisory 步用）。
 
     返回结构化结果（不抛）：`{ok, days, returncode, error, durationSec, logPath,
     stdoutTail, artifactPath, artifactMtime?, windowEnd?}`。失败保留旧表、撤掉半成品。

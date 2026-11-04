@@ -4,7 +4,7 @@
 锁定项（全 fake/monkeypatch，零真实 jev 调用，AGENTS §1.2-7）：
 - 口径：断板候选池=前 2~5 交易日在板 & 昨日未板；反包率分母归一（裸计数与当日涨停家数
   corr=0.684 共线，预注册 §4）；回封率分母=昨日炸板池；池空/池缺失 fail-visible 不补 0；
-- 池一日两更：12:30 午盘链更 `{date}:midday`（触板口径）、16:00 盘后链更 `{date}:final`；
+- 池一日两更：12:30 午盘链更 `{date}:midday`（触板口径）、17:00 盘后链更 `{date}:final`；
   dry-run 零写入；
 - 免投喂承接：池内股零 jev 调用复制前日标签（labelSource=rewrap_carry 可追溯），
   守卫不满足回落实判不静默降级；

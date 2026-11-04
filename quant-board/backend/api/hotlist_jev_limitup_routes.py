@@ -33,9 +33,16 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
         # 盘中回退（2026-10-27 用户裁决）：指定日无打标存档（盘前/非交易日/打标链未跑）
         # → 整体回退 < 指定日最新有档交易日，后续梯队/板块信息/连板/反包 join 全部
         # 跟随生效日同口径，date 字段透出实际生效日 + dateFallback 标记。
-        date, date_fallback = resolve_view_date(
-            db["hotlist_jev_driver_labels"], date,
-            {"origin": {"$ne": PHASE_ORIGIN}})
+        # 2026-11-04 用户裁决收窄回退面：名单可见性与打标解偶——指定日已有韭研名单
+        # （final/midday）时不再回退，展示当日名单 + unlabeled 行（labelCoverage 透出
+        # 打标进度）；仅当日连名单都没采到（盘前/非交易日）才回退最近有档交易日。
+        if (db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"_id": 1})
+                or db["jiuyan_action"].find_one({"_id": f"{date}:midday"}, {"_id": 1})):
+            date_fallback = None
+        else:
+            date, date_fallback = resolve_view_date(
+                db["hotlist_jev_driver_labels"], date,
+                {"origin": {"$ne": PHASE_ORIGIN}})
         # with_raw=1（relay_page 调用日志展开用）：个股条目附带 narrative/questionsRaw 等
         # 原始调用字段；默认 0 保持既有合同（根前端消费方零变化）
         result = collect_limitup_labels(db, date, with_raw=bool(with_raw))

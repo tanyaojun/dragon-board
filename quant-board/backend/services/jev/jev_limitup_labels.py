@@ -118,6 +118,44 @@ def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[s
             })
     stocks.sort(key=lambda x: (x["rank"] is None, x["rank"] if x["rank"] is not None else 9999,
                                str(x["code"])))
+    # 2026-11-04 用户需求：名单可见性与打标解耦——韭研名单抓到多少就展示多少，
+    # 未打标个股以 unlabeled=True 行并入 stocks（高度/原因/炸板二分等 join 由路由层
+    # 统一补齐，与打标行同构；打标行保持既有排序在前，未打标行按名单序沉底）。
+    # source 透出名单源（slot/fetchedAt/listTotal），labelCoverage 透出名单/已打标/未打标
+    # 三数——前端据此展示采集进度与打标进度，不再盲等打标完成才能看到名单（§4.0）。
+    source: dict[str, Any] | None = None
+    labeled_codes = {str(s.get("code") or "")[-6:] for s in stocks}
+    try:
+        proj = {"fetchedAt": 1, "counts.all": 1,
+                "fields.name": 1, "fields.stocks.code": 1, "fields.stocks.name": 1}
+        slot = "final"
+        doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, proj)
+        if not doc or not any(f.get("stocks") for f in (doc or {}).get("fields") or []):
+            slot = "midday"
+            doc = db["jiuyan_action"].find_one({"_id": f"{date}:midday"}, proj)
+        if doc and any(f.get("stocks") for f in (doc or {}).get("fields") or []):
+            list_total = 0
+            for field in doc.get("fields") or []:
+                bname = field.get("name")
+                for st in field.get("stocks") or []:
+                    list_total += 1
+                    code6 = str(st.get("code") or "")[-6:]
+                    if not code6 or code6 in labeled_codes:
+                        continue
+                    stocks.append({
+                        "code": st.get("code"), "name": st.get("name"),
+                        "tradingDate": date, "board": bname, "rank": list_total,
+                        # rank=韭研名单序（板块段展平）；打标行 rank=投喂序，同为名单内序
+                        "unlabeled": True, "labelSlot": slot,
+                        "jiuyanFetchedAt": doc.get("fetchedAt"),
+                    })
+            source = {"slot": slot, "fetchedAt": doc.get("fetchedAt"),
+                      "sourceCountsAll": (doc.get("counts") or {}).get("all"),
+                      "listTotal": list_total}
+        # final+midday 双缺 → source=None（无名单可展示，走既有 no_data 路径）
+    except Exception as exc:  # noqa: BLE001 — 名单读失败不阻断打标行（fail-visible）
+        source = {"ok": False, "error": f"jiuyan_source_read_failed: {exc}"}
+    labeled_n = sum(1 for s in stocks if not s.get("unlabeled"))
     no_data = phase_doc is None and not stocks and not degraded
     return {
         "ok": True,
@@ -127,13 +165,21 @@ def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[s
         "phaseError": phase_error,
         "stocks": stocks,
         "summary": {
+            # total=stocks 行数（含 unlabeled 行，即名单全量）；label 分布只数打标行
             "total": len(stocks),
-            "label": _counts([x["label"] for x in stocks]),
-            "catalystDepth": _counts([x["catalystDepth"] for x in stocks]),
-            "buySideLogic": _counts([x["buySideLogic"] for x in stocks]),
+            "unlabeledCount": len(stocks) - labeled_n,
+            "label": _counts([x["label"] for x in stocks if not x.get("unlabeled")]),
+            "catalystDepth": _counts([x["catalystDepth"] for x in stocks if not x.get("unlabeled")]),
+            "buySideLogic": _counts([x["buySideLogic"] for x in stocks if not x.get("unlabeled")]),
             "degradedCount": len(degraded),
             "degraded": degraded,
         },
+        "source": source,
+        "labelCoverage": {
+            "fetched": source.get("listTotal") if isinstance(source, dict) else None,
+            "labeled": labeled_n,
+            "unlabeled": len(stocks) - labeled_n,
+        },
         "noData": no_data,
-        "reason": None if not no_data else f"{date} 无涨停打标文档（非交易日或当日未跑）",
+        "reason": None if not no_data else f"{date} 无涨停名单与打标文档（非交易日或当日未采集）",
     }

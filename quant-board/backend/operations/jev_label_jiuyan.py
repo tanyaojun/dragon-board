@@ -2469,7 +2469,7 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
     """个股驱动打标主循环。
 
     slot（2026-10-20 用户裁决）：
-    - `final`（默认）：收盘链（16:00 盘后链）投喂收盘涨停名单；
+    - `final`（默认）：收盘链（17:00 盘后链）投喂收盘涨停名单；
     - `midday`：午盘涨停名单口径（手动/回填；12:30 调度投喂已于 2026-11-03 移除），
       叙事走午盘口径（build_midday_narrative），
       并以 `midday_source_state` 卡住「收盘后才补写的伪午盘文档」。
@@ -2506,7 +2506,7 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         if not pop:
             print(f"[{di + 1}/{len(dates)}] {date} 无韭研 {slot} 文档，跳过（披露）")
             continue
-        # 反包板池随打标更新（2026-10-21 用户裁决）：每个 date 先更池再打标——16:00 盘后链更新
+        # 反包板池随打标更新（2026-10-21 用户裁决）：每个 date 先更池再打标——17:00 盘后链更新
         # `{date}:final`（封板口径）；slot=midday（手动/回填）更新 `{date}:midday`（触板口径），
         # 12:30 调度投喂已于 2026-11-03 移除，midday 池不再自动日更；
         # dry-run 零写入纪律：不落库，池内股免投喂跳过同样不生效（dry-run 只看叙事）。

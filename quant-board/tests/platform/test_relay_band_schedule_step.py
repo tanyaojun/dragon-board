@@ -2,7 +2,7 @@
 """分带表重算挂链测试（2026-10-19 用户裁决 A+A1：`_run_relay_band_step`）。
 
 背景：分带表是 relay_page 常驻读数，长期靠人工手跑 → 序列前进、表停在旧日（滞后警告天天亮）。
-A = 挂进 16:00 盘后链（advisory 步，零模型调用）；A1 = 全窗就地重建（审计靠产物 provenance）。
+A = 挂进 17:00 盘后链（advisory 步，零模型调用）；A1 = 全窗就地重建（审计靠产物 provenance）。
 
 本测试全 monkeypatch（假 Mongo + 假 subprocess.run），零真实子进程、零网络、零模型调用
 （AGENTS §1.2-7）。

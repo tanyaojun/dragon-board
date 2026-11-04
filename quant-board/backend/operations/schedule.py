@@ -20,6 +20,7 @@ _TZ = ZoneInfo("Asia/Shanghai")
 
 _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
 _PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
+_JIUYAN_PREFLIGHT_MAX_REPAIRS = 2  # 预检补齐重试上限（采集本身幂等，重试防网络抖动）
 _JEV_DAILY_LINE_TIMEOUT_SECONDS = 600  # 日度一句话：单次 jev 调用（client 内部 60s）+ 规则/落库，600s 冗余
 _RELAY_INDEX_TIMEOUT_SECONDS = 600  # 连板指数：单次 jev 调用（七题一 call，实测 <1s）+ 原料拼装/落库，600s 冗余
 _RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 ×约3000 只（实测 5–9 分钟），15min 冗余
@@ -73,6 +74,103 @@ def _should_run_phase_pulse(db: Any, today: str, dataset_id: str, snapshot_type:
     if not doc:
         return False, f"no EOD doc for {today}（非交易日或数据未落）"
     return True, ""
+
+
+def run_jiuyan_preflight(today: str) -> dict[str, Any]:
+    """盘后链预检（2026-11-04 用户裁决）：韭研远端名单数 vs 落库 final 一致性。
+
+    背景：韭研异动解析盘后持续补名单，15:35 采集版可能不完整（当日实测 44 只、
+    晚间 136；THS 独立口径涨停 116+炸板 32）——名单不完整不得打标（不完整投喂
+    会烧 token 且下游叙事/归因全部基于残名单）。
+
+    规则：探针 count-pc（零 jev token，韭研额度内）对落库 `jiuyan_action {date}:final`
+    的 counts.all；不一致 → 幂等重采补齐（collect_and_store，零 jev token）再核；
+    补齐后仍不一致 → ok=False（链 stoppedAt=jiuyanPreflight 拦停，人工介入）；
+    探针失败/载荷缺 all/补齐后复核不可知 → ok=True + 结构化 warning
+    （远端不可知 ≠ 确认不一致，不能拦住备份链，fail-visible 待人工关注）。
+    """
+    from backend.operations.jiuyan_auth import resolve_auth
+    from backend.operations.jiuyan_collect import collect_and_store
+    from backend.operations.jiuyan_fetch import fetch_count
+    db = repository_factory.get_runtime_mongodb_database()
+
+    def _stored_all() -> int | None:
+        doc = db["jiuyan_action"].find_one({"_id": f"{today}:final"}, {"counts.all": 1})
+        return (doc.get("counts") or {}).get("all") if doc else None
+
+    def _probe() -> dict[str, Any]:
+        auth = resolve_auth(date=today)
+        if not auth.get("ok"):
+            return {"ok": False, "authFailed": True,
+                    "error": {"code": "jiuyan_preflight_auth_failed", "message": str(auth)[:200]}}
+        probe = fetch_count(today, session_cookie=auth["session"],
+                            token=auth["token"], timestamp=auth["timestamp"])
+        if not probe.get("ok") and probe.get("authFailed"):
+            # authFailed 自愈（同调度支线口径）：会话/token 缓存过期 → 强制重登重铸再试一次
+            auth = resolve_auth(date=today, force_refresh=True)
+            if not auth.get("ok"):
+                return {"ok": False, "authFailed": True,
+                        "error": {"code": "jiuyan_preflight_auth_failed",
+                                  "message": f"自愈后仍失败: {str(auth)[:150]}"}}
+            probe = fetch_count(today, session_cookie=auth["session"],
+                                token=auth["token"], timestamp=auth["timestamp"])
+        return probe
+
+    repairs: list[dict[str, Any]] = []
+    try:
+        stored = _stored_all()
+        probe = _probe()
+        if not probe.get("ok"):
+            return {"ok": True, "date": today, "checked": False,
+                    "storedCountsAll": stored,
+                    "warning": {"code": "jiuyan_preflight_probe_failed",
+                                "message": str(probe.get("error") or probe)[:200]},
+                    "note": "远端名单数不可知，链继续（不拦备份链）；名单完整性未验证，fail-visible"}
+        remote = probe.get("all")
+        if remote is None:
+            # 探针 ok 但载荷无 all（parse_count_response 缺失时不伪造 0）→ 远端不可知，
+            # 同探针失败口径：不拦链、不重采，fail-visible（否则会空转重采并误拦停）
+            return {"ok": True, "date": today, "checked": False,
+                    "storedCountsAll": stored,
+                    "warning": {"code": "jiuyan_preflight_probe_incomplete",
+                                "message": "探针响应缺 all 字段，远端名单数不可知"},
+                    "note": "远端名单数不可知，链继续（不拦备份链）；名单完整性未验证，fail-visible"}
+        for attempt in range(1, _JIUYAN_PREFLIGHT_MAX_REPAIRS + 1):
+            if stored is not None and remote is not None and stored >= remote:
+                return {"ok": True, "date": today, "checked": True,
+                        "remoteCountsAll": remote, "storedCountsAll": stored,
+                        "repairs": repairs,
+                        "note": "落库名单数 ≥ 远端探针数，一致（≥ 容忍源端晚回缩的重复去重）"}
+            # 不一致（远端更多 / 落库缺失）→ 幂等重采补齐
+            recollect = collect_and_store(today, "final", db=db)
+            repairs.append({"attempt": attempt, "before": stored, "remote": remote,
+                            "ok": bool(recollect.get("ok")),
+                            "stocks": recollect.get("stocks"),
+                            "error": recollect.get("error")})
+            if not recollect.get("ok"):
+                break
+            stored = _stored_all()
+            probe = _probe()
+            if not probe.get("ok") or probe.get("all") is None:
+                # 补齐后复核不可知（探针失败/载荷缺 all）≠ 确认不一致：重采本身已按
+                # 当时源端数据落库，不拦链，结构化 warning 待人工关注（同顶层口径）
+                return {"ok": True, "date": today, "checked": True,
+                        "remoteCountsAll": remote, "storedCountsAll": stored,
+                        "repairs": repairs,
+                        "warning": {"code": "jiuyan_preflight_repair_verify_unknown",
+                                    "message": f"补齐后复核不可知: {str(probe.get('error') or probe)[:120]}"},
+                        "note": "重采已落库（当时源端数据），复核对账未完成，链继续，需人工关注"}
+            remote = probe.get("all")
+        return {"ok": False, "date": today, "checked": True,
+                "remoteCountsAll": remote, "storedCountsAll": stored,
+                "repairs": repairs,
+                "error": {"code": "jiuyan_preflight_inconsistent",
+                          "message": f"补齐 {_JIUYAN_PREFLIGHT_MAX_REPAIRS} 次后远端={remote} 落库={stored} 仍不一致，名单不完整不得打标，链拦停待人工"}}
+    except Exception as exc:  # noqa: BLE001 — 预检自身异常不拦链（不可校验 ≠ 不一致，fail-visible）
+        return {"ok": True, "date": today, "checked": False, "repairs": repairs,
+                "warning": {"code": "jiuyan_preflight_error",
+                            "message": f"{type(exc).__name__}: {exc}"[:200]},
+                "note": "预检自身异常，链继续；名单完整性未验证，需人工关注"}
 
 
 def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
@@ -289,8 +387,9 @@ def run_theme_leader_label_once(today: str | None = None, *,
 
     门控：开关（`THEME_LEADER_LABEL_ENABLED`）→ 交易日（非抛错日历：bridge 宕机不丢一天）→
     子进程自身幂等（`_id={date}:{code}` 已 `status=ok` 跳过，重跑不重复烧 token）。
-    时点 17:30：晚于 16:10 的题材语料刷新（当日晚于收盘的催化正文先进库）与 15:35 收盘名单；
-    晚于龙虎榜榜生成（约 17:00 盘后），当日龙虎榜事实行（AMMO 2026-10-30a）当日可得。
+    时点 17:30：晚于 16:10 的题材语料刷新（当日晚于收盘的催化正文先进库）、15:35 收盘
+    名单采集与龙虎榜榜生成（约 17:00 盘后），当日龙虎榜事实行（AMMO 2026-10-30a）当日可得；
+    15:35 名单完整性由 17:00 盘后链预检 run_jiuyan_preflight 补齐保障（2026-11-04）。
 
     预算语义（§1.2-7）：本步属**预登记日包络**下的常态挂链（用户已批准 ≈29k tokens/交易日），
     故直接带 `--confirm-budget`；无包络的路必须走 CLI 人工批准。
@@ -1146,6 +1245,18 @@ def run_after_market_once(
 
     settings = get_settings()
     if settings.storage_backend == "mongodb":
+        # 盘后链预检（2026-11-04 用户裁决）：jiuyan 名单数与落库一致才往下跑；不一致先
+        # 幂等重采补齐，补齐仍失败 → 拦停（stoppedAt=jiuyanPreflight），不烧不完整投喂。
+        # pytest 环境跳过（§1.2-7 测试禁真调用：预检会真调 auth/浏览器铸造；
+        # run_jiuyan_preflight 自身单测走全 monkeypatch，不受此守卫影响）。
+        if not dry_run and not os.environ.get("PYTEST_CURRENT_TEST"):
+            preflight = run_jiuyan_preflight(datetime.now(_TZ).strftime("%Y-%m-%d"))
+            results["jiuyanPreflight"] = preflight
+            if not preflight.get("ok"):
+                return {"ok": False, "stoppedAt": "jiuyanPreflight",
+                        "results": results,
+                        "startedAt": started_at,
+                        "finishedAt": datetime.now(timezone.utc).isoformat()}
         snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
         try:
             hotlist_result = run_hotlist_sentiment_for_latest_day(

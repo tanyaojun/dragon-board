@@ -113,7 +113,7 @@ def test_collect_no_data_fail_visible():
     out = collect_limitup_labels(FakeDb([]), "2026-10-11")
     assert out["ok"] is True and out["noData"] is True
     assert out["stocks"] == [] and out["phase"] is None
-    assert "无涨停打标" in out["reason"]
+    assert "无涨停名单" in out["reason"]
 
 
 # ---- 批次A C1：degraded 文档结构化暴露 ----
@@ -174,3 +174,86 @@ def test_with_raw_includes_call_material_default_unchanged():
     # 共有字段两态一致（不因 with_raw 漂移）
     for k in ("code", "name", "label", "catalystDepth", "rank"):
         assert s_raw[k] == s_def[k]
+
+
+# ── 名单可见性与打标解耦（2026-11-04 用户需求）：抓到多少展示多少 ──
+
+
+class FakeDb2:
+    """driver_labels 与 jiuyan_action 分列的假库（名单解耦测试用）。"""
+
+    def __init__(self, docs, jiuyan_docs=None):
+        self._col = FakeCol(docs)
+        self._jiuyan = FakeCol(jiuyan_docs or [])
+
+    def __getitem__(self, name):
+        return self._jiuyan if name == "jiuyan_action" else self._col
+
+
+def _jiuyan_doc(date, slot, stocks_by_field):
+    return {"_id": f"{date}:{slot}", "fetchedAt": f"{date}T17:35:20",
+            "counts": {"all": sum(len(v) for v in stocks_by_field.values())},
+            "fields": [{"name": k, "stocks": v} for k, v in stocks_by_field.items()]}
+
+
+def test_collect_includes_unlabeled_rows():
+    """名单 3 只、打标 1 只 → unlabeled 行并入 stocks，coverage/source 透出进度（§4.0）。"""
+    jiuyan = _jiuyan_doc("2026-09-30", "final", {
+        "机器人": [{"code": "600000", "name": "已打标股"},
+                  {"code": "000001", "name": "未打标甲"}],
+        "光伏": [{"code": "300001", "name": "未打标乙"}]})
+    out = collect_limitup_labels(
+        FakeDb2([_phase_doc(), _stock("600000", 5)], [jiuyan]), "2026-09-30")
+    assert out["ok"] is True and out["noData"] is False
+    assert len(out["stocks"]) == 3
+    unlabeled = [s for s in out["stocks"] if s.get("unlabeled")]
+    assert len(unlabeled) == 2
+    for s in unlabeled:
+        assert s["labelSlot"] == "final" and s["jiuyanFetchedAt"] == "2026-09-30T17:35:20"
+        assert "label" not in s and "narrative" not in s  # 不伪造打标字段
+    assert {s["code"] for s in unlabeled} == {"000001", "300001"}
+    assert unlabeled[0]["board"] in ("机器人", "光伏")  # 板块名随名单段
+    cov = out["labelCoverage"]
+    assert cov == {"fetched": 3, "labeled": 1, "unlabeled": 2}
+    assert out["source"]["slot"] == "final"
+    assert out["source"]["listTotal"] == 3
+    assert out["source"]["fetchedAt"] == "2026-09-30T17:35:20"
+    assert out["summary"]["total"] == 3 and out["summary"]["unlabeledCount"] == 2
+    assert out["summary"]["label"] == {"ma_restructure": 1}  # 分布只数打标行
+    # 打标行在前（既有排序），未打标行沉底
+    assert out["stocks"][0]["code"] == "600000"
+
+
+def test_collect_source_midday_fallback_when_final_missing():
+    """final 缺失 → source 回落 midday（与 board_info 兑底同口径，slot 显式注记）。"""
+    jiuyan = _jiuyan_doc("2026-09-30", "midday", {"机器人": [{"code": "000001", "name": "甲"}]})
+    out = collect_limitup_labels(FakeDb2([], [jiuyan]), "2026-09-30")
+    assert out["source"]["slot"] == "midday"
+    assert out["labelCoverage"] == {"fetched": 1, "labeled": 0, "unlabeled": 1}
+    assert out["stocks"][0]["unlabeled"] is True
+
+
+def test_collect_no_list_and_no_labels_keeps_no_data():
+    """名单与打标双缺（盘前/非交易日）→ 既有 no_data 路径不变，source=None。"""
+    out = collect_limitup_labels(FakeDb2([], []), "2026-09-30")
+    assert out["noData"] is True and out["source"] is None
+    assert out["labelCoverage"] == {"fetched": None, "labeled": 0, "unlabeled": 0}
+    assert "未采集" in out["reason"]
+
+
+def test_collect_list_read_failure_degrades_not_blocks():
+    """名单读异常 → source.ok=False 结构化暴露，不阻断打标行（fail-visible）。"""
+    class BoomCol(FakeCol):
+        def find_one(self, query, projection=None):
+            if ":final" in str(query.get("_id")) or ":midday" in str(query.get("_id")):
+                raise RuntimeError("boom")
+            return super().find_one(query, projection)
+
+    class BoomDb(FakeDb2):
+        def __getitem__(self, name):
+            return BoomCol([]) if name == "jiuyan_action" else self._col
+
+    out = collect_limitup_labels(BoomDb([_stock("600000", 5)], []), "2026-09-30")
+    assert out["ok"] is True and len(out["stocks"]) == 1
+    assert out["source"]["ok"] is False and "boom" in out["source"]["error"]
+    assert out["labelCoverage"]["labeled"] == 1 and out["labelCoverage"]["fetched"] is None

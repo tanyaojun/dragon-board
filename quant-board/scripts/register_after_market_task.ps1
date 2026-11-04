@@ -10,6 +10,14 @@
 # 2026-09-28 触发时间 15:30 -> 18:00：15:30 是 daily 快照采集窗口，18:00 保证
 # 备份与归档拿到全天完整数据（含 daily 与 15:30 半小时槽）。
 #
+# 2026-11-04 触发时间 16:00 -> 17:00（用户裁决）：
+#   韭研异动解析盘后持续补充名单——15:35/16:00 版可能不完整（当日实测 15:35 版仅 44 只、
+#   晚间补齐到 136；THS 独立口径涨停 116+炸板 32），16:00 链 jiuyanLabel 据此打标锁死
+#   半截名单且 relay 叙事/归因等下游全部基于不完整名单。17:00 触发 + 链首预检
+#   run_jiuyan_preflight：远端探针 vs 落库对账，不一致先幂等重采补齐（零 jev token），
+#   补齐后仍不一致拦停链（stoppedAt=jiuyanPreflight），不烧不完整投喂。
+#   代价：盘后读数/脉拍句子晚 ≈1 小时（相对 16:00 时代）。
+#
 # 2026-10-08 触发时间 18:00 -> 16:00（用户裁决，盘后读数/脉拍句子提前可用）：
 #   half_hour 最后槽 15:00/EOD ≈15:05 落库，daily 型唯一槽 15:30 ≈15:40 落库，
 #   16:00 触发留 ≈20 分钟缓冲；R2 归档为 T-1 口径无当日竞态；脉拍门控所需的
@@ -57,7 +65,7 @@ if (-not (Test-Path $pythonExe)) {
 $action = New-ScheduledTaskAction -Execute $pythonExe `
     -Argument '-m backend.cli after-market-once' `
     -WorkingDirectory $quantBoardRoot
-$trigger = New-ScheduledTaskTrigger -Daily -At 16:00
+$trigger = New-ScheduledTaskTrigger -Daily -At 17:00
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
@@ -82,10 +90,10 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Description 'QuantBoard 盘后链（16:00）：热榜情绪计算 + MongoDB 备份（交易日 light / 周五 full，含 verify/prune/周五 R2 push）+ 四类型快照 R2 日归档 + 分带表重算（零模型调用）+ 脉拍等 advisory 步' `
+    -Description 'QuantBoard 盘后链（17:00，含 jiuyan 名单一致性预检）：热榜情绪计算 + MongoDB 备份（交易日 light / 周五 full，含 verify/prune/周五 R2 push）+ 四类型快照 R2 日归档 + 涨停/炸板打标 + 分带表重算（零模型调用）+ 脉拍等 advisory 步' `
     | Out-Null
 
 Write-Host "registered task '$taskName'"
 Write-Host "  action : $pythonExe -m backend.cli after-market-once"
 Write-Host "  workdir: $quantBoardRoot"
-Write-Host "  trigger: daily 16:00 (StartWhenAvailable, 电池/错过窗口补跑)"
+Write-Host "  trigger: daily 17:00 (StartWhenAvailable, 电池/错过窗口补跑)"

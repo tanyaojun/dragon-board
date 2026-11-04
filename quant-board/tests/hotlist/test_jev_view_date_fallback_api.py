@@ -254,3 +254,30 @@ def test_dieban_review_keeps_today_when_frame_exists(monkeypatch):
     client = TestClient(app)
     client.get("/api/hotlist-jev/dieban-review", params={"date": _TODAY})
     assert captured["date"] == _TODAY
+
+
+def test_limitup_labels_no_fallback_when_jiuyan_list_exists(monkeypatch):
+    """2026-11-04 收窄：指定日已有韭研名单（final/midday）→ 不回退，展示当日名单+未打标行。"""
+    captured = {}
+
+    def fake_collect(db, date, with_raw=False):
+        captured["date"] = date
+        return {"ok": True, "date": date, "stocks": [], "noData": False}
+
+    monkeypatch.setattr(
+        "backend.api.hotlist_jev_limitup_routes.collect_limitup_labels", fake_collect)
+    db = FakeDb({
+        "hotlist_jev_driver_labels": FakeCol([
+            {"_id": "x", "tradingDate": _D2, "origin": "stock_label", "code": "000001"}]),
+        "jiuyan_action": FakeCol([{"_id": f"{_TODAY}:final", "fetchedAt": "t"}]),
+    })
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: db,
+    )
+    client = TestClient(app)
+    r = client.get("/api/hotlist-jev/limitup-labels", params={"date": _TODAY})
+    assert r.status_code == 200
+    body = r.json()
+    assert captured["date"] == _TODAY
+    assert body["date"] == _TODAY and "dateFallback" not in body

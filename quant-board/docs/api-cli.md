@@ -720,7 +720,7 @@ error, days, logPath, artifactPath, logTail}`。产物先写临时文件、成�
 `data/backups/relay-band-table-days<N>.json`，绝不覆盖正式读数（否则门控会误判已覆盖最新日、
 永久跳过全窗重建）。
 
-该重算亦已挂入 **16:00 盘后链**（advisory 步 `relayBand`，`backend/operations/schedule.py`；
+该重算亦已挂入 **17:00 盘后链**（2026-11-04 起触发 16:00→17:00，用户裁决）（advisory 步 `relayBand`，`backend/operations/schedule.py`；
 路径/命令/原子替换的单一事实源 = `backend/services/jev/relay_band.py`）：门控自愈式，产物
 `window.end` < 最新 `status=ok 且 relayIndex 非空` 判定日才重算（已覆盖则零成本跳过；门控查询
 失败按 skipped 处理，与兄弟 advisory 步一致），因此页面日常不再滞后。

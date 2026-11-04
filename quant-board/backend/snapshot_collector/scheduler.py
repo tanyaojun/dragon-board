@@ -69,7 +69,9 @@ class SnapshotCollectorScheduler:
         self._completed_today: set[str] = set()
         self._completed_date: str | None = None
         # 韭研公社异动支线（交易日 12:05 midday / 15:35 final，每日各 ≤1 次；
-        # 2026-11-03 用户裁决：午盘只采名单，不投喂不打标，盘后链全量投喂）
+        # 2026-11-03 用户裁决：午盘只采名单，不投喂不打标，盘后链全量投喂；
+        # 2026-11-04 用户裁决：15:35 版可能不完整（韭研盘后补名单），完整性由
+        # 17:00 盘后链预检 run_jiuyan_preflight 保障：远端探针 vs 落库，不一致先补齐）
         self._jiuyan_task: asyncio.Task[None] | None = None
         self._jiuyan_last: dict[str, Any] | None = None
         self._jiuyan_theme_last: dict[str, Any] | None = None
@@ -500,6 +502,8 @@ snapshot_collector_scheduler = SnapshotCollectorScheduler()
 
 _JIUYAN_ATTEMPTS = (
     (datetime.time(12, 5), "midday"),
+    # 15:35 版可能不完整（韭研盘后补名单，2026-11-04 实测 44 只/晚间 136）：
+    # 完整性由 17:00 盘后链预检 run_jiuyan_preflight 保障（探针对账，不一致先补齐）。
     (datetime.time(15, 35), "final"),
 )
 
@@ -518,7 +522,8 @@ _THEME_CORPUS_ATTEMPTS = (
 # 午盘投喂已于 2026-11-03 用户裁决移除：午盘只采名单不投喂不打标，盘后链全量投喂。
 # 题材层龙头投喂时点（2026-10-20 用户裁决「每日自动投喂、累积到 20 交易日」；
 # **2026-10-30 用户裁决改 17:30**：龙虎榜榜约 17:00 盘后生成，17:30 挂链使当日龙虎榜
-# 事实行（AMMO 2026-10-30a lhb_line）当日可得；仍晚于 16:10 题材语料刷新 + 15:35 收盘名单；
+# 事实行（AMMO 2026-10-30a lhb_line）当日可得；仍晚于 16:10 题材语料刷新 + 15:35 收盘
+# 名单（名单完整性由 17:00 盘后链预检补齐保障，2026-11-04）；
 # 每日 1 call/龙头（实测 13 只 ≈29k tokens/日），子进程幂等（同股同日不重复投喂）。
 _THEME_LEADER_LABEL_AT = datetime.time(17, 30)
 # 失败重试：每日最多 3 次，间隔 ≥10 分钟（防一次通道抖动吃掉整天 pilot 样本）
@@ -557,7 +562,7 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
     （清缓存重新解析，可触发浏览器铸造/登录，见 jiuyan_auth），仍失败如实记状态。
 
     2026-11-03 用户裁决：午盘只采名单（落 `jiuyan_action` 供盘中读口），不投喂不打标；
-    投喂打标统一在 16:00 盘后链 `jiuyanLabel` 步全量执行（单日每股一次幂等保留）。
+    投喂打标统一在 17:00 盘后链 `jiuyanLabel` 步全量执行（单日每股一次幂等保留）。
 
     与主采集循环互不阻塞（collect 走 asyncio.to_thread）。60s 轮询足够（时点粒度=分钟）。
     """
