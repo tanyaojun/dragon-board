@@ -46,6 +46,8 @@
   .kpi .s{font-size:11px;color:var(--muted2);margin-top:2px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th{text-align:left;font-size:12px;color:var(--muted);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+  .th-sort{cursor:pointer;user-select:none}
+  .th-sort:hover{color:var(--fg)}
   th.sortable{cursor:pointer;user-select:none}
   th.sortable:hover{color:var(--blue)}
   td{padding:8px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap}
@@ -4324,7 +4326,9 @@ function toggleSidebar(){ $('app').classList.toggle('collapsed'); }
 const LB = { doc: null, dates: [], loading: false, error: null, selected: null, nodesRows: {}, seq: 0,
              pollTimer: null, quoteTimer: null, stockPage: 0,
              // V4-E2：盘中读数迁入（sector-pulse 读口，按 board 名匹配；成员=N10 冻结口径）
-             pulseRows: {}, pulseStored: false, pulseReason: null };
+             pulseRows: {}, pulseStored: false, pulseReason: null,
+             // 2026-11-05 用户需求：表头点击排序状态（板块表/成分股表各自独立）
+             boardSort: { key: null, dir: -1 }, stockSort: { key: null, dir: -1 } };
 function lbPill(txt, cls){ const p = $('lbPill'); if (!p) return;
   p.className = 'pill' + (cls ? ' ' + cls : '');
   p.innerHTML = '<span class="dot"></span>' + esc(txt); }
@@ -4398,12 +4402,16 @@ function lbPulseMap(pr){
   if (pr && pr.source === 'stored'){
     const doc = pr.doc || {};
     const fb15 = ((doc.frames || {})["15:00"] || {}).boards || {};
-    const rows = [].concat(doc.candidates || [], doc.all || [])
+    // all 在前、candidates 在后：两集合同 board 键，candidates 是唯一带 hint 字段的
+    // 覆盖层（后端只在候选层置 hint）；若 candidates 在前会被 all 无 hint 行覆盖，
+    // 今节点列恒为「--」（2026-11-05 修复）。
+    const rows = [].concat(doc.all || [], doc.candidates || [])
       .map(e => Object.assign({}, e, fb15[e.board]
         ? { volRatioMedian: fb15[e.board].volRatioMedian, volFrame: "15:00" } : {}));
     return { rows, stored: true, reason: pr.reason || null };
   }
-  return { rows: [].concat((pr && pr.candidates) || [], (pr && pr.all) || []),
+  // 同上：all 在前、candidates 在后（candidates 携带 hint，后者覆盖前者）
+  return { rows: [].concat((pr && pr.all) || [], (pr && pr.candidates) || []),
            stored: false, reason: (pr && pr.reason) || null };
 }
 // 归一（去空白/括号/分隔符 + 剥一个后缀）；匹配两侧（韭研 board、KPL plate）同规则
@@ -4437,6 +4445,49 @@ function lbZtCountOf(board){
   }
   return null;
 }
+// ══════════ 表头点击排序（2026-11-05 用户需求：连板行情板块表 + 成分股表）══════════
+// 仅改显示序，不动 lbView() 名单顺序、订阅链与选中态；null 恒排末尾（不伪造 0）；
+// 新列首击=降序（行情榜热→冷常用序），同列再击切换升降；数组值逐位比较（封板 今/昨 双键）。
+const NODE_ORD = { ice: 0, collapse: 1, weakening: 2, unknown: 3, normal: 4,
+                   brewing: 5, fermenting: 6, mainline: 7, wzs: 8 };   // 节点语义序：弱→强
+function lbThSort(label, key, st, fn){
+  const arrow = st.key === key ? (st.dir === 1 ? ' ▲' : ' ▼') : '';
+  return `<th class="th-sort" title="点击排序（新列首击降序，再击切换升降）" onclick="${fn}('${key}')">${label}${arrow}</th>`;
+}
+function lbSortToggle(st, key){
+  if (st.key === key) st.dir = -st.dir;
+  else { st.key = key; st.dir = -1; }
+}
+function lbBoardSortBy(key){ lbSortToggle(LB.boardSort, key); lbRenderBoards(); }
+function lbStockSortBy(key){ lbSortToggle(LB.stockSort, key); LB.stockPage = 0; lbRenderStocks(); }
+function lbCmpVals(a, b){
+  const an = a == null, bn = b == null;
+  if (an || bn) return an && bn ? 0 : (an ? 1 : -1);   // null 恒末尾
+  if (Array.isArray(a) || Array.isArray(b)){
+    const A = Array.isArray(a) ? a : [a], B = Array.isArray(b) ? b : [b];
+    for (let i = 0; i < Math.max(A.length, B.length); i++){
+      const c = lbCmpVals(A[i], B[i]);
+      if (c) return c;
+    }
+    return 0;
+  }
+  if (typeof a === 'string' || typeof b === 'string')
+    return String(a).localeCompare(String(b), 'zh');
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function lbSortedRows(list, st, valsOf){
+  if (!st.key) return list;
+  return list.slice().sort((x, y) => {
+    const vx = valsOf(x)[st.key], vy = valsOf(y)[st.key];
+    const c = lbCmpVals(vx, vy);
+    if (!c) return 0;
+    return (vx == null || vy == null) ? c : c * st.dir;   // null 末尾不随方向翻转
+  });
+}
+function lbSelectName(name){
+  const i = lbView().findIndex(f => f.name === name);   // 排序只改显示序，选中仍走 lbView 原序索引
+  if (i >= 0) lbSelectAt(i);
+}
 function lbRenderBoards(){
   // 列：#/板块/家数 + 节点/聚合涨幅（复刻板块节点模块：node + aggN10.pctMean）
   //   + 涨幅/红盘率/量能（V4-E2 迁入：sector-pulse 读口，成员=昨日封窗 N10 冻结，
@@ -4444,8 +4495,21 @@ function lbRenderBoards(){
   //   + 主力净额/成交额（成员股 KPL WS quotas 聚合，KQ.MAIN_NET/AMOUNT，未到流 '--'）
   const fields = lbView();
   const srcNote = LB.pulseStored ? '收盘帧读数' : 'TDX 实时快照 · 60s';
-  let html = '<thead><tr><th>#</th><th>板块</th><th>家数</th><th>昨节点</th><th>今节点</th><th>昨涨幅</th><th>今涨幅</th><th>红盘率</th><th>量能</th><th>封板 今/昨</th><th>主力净额</th><th>成交额</th></tr></thead><tbody>';
-  fields.forEach((f, i) => {
+  // 2026-11-05 用户需求：表头点击排序（# 序号列不排，为排序后显示序）
+  const thead = '<thead><tr><th>#</th>'
+    + lbThSort('板块', 'name', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('家数', 'count', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('昨节点', 'ynode', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('今节点', 'nnode', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('昨涨幅', 'aggP', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('今涨幅', 'pctT', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('红盘率', 'redP', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('量能', 'vol', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('封板 今/昨', 'zt', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('主力净额', 'mainNet', LB.boardSort, 'lbBoardSortBy')
+    + lbThSort('成交额', 'amount', LB.boardSort, 'lbBoardSortBy')
+    + '</tr></thead>';
+  const rows = fields.map((f) => {
     const nr = LB.nodesRows[f.name];
     const nodeCell = nr
       ? `<span class="badge ${NODE_BADGE[nr.node] || 'b-gray'}" title="${esc(NODE_TIP[nr.node] || '')}">${esc(NODE_CN[nr.node] || nr.node || '--')}</span>`
@@ -4491,12 +4555,13 @@ function lbRenderBoards(){
           + `两列口径不同（KPL plate vs 韭研 board，一票多板块各计一次）如实并列">`
         + `${ztNow == null ? '--' : ztNow} / ${ztPrev == null ? '--' : ztPrev}</span>`;
     // V4-E2 今节点：板块节点提示卡的实时节点逻辑平移（昨日转弱/退潮=弱转强候选；
-    // 实时红盘提示（聚合涨幅>0 且红盘率≥50%）→ 转强提示；候选未现红盘 → 候选观察）
+    // 实时红盘提示（聚合涨幅>0 且红盘率≥50%）→ 亮「弱转强」（2026-11-05 展示标签与 NODE_CN.wzs
+    // 统一，原「转强提示」，语义不变）；候选未现红盘 → 候选观察）
     const isCand = !!(pr && typeof pr.hint === 'boolean');
     const nowNodeCell = !isCand
       ? '<span style="color:var(--muted2)" title="非弱转强候选（昨日节点非转弱/退潮）">--</span>'
       : pr.hint
-        ? `<span class="badge b-green" title="昨日节点=${esc(NODE_CN[pr.yesterdayNode] || pr.yesterdayNode || '—')} · 实时红盘提示（聚合涨幅>0 且红盘率≥50%）——弱转强候选获实时确认，不进收盘判定">转强提示</span>`
+        ? `<span class="badge b-green" title="昨日节点=${esc(NODE_CN[pr.yesterdayNode] || pr.yesterdayNode || '—')} · 实时红盘提示（聚合涨幅>0 且红盘率≥50%）——弱转强候选获实时确认，不进收盘判定">弱转强</span>`
         : `<span class="badge b-gray" title="昨日节点=${esc(NODE_CN[pr.yesterdayNode] || pr.yesterdayNode || '—')} · 弱转强候选，尚未出现实时红盘提示">候选观察</span>`;
     // 主力净额/成交额 = 成员股 KPL WS 3001 quotas 聚合（与右栏个股表同源，未到流不算）
     let mainNet = null, amount = null, quoted = 0, total = 0;
@@ -4512,18 +4577,37 @@ function lbRenderBoards(){
       if (am != null) amount = (amount || 0) + am;
     }
     const aggTip2 = '成员股 KPL 行情聚合（已到流 ' + quoted + '/' + total + '；未到流不计入，非零值不伪造）';
+    return { f, nodeCell, aggP, pctT, redP, volCell, ztCell, nowNodeCell, mainNet, amount,
+             quoted, aggTip, pulseTip, strongTip, aggTip2,
+             sortVals: {
+               name: f.name || '',
+               count: (f.stocks || []).length,
+               ynode: nr ? (NODE_ORD[nr.node] != null ? NODE_ORD[nr.node] : null) : null,
+               nnode: isCand ? (pr.hint ? 2 : 1) : null,   // 弱转强>候选观察>非候选（非候选恒末尾）
+               aggP, pctT, redP,
+               vol: vr,
+               zt: (ztNow == null && ztPrev == null) ? null : [ztNow, ztPrev],
+               mainNet: quoted ? mainNet : null,
+               amount: quoted ? amount : null,
+             } };
+  });
+  const sorted = lbSortedRows(rows, LB.boardSort, r => r.sortVals);
+  let html = thead + '<tbody>';
+  sorted.forEach((r, i) => {
+    const f = r.f;
     const on = LB.selected === f.name ? ' class="on"' : '';
-    html += `<tr${on} onclick="lbSelectAt(${i})"><td class="kpl-uni">${i + 1}</td><td>${esc(f.name || '--')}</td>`
+    // 排序后显示序 ≠ lbView 原序，行点击改按板块名选中（lbSelectName → lbSelectAt）
+    html += `<tr${on} onclick="lbSelectName('${js(f.name)}')"><td class="kpl-uni">${i + 1}</td><td>${esc(f.name || '--')}</td>`
       + `<td class="kpl-uni">${(f.stocks || []).length}</td>`
-      + `<td>${nodeCell}</td>`
-      + `<td>${nowNodeCell}</td>`
-      + `<td class="kpl-uni ${kcls(aggP)}" title="${esc(aggTip)}">${kfmtNum(aggP) + (aggP == null ? '' : '%')}</td>`
-      + `<td class="kpl-uni ${kcls(pctT)}" title="${esc('盘中涨幅（' + pulseTip + '）')}">${kfmtNum(pctT) + (pctT == null ? '' : '%')}</td>`
-      + `<td class="kpl-uni" title="${esc('红盘率：' + pulseTip + '；' + strongTip)}">${redP == null ? '--' : Math.round(redP * 100) + '%'}</td>`
-      + `<td class="kpl-uni" title="${esc('量能：' + pulseTip)}">${volCell}</td>`
-      + `<td class="kpl-uni">${ztCell}</td>`
-      + `<td class="kpl-uni ${kcls(mainNet)}" title="${esc(aggTip2)}">${quoted ? kfmtAmt(mainNet) : '--'}</td>`
-      + `<td class="kpl-uni" title="${esc(aggTip2)}">${quoted ? kfmtAmt(amount) : '--'}</td></tr>`;
+      + `<td>${r.nodeCell}</td>`
+      + `<td>${r.nowNodeCell}</td>`
+      + `<td class="kpl-uni ${kcls(r.aggP)}" title="${esc(r.aggTip)}">${kfmtNum(r.aggP) + (r.aggP == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni ${kcls(r.pctT)}" title="${esc('盘中涨幅（' + r.pulseTip + '）')}">${kfmtNum(r.pctT) + (r.pctT == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni" title="${esc('红盘率：' + r.pulseTip + '；' + r.strongTip)}">${r.redP == null ? '--' : Math.round(r.redP * 100) + '%'}</td>`
+      + `<td class="kpl-uni" title="${esc('量能：' + r.pulseTip)}">${r.volCell}</td>`
+      + `<td class="kpl-uni">${r.ztCell}</td>`
+      + `<td class="kpl-uni ${kcls(r.mainNet)}" title="${esc(r.aggTip2)}">${r.quoted ? kfmtAmt(r.mainNet) : '--'}</td>`
+      + `<td class="kpl-uni" title="${esc(r.aggTip2)}">${r.quoted ? kfmtAmt(r.amount) : '--'}</td></tr>`;
   });
   html += '</tbody>';
   $('lbBoardTable').innerHTML = fields.length ? html
@@ -4613,7 +4697,7 @@ function wlRender(){
   const rows = (linkNote ? '<tr class="wl-head"><td colspan="8">' + esc(linkNote) + '</td></tr>' : '')
     + groups.map(g => {
     const nodeB = g.hint === true
-      ? '<span class="badge b-green">转强提示</span>'
+      ? '<span class="badge b-green">弱转强</span>'
       : g.hint === false ? '<span class="badge b-gray">候选观察</span>' : '--';
     const red = g.strongRedRatio == null ? null : Math.round(g.strongRedRatio * 100);
     const head = `<tr class="wl-head"><td colspan="8">`
@@ -4772,7 +4856,6 @@ function lbRenderStocks(){
   const totalPages = Math.max(1, Math.ceil(allRows.length / LB_STOCK_PAGE_SIZE));
   if (LB.stockPage >= totalPages) LB.stockPage = totalPages - 1;   // 数据刷新后页号越界回缩
   if (LB.stockPage < 0) LB.stockPage = 0;
-  const rows = allRows.slice(LB.stockPage * LB_STOCK_PAGE_SIZE, (LB.stockPage + 1) * LB_STOCK_PAGE_SIZE);
   $('lbStockTitle').textContent = f.name + ' · ' + allRows.length + ' 只';
   if (pager){
     pager.innerHTML = (LB.stockPage <= 0 && totalPages <= 1) ? ''
@@ -4785,13 +4868,12 @@ function lbRenderStocks(){
   // 行情值：WS 3001 混合流 quotas 优先（KPL.items，与板块行情同源）→ 3006 hq 兑底价/涨幅
   // → 韭研盘口快照价最后兜底（fail-visible，不猜数）；地位/换手/概念：
   // live-stocks-meta 惰性索引（与直播页共用同一份 LIVE.stockMeta，单一事实源）。
+  // 2026-11-05 用户需求：表头点击排序——先对全量行预计算+排序，再翻页切片；
+  // 排序只改显示序，不改数据源与订阅链。
   const metaMap = LIVE.stockMeta.map, metaBuilding = LIVE.stockMeta.building;
   const mv = (c, k) => { const m = metaMap[c]; return m ? (m[k] || m[k] === 0 ? m[k] : null) : null; };
   const dash = metaBuilding ? '…' : '--';
-  let html = '<thead><tr><th>代码</th><th>名称</th><th>领涨</th><th>现价</th><th>涨幅%</th>'
-    + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
-    + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
-  for (const s of rows){
+  const decorated = allRows.map(s => {
     const code = lbCode(s.code);
     const it = code ? KPL.items.get(code) : null;
     const q = it && it.quotas && it.quotas.length ? it.quotas : null;
@@ -4802,27 +4884,61 @@ function lbRenderStocks(){
     const rateRaw = gv(KQ.PCT) != null ? gv(KQ.PCT)
       : (hq && hq.inc_rate != null ? hq.inc_rate / 100 : null);
     const pct = (rateRaw != null && Math.abs(rateRaw) <= 21) ? rateRaw : null;   // 越界=口径异常 → '--'
-    const liveMark = q ? ' title="WS 实时覆盖"'
-      : (hq ? ' title="3006 实时价"'
-        : (s.price != null ? ' title="韭研盘口快照价（等待行情到流）"' : ''));
     // 连板列：韭研打标口径优先（本页核心名单），缺则回 KPL meta board_status；
     // num 实测为「X天X板」字符串（2026-10-29 修「X天X板板」）——纯数字才拼「板」，其余原样
     const numRaw = s.num == null ? '' : String(s.num);
     const lbTxt = numRaw ? (/^\d+$/.test(numRaw) ? numRaw + '板' : numRaw)
       : (mv(code, 'board_status') || dash);
+    const turn = mv(code, 'turnover');
+    const rank = mv(code, 'rank_title');
+    const conceptRaw = String(mv(code, 'concept') || '');
+    const lbNumMatch = String(lbTxt).match(/\d+/);   // 连板排序键：首段数字（「2天3板」取 2；无数字→null 恒末尾）
+    return { s, code, q, hq, price, pct, lbTxt,
+             turn, rank, concept: conceptRaw.slice(0, 24) || dash,
+             mainNet: gv(KQ.MAIN_NET), mainBuy: gv(KQ.MAIN_BUY), mainSell: gv(KQ.MAIN_SELL),
+             vr: gv(KQ.VR), amount: gv(KQ.AMOUNT),
+             sortVals: {
+               code: code || '', name: s.name || '', rank, price, pct, turn,
+               lb: lbNumMatch ? parseInt(lbNumMatch[0], 10) : null,
+               mainNet: gv(KQ.MAIN_NET), mainBuy: gv(KQ.MAIN_BUY), mainSell: gv(KQ.MAIN_SELL),
+               vr: gv(KQ.VR), amount: gv(KQ.AMOUNT), concept: conceptRaw,
+             } };
+  });
+  const rows = lbSortedRows(decorated, LB.stockSort, d => d.sortVals)
+    .slice(LB.stockPage * LB_STOCK_PAGE_SIZE, (LB.stockPage + 1) * LB_STOCK_PAGE_SIZE);
+  let html = '<thead><tr>'
+    + lbThSort('代码', 'code', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('名称', 'name', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('领涨', 'rank', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('现价', 'price', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('涨幅%', 'pct', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('换手%', 'turn', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('连板', 'lb', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('主力净', 'mainNet', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('主力买', 'mainBuy', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('主力卖', 'mainSell', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('量比', 'vr', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('成交额', 'amount', LB.stockSort, 'lbStockSortBy')
+    + lbThSort('概念', 'concept', LB.stockSort, 'lbStockSortBy')
+    + '</tr></thead><tbody>';
+  for (const d of rows){
+    const { s, code, q, hq, price, pct, lbTxt, turn, rank, concept } = d;
+    const liveMark = q ? ' title="WS 实时覆盖"'
+      : (hq ? ' title="3006 实时价"'
+        : (s.price != null ? ' title="韭研盘口快照价（等待行情到流）"' : ''));
     html += `<tr data-code="${code}"><td class="kpl-uni">${esc(code || '--')}</td><td>${esc(s.name || '--')}</td>`
-      + `<td><span class="badge b-purple">${esc(mv(code, 'rank_title') || dash)}</span></td>`
+      + `<td><span class="badge b-purple">${esc(rank || dash)}</span></td>`
       + `<td class="kpl-uni"${liveMark}>${kfmtNum(price)}</td>`
       + `<td class="kpl-uni ${kcls(pct)}" title="${pct == null ? '等待个股行情（3001 quotas / 3006 inc_rate ×100，越界护栏 21%）' : 'KPL 实时涨幅'}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
-      + `<td class="kpl-uni">${mv(code, 'turnover') != null ? kfmtNum(mv(code, 'turnover'), 1) : dash}</td>`
+      + `<td class="kpl-uni">${turn != null ? kfmtNum(turn, 1) : dash}</td>`
       + `<td class="kpl-uni">${esc(lbTxt)}</td>`
-      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_NET))}">${kfmtAmt(gv(KQ.MAIN_NET))}</td>`
-      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_BUY))}">${kfmtAmt(gv(KQ.MAIN_BUY))}</td>`
-      + `<td class="kpl-uni ${kcls(gv(KQ.MAIN_SELL))}">${kfmtAmt(gv(KQ.MAIN_SELL))}</td>`
-      + `<td class="kpl-uni">${kfmtNum(gv(KQ.VR))}</td>`
-      + `<td class="kpl-uni">${kfmtAmt(gv(KQ.AMOUNT))}</td>`
+      + `<td class="kpl-uni ${kcls(d.mainNet)}">${kfmtAmt(d.mainNet)}</td>`
+      + `<td class="kpl-uni ${kcls(d.mainBuy)}">${kfmtAmt(d.mainBuy)}</td>`
+      + `<td class="kpl-uni ${kcls(d.mainSell)}">${kfmtAmt(d.mainSell)}</td>`
+      + `<td class="kpl-uni">${kfmtNum(d.vr)}</td>`
+      + `<td class="kpl-uni">${kfmtAmt(d.amount)}</td>`
       + `<td class="kpl-sub" title="KPL 板块概念（${esc(String(mv(code, 'plate_id') || ''))
-        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）${LIVE.stockMeta.fb ? ' · 数据日 ' + esc(String(LIVE.stockMeta.fb)) : ''}">${esc(String(mv(code, 'concept') || '').slice(0, 24) || dash)}</td></tr>`;
+        || (LIVE.stockMeta.error || LIVE.stockMeta.failedPlates.length ? '索引构建失败，非未入宇宙' : '未入宇宙')}）${LIVE.stockMeta.fb ? ' · 数据日 ' + esc(String(LIVE.stockMeta.fb)) : ''}">${esc(concept)}</td></tr>`;
   }
   html += '</tbody>';
   $('lbStockTable').innerHTML = html;

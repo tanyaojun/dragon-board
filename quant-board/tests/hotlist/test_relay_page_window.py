@@ -1813,3 +1813,103 @@ def test_error_banners_suppressed_page_side(js: str):
     assert "题材龙头读口异常：" not in tl and "后台刷新失败（" not in tl, "tl 黄条须删除"
     # 2026-11-01 V4-E2：pulse 卡整个移除（涨幅/红盘率/量能三列迁连板行情板块目录）
     assert "pulseRender" not in js and "pulseBox" not in js, "pulse 卡应已删除"
+
+
+def test_lb_pulse_map_candidates_hint_not_overwritten(js: str, tmp_path):
+    """**行为**回归（2026-11-05 今节点列恒空修复）：lbPulseMap 归一时 candidates
+    是唯一携带 hint 字段的层，若被同 board 的 all 行覆盖，今节点列恒渲染「--」。
+
+    变异测试已验：把 concat 顺序改回 candidates 在前（旧缺陷版），本测试立即 FAIL。
+    """
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        _fn(js, "lbPulseMap"),
+        "const live = { candidates: [{ board: '机器人', hint: true }],",
+        "              all: [{ board: '机器人' }, { board: '半导体' }] };",
+        "const stored = { source: 'stored', reason: null, doc: { frames: { '15:00': { boards: {",
+        "  '机器人': { volRatioMedian: 1.2 },",
+        "  '候选板块': { volRatioMedian: 0.8 },",
+        "} } }, candidates: [{ board: '候选板块', hint: false }],",
+        "  all: [{ board: '候选板块' }, { board: '黄金' }] } };",
+        "const out = {};",
+        "for (const e of lbPulseMap(live).rows) if (e.board) out[e.board] = e;",
+        "const outS = {};",
+        "for (const e of lbPulseMap(stored).rows) if (e.board) outS[e.board] = e;",
+        "console.log(JSON.stringify({",
+        "  liveHint: out['机器人'].hint === true,",
+        "  livePlain: out['半导体'] && !('hint' in out['半导体']),",
+        "  storedHint: outS['候选板块'].hint === false,",
+        "  storedVol: outS['候选板块'].volRatioMedian === 0.8,",
+        "}));",
+    ])
+    script = tmp_path / "lb_pulse_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert got == {"liveHint": True, "livePlain": True,
+                   "storedHint": True, "storedVol": True}, (
+        f"lbPulseMap 归一不符：{got}（candidates 携带的 hint 不得被同 board all 行覆盖）")
+
+
+def test_lianban_header_sort_boards_and_stocks(js: str, tmp_path):
+    """连板行情板块表 + 成分股表表头点击排序（2026-11-05 用户需求）。
+
+    行为断言（Node 实跑 lbCmpVals/lbSortedRows/lbSortToggle，非只断言字样）：
+    数值列降序/升序切换、null 恒末尾不随方向翻转、封板 今/昨 双键逐位比较。
+    """
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    # 板块表：# 序号列不排序，其余 11 列均挂 lbBoardSortBy；成分股表 13 列全挂 lbStockSortBy
+    board_head = re.search(r"const thead = '<thead><tr><th>#</th>'([\s\S]*?)'</tr></thead>'", js)
+    assert board_head, "板块表应使用 lbThSort 构建可排序表头"
+    assert board_head.group(1).count("lbThSort(") == 11, "板块表应有 11 个可排序列"
+    assert "'lbBoardSortBy'" in board_head.group(1), "板块表头应挂 lbBoardSortBy"
+    stock_head = re.search(r"let html = '<thead><tr>'([\s\S]*?)'</tr></thead><tbody>'", js)
+    assert stock_head, "成分股表应使用 lbThSort 构建可排序表头"
+    assert stock_head.group(1).count("lbThSort(") == 13, "成分股表应有 13 个可排序列"
+    assert "'lbStockSortBy'" in stock_head.group(1), "成分股表头应挂 lbStockSortBy"
+    # 排序只改显示序：板块行点击按名选中（排序后行号≠lbView 原序）
+    assert "lbSelectName('" in js and "function lbSelectName(" in js, (
+        "排序后行点击须改走 lbSelectName（按板块名选中）")
+    # 成分股：全量排序后再翻页切片（跨页有序）
+    assert "lbSortedRows(decorated, LB.stockSort" in js \
+        and ".slice(LB.stockPage *" in js, (
+        "成分股须全量排序后再翻页切片")
+    # 行为回归：提取排序实跑（复用模块级 _fn，不再重复实现）
+    node_ord = js[js.index("const NODE_ORD = "):js.index(";", js.index("const NODE_ORD = ")) + 1]
+    src = "\n".join([
+        node_ord, _fn(js, "lbCmpVals"), _fn(js, "lbSortedRows"), _fn(js, "lbSortToggle"),
+        "const st = { key: 'pct', dir: -1 };",
+        "const rows = [{ n: 'A', v: { pct: 3.2 } }, { n: 'B', v: { pct: null } },",
+        "  { n: 'C', v: { pct: -1.5 } }, { n: 'D', v: { pct: 0 } }, { n: 'E', v: { pct: null } }];",
+        "const desc = lbSortedRows(rows, st, r => r.v).map(r => r.n);",
+        "st.dir = 1;",
+        "const asc = lbSortedRows(rows, st, r => r.v).map(r => r.n);",
+        "lbSortToggle(st, 'pct');   // 同列再击 → 回降序",
+        "const toggled = lbSortedRows(rows, st, r => r.v).map(r => r.n);",
+        "const st3 = { key: null, dir: -1 };",
+        "lbSortToggle(st3, 'pct');   // 新列首击应=降序（dir 仍 -1）",
+        "const firstClick = lbSortedRows(rows, st3, r => r.v).map(r => r.n);",
+        "const st2 = { key: 'zt', dir: -1 };",
+        "const zt = lbSortedRows([{ n: 'x', v: { zt: [3, 1] } }, { n: 'y', v: { zt: [3, null] } },",
+        "  { n: 'z', v: { zt: null } }, { n: 'w', v: { zt: [1, 2] } }], st2, r => r.v).map(r => r.n);",
+        "console.log(JSON.stringify({ desc, asc, toggled, firstClick, zt }));",
+    ])
+    script = tmp_path / "lb_sort_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert got["desc"] == ["A", "D", "C", "B", "E"], (
+        f"降序应为 3.2,0,-1.5,null,null（null 恒末尾）：{got['desc']}")
+    assert got["asc"] == ["C", "D", "A", "B", "E"], (
+        f"升序应为 -1.5,0,3.2,null,null（null 末尾不随方向翻转）：{got['asc']}")
+    assert got["toggled"] == got["desc"], "同列再击应切回降序"
+    assert got["firstClick"] == got["desc"], (
+        f"新列首击应=降序（st3 从 key:null 起）：{got['firstClick']}")
+    assert got["zt"] == ["y", "x", "w", "z"], (
+        f"封板 今/昨 应双键逐位比较、全缺恒末尾：{got['zt']}")
