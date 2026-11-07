@@ -303,3 +303,9 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   含回归用例），盘中实测 25 项稳定到流。
 - **边界**：该链路是本地单机诊断/观察链路；`serve_kpl_socket.py + kpl_page/` 布局已裁定遵循
   `serve_relay_page.py + relay_page/` 已入库先例（独立进程入口 + 静态页目录），不再迁移。
+- **上涨/下跌复盘板块字段 = 韭研产业名（2026-11-06 用户需求）**：`services/jev/jiuyan_board`
+  （单一事实源 `jiuyan_industry_stocks` 韭研产业树一级节点周频全成分快照，108 产业/2748 股）；
+  board = 韭研产业名（节点 `_id` 升序首个收录）；韭研未收录 → board 置空「未分板块」
+  （用户裁决：不回推主题材名，避免单列双口径）；产业库空 → `degraded:jiuyan_board`
+  + 响应 `jiuyanBoard` meta 披露；板块 chips/筛选/分布共用 resolved 值。真库对拍
+  2026-11-06 上涨名单 20/45 命中。详见 docs/hotlist-jev/jev-dieban-review-design.md §2 板块行。

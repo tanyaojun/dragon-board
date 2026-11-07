@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.core.limit_rules import limit_up_price
 from backend.operations import market_rise_pool as rp
 from backend.services.jev import jev_dieban_review as _die
+from backend.services.jev import jiuyan_board
 from backend.services.jev import jev_rise_review as svc
 
 
@@ -92,18 +93,22 @@ def _full_row(code, pct, price, prev_close, name="甲", touched=None, high=None,
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    """rise 缓存 + die 共享槽位缓存（同日期跨用例/跨假库会串读数）。"""
+    """rise 缓存 + die 共享槽位缓存 + 韭研板块索引缓存（同日期跨用例/跨假库会串读数）。"""
     svc.reset_rise_cache()
     _die.reset_full_market_cache()
+    jiuyan_board.reset_jiuyan_board_cache()
     yield
     svc.reset_rise_cache()
     _die.reset_full_market_cache()
+    jiuyan_board.reset_jiuyan_board_cache()
 
 
-def _db(frames, rows, rise_rows=None):
+def _db(frames, rows, rise_rows=None, industries=None):
     cols = {"snapshot_frames": FakeCol(frames), "snapshot_stock_rows": FakeCol(rows)}
     if rise_rows is not None:
         cols[rp.COLLECTION_ROWS] = FakeCol(rise_rows)
+    if industries is not None:
+        cols[jiuyan_board.COLLECTION_INDUSTRY_STOCKS] = FakeCol(industries)
     return FakeDb(cols)
 
 
@@ -136,6 +141,42 @@ def test_scan_file_rise_criterion():
     assert row["price"] == 10.8 and row["prevClose"] == 10.0
     assert row["limitUpPrice"] == 11.0
     assert row["touchedLimitUp"] is True
+
+
+# ── 板块字段 = 韭研产业名（2026-11-06，与下跌复盘同规同源）──────────────────
+def test_board_uses_jiuyan_industry_strict(monkeypatch):
+    """board = 韭研产业名；韭研未收录 → board 置空（用户裁决：不回推主题材名）。"""
+    industries = [
+        {"_id": "0002", "name": "第二产业", "batchDate": "2026-09-01", "stockN": 2,
+         "stocks": [{"code": "600001"}, {"code": "600002"}]},
+        {"_id": "0001", "name": "第一产业", "batchDate": "2026-09-01", "stockN": 1,
+         "stocks": [{"code": "600001"}]},
+    ]
+    rows = [_row("600001", -10.0, price=9.0, pre_close=10.0),
+            _row("600009", -8.0, price=9.2, pre_close=10.0)]
+    db = _db([_frame(D3)], rows, industries=industries)
+    _patch_full(monkeypatch, {D3: _rise_doc(D3, [_full_row("600010", 6.0, 10.6, 10.0)])})
+    out = svc.collect_rise_review(db, D3)
+    by_code = {s["code"]: s for s in out["stocks"]}
+
+    assert by_code["600001"]["board"] == "第一产业"           # 节点 _id 升序首个收录
+    assert by_code["600001"]["boardSource"] == "jiuyan"
+    assert by_code["600009"]["board"] is None                  # 韭研未收录 → 置空（不回推）
+    assert by_code["600009"]["boardSource"] is None
+    assert by_code["600010"]["board"] is None                  # 全市场行同样口径
+    assert by_code["600010"]["boardSource"] is None
+    assert out["jiuyanBoard"] == {"batchDate": "2026-09-01", "nodes": 2, "codes": 2}
+
+
+def test_jiuyan_board_empty_is_degraded(monkeypatch):
+    """产业库空 → 索引为空，板块全置空必须 degraded 结构化披露（与下跌复盘同规，不静默）。"""
+    db = _db([_frame(D3)], [_row("600001", -10.0, price=9.0, pre_close=10.0)])
+    _patch_full(monkeypatch, {})
+    out = svc.collect_rise_review(db, D3)
+    assert out["stocks"][0]["board"] is None
+    assert out["stocks"][0]["boardSource"] is None
+    assert out["jiuyanBoard"]["nodes"] == 0
+    assert {"scope": "jiuyan_board", "reason": "industry_stocks_empty"} in out["degraded"]
 
 
 def test_scan_file_rise_chi_next_board():

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.core.limit_rules import limit_down_price
 from backend.operations import market_dieban_pool as mdp
+from backend.services.jev import jiuyan_board
 from backend.services.jev import jev_dieban_review as svc
 
 
@@ -34,6 +35,8 @@ class FakeCol:
             got = row.get(key)
             if isinstance(want, dict):
                 if "$lt" in want and not (got is not None and got < want["$lt"]):
+                    return False
+                if "$gt" in want and not (got is not None and got > want["$gt"]):
                     return False
                 if "$in" in want and got not in want["$in"]:
                     return False
@@ -92,15 +95,20 @@ def _row(code, pct, name="X", price=10.0, pre_close=11.0, high=None, low=None,
 
 @pytest.fixture(autouse=True)
 def _clear_full_market_cache():
-    """进程内家数缓存跨用例会串读数 → 每用例前后各清一次。"""
+    """进程内家数缓存跨用例会串读数 → 每用例前后各清一次（含韭研板块索引缓存）。"""
     svc.reset_full_market_cache()
+    jiuyan_board.reset_jiuyan_board_cache()
     yield
     svc.reset_full_market_cache()
+    jiuyan_board.reset_jiuyan_board_cache()
 
 
-def _db(frames, rows, ref=None):
-    return FakeDb({"snapshot_frames": FakeCol(frames), "snapshot_stock_rows": FakeCol(rows),
-                   "market_daily_limit_down": FakeCol(ref or [])})
+def _db(frames, rows, ref=None, industries=None):
+    cols = {"snapshot_frames": FakeCol(frames), "snapshot_stock_rows": FakeCol(rows),
+            "market_daily_limit_down": FakeCol(ref or [])}
+    if industries is not None:
+        cols[jiuyan_board.COLLECTION_INDUSTRY_STOCKS] = FakeCol(industries)
+    return FakeDb(cols)
 
 
 def _patch_market(monkeypatch, count=0, source=mdp.SOURCE_EM, hist=None):
@@ -132,6 +140,56 @@ def test_flags_limit_down_and_one_word(monkeypatch):
     assert by_code["300004"]["limitDown"] is True           # 创业板 -19.9 达线
     assert out["pool"]["deepDrop"] == 4                    # 全部 ≤ -7%
     assert out["pool"]["deepDropOnly"] == 1                # 未跌停的大跌股
+
+
+# ── 板块字段 = 韭研产业名（2026-11-06，services/jev/jiuyan_board）────────────
+def test_board_uses_jiuyan_industry_strict(monkeypatch):
+    """board = 韭研一级产业名（节点 _id 序首个收录）；未收录置空（用户裁决：不回推）。"""
+    price = round(11.0 * 0.9, 2)
+    rows = [_row("600001", -10.0, name="甲", price=price, pre_close=11.0),
+            _row("600009", -9.0, name="乙", price=9.9, pre_close=11.0)]
+    industries = [
+        {"_id": "0002", "name": "第二产业", "batchDate": "2026-09-01", "stockN": 2,
+         "stocks": [{"code": "600001"}, {"code": "600002"}]},
+        {"_id": "0001", "name": "第一产业", "batchDate": "2026-09-01", "stockN": 1,
+         "stocks": [{"code": "600001"}]},
+    ]
+    db = _db([_frame(D3)], rows, industries=industries)
+    _patch_market(monkeypatch, count=1)
+    out = svc.collect_dieban_review(db, D3)
+    by_code = {s["code"]: s for s in out["stocks"]}
+
+    assert by_code["600001"]["board"] == "第一产业"           # 节点 _id 升序首个收录（确定性）
+    assert by_code["600001"]["boardSource"] == "jiuyan"
+    assert by_code["600009"]["board"] is None                  # 韭研未收录 → 置空（不回推）
+    assert by_code["600009"]["boardSource"] is None
+    assert out["jiuyanBoard"] == {"batchDate": "2026-09-01", "nodes": 2, "codes": 2}
+    assert {"scope": "jiuyan_board", "reason": "industry_stocks_empty"} not in out["degraded"]
+    # 板块分布 chips / 筛选共用同一 resolved 值（韭研名计入分布，不残留双口径）
+    assert any(b["board"] == "第一产业" for b in out["negative"]["topBoards"])
+
+
+def test_jiuyan_board_empty_is_degraded(monkeypatch):
+    """产业库空 → 索引为空，板块全置空必须 degraded 结构化披露（不静默伪 0）。"""
+    db = _db([_frame(D3)], [_row("600001", -10.0, price=9.0, pre_close=10.0)])
+    _patch_market(monkeypatch, count=1)
+    out = svc.collect_dieban_review(db, D3)
+    assert out["stocks"][0]["board"] is None
+    assert out["stocks"][0]["boardSource"] is None
+    assert out["jiuyanBoard"]["nodes"] == 0
+    assert {"scope": "jiuyan_board", "reason": "industry_stocks_empty"} in out["degraded"]
+
+
+def test_jiuyan_board_read_failed_reason():
+    """读库异常 ≠ 产业库真空：meta.reason 结构化区分根因，且失败不进缓存（下次重试）。"""
+    class BoomDb:
+        def __getitem__(self, _):
+            raise RuntimeError("mongo down")
+
+    idx, meta = jiuyan_board.board_index(BoomDb())
+    assert idx == {}
+    assert meta["nodes"] == 0 and meta["codes"] == 0
+    assert meta["reason"] == "industry_stocks_read_failed"
 
 
 # ── 连跌回溯 / 近3日基准 ───────────────────────────────────────────────────
@@ -339,7 +397,9 @@ def test_full_market_rows_merged_into_stocks(monkeypatch):
     assert out["fullMarket"]["rowsMissing"] is None
     em_only = by_code["000949"]
     assert em_only["limitDown"] is True and em_only["sources"] == ["full_market"]
-    assert em_only["board"] == "化学纤维" and em_only["emStreakDays"] == 1
+    # 2026-11-06 板块字段改韭研产业名：假库无产业成分 → board 置空（不回推 EM industry）
+    assert em_only["board"] is None and em_only["boardSource"] is None
+    assert em_only["emStreakDays"] == 1
     assert em_only["lastSealTime"] == "14:54:06"
     merged = by_code["600001"]
     assert merged["sources"] == ["pool", "full_market"]

@@ -36,6 +36,7 @@
 | 近3日跌幅 | 当前价 / 3 个交易日前 15:00 价 − 1 | 基准缺失（池外新进/历史不足）→ `ret3d=null` + `degraded:ret3d` |
 | 触板回撤 | `limitSummary.thsPools.pools.drawdown.items[].max_drawdown` | 同花顺大幅回撤池（当日曾触板后自高点深回撤）；负号统一换正幅值；池未采集 → `degraded`，不伪 0 |
 | 日内回撤 | 快照 `(high − price)/high` | 与触板回撤语义不同，列内用浅色 + tooltip 区分 |
+| 板块（2026-11-06 修订） | `services/jev/jiuyan_board`（单一事实源 `jiuyan_industry_stocks` 韭研产业树一级节点周频全成分快照，交易日 16:10 守卫刷新） | board = 韭研产业名（节点 `_id` 升序首个收录，确定性不猜）；韭研未收录 → board 置空「未分板块」（用户裁决：**不回推主题材/EM industry/THS industry_block**，避免单列双口径）；产业库空 → `degraded:jiuyan_board` + 响应 `jiuyanBoard` meta（batchDate/nodes/codes）披露；板块 chips/筛选/分布共用同一 resolved 值 |
 | 全市场跌停家数 | `operations/market_dieban_pool.limit_down_count` | 东财跌停池（近 30 自然日窗口）→ 行情快照（仅当日）→ 本地通达信日线（离线回填）→ 采集池末位降级；`source` 透传，降级时 `fullMarketScope=false` + `degraded` |
 | 全市场逐股 | `market_dieban_pool.rows_for_date`（`market_daily_limit_down_stocks`） | EM 载荷解析（p 为 ×1000 定点、lbt 为 HHMMSS）或本地日线两道闸重算；源优先级 EM > 快照 > TDX；`emStreakDays` 为 EM 自报字段透传（页面连跌口径仍统一用逐日回溯）；`count`/`rowsReturned`（=len(rows)+badRows）/`truncated` 三读数并列，读口 `rowsCount`=实际行数、`rowsDocCount`=自报家数 |
 | 同源分位 | `reference_counts(同源, 近 20 日)` + `percentile_fraction` | 同源样本 <10 → `percentile=null`（「分位不可算」）；**家数存疑日剔出窗**（`historyExcluded` 列明，见下节） |

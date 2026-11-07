@@ -3540,7 +3540,7 @@ function dbRenderKpi(D){
     + clickable('下跌家数', fx(p.down), `池内涨跌比 ${fx(p.ratio)}（涨 ${fx(p.up)} / 平 ${fx(p.flat)} / 池 ${fx(p.rows)} 只）`, 'down')
     + clickable('触板回撤', fx(dd.count), ddSub, 'draw')
     + card('跌幅最深', big.name ? `<span style="color:${pctColor(big.pctChange)}">${esc(big.name)}</span> ${num(big.pctChange)}%`
-        : '--', [big.board, (big.sources || []).includes('pool') ? '' :
+        : '--', [big.board ? esc(big.board) : '', (big.sources || []).includes('pool') ? '' :
         `（来源：${esc((big.sources || []).join('+'))}）`].filter(Boolean).join('')
         || '当日采集池内最深')
     + card('主力净流出', neg.netOutflowTotal == null ? '--'
@@ -3609,7 +3609,7 @@ function dbRenderRows(){
     const open = ui.openKey === entry.key;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('die', '${js(entry.key)}')">
       <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
-      <td${!s.board ? ' title="韭研产业未收录 · 未分板块"' : ''}>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${dbTypeBadges(s)}</td>
+      <td${!s.board ? ` title="${(((STATE.dieban || {}).jiuyanBoard || {}).nodes) ? '韭研产业未收录 · 未分板块' : '韭研产业库为空/未加载 · 未分板块'}"` : ''}>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${dbTypeBadges(s)}</td>
       <td class="num" style="color:${pctColor(s.pctChange)}">${fmtPctChg(s.pctChange)}</td>
       <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
       <td class="num" style="color:${pctColor(s.ret3d)}">${fmtPctChg(s.ret3d)}</td><td>${ddCell(s)}</td>
@@ -3658,7 +3658,8 @@ function dbSet(k, v){
   const stocks = (STATE.dieban || {}).stocks || [];
   let pool = dbScopePool(stocks, STATE.diebanFilter);
   // 切换范围后若原板块在新池内不存在，选项会退化成「全部」而筛选仍生效 → 0 行假象（review minor）
-  if (STATE.diebanFilter.board && !pool.some(x => (x.board || '') === STATE.diebanFilter.board)){
+  // 板块桶口径与 chips/行筛选一致：空 board = 「未分板块」（review major，同上涨复盘）
+  if (STATE.diebanFilter.board && !pool.some(x => (x.board || '未分板块') === STATE.diebanFilter.board)){
     STATE.diebanFilter.board = '';
     pool = dbScopePool(stocks, STATE.diebanFilter);
   }
@@ -3903,7 +3904,7 @@ function rsRenderRows(){
     const open = ui.openKey === entry.key;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('rise', '${js(entry.key)}')">
       <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
-      <td${!s.board ? ' title="韭研产业未收录 · 未分板块"' : ''}>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${rsTypeBadges(s)}</td>
+      <td${!s.board ? ` title="${(((STATE.rise || {}).jiuyanBoard || {}).nodes) ? '韭研产业未收录 · 未分板块' : '韭研产业库为空/未加载 · 未分板块'}"` : ''}>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${rsTypeBadges(s)}</td>
       <td class="num" style="color:${pctColor(s.pctChange)}">${fmtPctChg(s.pctChange)}</td>
       <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
       <td class="num" style="color:${pctColor(s.ret3d)}">${fmtPctChg(s.ret3d)}</td><td>${ampCell(s)}</td>
@@ -3949,8 +3950,9 @@ function rsSet(k, v){
   STATE.riseFilter[k] = v;
   const stocks = (STATE.rise || {}).stocks || [];
   let pool = rsScopePool(stocks, STATE.riseFilter);
-  // 切换范围后若原板块在新池内不存在 → 选项退化「全部」而筛选仍生效 → 0 行假象（同下跌复盘）
-  if (STATE.riseFilter.board && !pool.some(x => (x.board || '') === STATE.riseFilter.board)){
+  // 切换范围后若原板块在新池内不存在 → 选项退化「全部」而筛选仍生效 → 0 行假象（review minor）
+  // 板块桶口径与 chips/行筛选一致：空 board = 「未分板块」（严格置空后高频路径，review major）
+  if (STATE.riseFilter.board && !pool.some(x => (x.board || '未分板块') === STATE.riseFilter.board)){
     STATE.riseFilter.board = '';
     pool = rsScopePool(stocks, STATE.riseFilter);
   }

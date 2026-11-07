@@ -31,6 +31,10 @@ upsert 家数/逐股文档（1 次/日，受 15:05 截点、30 日窗口、120s 
 7. **日内回撤**：采集池行 `(high − price) / high`（正幅值）；回撤池行用 `max_drawdown` 幅值。
    两者语义不同，页面分列标注。
 8. **盘中**：15:00 帧未到（收盘前）→ 回落当日**最新** `half_hour` 槽，`intraday=True`。
+9. **板块字段**（2026-11-06）：board = 韭研产业树一级节点名（`services/jev/jiuyan_board`，
+   单一事实源 `jiuyan_industry_stocks` 周频全成分快照）；韭研未收录 → board 置空
+   （「未分板块」，用户裁决：不回推原板块名/主题材/EM industry/THS industry_block，
+   避免单列双口径）；产业库空 → `degraded[jiuyan_board]` 披露。
 
 **口径分域（2026-10-20 review major）**：`stocks[].limitDown` 是**并集判定**（采集池阈值线
 ∪ 全市场逐股名单），用于徽标/筛选；**采集池口径的统计**（`pool.dieban/deepDrop/deepDropOnly/
@@ -60,6 +64,7 @@ from backend.operations.market_dieban_pool import (
     rows_for_date,
     source_label,
 )
+from backend.services.jev import jiuyan_board
 from backend.services.jev.shape_types import shape_fields
 
 SNAPSHOT_TYPE = "half_hour"
@@ -492,6 +497,14 @@ def collect_dieban_review(db: Any, date: str,
         s.update(shape_fields(s["code"], s["pctChange"], s["price"], s["preClose"],
                               s["high"], s["low"], sealed_down=bool(s.get("limitDown"))))
 
+    # ── 板块字段 = 韭研产业名（2026-11-06 用户裁决，与上涨复盘同规同源）─────
+    # 单一事实源 = jiuyan_industry_stocks（产业树 stock-tree 周频全成分快照）；
+    # 韭研未收录 → board 置空（「未分板块」，不回推主题材/EM industry/THS
+    # industry_block，避免单列双口径）；产业库空 → degraded 结构化披露。
+    jy_index, jy_meta = jiuyan_board.board_index(db)
+    jiuyan_board.apply_boards(list(stocks.values()), jy_index)
+    jy_empty = bool(stocks) and not jy_meta["codes"]
+
     # ── 全市场跌停家数（同源分位；跨源存疑日剔除出分位窗并披露）────────────────
     history_all = (reference_counts(db, prior[-HISTORY_DAYS:], full_source)
                    if full_source in FULL_MARKET_SOURCES and prior else {})
@@ -567,6 +580,9 @@ def collect_dieban_review(db: Any, date: str,
     }
 
     degraded: list[dict[str, Any]] = []
+    if jy_empty:
+        degraded.append({"scope": "jiuyan_board",
+                         "reason": jy_meta.get("reason") or "industry_stocks_empty"})
     if drawdown_degraded:
         degraded.append({"scope": "ths_drawdown_pool", "reason": drawdown_degraded})
     if frame is None:
@@ -608,6 +624,8 @@ def collect_dieban_review(db: Any, date: str,
         "noData": no_data,
         "reason": reason,
         "fullMarket": full_market,
+        # 韭研板块归属口径披露：batchDate=成分快照批次、codes=可归属个股数（页面提示用）
+        "jiuyanBoard": jy_meta,
         "pool": {
             "rows": len(rows),
             "up": up,

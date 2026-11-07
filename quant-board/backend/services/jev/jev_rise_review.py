@@ -19,6 +19,10 @@
 5. **近3日累计涨幅**：当前价 / 3 个交易日前 15:00 价 − 1（仅采集池行有价格史）；基准缺失 → None。
 6. **振幅**：`(high − low) / preClose`（全市场日线行与采集池行都可算；缺前收 → None）。
 7. **盘中**：15:00 帧未到 → 回落当日最新 `half_hour` 槽，`intraday=True`。
+8. **板块字段**（2026-11-06）：board = 韭研产业树一级节点名（`services/jev/jiuyan_board`，
+   单一事实源 `jiuyan_industry_stocks` 周频全成分快照）；韭研未收录 → board 置空
+   （「未分板块」，用户裁决：不回推主题材名，避免单列双口径）；
+   产业库空 → `degraded[jiuyan_board]` 披露。
 
 槽位行 / 槽位缓存 / 交易日回溯 / 数值化等基础设施**直接复用 jev_dieban_review 的实现**
 （同一条 15:00 槽权威线，不写第二份）；进程内缓存（120s，含负缓存）同样复用其纪律。
@@ -35,6 +39,7 @@ from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID, percent
 from backend.core.limit_rules import is_limit_down_pct, limit_up_price
 from backend.operations import market_rise_pool as rp
 from backend.services.jev import jev_dieban_review as _die
+from backend.services.jev import jiuyan_board
 from backend.services.jev.shape_types import shape_fields
 
 SNAPSHOT_TYPE = _die.SNAPSHOT_TYPE
@@ -261,6 +266,14 @@ def collect_rise_review(db: Any, date: str,
                               sealed_down=is_limit_down_pct(s["pctChange"], s["code"]),
                               touched=s.get("touchedLimitUp")))
 
+    # ── 板块字段 = 韭研产业名（2026-11-06 用户裁决）────────────────────────────
+    # 单一事实源 = jiuyan_industry_stocks（产业树 stock-tree 周频全成分快照）；
+    # 韭研未收录 → board 置空（「未分板块」，不回推主题材名，避免单列双口径）；
+    # 产业库空 → degraded 结构化披露，不静默。
+    jy_index, jy_meta = jiuyan_board.board_index(db)
+    jiuyan_board.apply_boards(list(stocks.values()), jy_index)
+    jy_empty = bool(stocks) and not jy_meta["codes"]
+
     # ── 全市场上涨家数分位（同源 = 本地日线；缺文档日剔除并披露）────────────────
     history_dates = prior[-HISTORY_DAYS:]
     hist_docs = {str(d["_id"]): d for d in
@@ -314,6 +327,9 @@ def collect_rise_review(db: Any, date: str,
     top_boards = sorted(board_dist.items(), key=lambda kv: -kv[1])
 
     degraded: list[dict[str, Any]] = []
+    if jy_empty:
+        degraded.append({"scope": "jiuyan_board",
+                         "reason": jy_meta.get("reason") or "industry_stocks_empty"})
     if frame is None:
         degraded.append({"scope": "snapshot_frame", "reason": "no_half_hour_frame"})
     elif not rows:
@@ -344,6 +360,8 @@ def collect_rise_review(db: Any, date: str,
         "noData": no_data,
         "reason": reason,
         "fullRise": full_rise,
+        # 韭研板块归属口径披露：batchDate=成分快照批次、codes=可归属个股数（页面提示用）
+        "jiuyanBoard": jy_meta,
         "pool": {
             "rows": len(rows),
             "up": up,
