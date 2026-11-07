@@ -19,6 +19,7 @@ import websockets
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
+from backend.core.settings import get_settings
 from backend.services import kpl_ranking_service
 from backend.services.kpl_ranking_service import KplRankingError
 from backend.api.lhb_fallback import walk_back
@@ -143,11 +144,58 @@ async def plate_tree() -> JSONResponse:
 
 @router.get("/daban-list")
 async def daban_list(pid_type: int = 8) -> JSONResponse:
-    """2103 打板个股列表快照（KPL App 打板页签）：pid_type 8=集合竞价 / 0=即将涨停 / 6=风向标。
+    """2103 打板个股列表快照（KPL App 打板页签）：pid_type 8=集合竞价 / 0=即将涨停 /
+    6=风向标 / 1=涨停池。
 
     数据源=socket 2103 订阅推送的最近快照（collector 缓存），非历史回看——历史走 /daban-list-history。
     """
     return await _proxy_get(f"/api/kpl/daban-list?pid_type={pid_type}")
+
+
+@router.get("/daban-pool")
+def daban_pool(date: str = "") -> JSONResponse:
+    """涨停池（2103 pidType=1）按日存档读口（2026-11-07 涨停行情历史回放）。
+
+    数据源=本地 MongoDB kpl_daban_pool（DabanPoolArchiver 按日 upsert 的合并快照），
+    与实时读口 /daban-list 同构（items 字段一致，前端零转换渲染）。上游 HisDaBanList
+    白名单不认页签参数、实证返回默认集合非涨停池——无档返回结构化
+    {ok:false, degraded:true, reason:'no_archive'}（fail-visible，不回退默认集合冒充）。
+    storage_backend 非 mongodb 同样结构化降级。
+    """
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    if get_settings().storage_backend != "mongodb":
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
+            status_code=502)
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    from backend.services.kpl_daban_archiver import load_day
+
+    return JSONResponse(content=load_day(get_runtime_mongodb_database(), date))
+
+
+@router.get("/daban-bidding")
+def daban_bidding(date: str = "") -> JSONResponse:
+    """集合竞价（2103 pidType=8）按日存档读口（2026-11-08 历史回放）。
+
+    数据源=本地 MongoDB kpl_daban_pool 同日档的 bid_ 前缀字段（用户裁决：不另建数据集），
+    DabanPoolArchiver 单循环双通道按日 upsert；载荷映射为与 /daban-list 同构
+    （items/ts/max_size/…），前端零转换渲染。无档返回结构化
+    {ok:false, degraded:true, reason:'no_archive'}（fail-visible，不回退默认集合冒充）。
+    storage_backend 非 mongodb 同样结构化降级。
+    """
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    if get_settings().storage_backend != "mongodb":
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
+            status_code=502)
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    from backend.services.kpl_daban_archiver import load_day
+
+    return JSONResponse(content=load_day(get_runtime_mongodb_database(), date, lane="bid"))
 
 
 @router.get("/lhb-forecast")

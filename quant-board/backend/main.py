@@ -246,6 +246,17 @@ async def on_startup() -> None:
     # 题材日频因子盘后补算（2026-09-27 Task1）：仅 mongodb 后端启用，
     # 每日 18:30 补算缺因子行的交易日，幂等覆盖写 theme_daily_factors。
     theme_daily_factors_scheduler.start()
+    # 2103 涨停池+集合竞价按日存档（2026-11-07/08 历史回放数据源）：仅 mongodb 后端启用，
+    # 每 60s 拉本机 :8002 合并快照（pidType=1/8）合并进 kpl_daban_pool 同日档
+    # （_id=交易日；涨停池=成员并集+收盘态标注 sealed/broken；集合竞价=bid_ 前缀字段，
+    # 成员并集+字段刷新，不另建数据集）。best-effort：失败不阻断启动。
+    if get_settings().storage_backend == "mongodb":
+        try:
+            from backend.services.kpl_daban_archiver import get_daban_pool_archiver
+
+            get_daban_pool_archiver().start()
+        except Exception:
+            logger.exception("daban pool archiver startup failed; continue startup")
     # KPL 题材个股人气缓存（2026-09 热度口径 = KPL 人气总和，tck2.js）：后台线程
     # 每 10 分钟全量刷新，启动即预热一轮。best-effort：失败不阻断启动，
     # 题材热度缺失会以 kpl_hotness_unavailable 标记暴露在前端。
@@ -399,6 +410,9 @@ async def on_shutdown() -> None:
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
     await theme_daily_factors_scheduler.stop()
+    from backend.services.kpl_daban_archiver import close_daban_pool_archiver
+
+    await close_daban_pool_archiver()
     # KPL 缓存只在 mongodb 模式启动（与 startup 对称）：非 mongo 部署不尝试
     # 停止，避免每次关闭都打印 "kpl hotness shutdown failed" 异常栈（审计 L4）。
     if get_settings().storage_backend == "mongodb":

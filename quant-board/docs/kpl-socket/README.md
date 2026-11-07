@@ -326,7 +326,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 - 页签↔pidType：APK 资源数组 `PatternTabs × PatternTabsServerPidType`
   （androguard 解包 base_new.apk）：竞价=**8**、即将涨停=**0**、风向标=**6**、涨停=1、
-  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。已接 8/0/6 三页签，其余增量接。
+  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。已接 8/0/6/1 四页签（2026-11-07 增补涨停，
+  前端【涨停行情】页分组键=quotas[16] zt_reason 原因字段），其余增量接。
   风向标页签列序（4,5,11,12,13,14,15=涨幅/涨速/板块/主力净额/成交额/实际换手/实际流通）
   与 App 同屏逐项核对一致（2026-10-27 盘后真帧：冰山冷热/襄阳轴承/九阳股份/百洋股份等 25 只）。
 - 请求 `DaBanStockListReq{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count}`，
@@ -350,9 +351,16 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   （4连板/昨日首板/昨3连板…）= **quotas[10] state 列**（2026-10-27 与 App 同屏逐项核对）。
 - 数值/单位：涨停委买额/竞价净额/竞价成交额/实际流通等为**数值元**（1302937361.0=13.02 亿，
   与 App 同屏一致）；解析层可转 float 的转 float，不可转的原样字符串保留（fail-visible，
-  不猜换算）；quotas[20]/[21] 无目录名，只进 raw quotas。
-- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0|6`（:8000 同路径代理透传）→
-  `{ok, items[合并全量], max_size, pages, pages_expected, pages_missing, date, ts}`；
+  不猜换算）；quotas[20] 无目录名只进 raw quotas（1~5 小整数，与连板高度/原因榜排名均不相关，
+  未破译）；**quotas[21] 已破译（2026-11-07）= 涨停原因关联板块 PlateID（801xxx，与板块排行
+  PlateID 同码制；11-06 收盘帧 31/33 命中 /sector-ranking）→ 具名 `plate_id`，涨停行情页
+  强度/量比按此精确匹配（禁止名称匹配，用户裁决）；未破译位/新位一律原样留 quotas。**
+- **2103 全字段落库（2026-11-07 用户要求）**：涨停池日档 `kpl_daban_pool` items 保存
+  解析具名字段 + quotas×28 原始数组全量，快照级保存 pid_type/pages_meta（页级
+  order_type/sort_type/index/count/indexes）/raw_len——前端暂不展示的字段后台全量留存，
+  随时可取用（后续破译 pos20 可直接从 quotas 重提，无需重采）。
+- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0|6|1`（:8000 同路径代理透传）→
+  `{ok, items[合并全量], max_size, pages, pages_expected, pages_missing, pages_meta, date, ts}`；
   页缺口显式透出（如即将涨停页盘后 maxSize=30 但推送 items 空，属上游语义非链路故障）。
 - 无快照（采集未运行/未订阅）返回结构化降级 `{ok:false, degraded:true,
   reason:"no_daban_list_snapshot"}`，不伪装空列表。
@@ -404,6 +412,34 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `upstream_empty_list`（fail-visible，不伪装空页；历史模式单发不轮询，重拉需切换日期/重进页签）；
   历史 note（默认集合口径说明）在成功态同样经页内横幅透出；前端三页（集合竞价/即将涨停/风向标）已加
   精选板块同款日期切换 + 回实时工具条，历史模式单发不轮询。
+- **涨停池历史回放（2026-11-07 增补，pid=1 专属）**：上游 HisDaBanList 白名单不认页签参数，
+  实证返回默认集合非涨停池（2026-11-06 返 9 只 5~6.5% 涨幅非涨停股，连板/涨停时间/封单全空）
+  ——涨停池历史帧无上游读口。本地按日存档：:8000 `DabanPoolArchiver`（mongodb 模式 startup
+  启动）每 60s 拉本机 :8002 pidType=1 合并快照，按 stock_id **成员并集**合并进
+  `kpl_daban_pool`（_id=交易日）+ 收盘态标注：`pool_state='sealed'`=收盘仍封住 /
+  `'broken'`=曾入池后掉出即**炸板未回封**（字段保留其最后封住时快照 + last_seen_ts；
+  回封重新入池自动恢复 sealed；页缺口帧 pages_missing 非空时跳过掉出标注防误标）；
+  读口 `GET /api/kpl/daban-pool?date=`（与 /daban-list 同构零转换渲染；无档结构化
+  `no_archive`，前端逐日回退 ≤7 天找最近有档交易日并回填生效日，
+  板块行情成分股 kplShiftDate 同款）。存档自 2026-11-07 起，此前日期无源（如实透出不伪造）。
+  依赖：:8000（存档器）与 :8002（collector）同日盘中运行方有当日档。
+- **个股涨停原因详情（概念解析全文）无上游源，待 MITM 抓包（2026-11-08）**：App 个股
+  详情页「涨停原因」tab（组合原因串 + 分段概念解析全文）不在 2103 推送内（全帧 quotas
+  无含「+」串；pos12=短原因如「ST摘帽」，组合串=客户端拼接）；盲探 apphis 12 候选
+  action（ZhangTingReason/StockZtReason/ReasonList 等×StockDetail/HisHomeDingPan）
+  全部 errcode 1020 严格白名单（与 HisDaBanList 同款）。后续需抓一次真实 App 请求
+  （详情页→涨停原因 tab，导出 HAR）后补端点与解析；此前 tooltip 只显原因构成不伪装。
+- **集合竞价历史回放（2026-11-08 增补，pid=8；用户裁决：与涨停池同集合同日档，不另建数据集）**：
+  同一 `kpl_daban_pool` 日档的 **bid_ 前缀字段**（bid_items/bid_ts/bid_pages_meta/…），
+  DabanPoolArchiver 单循环双通道（pidType=1/8）顺序落库、各改各前缀互不覆盖；
+  语义=成员并集+字段随最新帧刷新（竞价五件套 9:25 后冻结，成员为当日曾入列全集；
+  无炸板语义，不标 pool_state）。读口 `GET /api/kpl/daban-bidding?date=`
+  （映射为 /daban-list 同构载荷，零转换渲染；无档/日档存在但竞价通道无数据均结构化
+  `no_archive`）。单通道故障不连带：涨停池拉取失败（含 fetch 阶段拒连/非 JSON）不阻断
+  竞价通道落库，各自记 status。**单写者约束**：日档写入为「读全文→仅改本通道前缀字段→
+  整 doc 回写」，仅在单实例单 archiver 顺序执行下保证两通道不互覆盖；多实例/多 worker
+  部署时读改写窗口重叠会丢对方通道更新，需改为 `$set` 按前缀字段写（当前本地单实例，
+  已知边界记录于此）。
 - **2026-10-27 晚上游异常实录（阴性记录，已于 2026-10-28 复测解除）**：当晚 HisDaBanList
   全参数形态 errcode 1020 / ZhiShuStockList_W8 errcode 0+空列表，两种形态抖动；
   游客/现役凭据/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、apphis/apphwhq/applhb

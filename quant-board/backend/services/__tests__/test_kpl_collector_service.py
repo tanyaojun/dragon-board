@@ -146,8 +146,9 @@ class TestSessionStateMachine:
 
         assert len(svc._codec.wbe_calls) == 1
         assert svc._codec.wbe_calls[0][0] == "2db64e49ca378ac2a21331deca1a7425"
-        # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 7 打板/情绪帧（含 2100 打板头）+ 21 帧 2103（3 页签×7 页）
-        assert len(fake.sent) == 35
+        # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 7 打板/情绪帧（含 2100 打板头）
+        # + 28 帧 2103（4 页签 8/0/6/1×7 页；2026-11-07 增补涨停页签）
+        assert len(fake.sent) == 42
         assert fake.sent[0][7:9] == (610).to_bytes(2, "big")
         assert fake.sent[1][7:9] == (602).to_bytes(2, "big")
         assert fake.sent[2][7:9] == (2301).to_bytes(2, "big")
@@ -157,8 +158,8 @@ class TestSessionStateMachine:
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
         # 6c) 打板/情绪订阅帧：2114/2115/2116/2119/2120/2126（ext 路由头 02 <cmdBE>）
         daban_cmds_sent = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
-        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 21
-        # 2103 分页订阅：3 页签×7 页，body=0xAA+req → pidType=f1、index=f4、count=f5=30
+        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 28
+        # 2103 分页订阅：4 页签（8/0/6/1）×7 页，body=0xAA+req → pidType=f1、index=f4、count=f5=30
         from backend.services import kpl_daban_protocol as daban
         pages = []
         for f in fake.sent[14:]:
@@ -167,7 +168,8 @@ class TestSessionStateMachine:
                           daban.pb_first(req, 5, -1)))
         assert pages == ([(8, i * 30, 30) for i in range(7)]
                          + [(0, i * 30, 30) for i in range(7)]
-                         + [(6, i * 30, 30) for i in range(7)])
+                         + [(6, i * 30, 30) for i in range(7)]
+                         + [(1, i * 30, 30) for i in range(7)])
         for f, c in zip(fake.sent[7:14], daban_cmds_sent[:7]):
             assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
@@ -417,6 +419,10 @@ class TestDabanDispatch:
         assert [it["stock_id"] for it in snap["items"]] == ["603028", "300604"]   # 按 index 拼接
         assert snap["pages"] == 2 and snap["pages_expected"] == 7 and snap["pages_missing"] == [2, 3, 4, 5, 6]
         assert "ts" in snap
+        # 页级元数据全量透出（2026-11-07 涨停池全量存档要求）
+        assert len(snap["pages_meta"]) == 2
+        assert snap["pages_meta"][0]["index"] == 0 and snap["pages_meta"][1]["index"] == 30
+        assert "count" in snap["pages_meta"][0] and "indexes" in snap["pages_meta"][0]
         # 另一页签无快照 → fail-visible 结构化降级，不伪装空列表
         miss = svc.get_daban_list(0)
         assert miss["ok"] is False and miss["degraded"] is True and miss["reason"] == "no_daban_list_snapshot"

@@ -47,11 +47,12 @@ CMD_FORECAST_LHB = 2112      # ServiceHqDaban.ForecastLHBResp（会不会上龙�
 
 # 2103 pidType → 页签（APK 资源数组 PatternTabs × PatternTabsServerPidType，2026-10-27
 # androguard 解包 base_new.apk：['竞价','即将涨停','风向标','涨停','炸板','跌停',…]
-# × ['8','0','6','1','2','3',…]）。已接：竞价/即将涨停/风向标；其余增量。
+# × ['8','0','6','1','2','3',…]）。已接：竞价/即将涨停/风向标/涨停；其余增量。
 DABAN_LIST_PIDS: Dict[int, str] = {
     8: "bidding",       # 集合竞价
     0: "about_to_zt",   # 即将涨停
     6: "wind_vane",     # 风向标
+    1: "zt_pool",       # 涨停（2026-11-07 增补：JEV 工作台【涨停行情】页，分组键=quotas[16] zt_reason）
 }
 
 DABAN_SUB_CMDS: tuple = (
@@ -431,11 +432,15 @@ DABAN_QUOTA_NAMES: Dict[int, str] = {
     17: "real_float",       # 实际流通（pos15）
     18: "max_zt_tur",       # 最大封单（pos23）
     19: "last_zt_time",     # 最后涨停时间（pos25）
+    21: "plate_id",         # 板块 ID（801xxx，与板块排行 PlateID 同码制；2026-11-07 实测
+                            # 11-06 收盘帧 31/33 命中 /sector-ranking——强度/量比按此精确匹配）
     22: "amplitude",        # 振幅（pos28）
     23: "turnover_rate",    # 换手率（pos29）
     24: "volume_ratio",     # 量比（pos30）
     25: "total_mv",         # 总市值（pos31）
     26: "float_mv",         # 流通市值（pos32）
+    # 20/27 未破译（20=1~5 小整数，与连板高度/原因榜排名均不相关；27 偶见 pid=8）；
+    # fail-visible：原样保留在 quotas 数组，待 MITM 对照 App 请求后补名。
 }
 
 
@@ -465,7 +470,9 @@ def parse_daban_stock_list(payload: bytes) -> Dict[str, Any]:
         for i, q in enumerate(quotas):
             name = DABAN_QUOTA_NAMES.get(i)
             if name is not None:
-                named[name] = _maybe_num(q)
+                # plate_id 保持字符串原样（801464 不能被 _maybe_num 转 801464.0，
+                # 否则前端 String() 后变 "801464.0"，与板块排行整型 ID 字符串化后永不相等）
+                named[name] = _s(q) if name == "plate_id" else _maybe_num(q)
         items.append({
             "stock_id": _s(pb_first(sub, 1, b"")),
             "name": _s(pb_first(sub, 2, b"")),

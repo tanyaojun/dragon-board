@@ -292,6 +292,11 @@ class TestDabanStockList2103:
         assert it["pct"] == pytest.approx(10.01)
         assert it["plate"] == "机器人概念\n海洋经济"
         assert it["price"] == pytest.approx(7.14)
+        # pos21 = 板块 PlateID（801xxx，2026-11-07 破译；强度/量比按此精确匹配，禁名称匹配）
+        quotas21 = quotas + ["", "", "4", "801464"]   # idx18/19 空，idx20 未破译，idx21=plate_id
+        payload21 = pb_varint_field(1, 1) + pb_bytes(20, _daban_item("000525", "红太阳", quotas21))
+        it21 = dp.parse_daban_stock_list(payload21)["items"][0]
+        assert it21["plate_id"] == "801464" and it21["quotas"][20] == "4"   # 20 未破译仅留 raw
         # fail-visible：全部原始列保留
         assert len(it["quotas"]) == 18
 
@@ -314,7 +319,7 @@ class TestDabanStockList2103:
 
     def test_registry_has_2103(self):
         assert dp.DABAN_RESP_PARSERS[dp.CMD_DABAN_STOCK_LIST] is dp.parse_daban_stock_list
-        assert dp.DABAN_LIST_PIDS == {8: "bidding", 0: "about_to_zt", 6: "wind_vane"}
+        assert dp.DABAN_LIST_PIDS == {8: "bidding", 0: "about_to_zt", 6: "wind_vane", 1: "zt_pool"}
 
 
 # ── 历史行解析（HisDaBanList HTTP，qg.q1 × PatternDynamicQuota 列位语义）────────

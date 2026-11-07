@@ -207,7 +207,7 @@ class KplCollectorService:
         human_delay: bool = True,
         daban_subs: bool = True,
         daban_market_type: int = 1,
-        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6),
+        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1),
         daban_list_page_size: int = 30,
         daban_list_pages: int = 7,
         daban_lhb: bool = False,
@@ -229,7 +229,8 @@ class KplCollectorService:
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
         self._daban_market_type = daban_market_type
-        # 2103 打板个股列表页签（8=集合竞价 0=即将涨停，kpl_daban_protocol.DABAN_LIST_PIDS）。
+        # 2103 打板个股列表页签（8=集合竞价 0=即将涨停 6=风向标 1=涨停，
+        # kpl_daban_protocol.DABAN_LIST_PIDS）。
         # 2026-10-27 实测（KPL_DEBUG 帧解密核对）：请求 count=200 服务器接受但推送页固定
         # 30 行（Resp.count 恒 30，竞价页 maxSize≈183）——分页只能 index 偏移多页订阅（App
         # 翻页同款），每页一帧订阅、按 Resp.index 合并成全量快照。
@@ -324,11 +325,19 @@ class KplCollectorService:
         expected_pages = max(1, -(-int(max_size or 0) // page_size))
         present = {i // page_size for i in pages if isinstance(i, int) and i >= 0}
         latest = max(p.get("ts", 0.0) for p in ordered)
+        # 页级元数据全量透出（order_type/sort_type/index/count/indexes），供存档层
+        # 全字段落库（2026-11-07 涨停池全量存档要求）；items 内含完整 quotas×28 原始数组。
+        pages_meta = [
+            {k: p.get(k) for k in ("index", "count", "order_type", "sort_type",
+                                    "indexes", "max_size", "date", "raw_len", "ts")}
+            for p in ordered
+        ]
         return {
             "ok": True, "pid_type": key, "items": items,
             "max_size": max_size, "date": ordered[-1].get("date", ""),
             "pages": len(pages), "pages_expected": expected_pages,
             "pages_missing": sorted(set(range(expected_pages)) - present),
+            "pages_meta": pages_meta,
             "ts": latest, "raw_len": sum(p.get("raw_len", 0) for p in ordered),
         }
 
