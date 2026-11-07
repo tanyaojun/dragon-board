@@ -2773,13 +2773,8 @@ function tlRenderRows(){
   const rows = tlSorted(tlFiltered());
   const pg = relayPageSlice(rows, f.page);
   f.page = pg.page;
-  // 判据代际混版守卫（P2，2026-10-24 review；与 relay 链 verBadge 同款 fail-visible）：
-  // v8 前向验收窗内 v6 旧档与 v8 新行同表混显时逐行徽章（非最新代琥珀），单版保持干净。
-  // 上下文取自区间全量行（非筛选子集），混版判定不随筛选漂移
-  const allRows = d.rows || [];
-  const vers = [...new Set(allRows.map(r => r.questionSetVersion || '?'))];
-  tlVerCtx.mixed = vers.length > 1;
-  tlVerCtx.curVer = (allRows.find(r => r.questionSetVersion) || {}).questionSetVersion;
+  // 判据代际混版徽章已迁详情卡（2026-11-07 用户裁决：列表日期格只留日期，
+  // 版本号在展开卡 meta 区常显；原逐行徽章 fail-visible 语义由详情卡「版本」项接管）
   const th = (label, key) => '<th class="sortable" onclick="tlSortBy(\'' + key + '\')">'
     + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
@@ -2801,17 +2796,8 @@ function tlPager(page, total){
     : '';
   return '<span class="pager" id="tlPagerEl">' + nav + '<span class="cnt">共 ' + total + ' 页</span></span>';
 }
-// 题材龙头行混版徽章上下文（tlRenderRows 每轮刷新重算；模块级对象避免逐行重扫全量行）
-const tlVerCtx = { mixed: false, curVer: null };
-function tlVerBadge(r){
-  if (!tlVerCtx.mixed || !r.questionSetVersion) return '';
-  const cur = r.questionSetVersion === tlVerCtx.curVer;
-  // 图例随删 hint 迁入徽章 tooltip（2026-10-27 用户裁决删左下角文字描述）
-  const tip = cur ? '最新代题集'
-    : '旧代题集（题集混版：判据口径不同，勿跨代直比；版本详见展开卡）';
-  return '<span class="badge ' + (cur ? 'b-gray' : 'b-amber') + '" title="' + esc(tip)
-    + '">' + esc(r.questionSetVersion) + '</span>';
-}
+// 题材龙头行版本/复盘徽章已删（2026-11-07 用户裁决）：列表日期格只留日期；版本号迁入
+// 详情卡 meta 区常显；audit 复盘标记前端完全不展示（画蛇添足，数据留存落库/原始 JSON）
 // v12 分轨徽章：主板/双创（main/growth）；v12+ 档缺 segment 显式标 legacy（读口已算）
 function tlSegBadge(r){
   const s = r.segmentLabel || r.segment;
@@ -2823,12 +2809,7 @@ function tlSegBadge(r){
   return '<span class="badge ' + (s === 'main' ? 'b-blue' : s === 'growth' ? 'b-purple' : 'b-gray')
     + '" title="' + esc(tip) + '">' + cn + '</span>';
 }
-// v12 复盘 audit 徽章（2026-10-28 两案：文投 10-27/10-28）
-function tlAuditBadge(r){
-  if (!r.auditFlag) return '';
-  return '<span class="badge b-amber" title="' + esc(r.auditNote || '复盘标记案例行')
-    + '">复盘</span>';
-}
+// v12 audit 徽章已删（2026-11-07 用户裁决：前端不展示，数据留存落库/原始 JSON）
 function tlCycleBadge(r){
   // P2 周期状态列：状态机当态 + 新龙反包标记（Q9:A 只标 leaderRebound）；
   // 状态机未覆盖（cycle 未回填）如实 '-',不伪态；jev 深度三层（左邻列）并列不仲裁；
@@ -2943,7 +2924,7 @@ function tlRowHtml(r, f){
       + '" onclick="tlRow(\'' + dkey + '\')">'
     + '<td class="num"><span class="lg-caret" title="展开/收敛 JEV 调用日志"'
       + ' onclick="event.stopPropagation(); tlToggle(\'' + js(tlKey(r)) + '\')">▶</span>'
-      + esc((r.tradingDate || '').slice(5)) + tlVerBadge(r) + tlAuditBadge(r) + '</td>'
+      + esc((r.tradingDate || '').slice(5)) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
     + '<td>' + esc(r.board || '-') + tlSegBadge(r) + '</td>'
@@ -3070,6 +3051,9 @@ function tlDetailHtml(r){
     + (u.output_tokens != null ? Number(u.output_tokens).toLocaleString() : '-') + '</div></div>'
     + '<div><div class="k">状态</div><div class="v" style="color:' + stColor + '">'
     + esc(st) + '</div></div>'
+    + '<div><div class="k">版本</div><div class="v" title="题集版本 + hash（原料代际详见下方 foot；'
+      + '混版时段判据口径不同，勿跨代直比）">'
+    + esc(r.questionSetVersion || '旧代') + '</div></div>'
     + '<div><div class="k">续板档位</div><div class="v">'
     + esc(TL_CHOICE_CN[r.choice] || r.choice || '-') + '</div></div>'
     + '<div><div class="k">结局</div><div class="v" style="color:' + outColor + '">'

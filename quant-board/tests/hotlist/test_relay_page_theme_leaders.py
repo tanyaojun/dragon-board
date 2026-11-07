@@ -101,25 +101,22 @@ def test_rows_span_range_with_date_column(html: str) -> None:
     assert "relayPageSlice(" in rows_fn, "分页复用 relayPageSlice（同涨停分析规格）"
 
 
-def test_mixed_generation_row_badge_like_relay_chain(html: str) -> None:
-    """P2（2026-10-24 review）：v8 验收窗内 v6 旧档与 v8 新行同表混显，行内必须有
-    版本徽章（与 relay 链 verBadge 同款：混版才出、非最新代琥珀），hint 带中性图例。
+def test_mixed_generation_badge_moved_to_detail_card(html: str) -> None:
+    """P2（2026-10-24 review）→ 2026-11-07 用户裁决迁卡：列表日期格不再挂版本徽章，
+    版本号在展开详情卡 meta 区常显（fail-visible 语义不变，视觉去噪）。
 
-    边界（10-22 结项裁决不回潮）：混版是设计内常态非告警态——只有**逐行徽章**，
-    不得重建页面级警示横幅；上下文取自区间全量行，不随筛选漂移。
+    边界不变：混版是设计内常态非告警态——不得重建页面级警示横幅。
     """
     rows_fn = _fn(html, "tlRenderRows")
-    assert "tlVerCtx.mixed = vers.length > 1" in rows_fn
-    assert "(d.rows || [])" in rows_fn, "混版判定必须用区间全量行（非筛选子集）"
+    assert "tlVerCtx" not in rows_fn, "逐行混版上下文已随徽章删除（死代码不得残留）"
     row = _fn(html, "tlRowHtml")
-    assert "tlVerBadge(r)" in row, "行内（日期格）必须挂版本徽章"
-    badge_fn = _fn(html, "tlVerBadge")
-    assert "b-amber" in badge_fn and "b-gray" in badge_fn, "非最新代琥珀/最新代灰"
-    assert "!tlVerCtx.mixed" in badge_fn, "单版序列不出徽章（保持干净）"
-    # 图例迁入徽章 tooltip（2026-10-27 用户裁决删左下角 hint 文字描述）
-    assert "题集混版" in badge_fn and "旧代题集" in badge_fn, "混版图例必须随徽章 title 保留"
+    assert "tlVerBadge" not in row, "日期格不得再挂版本徽章（迁详情卡）"
+    assert "tlVerBadge" not in html and "tlVerCtx" not in html, "旧徽章函数/上下文死代码删除"
+    detail = _fn(html, "tlDetailHtml")
+    assert "题集版本" in detail and "questionSetVersion" in detail, "详情卡必须常显版本号"
+    assert "勿跨代直比" in detail, "混版图例随版本项 tooltip 保留"
     banner = _fn(html, "tlRenderBanner")
-    assert "跨代不可比较" not in banner, "结项横幅不得回潮（徽章≠横幅）"
+    assert "跨代不可比较" not in banner, "结项横幅不得回潮"
 
 
 def test_count_text_removed_pagination_top_right(html: str) -> None:
@@ -481,12 +478,16 @@ def test_unsealed_leader_badge_in_streak_cell(html: str) -> None:
     assert "未封板" in row and "gain10" in row, "徽章带 10日涨幅身位"
 
 
-def test_segment_audit_badges_and_seal_tooltip(html: str) -> None:
-    """P2-8（review）：v12 分轨/audit 徽章必须挂行；未封板 tooltip 描述与 v12
-    复合排序实现一致（空间板组整体优先·组内 gain10 最高，非「首封最早优先」）。"""
+def test_segment_badge_and_seal_tooltip_audit_display_removed(html: str) -> None:
+    """P2-8（review）→ 2026-11-07 用户裁决两步收敛：audit 徽章先迁详情卡，随后
+    详情卡复盘标记也删除（画蛇添足）——auditFlag/auditNote 不在前端任何位置展示
+    （数据仍在落库文档/原始 JSON 可查，复算报告消费）。"""
     row = _fn(html, "tlRowHtml")
     assert "tlSegBadge(r)" in row, "板块格必须挂分轨徽章（主板/双创/legacy）"
-    assert "tlAuditBadge(r)" in row, "日期格必须挂 audit 徽章（复盘标记）"
+    assert "tlAuditBadge" not in html, "日期格 audit 徽章已删，死代码不得残留"
+    detail = _fn(html, "tlDetailHtml")
+    assert "复盘标记" not in detail and "auditFlag" not in detail \
+        and "auditNote" not in detail, "详情卡不得展示复盘标记（2026-11-07 用户裁决）"
     assert "高度≥2 空间板组整体优先" in row,         "未封板 tooltip 必须写 v12 复合排序真实规则（P2-7 矛盾修复）"
     assert "仅当轨内无当日封板候选时成龙一" not in row, "旧 tooltip 矛盾描述不得残留"
 
