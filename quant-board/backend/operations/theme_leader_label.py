@@ -58,6 +58,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     kpl_live_line,
     lhb_line,
     plate_series_line,
+    structure_facts_line,
     limitup_reason_line,
     plate_strength_line,
     rebound_popularity_line,
@@ -639,7 +640,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               live_line: str | None = None,
               market_summary: str | None = None,
               lhb_facts: dict | None = None,
-              rebound_line: str | None = None) -> dict:
+              rebound_line: str | None = None,
+              cycle: dict | None = None) -> dict:
     """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。"""
     from backend.operations.jev_label_jiuyan import market_facts_line
 
@@ -685,6 +687,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
         segment=row.get("segment"),
+        # v15 P1：结构事实行（周期/封板/高度/梯队，程序直读；Q8:A 校准参考不仲裁）
+        facts_line=structure_facts_line(row, cycle),
     )
     return {"docKind": DOC_KIND_LEADER, "narrative": narrative, "evidence": block,
             "driverCross": {"found": bool(driver_doc),
@@ -1086,7 +1090,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                                     unavailable=lm.get("unavailable")),
             market_summary=market_summary,
             lhb_facts=lhb_facts,
-            rebound_line=rebound_line)
+            rebound_line=rebound_line,
+            cycle=cyc or None)
         built["row"] = row
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k]
                               for k in (LEADER_QUESTIONS_REBOUND

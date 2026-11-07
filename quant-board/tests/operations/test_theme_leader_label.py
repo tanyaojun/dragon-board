@@ -204,9 +204,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
-    assert doc["questionSetVersion"] == "v14"
-    assert doc["questionSetHash"] == "510d1110c0a7"   # v13 未封板 insufficient 禁令（v1-v12 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-02a"   # 直播收窄+来源注记删（2026-10-30f）；题集 hash 不变
+    assert doc["questionSetVersion"] == "v15"
+    assert doc["questionSetHash"] == "97c50fd9fccb"   # v15 续板题基础率锚（v1-v14 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-11-04a"   # v15 P1：+结构事实行；题面 v14 四题零改动（续板题除外）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -254,7 +254,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v14", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v15", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -1358,6 +1358,10 @@ def test_v14_event_gate_wires_rebound_question_only_for_event_stock(env, monkeyp
     assert "人气证据链" in doc_hit["narrative"], "事件股叙事含人气证据链行组"
     assert "形式①人气股反包" in doc_hit["narrative"]
     assert "主升·第2轮" in doc_hit["narrative"], "周期背景只披露"
+    # v15 P1 接线（review 2026-11-05）：run→build_one 的 cycle 透传被误删时此处先红
+    assert "结构事实（程序直读" in doc_hit["narrative"], "v15 事实行恒在（fail-visible）"
+    assert "周期状态=主升" in doc_hit["narrative"], "cycle 文档透传到事实行"
+    assert "周期状态=不可考" in doc_miss["narrative"], "无周期文档时显式不可考不伪造"
     # 非事件股：2 题判答（B1:A 零额外调用）
     assert L.REBOUND_QUESTION not in doc_miss["questionsRaw"]
     assert "人气证据链" not in doc_miss["narrative"]

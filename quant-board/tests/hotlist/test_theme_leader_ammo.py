@@ -59,7 +59,12 @@ def test_question_set_frozen_hash_and_versions():
     B1-B5 全 A）**：①新增事件驱动题 leader_rebound_popularity（三档：新龙确立/
     单日反抽/insufficient，事件门=当日弱转强事件股，B1:A）；②人气证据链叙事行
     （AMMO 2026-11-02a，rebound_popularity_line，零新采集 B3:A）；③四题题面
-    一字不改。AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
+    一字不改。**v15 = 2026-11-04/05 续板题桶校准锚 + 结构事实行（预登记
+    theme-leader-v15-seal-calibration-preregistration-20261104，用户批准实施；门槛达成：
+    settled live 112≥100、wzs 数据轨 122 文档/413 事件≥20）**：①C1 续板题规则①加全样本基础率锚
+    （n=112 续板率 21.4%，归因：四桶无区分力+系统性高估）；②P1 结构事实行
+    （structure_facts_line，周期/封板/高度/梯队，Q8:A 并列披露不仲裁，AMMO 2026-11-04a）；
+    ③深度/延续/空间/人气四题题面一字不改，hash 随续板题面变更跨代不可比。AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
     ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
     **2026-10-24d review 处置**（断板改同名成员口径 prevStill，迁移场景不出负数；
@@ -75,9 +80,9 @@ def test_question_set_frozen_hash_and_versions():
     事实源，龙一+板内并列；板块强度行 plate_strength_line：KPL 层1 名称桥，未匹配
     fail-visible）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v14"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-02a"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "510d1110c0a7"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v15"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-04a"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "97c50fd9fccb"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
     # v14：+leader_rebound_popularity（事件驱动题，事件门在 operations 层）
@@ -112,6 +117,12 @@ def test_question_set_frozen_hash_and_versions():
     assert "锚缺失如实对待**不等于**可判 insufficient" in cont, "v13 反向禁令接线"
     assert "confidence ≤0.6" in cont, "v13 未封板锚缺失强制降置信"
     assert "结构基线行有任一出率桶时不得选本档" in A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["criteria"]["insufficient"], "v13 续板题对称禁令"
+    # v15 C1（预登记 theme-leader-v15-seal-calibration-preregistration-20261104）：
+    # 续板题规则①加全样本基础率锚（归因：四桶无区分力+系统性高估，0 行 ≥65%）
+    assert "全样本基础率锚" in cont, "v15 基础率锚必须写入续板题题面"
+    assert "n=112 续板率 21.4%" in cont, "锚必须是实测数字（程序直算可复算，非拍脑袋）"
+    assert "先验底" in cont and "≥45%" in cont, "锚语义：无差异化证据的先验底 + 高档抬升需点名强证据"
+    assert "必须先对齐的概率中枢" in cont, "v11 同桶中枢语义不得回潮"
     tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
     # v12 修订：引用义务扩源（结构再点火）+ ending 方向约束；v11 保守条款改为板块级表述
     assert "引用义务（v12 修订）" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"
@@ -124,6 +135,33 @@ def test_question_set_frozen_hash_and_versions():
     assert "贫料 ≠ 断流" in tdep and "igniting 优先" in tdep, "深度题贫料定向"
     thead = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
     assert "默认不得选 peak" in thead, "空间题跨题一致性"
+
+
+def test_structure_facts_line_v15_p1():
+    """v15 P1 结构事实行：四字段程序直读、Q8:A 边界（行首标注不作判据）、fail-visible
+    （缺字段显式不可考、行恒在），叙事排在基线后、空间锚前（校准参考行与锚行相邻）。"""
+    # 四字段全在：周期（stateCn 优先）/封板/高度/梯队
+    ln = A.structure_facts_line({"streak": 3, "ladderFollowers": 11, "leaderSealedToday": True},
+                                {"state": "mainrise", "stateCn": "主升"})
+    assert "周期状态=主升" in ln and "今日已封板=是" in ln
+    assert "真连板高度=3 板" in ln and "板内梯队=11 家" in ln
+    assert "供校准参考 · 不作判据" in ln, "Q8:A 边界：行首必须标注不仲裁"
+    # 缺字段 fail-visible：不可考显式、不伪造
+    ln0 = A.structure_facts_line({"leaderSealedToday": False}, None)
+    assert "不可考" in ln0 and "断板反包候选" in ln0
+    assert A.structure_facts_line({}, {"state": "wzs"}).count("不可考") >= 3
+    assert "弱转强" in A.structure_facts_line({}, {"state": "wzs"}), "stateCn 缺失时回退 CYCLE_STATE_CN"
+    # 叙事接线：基线 < 事实行 < 空间锚（旧行为不变：facts_line=None 不出行）
+    common = dict(date="2026-11-05", market_line="涨停 46 家",
+                  structure="结构行", baseline="结构基线：…",
+                  evidence_block="【题材证据】", leader_name="X", leader_code="1")
+    n = A.build_leader_narrative(**common, headroom="空间锚行",
+                                 facts_line=A.structure_facts_line(
+                                     {"streak": 3, "leaderSealedToday": True},
+                                     {"state": "mainrise"}))
+    assert n.index("结构基线") < n.index("结构事实（") < n.index("空间锚行")
+    n0 = A.build_leader_narrative(**common)
+    assert "结构事实（" not in n0, "facts_line=None 旧行为不变"
 
 
 def test_bucket_functions_stable_keys():

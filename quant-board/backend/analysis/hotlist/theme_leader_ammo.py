@@ -82,7 +82,15 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # （B3:A）——事件行/窗内逐日表现（观察池 windowChanges）/板内跟随（当日板内上板
 # 家数）/周期背景（theme_cycle 当日态，只披露不进判档硬判据）；④四题题面一字不改
 # （v13 §2.4 纪律），hash 随换代变更跨代不可比。
-QUESTION_SET_VERSION_THEME_LEADER = "v14"
+# **v15 = 2026-11-04/05 续板题桶校准锚 + 结构事实行（预登记
+# theme-leader-v15-seal-calibration-preregistration-20261104，用户批准实施；门槛已达成：
+# settled live 112≥100、wzs 数据轨 122 文档/413 事件≥20）**：①C1 续板题规则①加全样本基础率锚
+# （实测 n=112 续板率 21.4%，程序直算可复算 backend.operations.theme_leader_seal_stats）——
+# 归因发现四桶无区分力且系统性高估（0 行 ≥65%、verylow>low 颠倒、pEst≈30% vs 21.4%）；
+# ②P1 结构事实行（structure_facts_line，Q8:A 并列披露不仲裁）：周期状态/当日封板/
+# 真连板高度/板内梯队四字段程序直读随语料投喂，行首标注「供校准参考 · 不作判据」；
+# ③深度/延续/空间/人气四题题面一字不改（v13 §2.4 纪律），hash 随续板题面变更跨代不可比。
+QUESTION_SET_VERSION_THEME_LEADER = "v15"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -166,7 +174,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v14"
 # rebound_popularity_line——弱转强事件股专属证据行组（事件行/窗内逐日表现/板内跟随/
 # 周期背景），全部复用已落地数据零新采集；仅事件日出行，与 v14 事件门同源。原四题
 # 判据引用源未变，不构成题面改动。
-AMMO_VERSION_THEME_LEADER = "2026-11-02a"
+AMMO_VERSION_THEME_LEADER = "2026-11-04a"   # v15 P1：+结构事实行（周期/封板/高度/梯队，Q8:A 校准参考不仲裁）
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -442,8 +450,13 @@ QUESTIONS_THEME_LEADER = {
         "type": "choice",
         "instructions": "仅依据所给证据（板块结构、封板质量、题材证据与前瞻事件、同桶历史基准率），"
                         "判断该板块龙头在**次一交易日**继续封板（涨停）的概率落在哪一档？"
-                        "只判概率档位，不预测价格、不给出买卖建议。四条硬规则："
-                        "①同桶历史基准率是必须先对齐的概率中枢——取叙事「结构基线」行中最细"
+                        "只判概率档位，不预测价格、不给出买卖建议。硬规则："
+                        "①全样本基础率锚（v15）：题材龙头-日次一交易日续板率长期约两成"
+                        "（实测 2026-10-23~11-05：n=112 续板率 21.4%，程序直算），"
+                        "这是无差异化证据时的先验底——档位高于该锚两档（即 ≥45%）时，"
+                        "必须在理由点名锚未覆盖的当日强证据（当日新催化、承接突变、封板显著提前），"
+                        "不得凭整体行情乐观抬档；"
+                        "同桶历史基准率是必须先对齐的概率中枢——取叙事「结构基线」行中最细"
                         "同桶（方括号条件最全且已出率，即样本≥8 的那行）；偏离中枢一档以上"
                         "（上调或下调）都必须在理由中点名所依据的基线行具体数字，并给出锚未"
                         "覆盖的新证据（当日新催化、承接突变、封板质量异常等），不得凭感觉移动"
@@ -1391,6 +1404,37 @@ def rebound_popularity_line(event: dict | None, pool_row: dict | None,
     return "\n".join(lines)
 
 
+# v15 P1：题材周期状态机四态中文名——单一事实源导入 theme_cycle.STATE_LABELS_CN
+# （review 2026-11-05 P2：状态机加新态时此处静默漏更会把已回填周期误标「不可考」）
+from backend.analysis.hotlist.theme_cycle import STATE_LABELS_CN as CYCLE_STATE_CN
+
+
+def structure_facts_line(row: dict, cycle: dict | None = None) -> str:
+    """v15 P1（预登记 theme-leader-v15-seal-calibration-preregistration-20261104）：
+    结构事实行——程序直读的强校准变量并列披露，随龙头叙事投喂。
+
+    Q8:A 边界：行首显式标注「供校准参考 · 不作判据」，题面判据不引用本行，不仲裁档位。
+    四字段（归因文档 §2 分判度排序头部）：周期状态（theme_cycle 当态，join 于 operations 层）/
+    当日封板（False=断板反包候选，v12/v13 语义）/ 真连板高度 / 板内梯队家数。
+    缺失字段显式「不可考」，不伪造不缺行（§4.0：fail-visible，行恒在）。
+    """
+    cycle = cycle or {}
+    st_cn = cycle.get("stateCn") or CYCLE_STATE_CN.get(cycle.get("state"))
+    parts = ["周期状态=" + (str(st_cn) if st_cn else "不可考（周期未回填）")]
+    sealed = row.get("leaderSealedToday")
+    if sealed is True:
+        parts.append("今日已封板=是")
+    elif sealed is False:
+        parts.append("今日已封板=否（断板反包候选）")
+    else:
+        parts.append("今日封板状态=不可考")
+    streak = row.get("streak")
+    parts.append("真连板高度=" + (f"{streak} 板" if streak is not None else "不可考"))
+    ladder = row.get("ladderFollowers")
+    parts.append("板内梯队=" + (f"{ladder} 家" if ladder is not None else "不可考"))
+    return "结构事实（程序直读 · 供校准参考 · 不作判据）：" + "｜".join(parts)
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
@@ -1405,7 +1449,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            plate_strength: str | None = None,
                            series_line: str | None = None,
                            live_line: str | None = None,
-                           segment: str | None = None) -> str:
+                           segment: str | None = None,
+                           facts_line: str | None = None) -> str:
     """投喂给 jev 的完整叙事（顺序固定，便于逐字复现与回归比对）。
 
     evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本），
@@ -1422,6 +1467,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     排在打标交叉行后、证据块前；None 不出行。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
     事实行（lhb_line 产出，取数单一源 jev_lhb_ammo.collect_lhb_facts），排在涨停原因行后、
     证据块前；None 不出行（未传入时旧行为不变）。
+    `facts_line`（v15 P1）= 结构事实行（structure_facts_line 产出：周期/封板/高度/梯队），
+    校准参考行与锚行相邻：排在基线后、空间锚前；None 不出行（旧行为不变，板块级叙事不消费）。
     """
     lines = [
         f"{date} 交易日 · {market_line}",
@@ -1447,6 +1494,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     if live_line:
         lines.append(live_line)
     lines.append(baseline)
+    if facts_line:
+        lines.append(facts_line)   # v15 P1：结构事实行（校准参考，Q8:A 不仲裁）
     if headroom:
         lines.append(headroom)
     if driver_cross:
