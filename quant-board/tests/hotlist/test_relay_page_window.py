@@ -1471,7 +1471,7 @@ def test_dieban_page_fail_visible_banner(js: str):
     render = _fn(js, "renderDieban")
     assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
     # 读口不可用 ≠ 当日无负反馈：两个空态文案必须分开（不得把读失败说成「无数据」）
-    assert "读口不可用：未取到名单" in render and "当日无任何可用原始记录" in render
+    assert "数据源不可用：未取到名单" in render and "当日无任何可用原始记录" in render
     assert "当日无负反馈记录" not in render, "旧文案把读失败与真无数据混为一谈"
     # 新增披露字段必须在 banner/KPI 有消费（否则等于没披露）
     for key in ("full_market_count_disputed", "streak_lookback", "countDisputed"):
@@ -1505,7 +1505,7 @@ def test_rise_page_registered_like_dieban_review(html: str, js: str):
     assert "banner amber" not in banner and "innerHTML" not in banner, "页内不得再渲染任何横幅"
     render = _fn(js, "renderRise")
     assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
-    assert "读口不可用：未取到名单" in render and "当日无任何可用原始记录" in render
+    assert "数据源不可用：未取到名单" in render and "当日无任何可用原始记录" in render
     detail = _fn(js, "detailHtml")
     assert "rsDetailHtml" in detail, "detailHtml 须分支到上涨复盘行展开"
     lg_entries = _fn(js, "lgEntries")
@@ -1564,7 +1564,7 @@ def test_dieban_table_marks_and_sort_keys(js: str):
         assert label in badges, f"类型徽标缺：{label}"
     detail = _fn(js, "dbDetailHtml")
     assert "口径与读数" in detail and "读口行 JSON" in detail, "行展开须给口径读数 + 原始行 JSON"
-    assert "is_limit_down_pct" in detail, "展开卡须标注跌停判定单一事实源"
+    assert "按交易所涨跌停价格规则" in detail, "展开卡须标注跌停判定方式（2026-11-07 业务语言化）"
 
 
 # ── 2026-10-20 立项：全市场逐股明细接入（EM/TDX 回填 + 读口合并）────────────────
@@ -1618,7 +1618,7 @@ def test_relay_page_has_rewrap_kpi_and_row():
     html = (Path(__file__).resolve().parents[2] / "backend" / "relay_page" / "index.html").read_text(encoding="utf-8")
     assert "rewrap: '反包'" in html, "SCOPE_CN 缺反包范围"
     assert "onclick=\"lfScope('rewrap')\"" in html, "KPI 反包卡缺点击筛选"
-    assert "午盘触板口径" in html, "反包卡缺口径徽标（触板≠封板）"
+    assert "含盘中触板" in html, "反包卡缺口径徽标（触板≠封板，2026-11-07 业务语言化）"
     assert 'id="labelRewrapRow"' not in html and "lfRenderRewrap" not in html, "反包池文字行应已删除"
     assert "反包池 " not in html, "反包池文字描述应已删除"
     assert 'slotTag' not in html and ">午盘</span>" not in html, "驱动列「午盘」徽标应已删除"

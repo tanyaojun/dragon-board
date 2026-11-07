@@ -114,7 +114,7 @@ def test_mixed_generation_badge_moved_to_detail_card(html: str) -> None:
     assert "tlVerBadge" not in html and "tlVerCtx" not in html, "旧徽章函数/上下文死代码删除"
     detail = _fn(html, "tlDetailHtml")
     assert "题集版本" in detail and "questionSetVersion" in detail, "详情卡必须常显版本号"
-    assert "勿跨代直比" in detail, "混版图例随版本项 tooltip 保留"
+    assert "不宜直接对比" in detail, "版本项 tooltip 保留业务图例（不同版本结果不宜直接对比）"
     banner = _fn(html, "tlRenderBanner")
     assert "跨代不可比较" not in banner, "结项横幅不得回潮"
 
@@ -235,9 +235,8 @@ def test_narrative_writeback_has_generation_guard(html: str) -> None:
 def test_detail_card_is_jev_call_log_card(html: str) -> None:
     """明细卡 = lg-card 范式（与涨停分析同构：双模式 + 指标格 + 双栏 JSON 树 + 页脚）。"""
     detail = _fn(html, "tlDetailHtml")
-    for token in ('class="lg-card"', "🕐 jev ·", "详细信息", "原始 JSON", 'class="lg-meta"',
-                  'class="lg-panels"', "筛选 JSON", "⧉ 复制", 'class="lg-foot"',
-                  "存档 _id", "modelAnswers"):
+    for token in ('class="lg-card"', "🕐", "详细信息", "原始 JSON", 'class="lg-meta"',
+                  'class="lg-panels"', "筛选 JSON", "⧉ 复制", 'class="lg-foot"'):
         assert token in detail, f"明细卡缺少 {token}"
     assert "treeHtml(" in detail, "复用 JSON 树"
     assert "tlRedrawTrees()" in _fn(html, "tlFilter"), "筛选只重绘树"
@@ -316,7 +315,7 @@ def test_detail_card_has_rerun_button(html: str) -> None:
     assert 'button class="rerun"' in detail, "明细卡必须有重跑按钮"
     assert "tlRerun(" in detail and "stopPropagation" in detail
     assert "重跑中…" in detail, "busy 态文案"
-    assert "5-6K tokens" in detail, "confirm 警示必须写明成本（v12 实际）"
+    assert "调用 jev 模型重判该龙头" in detail, "重跑按钮 title 保留用途说明（2026-11-07 用户精简文案）"
     fn = _fn(html, "tlRerun")
     assert "window.confirm" in fn, "重跑前必须 confirm"
     assert "STATE.rerunBusy" in fn, "必须复用全局 busy 防并发（同 relay）"
@@ -453,7 +452,7 @@ def test_continue_probability_is_midpoint_weighted_expectation(html: str) -> Non
     assert "'insufficient' ? a : a" not in fn, "旧的「非 insufficient 质量和」求和不得复活"
     # 单元格 tooltip 注明口径（中值加权期望，非模型直读）
     row = _fn(html, "tlRowHtml")
-    assert "非模型直读" in row
+    assert "四档概率按中值" in row
 
 
 def test_evidence_cell_shows_l2_resolution_badge_even_when_industry_mapped(html: str) -> None:
@@ -488,7 +487,7 @@ def test_segment_badge_and_seal_tooltip_audit_display_removed(html: str) -> None
     detail = _fn(html, "tlDetailHtml")
     assert "复盘标记" not in detail and "auditFlag" not in detail \
         and "auditNote" not in detail, "详情卡不得展示复盘标记（2026-11-07 用户裁决）"
-    assert "高度≥2 空间板组整体优先" in row,         "未封板 tooltip 必须写 v12 复合排序真实规则（P2-7 矛盾修复）"
+    assert "优先高度、同高度取 10 日涨幅最高" in row, "未封板 tooltip 必须写排序真实规则（P2-7 矛盾修复，2026-11-07 业务语言化）"
     assert "仅当轨内无当日封板候选时成龙一" not in row, "旧 tooltip 矛盾描述不得残留"
 
 
@@ -497,7 +496,7 @@ def test_seal_tooltip_mentions_limit_down_rule(html: str) -> None:
 
     2026-11-01 用户裁决同步：候选另须真连板高度≥2，首板断板=跟风/统计口径。"""
     row = _fn(html, "tlRowHtml")
-    assert "须真连板高度≥2 且未跌停" in row
+    assert "须此前连板高度≥2 且当日未跌停" in row
 
 
 def test_kpl_live_stock_table_meta_columns(html):

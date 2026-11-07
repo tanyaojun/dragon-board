@@ -428,14 +428,14 @@
     <main class="content" id="content">
   <section id="tab-overview">
     <div class="page-head"><div><h2>总览</h2>
-      <p>当日逐槽日内演化 · EOD 日级窗口 · 大盘分时走势叠加直播看点。</p></div></div>
+      <p>当日各时段情绪演化与收盘日级汇总，叠加大盘分时走势与直播看点。</p></div></div>
     <div class="ph-line"></div>
     <div class="kpi-strip" id="kpiRow"></div>
     <div class="grid g3" style="margin-top:14px">
       <div class="card"><h3>📈 当日逐槽 · 日内演化 <span class="hint" id="slotHint"></span></h3>
         <table id="slotTable"></table></div>
       <div>
-        <div class="card"><h3>📅 EOD 日级窗口</h3><div id="eodCovNote"></div><table id="eodTable"></table></div>
+        <div class="card"><h3>📅 日级（收盘）</h3><div id="eodCovNote"></div><table id="eodTable"></table></div>
         <div class="card" style="margin-top:14px"><h3>🧮 今日连板情绪</h3><div id="relayMini" class="empty">加载中…</div></div>
       </div>
     </div>
@@ -447,7 +447,7 @@
 
   <section id="tab-lianban" style="display:none">
     <div class="page-head"><div><h2>连板行情</h2>
-      <p>韭研打标链每日连板名单（板块目录 → 成分股），右栏个股表与 KPL【板块行情】个股列表同字段（地位/现价/涨幅/换手/连板/主力净/买/卖/量比/成交额/概念），行情接入 KPL socket 实时推送；仅内存态动态更新，不落库、服务端不缓存。右栏页签：成分股（默认）/ 对比（韭研↔KPL 板块名录对照，原「板块对比」页并入）/ 盯盘（弱转强候选板块强势股自选，原「盯盘清单」页并入）；左侧板块列表点选即联动【对比】【盯盘】页签内容。</p></div></div>
+      <p>每日连板股名单与板块结构，右栏个股表实时刷新；页签：成分股（默认）/ 对比（两边板块名录对照）/ 盯盘（自选板块强势股）。左侧点选板块即联动右侧。</p></div></div>
     <div class="ph-line"></div>
     <div class="flex" style="margin-bottom:10px">
       <span class="pill" id="lbPill"><span class="dot"></span>未加载</span>
@@ -600,7 +600,7 @@
         <div class="lf-bar" id="nodesFilterBar" style="margin-top:6px">
           <input class="lf-q" placeholder="搜板块 / 龙头名…（回车生效）" value=""
                  onchange="nodesSet('q', this.value)">
-          <select title="节点筛选（确定性口径，非模型判读）" onchange="nodesSet('node', this.value)">
+          <select title="节点筛选（按规则计算，非 AI 判断）" onchange="nodesSet('node', this.value)">
             <option value="">节点 · 全部</option>
           </select>
           <button onclick="nodesClear()">清除筛选</button>
@@ -613,7 +613,7 @@
 
   <section id="tab-labels" style="display:none">
     <div class="page-head"><div><h2>涨停复盘</h2>
-      <p>韭研触板名单按 THS 炸板池二分（涨停 / 炸板 / 剔除）后的梯队分布、连板高度与驱动标签汇总。</p></div></div>
+      <p>涨停与炸板股名单，附梯队分布、连板高度与驱动标签汇总。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
       <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
@@ -626,10 +626,10 @@
 
   <section id="tab-dieban" style="display:none">
     <div class="page-head"><div><h2>下跌复盘</h2>
-      <p>个股名单 = 全市场逐股跌停 ∪ 采集池 ∪ 同花顺大幅回撤池；缺源与口径降级显式标注。</p></div></div>
+      <p>跌停股、触板回落与大幅回撤股名单；数据不全时会标注原因。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
-      <h3>负反馈名单与口径汇总 <span class="hint" id="diebanHint"></span></h3>
+      <h3>负反馈名单与汇总 <span class="hint" id="diebanHint"></span></h3>
       <div class="kpi-strip" id="diebanKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="diebanBoardRow"></div>
       <div class="lf-bar" id="diebanFilterBar"></div>
@@ -639,10 +639,10 @@
 
   <section id="tab-rise" style="display:none">
     <div class="page-head"><div><h2>上涨复盘</h2>
-      <p>个股名单 = 全市场逐股涨幅>5% 且未封涨停（本地日线重算）∪ 采集池快照行；触板未封/连涨/板块分布同下跌复盘展示语言。</p></div></div>
+      <p>涨幅超 5% 且未封板的个股名单；触板未封与连涨情况同下跌复盘展示。</p></div></div>
     <div class="ph-line"></div>
     <div class="card">
-      <h3>上涨名单与口径汇总 <span class="hint" id="riseHint"></span></h3>
+      <h3>上涨名单与汇总 <span class="hint" id="riseHint"></span></h3>
       <div class="kpi-strip" id="riseKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="riseBoardRow"></div>
       <div class="lf-bar" id="riseFilterBar"></div>
@@ -798,7 +798,7 @@
           </div>
           <h3 style="margin-bottom:8px;display:flex;align-items:center;flex-wrap:wrap;gap:8px">
             <span id="kplLhbTabTitle">个股</span>
-            <input type="date" id="kplLhbRtDate" style="margin-left:auto" onchange="kplLhbDateChange()" title="个股：默认当日 2112 预测实时/选日期回看实际上榜；营业部：按日榜（约 17:00 盘后生成）">
+            <input type="date" id="kplLhbRtDate" style="margin-left:auto" onchange="kplLhbDateChange()" title="个股：默认看当日预测名单，可选日期回看实际上榜；营业部：按日榜（约 17:00 更新）">
             <button onclick="kplLhbTodayBtn()">今日</button></h3>
           <div class="lf-bar" id="kplLhbSFilter" style="margin:0 0 8px">
             <input class="lf-q" id="kplLhbSq" placeholder="搜名称 / 代码 / 概念 / 原因…" oninput="kplLhbSSet('q', this.value)">
@@ -1358,7 +1358,7 @@ function prevTradingDayRef(date){
 // 分位列口径（2026-10-14）：当前槽温度在近 20 个交易日 EOD 日级温度中的分位（0-1）。
 // 后端 compute_and_upsert_for_slot 自动带出；存量 618 篇已回填 545 篇，其余为轨道
 // 早期「近20日有效样本 <10」的不可算日（fail-visible 留空，不补 0）。
-const PCT_TITLE = '温度分位 = 当前槽温度在近 20 个交易日 EOD 日级温度中的分位；有效样本 <10 或未回填的早期文档为空';
+const PCT_TITLE = '温度分位 = 当前温度在近 20 个交易日收盘温度中的排名；早期数据不足时为空';
 
 let _loadSeq = 0;
 async function loadAll(){
@@ -1455,7 +1455,7 @@ function renderKpis(){
   const conf = stageAns.confidence;
   const frame = intraday ? (sa.frame_stage || {}).choice : null;
   const stageTxt = STAGE_CN[stage] || stage || '-';
-  const stamp = intraday ? `盘中口径 · 最新槽 ${esc(slot.slotTime || '?')}` : '收盘口径';
+  const stamp = intraday ? `盘中 · 最新槽 ${esc(slot.slotTime || '?')}` : '收盘数据';
   // 帧档与序列档分歧=瞬时冲击信号（同 JEV 叙事面板 hero chip 语义）
   const stageSub = frame && frame !== stage ? `${stamp} · 当前帧 ${STAGE_CN[frame] || frame}` : stamp;
   const d = STATE.day || {};
@@ -1473,8 +1473,8 @@ function renderKpis(){
   if (intraday) why.push('EOD 日级文档未生成（daily:15:30 收盘快照后出数），前四张卡取最新 ok 槽的同题目实时读数');
   const note = why.length ? `<div class="kpi-note">⏳ 盘中降级：${why.join('；')}。</div>` : '';
   $('kpiRow').innerHTML = note + `
-    <div class="kpi"><div class="k">市场阶段${intraday ? '（盘中）' : ' (EOD)'}</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${intraday ? stageSub : (PATTERN_CN[(ea.day_pattern||{}).choice] || '收盘口径')}</div></div>
-    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}${confChip(tempAns.confidence)}</div><div class="s">${stamp === '收盘口径' ? '0-100 · 参照20日' : stamp}</div></div>
+    <div class="kpi"><div class="k">市场阶段${intraday ? '（盘中）' : '（收盘）'}</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${intraday ? stageSub : (PATTERN_CN[(ea.day_pattern||{}).choice] || '收盘数据')}</div></div>
+    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}${confChip(tempAns.confidence)}</div><div class="s">${stamp === '收盘数据' ? '0-100 · 参照20日' : stamp}</div></div>
     <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}${confChip(crowdAns.confidence)}</div><div class="s">${stamp}</div></div>
     <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">${intraday ? 'sequence_stage' : 'day_stage'}</div></div>
     ${relayCard('连板情绪指数', `<span style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</span>`, relaySub)}
@@ -1551,7 +1551,7 @@ function renderSlots(){
     const legacyBadge = e.evidenceRawUnavailable
       ? ` ${badge('历史证据未落档', 'b-amber')}` : '';
     eodRow = `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('slot', '${js(entry.key)}')">
-    <td><span class="lg-caret">▶</span><span class="num">EOD</span>${badge(e.status || '-', e.status === 'ok' ? 'b-green' : 'b-amber')}${legacyBadge}${covBadge}</td>
+    <td><span class="lg-caret">▶</span><span class="num">收盘</span>${badge(e.status || '-', e.status === 'ok' ? 'b-green' : 'b-amber')}${legacyBadge}${covBadge}</td>
     <td style="color:${stageColor(((e.answers||{}).day_stage||{}).choice)};font-weight:700">${STAGE_CN[((e.answers||{}).day_stage||{}).choice] || '-'}${confChip(((e.answers||{}).day_stage||{}).confidence)}</td>
     <td>日级</td>
     <td><div class="flex"><span class="num" style="color:${tempColor(e.scores ? Math.round(e.scores.day_temperature ?? NaN) : null)}">${e.scores && e.scores.day_temperature != null ? Math.round(e.scores.day_temperature) : '-'}</span></div>${confChip(((e.answers||{}).day_temperature||{}).confidence)}</td>
@@ -1803,7 +1803,7 @@ function renderRelayTab(){
   const wzsB = r => {
     const w = r.wzs;
     if (!w || !w.state) return '<span style="color:var(--muted2)">-</span>';
-    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点（收盘定档，重跑不改写）：昨日 idx ${esc(w.prevIdx)} → 定档 idx ${esc(w.idx)}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
+    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点（收盘确定，盘中不变）：昨日 idx ${esc(w.prevIdx)} → 定档 idx ${esc(w.idx)}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（连板指数从 ≤40 升到 ≥50 且升幅 ≥10）">弱转强</span>`;
     if (w.state === 'strong') {
       const B = STATE.wzsBaseline;
       const cont = w.continuation
@@ -1831,7 +1831,7 @@ function renderRelayTab(){
     // 2026-10-18 用户裁决：点行=只选中（KPI 跟随），不再自动展开；
     // 展开/收敛只归左侧三角（stopPropagation，不触发选中切换）。
     return `<tr class="lg-row${open ? ' open' : ''}${focused ? ' focus' : ''}" onclick="relayRow('${dkey}')">
-    <td class="num"><span class="lg-caret" title="展开/收敛 JEV 调用日志"
+    <td class="num"><span class="lg-caret" title="展开/收敛调用日志"
       onclick="event.stopPropagation(); relayToggle('${dkey}')">▶</span>${(r.tradingDate||'').slice(5)}${verBadge(r)}${gapBadge(r)}</td>
     <td class="num" style="color:${zoneIdxColor(r)};font-size:14px">${r.relayIndex ?? '-'}${confChip(((r.answers||{}).relay_index||{}).confidence)}</td>
     <td>${zoneBadge(r)}</td>
@@ -1874,7 +1874,7 @@ const ZONE_FILTER_LIST = ['green', 'toxic', 'mid', 'neutral', 'ice', 'na']
   .map(k => [k, ZONE_DEF[k].label === '—' ? '无指数' : ZONE_DEF[k].label]);
 function rWzsSel(){
   const cur = STATE.relayFilter.wzs || '';
-  return `<select title="弱转强节点筛选（确定性口径，非模型判读；三态=弱/弱转强/强）" onchange="rSet('wzs', this.value)">`
+  return `<select title="弱转强筛选（按规则计算，非 AI 判断）" onchange="rSet('wzs', this.value)">`
     + [['', '节点 · 全部'], ['wzs', '弱转强'], ['strong', '强'], ['weak', '弱']]
         .map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('')
     + `</select>`;
@@ -2022,7 +2022,7 @@ function renderLeaders(){
           const isPseudo = PSEUDO_BOARDS.has(s.name);
           const mainTag = isPseudo ? '主线·泛板块' : '主线';
           const tag = isMain ? ` <span class="badge b-purple">${mainTag}</span>`
-            : (isPseudo ? ' <span class="badge b-gray" title="韭研泛板块（非题材口径），不参与主线选择">泛板块</span>' : '');
+            : (isPseudo ? ' <span class="badge b-gray" title="韭研泛板块（非题材），不参与主线选择">泛板块</span>' : '');
           const surv = !chainOk ? `<span style="color:var(--muted)">不可算（${esc(chainReason)}）</span>`
             : `${s.survivors || 0}${s.survivors ? ' · ' + esc((s.survivorNames || []).join('、')) : ''}`;
           const prom = !chainOk ? '不可算' : `${s.promoted || 0}`;
@@ -2133,7 +2133,7 @@ function relayDocFetch(key){
 // 成功后丢弃旧存档并 loadAll 刷新序列 + 重拉当日完整存档；失败/降级结果在明细卡内一行提示（不弹阻断式 alert，不打横幅）。
 function relayRerun(key){
   if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
-  const ok = window.confirm(`重跑 ${key} 连板指数？\n\n将真实调用 jev 模型（约 7.5K tokens）重新判定该日并覆盖存档。\n建议仅在网络抖动导致 degraded 时使用。`);
+  const ok = window.confirm(`重跑 ${key} 连板指数？\n\n将真实调用 jev 模型（约 7.5K tokens）重新判定该日并覆盖存档。\n建议仅在数据异常或需要更新时使用。`);
   if (!ok) return;
   STATE.rerunBusy = key;
   STATE.rerunMsg = null;
@@ -2164,7 +2164,7 @@ function slotRerun(key){
   const d = e && e.doc;
   if (!d) return;
   const label = `${d.tradingDate || ''} ${d.slotTime || ''}`.trim();
-  const ok = window.confirm(`重跑 ${label} 帧级槽位情绪？\n\n将真实调用 jev 模型（约 3K tokens）重新判定该槽并覆盖存档。\n建议仅在网络抖动导致 degraded/no_data 时使用。`);
+  const ok = window.confirm(`重跑 ${label} 盘中槽位情绪？\n\n将真实调用 jev 模型（约 3K tokens）重新判定该槽并覆盖存档。\n建议仅在数据异常或缺失时使用。`);
   if (!ok) return;
   STATE.rerunBusy = key;
   STATE.rerunMsg = null;
@@ -2192,7 +2192,7 @@ function eodRerun(key){
   const e = (STATE.slotEntries || []).find(x => x.key === key && x.kind === 'eod');
   const d = e && e.doc;
   if (!d) return;
-  const ok = window.confirm(`重跑 ${d.tradingDate || ''} 日级 EOD 情绪？\n\n将真实调用 jev 模型（约 4K tokens）重新判定当日收盘口径并覆盖存档。\n建议仅在网络抖动导致 degraded/no_data 时使用。`);
+  const ok = window.confirm(`重跑 ${d.tradingDate || ''} 日级情绪？\n\n将真实调用 jev 模型（约 4K tokens）重新判定当日收盘数据并覆盖存档。\n建议仅在数据异常或缺失时使用。`);
   if (!ok) return;
   STATE.rerunBusy = key;
   STATE.rerunMsg = null;
@@ -2240,7 +2240,7 @@ function labRerun(key){
   // 守卫前置到 confirm 前（复审 nit：不弹一次不会发生的重跑确认框）
   const rerunDate = d.tradingDate || String(d._id || '').split(':')[0] || '';
   if (!rerunDate) { STATE.rerunMsg = { key: key, ok: false, text: '重跑未发起：行文档缺归属交易日（tradingDate/_id 均不可得，fail-visible）' }; renderLabels(); return; }
-  const ok = window.confirm(`重跑 ${rerunDate} ${d.name || d.code || ''} 驱动打标？\n\n将真实调用 jev 模型（约 2K tokens）重新判定该股四题并覆盖存档（沿用${d.labelSlot === 'midday' ? '午盘' : '收盘'}槽位口径）。`);
+  const ok = window.confirm(`重跑 ${rerunDate} ${d.name || d.code || ''} 驱动打标？\n\n将真实调用 jev 模型（约 2K tokens）重新判定该股并覆盖存档（沿用${d.labelSlot === 'midday' ? '午盘' : '收盘'}槽位）。`);
   if (!ok) return;
   STATE.rerunBusy = key;
   STATE.rerunMsg = null;
@@ -2603,7 +2603,7 @@ function renderNodes(){
       <td class="num">${prom}</td>
       <td class="num" style="color:${aggCol}" title="${esc(aggTip)}">${aggTxt}</td>
       <td class="num" style="color:${stCol}" title="${esc(stTip)}">${stTxt}</td>
-      <td><span class="badge ${NODE_BADGE[r.node] || 'b-gray'}" title="${esc(tip + prevTip)}（v1 确定性规则，收盘定档）">${nd}</span></td>
+      <td><span class="badge ${NODE_BADGE[r.node] || 'b-gray'}" title="${esc(tip + prevTip)}（按当日收盘数据确定）">${nd}</span></td>
       <td class="nd-basis" style="color:var(--muted)" title="${esc(basis)}">${esc(basis)}</td></tr>`
       + (open ? `<tr class="lg-detail"><td colspan="11"><div class="lg-card" onclick="event.stopPropagation()">
           <div class="lg-head"><div class="lg-title">${esc(r.board)} · 判定依据（v1 确定性规则，收盘定档）</div></div>
@@ -2760,14 +2760,14 @@ function tlRenderRows(){
     return;
   }
   if (d.error && !(d.rows || []).length){
-    el.innerHTML = '<tr><td class="empty">读口异常，未能取数（非「区间内无投喂」）</td></tr>';
+    el.innerHTML = '<tr><td class="empty">数据加载失败（并非区间内没有记录）</td></tr>';
     const ph1 = $('tlPagerHost'); if (ph1) ph1.innerHTML = ''; return;
   }
   const doc = d.doc || {};
   if (doc.no_data){
     el.innerHTML = '<tr><td class="empty">' + esc((STATE.relayRange || {}).start || '最早')
       + ' ~ ' + esc((STATE.relayRange || {}).end || '最新')
-      + ' 无题材龙头投喂记录（17:30 槽位未跑，或区间早于投产日）</td></tr>';
+      + ' 无题材龙头判定记录（当日 17:30 任务未运行，或区间早于功能上线）</td></tr>';
     const ph2 = $('tlPagerHost'); if (ph2) ph2.innerHTML = ''; return;
   }
   const rows = tlSorted(tlFiltered());
@@ -2802,10 +2802,10 @@ function tlPager(page, total){
 function tlSegBadge(r){
   const s = r.segmentLabel || r.segment;
   if (!s) return '';
-  const cn = s === 'main' ? '主板' : s === 'growth' ? '双创' : '旧口径';
+  const cn = s === 'main' ? '主板' : s === 'growth' ? '双创' : '旧版';
   const tip = s === 'main' ? '主板轨龙一（60/000-003）'
     : s === 'growth' ? '双创轨龙一（创业板/科创板）'
-    : 'v12 前旧口径行（未分轨，单龙一）';
+    : '旧版数据行（未分轨，单龙一）';
   return '<span class="badge ' + (s === 'main' ? 'b-blue' : s === 'growth' ? 'b-purple' : 'b-gray')
     + '" title="' + esc(tip) + '">' + cn + '</span>';
 }
@@ -2913,9 +2913,9 @@ function tlRowHtml(r, f){
         ? '；开盘 ' + (d2.openPct > 0 ? '+' : '') + d2.openPct + '%' : '';
       premHtml = '<b style="color:' + (v > 0 ? '#dc2626' : v < 0 ? '#16a34a' : 'var(--muted2)')
         + '" title="T+2（' + esc(String(d2.date || '')) + '）收盘 vs T+1 收盘' + esc(opTip)
-        + ' · settle_day2 / TDX 日线">' + (v > 0 ? '+' : '') + v.toFixed(2) + '%</b>';
+        + '">' + (v > 0 ? '+' : '') + v.toFixed(2) + '%</b>';
     } else {
-      premHtml = '<span style="color:var(--muted2)" title="T+2 溢价未回填（后日未到或挂链待自愈）">待回填</span>';
+      premHtml = '<span style="color:var(--muted2)" title="后一交易日未到，收盘后自动补上">待回填</span>';
     }
   }
   const dkey = js(r.tradingDate || '');
@@ -2930,12 +2930,12 @@ function tlRowHtml(r, f){
     + '<td>' + esc(r.board || '-') + tlSegBadge(r) + '</td>'
     + '<td>' + tlCycleBadge(r) + '</td>'
     + '<td class="num">' + (r.leaderSealedToday === false
-        ? '<span class="tl-ev" title="龙一复合排序（v12 用户三轮裁决）：高度≥2 空间板组整体优先、组内 10 日涨幅最高；全首板按当日首封最早。当日未封板=断板反包候选（须真连板高度≥2 且未跌停；首板断板=跟风/板块统计口径，2026-11-01 用户裁决），仍按 10 日涨幅参与组内排序；10日涨幅 '
+        ? '<span class="tl-ev" title="龙一排序规则：有 2 板以上候选时优先高度、同高度取 10 日涨幅最高；全是首板时按当日首封时间最早。未封板=断板反包候选（须此前连板高度≥2 且当日未跌停），仍按 10 日涨幅参与排序；10日涨幅 '
           + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '">未封板</span>'
         : (r.streak == null ? '-' : esc(String(r.streak)))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
     + '<td class="num">' + (r.boardN == null ? '-' : esc(String(r.boardN))) + '</td>'
-    + '<td class="num" title="四档概率中值（75/55/35/12.5）加权期望，离线评估同口径；非模型直读单值"><b>' + p.text + '</b></td>'
+    + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td>'
     + '<td>' + stage + '</td><td>' + contCell + '</td><td>' + headCell + '</td>'
     + '<td>' + evid + '</td><td>' + outcome + '</td><td class="num">' + premHtml + '</td></tr>'
@@ -3014,7 +3014,7 @@ function tlDetailHtml(r){
   const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
   const u = r.usage || {};
   const outKey = tlOutcomeKey(r);
-  const outTxt = outKey === 'pending' ? '待结算（等次一交易日）'
+  const outTxt = outKey === 'pending' ? '待结算'
     : (outKey === 'sealed' ? '续板' : '未续');
   const outColor = outKey === 'pending' ? 'var(--muted)' : outKey === 'sealed' ? '#16a34a' : '#dc2626';
   const gated = r.gate && r.gate.applied;
@@ -3026,14 +3026,14 @@ function tlDetailHtml(r){
   const rerunBtnHtml = '<button class="rerun"'
     + (busy ? ' disabled'
         : anyBusy ? ' disabled title="另有重跑进行中，防并发烧 token"'
-        : ' title="真实调用 jev 模型重判该龙头-日（约 5-6K tokens，v12 叙事变长；同板块 doc 幂等跳过、degraded 时一并自愈再 +≈5K），仅用于网络抖动导致 degraded/需更新时"')
+        : ' title="调用 jev 模型重判该龙头"')
     + ' onclick="event.stopPropagation(); tlRerun(\'' + js(tKey) + '\')">'
     + (busy ? '重跑中…' : '重跑') + '</button>';
   const rm = (STATE.rerunMsg && STATE.rerunMsg.key === tKey)
     ? '<div class="prov" style="margin:10px 0 0;color:'
       + (STATE.rerunMsg.ok ? 'var(--green)' : 'var(--amber)') + '">'
       + esc(STATE.rerunMsg.text) + '</div>' : '';
-  const head = '<div class="lg-head"><div class="lg-title">🕐 jev · '
+  const head = '<div class="lg-head"><div class="lg-title">🕐'
     + esc(r.tradingDate || '') + ' · ' + esc(r.name || '') + '（' + esc(r.code) + '）· '
     + esc(r.board || '-')
     + '<span class="lg-asof">' + esc(r.computedAt || '') + '</span></div>'
@@ -3051,15 +3051,14 @@ function tlDetailHtml(r){
     + (u.output_tokens != null ? Number(u.output_tokens).toLocaleString() : '-') + '</div></div>'
     + '<div><div class="k">状态</div><div class="v" style="color:' + stColor + '">'
     + esc(st) + '</div></div>'
-    + '<div><div class="k">版本</div><div class="v" title="题集版本 + hash（原料代际详见下方 foot；'
-      + '混版时段判据口径不同，勿跨代直比）">'
+    + '<div><div class="k">版本</div><div class="v" title="本次判定使用的题目集版本；不同版本判据不同，结果不宜直接对比">'
     + esc(r.questionSetVersion || '旧代') + '</div></div>'
     + '<div><div class="k">续板档位</div><div class="v">'
     + esc(TL_CHOICE_CN[r.choice] || r.choice || '-') + '</div></div>'
     + '<div><div class="k">结局</div><div class="v" style="color:' + outColor + '">'
     + esc(outTxt) + '</div></div>'
     + (outKey === 'sealed'
-      ? '<div><div class="k">T+2 溢价</div><div class="v" title="T+2 收盘 vs T+1 收盘（settle_day2 回填）">'
+      ? '<div><div class="k">T+2 溢价</div><div class="v" title="次日收盘 vs 当日收盘">'
         + (((r.outcomeDay2 || {}).closePct != null)
           ? (r.outcomeDay2.closePct > 0 ? '+' : '') + r.outcomeDay2.closePct + '%'
           : '待回填') + '</div></div>'
@@ -3101,19 +3100,15 @@ function tlDetailHtml(r){
       + esc(TL_CHOICE_CN[r.modelChoice] || r.modelChoice) + ' → 落库 '
       + esc(TL_CHOICE_CN[r.choice] || r.choice) + '（'
       + esc((r.gate || {}).label || TL_GATE_CN[(r.gate || {}).reason] || '证据缺失')
-      + '）；原答保留在 modelAnswers，消费端只用落库口径</div>' : '';
+      + '）；原始答案已存档备查</div>' : '';
   const err = r.errorCode
     ? '<div class="prov" style="margin:10px 0 0;color:var(--red)">调用异常 '
       + esc(r.errorCode) + '：' + esc(r.errorDetail || '') + '</div>' : '';
   const foot = '<div class="lg-foot">'
-    + '<span><span class="k">终端点</span> <code>POST /v1/systemone</code></span>'
     + '<span><span class="k">模型</span> <code>' + esc(r.model || '-') + '</code></span>'
     + '<span><span class="k">来源</span> <code>'
     + esc(TL_ORIGIN_CN[r.sampleOrigin] || r.sampleOrigin || '-') + '</code></span>'
-    + '<span><span class="k">题集版本</span> <code>' + esc(r.questionSetVersion || '-')
-    + '</code> <code>' + esc(r.questionSetHash || '-') + '</code></span>'
-    + '<span><span class="k">原料</span> <code>' + esc(r.ammoVersion || '-') + '</code></span>'
-    + '<span><span class="k">存档 _id</span> <code>' + esc(r.docId || '-') + '</code></span>'
+    + '<span><span class="k">题集版本</span> <code>' + esc(r.questionSetVersion || '-') + '</code></span>'
     + '</div>';
   return '<div class="lg-card" onclick="event.stopPropagation()">' + head + meta + rm + warn + err
     + body + foot + '</div>';
@@ -3138,11 +3133,11 @@ function tlRerun(key){
   if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
   const idx = key.indexOf(':');
   const date = key.slice(0, idx), code = key.slice(idx + 1);
-  const ok = window.confirm(`重跑 ${date} ${code} 龙头投喂？
+  const ok = window.confirm(`重跑 ${date} ${code} 龙头判定？
 
-将真实调用 jev 模型（约 5-6K tokens，v12 叙事变长）重新生成投喂语料并重判、覆盖存档（回填档保持回填标记；结局字段将清空，由次日自愈/评估回填）。
-同板块 doc 若已 status=ok 则幂等跳过；若 degraded 将一并重烧（再 +≈5K）。
-建议仅在网络抖动导致 degraded 时使用。`)
+将真实调用 jev 模型（约 5-6K tokens）重新判定并覆盖当前存档；结局字段将清空，次日收盘后自动补上。
+同一板块已判过的记录会跳过；异常记录会一并重算（再 +约 5K）。
+建议仅在数据异常或需要更新时使用。`)
   if (!ok) return;
   STATE.rerunBusy = key;
   STATE.rerunMsg = null;
@@ -3285,7 +3280,7 @@ function lfRenderKpi(stocks, f){
   const rwRate = (R && R.rate != null) ? Math.round(R.rate * 100) + '%' : '-';
   const rwPct = (R && R.ratePct20d != null) ? R.ratePct20d + ' 分位' : '-';
   const rwSeal = (R && R.reseal && R.reseal.total) ? `${R.reseal.n}/${R.reseal.total}（${Math.round(R.reseal.rate * 100)}%）` : '-';
-  const rwCaliber = (R && R.caliber === 'touched') ? ' · 午盘触板口径' : '';
+  const rwCaliber = (R && R.caliber === 'touched') ? ' · 含盘中触板' : '';
   const rwCard = (R && R.count != null)
     ? `<div class="kpi click${f.scope === 'rewrap' ? ' on' : ''}" title="反包=昨日断板（近5交易日在板、昨日未板）今日回封；弱转强信号。点击筛选反包股" onclick="lfScope('rewrap')"><div class="k">反包</div><div class="v">${R.count}</div><div class="s">反包率 ${rwRate} · 候选 ${R.candidate} · ${rwPct} · 炸板回封 ${rwSeal}${rwCaliber}</div></div>`
     : '';
@@ -3480,7 +3475,7 @@ function dbTypeBadges(s){
   if ((s.streak || 0) >= 2) out.push(`<span class="badge b-red">连跌${s.streak}</span>`);
   if (s.deepDrop && !s.limitDown) out.push(`<span class="badge b-amber">大跌</span>`);
   if (s.maxDrawdownPct != null) out.push(`<span class="badge b-amber">触板回撤</span>`);
-  if (s.shape) out.push(`<span class="badge ${SHAPE_TYPE_CLS[s.shape]}" title="游资复盘形态（振幅综合判断，日线近似口径）">${SHAPE_TYPE_CN[s.shape]}</span>`);
+  if (s.shape) out.push(`<span class="badge ${SHAPE_TYPE_CLS[s.shape]}" title="游资复盘形态（按日内振幅近似判断）">${SHAPE_TYPE_CN[s.shape]}</span>`);
   return out.length ? out.join(' ') : '<span class="badge b-gray">-</span>';
 }
 const dbSrcTxt = s => (s.sources || []).map(x => x === 'pool' ? '采集池快照'
@@ -3500,8 +3495,8 @@ function dbRenderBanner(D){
   const msgs = [];
   const DEG_CN = { ths_drawdown_pool: '同花顺大幅回撤池不可用（回撤逐股缺失）',
     snapshot_frame: '当日无 half_hour 快照帧', snapshot_stock_rows: '该槽无采集池行',
-    full_market_limit_down: '全市场跌停家数降级为采集池口径',
-    full_market_rows: '全市场逐股明细缺（回填/懒加载未覆盖该日，名单仅采集池口径）',
+    full_market_limit_down: '跌停家数暂按监控名单统计（全市场明细缺失）',
+    full_market_rows: '全市场逐股明细缺失，名单仅含监控到的个股',
     full_market_rows_cross_source: '家数与逐股来自不同源（EM 窗口滑出日：家数=权威源、逐股=本地日线重算），各自自洽，勿把行数当家数相减',
     full_market_count_disputed: '家数存疑：当日逐股名单比家数多（典型为 EM 空池被记成 0 家）→ 该日已剔出同源分位窗，家数仅供参考',
     streak_lookback: '连跌回溯窗内缺 15:00 采集池行 → 连跌天数可能被截断（缺几日已在 reason 标注）',
@@ -3529,10 +3524,10 @@ function dbRenderKpi(D){
   // 跨源/家数存疑日两个读数不同源，做差会印出无意义负数 → 明确说明不做差（review minor）
   const diffTxt = gap == null ? '' : (fm.crossSource || fm.countDisputed)
     ? '（家数与逐股跨源 · 不做差）' : `（池外 ${gap}）`;
-  const rowsTxt = fm.rowsMissing ? '逐股明细缺 · 名单仅采集池口径'
+  const rowsTxt = fm.rowsMissing ? '逐股明细缺失 · 名单仅含监控名单'
     : fm.rowsCount != null ? `逐股 ${fm.rowsCount} 行 · ${esc(fm.rowsSourceLabel || '源未知')}`
     : '逐股明细缺';
-  const countTitle = fm.fullMarketScope === false ? '跌停家数（采集池口径）' : '跌停家数（全市场）';
+  const countTitle = fm.fullMarketScope === false ? '跌停家数（按监控名单）' : '跌停家数（全市场）';
   const countSub = `${rowsTxt}${diffTxt} · 池内 ${fx(p.dieban)} · ${esc(fm.sourceLabel || '口径未知')} · ${esc(pctTxt)}`
     + (fm.countDisputed ? ' · ⚠️家数存疑' : '');
   const ddSub = `回撤池 ${fx(dd.itemCount)} 只逐股 · 均值 ${num(dd.avgDrawdownPct)}% · 最深 ${num(dd.deepestDrawdownPct)}%`;
@@ -3605,7 +3600,7 @@ function dbRenderRows(){
   const ddCell = s => s.maxDrawdownPct != null
     ? `<span class="num" style="color:var(--amber)" title="触板后自当日高点回撤（THS 大幅回撤池 max_drawdown）">${s.maxDrawdownPct.toFixed(2)}%</span>`
     : (s.intradayDrawdownPct != null
-      ? `<span style="color:var(--muted2)" title="当日最高价→最新价回落（快照派生，非触板口径）">${s.intradayDrawdownPct.toFixed(2)}%</span>`
+      ? `<span style="color:var(--muted2)" title="当日最高价到最新价的回落幅度（盘中快照估算）">${s.intradayDrawdownPct.toFixed(2)}%</span>`
       : '-');
   const netCell = s => s.mainNet == null ? '-'
     : `<span class="num" style="color:${moneyColor(s.mainNet)}">${fmtYi(s.mainNet)}</span>`;   // 净流入红 / 净流出绿
@@ -3614,7 +3609,7 @@ function dbRenderRows(){
     const open = ui.openKey === entry.key;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('die', '${js(entry.key)}')">
       <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
-      <td>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${dbTypeBadges(s)}</td>
+      <td${!s.board ? ' title="韭研产业未收录 · 未分板块"' : ''}>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${dbTypeBadges(s)}</td>
       <td class="num" style="color:${pctColor(s.pctChange)}">${fmtPctChg(s.pctChange)}</td>
       <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
       <td class="num" style="color:${pctColor(s.ret3d)}">${fmtPctChg(s.ret3d)}</td><td>${ddCell(s)}</td>
@@ -3634,10 +3629,10 @@ function renderDieban(){
   if (!stocks.length){
     $('diebanKpi').innerHTML = ''; $('diebanBoardRow').innerHTML = ''; $('diebanFilterBar').innerHTML = '';
     STATE.diebanEntries = [];
-    $('diebanHint').textContent = (D && (D.reason || (D.ok === false ? '读口不可用' : ''))) || '';
+    $('diebanHint').textContent = (D && (D.reason || (D.ok === false ? '数据源不可用' : ''))) || '';
     // 读失败不得谎称「当日无负反馈」（review minor：ok=false 与 noData 语义不同）
     $('diebanTable').innerHTML = (D && D.ok === false)
-      ? '<tr><td class="empty">读口不可用：未取到名单（原因见底部状态栏）</td></tr>'
+      ? '<tr><td class="empty">数据源不可用：未取到名单（原因见底部状态栏）</td></tr>'
       : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股 / 无回撤池逐股；降级原因见底部状态栏）</td></tr>';
     return;
   }
@@ -3645,7 +3640,7 @@ function renderDieban(){
   // 0 是真读数（全池无一落入负反馈），不得用 || 兜成池大小（review minor）
   const negN = (D.negative && D.negative.count != null) ? D.negative.count : pool.length;
   const fm = D.fullMarket || {};
-  $('diebanHint').textContent = `${D.date || ''} · ${D.intraday ? '盘中口径 ' + (D.slotTime || '') : '收盘口径 15:00'}`
+  $('diebanHint').textContent = `${D.date || ''} · ${D.intraday ? '盘中 ' + (D.slotTime || '') : '收盘 15:00'}`
     + ` · 池内 ${(D.pool || {}).rows} 只 · 负反馈 ${negN} 只`
     + (fm.rowsMissing ? ' · 全市场逐股缺（名单仅采集池口径）'
        : ` · 全市场逐股 ${fm.rowsCount ?? '--'} 行（${fm.rowsSourceLabel || '源未知'}）`)
@@ -3738,8 +3733,8 @@ function dbDetailHtml(e){
       <div class="lg-panel"><div class="lg-phead"><b>读口行 JSON</b><span class="st">GET /api/hotlist-jev/dieban-review</span></div>
         <div class="lg-tree">${treeHtml(s, '')}</div></div>
     </div>
-    <div class="lg-foot"><span><span class="k">跌停判定</span> <code>core/limit_rules.is_limit_down_pct</code></span>
-      <span><span class="k">回撤口径</span> <code>THS max_drawdown / 快照 high→price</code></span>
+    <div class="lg-foot"><span><span class="k">跌停判定</span> <code>按交易所涨跌停价格规则</code></span>
+      <span><span class="k">回撤</span> <code>最高价 → 最新价</code></span>
       <span><span class="k">全市场逐股</span> <code>market_daily_limit_down_stocks（EM &gt; 快照 &gt; 本地日线，逐行标 source）</code></span></div>
   </div>`;
 }
@@ -3787,7 +3782,7 @@ function rsTypeBadges(s){
   const out = [];
   if (s.strong) out.push(`<span class="badge b-red">大涨</span>`);
   if ((s.streak || 0) >= 2) out.push(`<span class="badge b-red">连涨${s.streak}</span>`);
-  if (s.shape) out.push(`<span class="badge ${SHAPE_TYPE_CLS[s.shape]}" title="游资复盘形态（振幅综合判断，日线近似口径）">${SHAPE_TYPE_CN[s.shape]}</span>`);
+  if (s.shape) out.push(`<span class="badge ${SHAPE_TYPE_CLS[s.shape]}" title="游资复盘形态（按日内振幅近似判断）">${SHAPE_TYPE_CN[s.shape]}</span>`);
   else if (s.sealedLimitUp) out.push(`<span class="badge b-gray">涨停（不入名单）</span>`);
   return out.length ? out.join(' ') : '<span class="badge b-gray">-</span>';
 }
@@ -3908,7 +3903,7 @@ function rsRenderRows(){
     const open = ui.openKey === entry.key;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('rise', '${js(entry.key)}')">
       <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
-      <td>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${rsTypeBadges(s)}</td>
+      <td${!s.board ? ' title="韭研产业未收录 · 未分板块"' : ''}>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${rsTypeBadges(s)}</td>
       <td class="num" style="color:${pctColor(s.pctChange)}">${fmtPctChg(s.pctChange)}</td>
       <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
       <td class="num" style="color:${pctColor(s.ret3d)}">${fmtPctChg(s.ret3d)}</td><td>${ampCell(s)}</td>
@@ -3928,17 +3923,17 @@ function renderRise(){
   if (!stocks.length){
     $('riseKpi').innerHTML = ''; $('riseBoardRow').innerHTML = ''; $('riseFilterBar').innerHTML = '';
     STATE.riseEntries = [];
-    $('riseHint').textContent = (D && (D.reason || (D.ok === false ? '读口不可用' : ''))) || '';
+    $('riseHint').textContent = (D && (D.reason || (D.ok === false ? '数据源不可用' : ''))) || '';
     // 读失败不得谎称「当日无上涨」（同下跌复盘：ok=false 与 noData 语义不同）
     $('riseTable').innerHTML = (D && D.ok === false)
-      ? '<tr><td class="empty">读口不可用：未取到名单（原因见底部状态栏）</td></tr>'
+      ? '<tr><td class="empty">数据源不可用：未取到名单（原因见底部状态栏）</td></tr>'
       : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股文档；降级原因见底部状态栏）</td></tr>';
     return;
   }
   const pool = rsScopePool(stocks, STATE.riseFilter);
   const posN = (D.positive && D.positive.count != null) ? D.positive.count : pool.length;
   const fr = D.fullRise || {};
-  $('riseHint').textContent = `${D.date || ''} · ${D.intraday ? '盘中口径 ' + (D.slotTime || '') : '收盘口径 15:00'}`
+  $('riseHint').textContent = `${D.date || ''} · ${D.intraday ? '盘中 ' + (D.slotTime || '') : '收盘 15:00'}`
     + ` · 池内 ${(D.pool || {}).rows} 只 · 上涨名单 ${posN} 只`
     + (fr.rowsMissing ? ' · 全市场逐股缺（名单仅采集池口径）'
        : ` · 全市场逐股 ${fr.rowsCount ?? '--'} 行（${fr.rowsSourceLabel || '源未知'}）`)
@@ -4026,7 +4021,7 @@ function rsDetailHtml(e){
       <div class="lg-panel"><div class="lg-phead"><b>读口行 JSON</b><span class="st">GET /api/hotlist-jev/rise-review</span></div>
         <div class="lg-tree">${treeHtml(s, '')}</div></div>
     </div>
-    <div class="lg-foot"><span><span class="k">上涨判定</span> <code>涨幅>5% 且 close≠limit_up_price（±0.005）</code></span>
+    <div class="lg-foot"><span><span class="k">上涨判定</span> <code>涨幅>5% 且未封板</code></span>
       <span><span class="k">全市场逐股</span> <code>market_daily_rise_stocks（本地通达信日线重算，一天一文档）</code></span>
       <span><span class="k">采集池</span> <code>snapshot_stock_rows 15:00 half_hour</code></span></div>
   </div>`;
@@ -4218,11 +4213,9 @@ function detailHtml(e, view){
         <div class="lg-tree" id="${view}RespTree">${treeHtml(entryResp(e), ui.q2)}</div></div>
     </div>`;
   }
-  const foot = `<div class="lg-foot"><span><span class="k">终端点</span> <code>POST /ai/run</code></span>
-    <span><span class="k">用户代理</span> <code>Python-urllib</code></span>
+  const foot = `<div class="lg-foot">
     <span><span class="k">来源</span> <code>${esc(d.origin || '-')}</code></span>
-    <span><span class="k">题集版本</span> <code>${esc(d.questionSetVersion || '未知（旧文档）')}</code></span>
-    <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
+    <span><span class="k">题集版本</span> <code>${esc(d.questionSetVersion || '未知（旧文档）')}</code></span></div>`;
   const rm = (STATE.rerunMsg && STATE.rerunMsg.key === e.key)
     ? `<div class="prov" style="margin:10px 0 0;color:${STATE.rerunMsg.ok ? 'var(--green)' : 'var(--amber)'}">${esc(STATE.rerunMsg.text)}</div>`
     : '';
@@ -4497,7 +4490,7 @@ function lbRenderBoards(){
     const nr = LB.nodesRows[f.name];
     const nodeCell = nr
       ? `<span class="badge ${NODE_BADGE[nr.node] || 'b-gray'}" title="${esc(NODE_TIP[nr.node] || '')}">${esc(NODE_CN[nr.node] || nr.node || '--')}</span>`
-      : '<span style="color:var(--muted2)" title="板块节点读口无此板块（THS 封窗池未含或读口未到数）">--</span>';
+      : '<span style="color:var(--muted2)" title="当日板块池中没有该板块（未收录或数据未到）">--</span>';
     const aggP = nr && nr.aggN10 && nr.aggN10.pctMean != null ? nr.aggN10.pctMean : null;
     const aggTip = nr && nr.aggN10
       ? '近10日活跃股聚合均值（成员' + nr.aggN10.memberN + ' · 有行情' + nr.aggN10.quotedN
@@ -4595,7 +4588,7 @@ function lbRenderBoards(){
   });
   html += '</tbody>';
   $('lbBoardTable').innerHTML = fields.length ? html
-    : '<tbody><tr><td class="empty">' + esc(LB.error || '无板块数据（等待读口到数）') + '</td></tr></tbody>';
+    : '<tbody><tr><td class="empty">' + esc(LB.error || '无板块数据（等待数据到齐）') + '</td></tr></tbody>';
   $('lbBoardHint').textContent = (fields.length ? fields.length + ' 板块' : '')
     + (LB.pulseReason ? ' · 盘中读数降级：' + LB.pulseReason : ' · 涨幅/红盘率/量能=' + srcNote + '（N10 成员口径）');
 }
@@ -4686,8 +4679,8 @@ function wlRender(){
     const red = g.strongRedRatio == null ? null : Math.round(g.strongRedRatio * 100);
     const head = `<tr class="wl-head"><td colspan="8">`
       + `<b>${esc(g.board)}</b>　${nodeB}`
-      + `　<span style="color:var(--muted2)" title="核心票（昨日连板≥2）实时翻红，缺口 3 读数（与红盘率 tooltip 同口径）">核心票翻红 ${g.strongRedN == null ? '--' : g.strongRedN + '/' + g.strongQuotedN + (red == null ? '' : '（' + red + '%）')}</span>`
-      + `　<span style="color:var(--muted2)" title="60 日成交额分位（P≥0.9 重注级；对比历史全天口径盘中读数天然偏低）">量级 ${g.amountPct == null ? '--' : 'P' + Math.round(g.amountPct * 100) + (g.amountPct >= 0.9 ? '·重注级' : '')}</span>`
+      + `　<span style="color:var(--muted2)" title="核心票（昨日连板≥2）实时翻红；a/b = 翻红家数/报价家数">核心票翻红 ${g.strongRedN == null ? '--' : g.strongRedN + '/' + g.strongQuotedN + (red == null ? '' : '（' + red + '%）')}</span>`
+      + `　<span style="color:var(--muted2)" title="成交额在近 60 日中的分位；≥90% 标「重注级」（盘中对比全天历史，读数天然偏低）">量级 ${g.amountPct == null ? '--' : 'P' + Math.round(g.amountPct * 100) + (g.amountPct >= 0.9 ? '·重注级' : '')}</span>`
       + `　<span style="color:var(--muted2)" title="成员级量比中位（V4-E 帧读数，仅观察）">量能 ${g.volRatioMedian == null ? '--' : g.volRatioMedian.toFixed(2) + (g.volRatioMedian >= 1.0 ? ' 放量' : ' 缩量')}</span>`
       + `</td></tr>`;
     const tks = (g.tickets || []).map(t => {
@@ -4702,7 +4695,7 @@ function wlRender(){
             : (t.leaderSealedToday === false && t.windowK === 0
                 ? '\n窗未开：今日断板（D0），反包观察自下一交易日始' : ''));
       const role = t.role === 'leader'
-        ? '<span class="badge b-red" title="断板反包候选=隔日弱转强（v5 预登记：严格回溯 3 个封板日，height≥2 且断板日未跌停；收盘回封为完成态）'
+        ? '<span class="badge b-red" title="断板反包候选：往前追溯 3 个封板日，高度≥2 且断板当日未跌停；收盘回封即反包完成'
           + wcTip + '">龙一' + (t.leaderSealedToday === false ? '·断板反包候选' + wkTxt : '') + '</span>'
         : '<span class="badge b-gray">核心</span>';
       const streak = t.streak != null ? (t.streak + '板') : '--';
@@ -4774,7 +4767,7 @@ function scRender(){
   const ck = SC.check || {};
   // 读口失败态如实展示（2026-11 review major：失败若走下方兜底行会误报成「板块不在名单」）
   if (SC.check && !ck.ok){
-    box.innerHTML = '<tbody><tr><td class="empty">对照读口失败：' + esc(ck.reason || '未知') + '</td></tr></tbody>';
+    box.innerHTML = '<tbody><tr><td class="empty">对照数据加载失败：' + esc(ck.reason || '未知') + '</td></tr></tbody>';
     const host = $('scExtra'); if (host) host.innerHTML = '';
     return;
   }
@@ -4794,18 +4787,18 @@ function scRender(){
           : r.match.way === '同名' ? 'var(--muted2)' : '#b45309';
         return `<tr><td class="kpl-uni">${i + 1}</td><td>${esc(r.board)}</td>`
           + `<td class="kpl-uni">${r.listN}</td>`
-          + `<td class="kpl-uni" title="KPL zt_stocks 实时（plate 顿号归属，一票多板块各计一次；与名录口径无关）">${r.ztNow == null ? '--' : r.ztNow}</td>`
+          + `<td class="kpl-uni" title="KPL zt_stocks 实时">${r.ztNow == null ? '--' : r.ztNow}</td>`
           + `<td${r.match.kpl ? '' : ' style="color:var(--muted2)"'}>${esc(r.match.kpl || '--')}</td>`
           + `<td style="color:${wayCol}">${esc(r.match.way)}</td>`
           + `<td style="color:var(--muted2)">${esc((r.match.kplAll || []).join('、') || '--')}</td></tr>`;
       }).join('')
-      || '<tr><td colspan="7" class="empty">无板块行（等待读口到数）</td></tr>')
+      || '<tr><td colspan="7" class="empty">无板块行（等待数据到齐）</td></tr>')
     + '</tbody>';
   const un = ck.unmatchedJiuyan || [];
   const unc = ck.uncoveredKpl || [];
   const lists = ck.ok
     ? '<div style="margin-top:10px;font-size:12px;color:var(--muted)">'
-      + '<div title="未匹配清单即 ALIASES 异名表维护候选（增补在 theme_event_digest.ALIASES）">'
+      + '<div title="未匹配清单即 ALIASES 异名表维护候选">'
       + '未匹配韭研板块（ALIASES 候选）：<b style="color:#dc2626">'
       + (un.length ? esc(un.join('、')) : '无') + '</b></div>'
       + '<details style="margin-top:4px"><summary style="cursor:pointer">KPL 未覆盖板块 '
@@ -5617,8 +5610,10 @@ function kplErrKey(s){
   // collector 对 CMD_ERROR 双发（ev.msg 单引号 JSON 版 + server-only stringify 版），
   // 同一错误两种序列化形态；归一为 code+msg 主键，配合状态栏同类折叠，刷屏减一半。
   const str = String(s);
-  const code = (str.match(/code'?:\s*"?(\d+)/) || [])[1];
-  const m = (str.match(/msg'?:\s*['"]([^'"]*)['"]/) || [])[1];
+  // 2026-11-06：正则兼容双引号 JSON 形态（server-only 双发事件经 JSON.stringify，
+  // {"code":1002,...} 原正则匹配不到 code/msg → 同一错误折叠成两条不同文本刷屏）
+  const code = (str.match(/code["']?\s*:\s*"?(\d+)/) || [])[1];
+  const m = (str.match(/msg["']?\s*:\s*["']([^"']*)["']/) || [])[1];
   return code ? ('server error code=' + code + (m ? '：' + m : '')) : str;
 }
 function kplBanner(msg, kind, sticky){
@@ -5714,7 +5709,7 @@ function kplHandleEvent(ev){
       if (stale) break;   // 回放的旧错误不展示（当下健康以新事件为准）
       // collector 对 CMD_ERROR 双发：带 msg 版 + server-only 版。结构化判断先行，
       // 避免 server 版经 JSON.stringify（双引号）后匹配不上下方单引号形态白名单
-      if (ev.server && ev.server.code === 1106){ kplUpdateStats(); break; }
+      if (ev.server && (ev.server.code === 1106 || ev.server.code === 1002)){ kplUpdateStats(); break; }
       KPL.status.lastError = ev.msg || (ev.server ? 'server error: ' + JSON.stringify(ev.server) : '');
       if (!KPL.status.lastError){ kplUpdateStats(); break; }   // server-only 事件无文本：只计统计
       // 重连链是设计内稳定性模型（README §三）：会话轮换/codec 自愈属例行噪声，
@@ -5724,7 +5719,10 @@ function kplHandleEvent(ev){
       // 属例行噪声；订阅超限型 1106 会在订阅期出现且无数据，两者以数据流健康为准。
       // 2026-10-29 增补：Connection{Aborted,Reset}Error（WinError 10053/10054）＝会话轮换时上游/中间设备断 TLS，
       // 采集器 2s 自愈（session#363/364 实测：双绿数据正常流），与 closed by server 同属重连链例行噪声
-      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out|network: ConnectionAbortedError|network: ConnectionResetError|server error: \{'code': 1106/.test(KPL.status.lastError)){
+      // 2026-11-06 盘中探针实测（75s/601 事件/8 会话）：会话 TTL 到期时服务器对末次
+      // keepalive 的拒绝信号已由 1106 变为 1002——每会话必以 {'code':1002,'msg':'连接错误：1002'}
+      // 紧跟 closed by server 收尾，会话期数据全量到流，与 1106 同属重连链例行噪声
+      if (/closed by server|signsvc pipe broken|subscriber queue overflow|network: TimeoutError|read operation timed out|network: ConnectionAbortedError|network: ConnectionResetError|server error: \{'code': (?:1106|1002)/.test(KPL.status.lastError)){
         kplUpdateStats();
       } else {
         kplBanner(KPL.status.lastError);
@@ -5966,7 +5964,7 @@ function kplRenderSectors(){
       + `<td${isChild ? ' style="color:var(--muted)"' : ''}>${isChild ? '<span style="color:var(--muted2)">└</span> ' : ''}${esc(r.name || '--')}</td>`
       + `<td class="kpl-uni" title="${r.zt == null
           ? (hist ? '历史分支暂无板块涨停数来源（HTTP 层1 无此列）' : '等待 zt_stocks 事件到流')
-          : '封板家数：zt_stocks 实时事件按板块归属聚合（口径=当前封住，与 App「涨停」列的含盘中触板口径可能不同）'}">${r.zt == null ? '--' : r.zt}</td>`      + `<td class="kpl-uni" title="${r.strength == null ? '强度：暂未收到该板块行情' : '强度 = quotas[56]（2026-10-27 与 HTTP 排行双源对账 55/80）'}">${r.strength == null ? '--' : kfmtNum(r.strength, 0)}</td>`
+          : '封板家数：按当前仍封住的板块统计（与 App「涨停」列的含触板统计可能略有差异）'}">${r.zt == null ? '--' : r.zt}</td>`      + `<td class="kpl-uni" title="${r.strength == null ? '强度：暂未收到该板块行情' : '强度：KPL 实时板块强度值'}">${r.strength == null ? '--' : kfmtNum(r.strength, 0)}</td>`
       + `<td class="kpl-uni ${kcls(r.pct)}">${kfmtNum(r.pct) + (r.pct == null ? '' : '%')}</td>`
       + `<td class="kpl-uni ${kcls(r.main_net)}">${kfmtAmt(r.main_net)}</td>`
       + `<td class="kpl-uni">${kfmtNum(r.volume_ratio)}</td></tr>`;
@@ -6900,8 +6898,8 @@ function kplLhbStockListRender(){
     + th('净买入', 'net')
     + th('总买入', 'buy', '当日实时=东财席位聚合（正值）；回看=KPL 口径卖出记负')
     + th('总卖出', 'sell', '当日实时=东财席位聚合（正值）；回看=KPL 口径卖出记负（负值原样展示）')
-    + '<th title="覆盖口径：KPL 3004 实时帧（涨幅≥5% 部分）∪ 2112 预测池命中；东财无概念源，其余显 --">所属概念</th>'
-    + '<th title="口径：3004 连板原因 ∪ 2112 → 东财 EXPLANATION（交易所口径）兑底，83 只全覆盖">上榜原因</th></tr>';
+    + '<th title="涨停与涨幅≥5% 实时名单、预测池命中合并；个别来源缺失时显示 --">所属概念</th>'
+    + '<th title="连板原因与预测池合并；缺失时用交易所公开原因兜底">上榜原因</th></tr>';
   $('kplLhbStockTable').innerHTML = rows.length
     ? head + rows.map((r, i) => {
         const on = String(r.code) === KPL.lhb.selCode ? ' class="on"' : '';
@@ -7100,7 +7098,7 @@ function kplLhbSaleTableRender(){
   $('kplLhbSaleTable').innerHTML = !s
     ? '<tr><td style="color:var(--muted)">--（' + (KPL.lhb.saleLoading ? '加载中…' : '读取失败；见状态栏说明') + '）</td></tr>'
     : rows.length
-      ? '<tr><th>#</th><th>营业部</th><th>买入</th><th>卖出</th><th title="派生口径：买入-卖出">净额</th><th>参与次数</th></tr>'
+      ? '<tr><th>#</th><th>营业部</th><th>买入</th><th>卖出</th><th title="净额 = 买入 − 卖出">净额</th><th>参与次数</th></tr>'
         + rows.map((r, i) => {
             const nb = parseFloat(r.buy), ns = parseFloat(r.sell);
             const net = (Number.isFinite(nb) && Number.isFinite(ns)) ? nb - ns : null;
