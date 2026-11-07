@@ -25,6 +25,10 @@
 > 归因依据：`theme-leader-seal-attribution-20261104.md`；弹药诊断：`theme-ammo-mirror-audit-20261104.md`。
 > （code review 2026-11-05：修复题面「四条硬规则」计数漂移 →「硬规则」，hash 同轮更新为
 > `97c50fd9fccb`；CYCLE_STATE_CN 改单源导入 theme_cycle.STATE_LABELS_CN；事实行 streak 口径统一。）
+> （2026-11-07 追记：①P1-1 改道——5 探针实证 jev 平台 answer schema 服务端锁死、
+> reason 不可行，撤协议注改程序侧偏离审计 auditFlag=deviation_from_anchor，见
+> `jev-reason-channel-probe-20261107.md`；②AMMO 2026-11-07a：梯队形态行领先差
+> 带符号（P2-4 负差原成「+-1」）；③seal_stats 增 anchorObservations 观察指标（P2-3）。）
 
 ## 1. 问题登记（§1.6 归因结论）
 

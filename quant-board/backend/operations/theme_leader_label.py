@@ -72,20 +72,41 @@ from backend.operations.theme_leader_baseline import (
 from backend.services.jev.jev_client import parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
-# P1-1（2026-11-07 用户裁决，三例真调用实证 answerReasons 全空）：C1 偏离义务可审计化。
-# 协议层（传输时附注）要求模型每题附 reason 字段——不动题面/判据/原料，
-# QUESTION_SET_HASH 不变（hash 冻结纪律只约束题面文本）；落库 narrative 不带本注。
-# 采纳率由 auditFlag=missing_reason 计量（fail-visible），不改变任何档位/门/状态。
-REASON_PROTOCOL_NOTE = (
-    "\n【输出要求（协议层 · 非判据）】每题 answer 对象请附 reason 字段（≤40 字），"
-    "内容=你依据的锚行/基线行数字或锚外新证据；缺失不改变判据与档位，"
-    "但落库将标 auditFlag=missing_reason。"
-)
+# P1-1 改道（2026-11-07 用户裁决先调研，5 探针实证后定案）：jev 平台（jev-1.14.0）
+# answer schema 服务端锁死（{type,choice,confidence,probabilities}，题面硬性要求也吐不出
+# reason），state 头/尾注均被忽略，questions 附加键顶层 422/题内被忽略，text 题型 400。
+# → 模型自证理由不可行，改由**程序侧**读叙事「结构基线」行计算档位偏离并打标
+# （auditFlag=deviation_from_anchor，纯落库审计元数据：不覆盖答案、不进门、不改状态）。
+# 原因透传（answerReasons）保留：平台未来若放开 answer schema 零改动接住。
+_ANCHOR_ORDER = ("verylow_lt25", "low_25_45", "mid_45_65", "high_ge65")
 
 
-def _reason_wired_narrative(narrative: str) -> str:
-    """传输时附加 reason 协议注（仅 dispatch 用；落库 narrative 保持原样）。"""
-    return narrative + REASON_PROTOCOL_NOTE
+def _rate_bucket(rate: float) -> str:
+    """基准率 → 档位桶（与续板题四桶边界一致：<25 / 25-45 / 45-65 / ≥65）。"""
+    return ("verylow_lt25" if rate < 25 else "low_25_45" if rate < 45
+            else "mid_45_65" if rate < 65 else "high_ge65")
+
+
+def _anchor_deviation_audit(narrative: str | None, choice: str | None) -> tuple[str | None, str | None]:
+    """程序侧偏离审计：规则①中枢（最细同桶，样本<8 回退按连板高度桶）与模型档位比对。
+
+    偏离≥1 档 → ("deviation_from_anchor", 说明)；同档/无基线行/insufficient/未答 → (None, None)。
+    """
+    if not narrative or not choice or choice == "insufficient" or choice not in _ANCHOR_ORDER:
+        return None, None
+    m = re.search(r"结构基线：同桶\[[^\]]+\] 历史次日连板率 ([\d.]+)%（(\d+) 样本）", narrative)
+    src = "同桶"
+    if not m or int(m.group(2)) < 8:
+        m2 = re.search(r"按连板高度\[[^\]]+\] ([\d.]+)%（(\d+) 样本）", narrative)
+        if not m2:
+            return None, None
+        m, src = m2, "按连板高度"
+    rate = float(m.group(1))
+    bucket = _rate_bucket(rate)
+    if bucket == choice:
+        return None, None
+    return ("deviation_from_anchor",
+            f"模型 {choice} vs {src}中枢 {rate}%（{_rate_bucket(rate)}）")
 
 COLLECTION = "hotlist_jev_theme_leader_labels"
 DRIVER_LABEL_COLLECTION = "hotlist_jev_driver_labels"
@@ -793,7 +814,7 @@ def _label_one(db, col, date: str, built: dict,
     doc_kind = built.get("docKind", DOC_KIND_LEADER)
     questions = built.get("questions") or QUESTIONS_THEME_LEADER
     narrative = built["narrative"]
-    env, ms = _dispatch_jev(_reason_wired_narrative(narrative), questions)
+    env, ms = _dispatch_jev(narrative, questions)
     parsed = parse_jev_response(env, ms, expected_keys=set(questions))
     raw_answers = parsed.get("answers") or {}
     # v2 确定性门（v5 起全题门；v12 拆题后按子集门）：证据缺失（语料未采集/板块未映射/
@@ -807,19 +828,13 @@ def _label_one(db, col, date: str, built: dict,
     depth = answers.get("theme_speculation_depth") or {}
     contn = answers.get("theme_continuation") or {}
     head = answers.get("leader_headroom") or {}
-    # P2-2（用户裁决顺带做）：模型若在 answer 对象附 reason（引用说明），容错透传落库
-    # ——jev 平台 answers dict 原样透传（parse 无字段白名单）。
-    # P1-1（2026-11-07）：预登记 §5 挂起项已闭环——三例真调用实证模型不主动产 reason，
-    # 改为协议层显式请求（REASON_PROTOCOL_NOTE）+ 缺失标 auditFlag=missing_reason
-    # （只对非 insufficient 的作答题要求；insufficient 桶无锚行引用义务）。
+    # P1-1 改道（2026-11-07）：reason 协议注经 5 探针实证无效已撤；审计改程序侧偏离标记。
+    # 模型若附 reason（平台未来放开）仍容错透传落库（P2-2 旧行为不变）。
     answer_reasons = {str(k): str(v.get("reason")) for k, v in answers.items()
                       if isinstance(v, dict) and v.get("reason")}
-    obligated = {str(k) for k, v in answers.items()
-                 if isinstance(v, dict) and v.get("choice")
-                 and v.get("choice") != "insufficient"}
-    missing_reason = sorted(obligated - set(answer_reasons))
-    audit_flag = "missing_reason" if missing_reason else None
-    audit_note = ("缺 reason: " + ",".join(missing_reason)) if missing_reason else None
+    audit_flag, audit_note = (
+        _anchor_deviation_audit(narrative, cont.get("choice"))
+        if doc_kind == DOC_KIND_LEADER else (None, None))
     if doc_kind == DOC_KIND_SECTOR:
         rows = built.get("rows") or []
         if not rows:
@@ -884,7 +899,7 @@ def _label_one(db, col, date: str, built: dict,
         "modelAnswers": raw_answers,   # 模型原答（审计用；不得被消费端当口径）
         "gate": gate,                  # {applied, reason, label, modelChoice, modelProbabilities}
         "answerReasons": answer_reasons,   # P2-2：结构化引用说明（模型产出才非空；容错透传）
-        # P1-1：reason 采纳率审计（fail-visible，不改变档位/门/状态；None=本轮全部作答题附了 reason）
+        # P1-1 改道：程序侧偏离审计（auditFlag=deviation_from_anchor；None=同档或无基线行）
         "auditFlag": audit_flag, "auditNote": audit_note,
         "leaderNextdayContinue": cont.get("choice") if doc_kind == DOC_KIND_LEADER else None,
         "leaderNextdayProbabilities": (cont.get("probabilities")
@@ -912,12 +927,13 @@ def _label_one(db, col, date: str, built: dict,
     })
     old = col.find_one({"_id": doc["_id"]}) or {}
     for k, v in old.items():
-        # auditFlag/auditNote：本轮缺失标记优先（描述本次调用的可审计性）；本轮无缺失时
-        # 原样带走旧值——但上一轮的瞬时 missing_reason 除外（应随本轮重评；v12 两案
-        # 等人工复盘标记非 missing_reason，继续防抹）
+        # auditFlag/auditNote：本轮标记优先；本轮无标记时旧值带走——但上一轮的瞬时
+        # 机审标记（missing_reason/deviation_from_anchor）除外（应随本轮重评；
+        # v12 两案等人工复盘标记继续防抹）
         if k.startswith("outcome") or (k in ("auditFlag", "auditNote")
                                        and audit_flag is None
-                                       and old.get("auditFlag") != "missing_reason"):
+                                       and old.get("auditFlag") not in (
+                                           "missing_reason", "deviation_from_anchor")):
             doc[k] = v   # 结局/复盘标记是事实性字段，重跑重建必须原样带走（v12 两案标记防抹）
     col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     from backend.analysis.hotlist.jev_driver_ammo import _usage_tokens

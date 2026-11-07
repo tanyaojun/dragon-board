@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v15"
     assert doc["questionSetHash"] == "97c50fd9fccb"   # v15 续板题基础率锚（v1-v14 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-04a"   # v15 P1：+结构事实行；题面 v14 四题零改动（续板题除外）
+    assert doc["ammoVersion"] == "2026-11-07a"   # P2-4：梯队行领先差带符号；v15 P1 事实行不变
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -339,24 +339,56 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     assert sec["leaderNextdayContinue"] is None
 
 
-def test_missing_reason_audit_flag_p1(env, monkeypatch):
-    """P1-1：协议层请求 reason（传输附注，不动题面/hash）；作答缺 reason 标
-    auditFlag=missing_reason（fail-visible，不改档位/门/状态）；协议注不进落库 narrative。"""
+def test_anchor_deviation_audit_unit():
+    """P1-1 改道（2026-11-07）：jev 平台 answer schema 服务端锁死（5 探针实证），
+    模型自证 reason 不可行 → 程序侧读叙事基线行计算偏离。规则①同口径：
+    最细同桶样本<8 回退按连板高度桶；偏离≥1 档打 deviation_from_anchor。"""
+    base = ("结构基线：同桶[streak2|n3-4|early] 历史次日连板率 61.1%（36 样本）；"
+            "按连板高度[2] 42.8%（180 样本）；总体 33.9%（740 样本）")
+    # 同档（61.1% ∈ mid 桶区间）：不标
+    assert L._anchor_deviation_audit(base, "mid_45_65") == (None, None)
+    # 偏离一档：打标 + note 带中枢读数
+    flag, note = L._anchor_deviation_audit(base, "low_25_45")
+    assert flag == "deviation_from_anchor" and "61.1%" in note and "同桶" in note
+    # 最细桶样本<8 → 回退按连板高度桶（42.8% ∈ low，mid 偏离一档）
+    low_n = base.replace("61.1%（36 样本）", "61.1%（5 样本）")
+    flag2, note2 = L._anchor_deviation_audit(low_n, "mid_45_65")
+    assert flag2 == "deviation_from_anchor" and "按连板高度" in note2 and "42.8%" in note2
+    # 回退后同档不标
+    assert L._anchor_deviation_audit(low_n, "low_25_45") == (None, None)
+    # 无基线行 / insufficient / 未答：不标
+    assert L._anchor_deviation_audit("无基线行叙事", "low_25_45") == (None, None)
+    assert L._anchor_deviation_audit(base, "insufficient") == (None, None)
+    assert L._anchor_deviation_audit(base, None) == (None, None)
+
+
+def test_reason_passthrough_and_human_mark_preserved(env, monkeypatch):
+    """P1-1 改道：answerReasons 容错透传保留（平台未来放开零改动）；本轮无偏离标记时
+    旧档人工标记（v12 两案）防抹；协议注已撤（传输 narrative 与落库一致）。"""
     calls, db = env
-    # 关掉证据门（夹具无语料会全题强制 insufficient，非 insufficient 才有 reason 义务）
     monkeypatch.setattr(L, "apply_evidence_gate",
                         lambda answers, evidence, keys=None: (
                             answers, {"applied": False, "reason": None}))
-    out = L.run("2026-10-19", confirm_budget=True)
-    assert out["ok"] == 4
+    env_reason = {**ENVELOPE, "result": {**ENVELOPE["result"], "result": {
+        **ENVELOPE["result"]["result"],
+        "answers": {k: {**v, "reason": "基线 41.6% 同档"}
+                   for k, v in ENVELOPE["result"]["result"]["answers"].items()}}}}
+
+    def fake_dispatch(narrative, questions):
+        calls.append((narrative, questions))
+        return env_reason, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", fake_dispatch)
+    monkeypatch.setattr(L, "_anchor_deviation_audit", lambda n, c: (None, None))
+    db[L.COLLECTION].docs["2026-10-19:603278"] = {
+        "_id": "2026-10-19:603278", "status": "pending",
+        "auditFlag": "v12_case_a", "auditNote": "人工两案标记"}
+    L.run("2026-10-19", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-10-19:603278"]
-    assert doc["auditFlag"] == "missing_reason"
-    assert "leader_nextday_continue" in doc["auditNote"]
-    assert doc["answerReasons"] == {}
-    # 协议注只进传输，不进落库 narrative（hash/题面零变更）
-    assert "【输出要求（协议层" in calls[0][0]
-    assert "【输出要求（协议层" not in doc["narrative"]
-    assert doc["questionSetHash"] == L.QUESTION_SET_HASH_THEME_LEADER
+    assert doc["auditFlag"] == "v12_case_a" and doc["auditNote"] == "人工两案标记"
+    assert doc["answerReasons"]["leader_nextday_continue"] == "基线 41.6% 同档"
+    assert doc["answerReasons"]["leader_headroom"] == "基线 41.6% 同档"
+    assert "【输出要求（协议层" not in calls[0][0], "无效协议注已撤（5 探针实证）"
 
 
 def test_reason_present_no_flag_and_human_mark_preserved(env, monkeypatch):
@@ -388,8 +420,8 @@ def test_reason_present_no_flag_and_human_mark_preserved(env, monkeypatch):
     assert doc["answerReasons"]["leader_headroom"] == "基线 41.6% 同档"
 
 
-def test_stale_missing_reason_cleared_on_clean_rerun(env, monkeypatch):
-    """P1-1：旧档 auditFlag=missing_reason（上一轮瞬时标记）+ 本轮 reason 在场
+def test_stale_transient_audit_flags_cleared_on_clean_rerun(env, monkeypatch):
+    """P1-1 改道：旧档瞬时机审标记（missing_reason/deviation_from_anchor）+ 本轮无标记
     → 清除不残留；人工标记才防抹。"""
     calls, db = env
     monkeypatch.setattr(L, "apply_evidence_gate",
@@ -408,6 +440,13 @@ def test_stale_missing_reason_cleared_on_clean_rerun(env, monkeypatch):
     db[L.COLLECTION].docs["2026-10-19:603278"] = {
         "_id": "2026-10-19:603278", "status": "pending",
         "auditFlag": "missing_reason", "auditNote": "缺 reason: leader_headroom"}
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert doc["auditFlag"] is None and doc["auditNote"] is None
+    # deviation_from_anchor 同属瞬时机审标记
+    db[L.COLLECTION].docs["2026-10-19:603278"] = {
+        "_id": "2026-10-19:603278", "status": "pending",
+        "auditFlag": "deviation_from_anchor", "auditNote": "模型 low vs 同桶 61.1%"}
     L.run("2026-10-19", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-10-19:603278"]
     assert doc["auditFlag"] is None and doc["auditNote"] is None

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import sys
 from collections import defaultdict
@@ -109,8 +110,44 @@ def collect_rows(db, start: str | None, end: str | None) -> list[dict]:
             "stale": bool(es.get("stale")),
             "day2": day2.get("closePct"),
             "day2Status": day2.get("status"),
+            # P2-3（2026-11-07 观察指标，登记不下结论）：①insufficient 概率质量（pEst 口径
+            # 丢弃该质量，校准时不可见——贫料 hedge 单独看）；②最细同桶率 vs 按连板高度
+            # 桶率差（三例+11-06 n=9 显示最细桶系统性高于边际桶，验证幸存者偏差假设）；
+            # ③程序侧偏离标记（与 theme_leader_label._anchor_deviation_audit 同口径）
+            "insufficientMass": (ans.get("probabilities") or {}).get("insufficient"),
+            **_anchor_observation_fields(d.get("narrative"), ans.get("choice")),
         })
     return rows
+
+
+_ANCHOR_ORDER = ("verylow_lt25", "low_25_45", "mid_45_65", "high_ge65")
+
+
+def _rate_bucket(rate: float) -> str:
+    return ("verylow_lt25" if rate < 25 else "low_25_45" if rate < 45
+            else "mid_45_65" if rate < 65 else "high_ge65")
+
+
+def _anchor_observation_fields(narrative: str | None, choice: str | None) -> dict:
+    """从叙事「结构基线」行抽最细同桶率/按连板高度桶率与偏离标记（规则①同口径：
+    同桶样本<8 回退高度桶；与 theme_leader_label._anchor_deviation_audit 保持一致）。"""
+    out: dict = {"anchorRate": None, "anchorN": None, "heightRate": None,
+                 "anchorBucket": None, "anchorDeviation": None}
+    if not narrative:
+        return out
+    m = re.search(r"结构基线：同桶\[[^\]]+\] 历史次日连板率 ([\d.]+)%（(\d+) 样本）", narrative)
+    if m:
+        out["anchorRate"], out["anchorN"] = float(m.group(1)), int(m.group(2))
+    mh = re.search(r"按连板高度\[[^\]]+\] ([\d.]+)%（(\d+) 样本）", narrative)
+    if mh:
+        out["heightRate"] = float(mh.group(1))
+    eff = out["anchorRate"] if (out["anchorRate"] is not None
+                                and (out["anchorN"] or 0) >= 8) else out["heightRate"]
+    if eff is not None:
+        out["anchorBucket"] = _rate_bucket(eff)
+        if choice in _ANCHOR_ORDER and choice != out["anchorBucket"]:
+            out["anchorDeviation"] = abs(_ANCHOR_ORDER.index(choice) - _ANCHOR_ORDER.index(out["anchorBucket"]))
+    return out
 
 
 def seal_rate(rows: list[dict]) -> str:
@@ -147,6 +184,30 @@ def day2_stats(rows: list[dict]) -> str:
             f"median={vals[len(vals) // 2]:+.2f}% win={win:.0f}%")
 
 
+def anchor_observations(settled: list[dict]) -> dict:
+    """P2-3（2026-11-07）：模型校准行为的三个观察维度（非判据、不改 pEst 口径）。
+
+    ①insufficientMassMean：模型意给「证据不足」桶的概率质量均值（pEst 口径丢弃该质量，
+    贫料 hedge 在校准里不可见——11-06 n=9 实测 7/9 上升）；②anchorHeightDiffMean：
+    最细同桶率 − 按连板高度桶率（两读数都在场时；验证「最细桶幸存者偏差」假设）；
+    ③deviationRows/ByBucket：模型档位偏离中枢桶的行数与分布。
+    """
+    masses = [float(r["insufficientMass"]) for r in settled
+              if r.get("insufficientMass") is not None]
+    diffs = [r["anchorRate"] - r["heightRate"] for r in settled
+             if r.get("anchorRate") is not None and r.get("heightRate") is not None]
+    dev = [r for r in settled if r.get("anchorDeviation")]
+    return {
+        "insufficientMassMean": round(statistics.fmean(masses), 3) if masses else None,
+        "insufficientMassN": len(masses),
+        "anchorHeightDiffMean": round(statistics.fmean(diffs), 1) if diffs else None,
+        "anchorHeightDiffN": len(diffs),
+        "deviationRows": len(dev),
+        "deviationByBucket": {b: sum(1 for r in dev if r["anchorBucket"] == b)
+                              for b in sorted({str(r["anchorBucket"]) for r in dev})},
+    }
+
+
 def build_report(rows: list[dict]) -> dict:
     live = [r for r in rows if r["origin"] == "live"]
     settled = [r for r in live if r["outcome"] != "pending"]
@@ -180,6 +241,8 @@ def build_report(rows: list[dict]) -> dict:
             "stale=True": seal_rate([r for r in settled if r["stale"]]),
         },
         "day2AllSealed": day2_stats(sealed),
+        # P2-3 观察指标（登记不下结论；判据变更走预登记）
+        "anchorObservations": anchor_observations(settled),
         "day2ByContinuation": {k: day2_stats([r for r in sealed if r["cont"] == k])
                                for k in {r["cont"] for r in sealed if r["cont"]}},
         "day2ByCycle": {k: day2_stats([r for r in sealed if r["cycle"] == k])

@@ -174,7 +174,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v15"
 # rebound_popularity_line——弱转强事件股专属证据行组（事件行/窗内逐日表现/板内跟随/
 # 周期背景），全部复用已落地数据零新采集；仅事件日出行，与 v14 事件门同源。原四题
 # 判据引用源未变，不构成题面改动。
-AMMO_VERSION_THEME_LEADER = "2026-11-04a"   # v15 P1：+结构事实行（周期/封板/高度/梯队，Q8:A 校准参考不仲裁）
+AMMO_VERSION_THEME_LEADER = "2026-11-07a"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1083,7 +1083,10 @@ def board_ladder_line(row: dict) -> str | None:
     leader_streak = row.get("streak")
     second = row.get("secondStreak")
     if isinstance(leader_streak, int) and isinstance(second, int):
-        seg += f"；龙头 {leader_streak} 板，次高 {second} 板（领先 +{leader_streak - second}）"
+        # P2-4（review 2026-11-05）：负差原拼接成「领先 +-1」，改带符号数；0 差写持平
+        diff = leader_streak - second
+        lead_txt = "持平" if diff == 0 else f"{diff:+d}"
+        seg += f"；龙头 {leader_streak} 板，次高 {second} 板（领先 {lead_txt}）"
     elif isinstance(leader_streak, int):
         seg += f"；龙头 {leader_streak} 板，次高 不可算"
     else:

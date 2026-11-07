@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v15"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-04a"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-07a"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "97c50fd9fccb"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -162,6 +162,14 @@ def test_structure_facts_line_v15_p1():
     assert n.index("结构基线") < n.index("结构事实（") < n.index("空间锚行")
     n0 = A.build_leader_narrative(**common)
     assert "结构事实（" not in n0, "facts_line=None 旧行为不变"
+
+
+def test_board_ladder_line_lead_diff_signed_p2_4():
+    """P2-4：梯队形态行领先差带符号（负差原拼成「+-1」，11-06 永臻股份实证）；零差写持平。"""
+    base = {"ladderShape": {"first": 1, "two": 0, "threePlus": 1, "unknown": 0}}
+    assert "领先 +1" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 2})
+    assert "领先 -1）" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 4})
+    assert "领先 持平）" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 3})
 
 
 def test_bucket_functions_stable_keys():
