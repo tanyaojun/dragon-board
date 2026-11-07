@@ -339,6 +339,80 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     assert sec["leaderNextdayContinue"] is None
 
 
+def test_missing_reason_audit_flag_p1(env, monkeypatch):
+    """P1-1：协议层请求 reason（传输附注，不动题面/hash）；作答缺 reason 标
+    auditFlag=missing_reason（fail-visible，不改档位/门/状态）；协议注不进落库 narrative。"""
+    calls, db = env
+    # 关掉证据门（夹具无语料会全题强制 insufficient，非 insufficient 才有 reason 义务）
+    monkeypatch.setattr(L, "apply_evidence_gate",
+                        lambda answers, evidence, keys=None: (
+                            answers, {"applied": False, "reason": None}))
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["ok"] == 4
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert doc["auditFlag"] == "missing_reason"
+    assert "leader_nextday_continue" in doc["auditNote"]
+    assert doc["answerReasons"] == {}
+    # 协议注只进传输，不进落库 narrative（hash/题面零变更）
+    assert "【输出要求（协议层" in calls[0][0]
+    assert "【输出要求（协议层" not in doc["narrative"]
+    assert doc["questionSetHash"] == L.QUESTION_SET_HASH_THEME_LEADER
+
+
+def test_reason_present_no_flag_and_human_mark_preserved(env, monkeypatch):
+    """P1-1：模型附 reason → answerReasons 落库、auditFlag 不标；旧档人工标记
+    （v12 两案）在本轮无缺失时原样带走防抹。"""
+    calls, db = env
+    monkeypatch.setattr(L, "apply_evidence_gate",
+                        lambda answers, evidence, keys=None: (
+                            answers, {"applied": False, "reason": None}))
+    env_reason = {**ENVELOPE, "result": {**ENVELOPE["result"], "result": {
+        **ENVELOPE["result"]["result"],
+        "answers": {k: {**v, "reason": "基线 41.6% 同档"}
+                   for k, v in ENVELOPE["result"]["result"]["answers"].items()}}}}
+
+    def fake_dispatch(narrative, questions):
+        calls.append((narrative, questions))
+        return env_reason, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", fake_dispatch)
+    # 旧档：人工标记 + 未完成 status（不挡 todo）
+    db[L.COLLECTION].docs["2026-10-19:603278"] = {
+        "_id": "2026-10-19:603278", "status": "pending",
+        "auditFlag": "v12_case_a", "auditNote": "人工两案标记"}
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    # 本轮无缺失：人工标记防抹（v12 两案语义）；瞬时 missing_reason 不残留
+    assert doc["auditFlag"] == "v12_case_a" and doc["auditNote"] == "人工两案标记"
+    assert doc["answerReasons"]["leader_nextday_continue"] == "基线 41.6% 同档"
+    assert doc["answerReasons"]["leader_headroom"] == "基线 41.6% 同档"
+
+
+def test_stale_missing_reason_cleared_on_clean_rerun(env, monkeypatch):
+    """P1-1：旧档 auditFlag=missing_reason（上一轮瞬时标记）+ 本轮 reason 在场
+    → 清除不残留；人工标记才防抹。"""
+    calls, db = env
+    monkeypatch.setattr(L, "apply_evidence_gate",
+                        lambda answers, evidence, keys=None: (
+                            answers, {"applied": False, "reason": None}))
+    env_reason = {**ENVELOPE, "result": {**ENVELOPE["result"], "result": {
+        **ENVELOPE["result"]["result"],
+        "answers": {k: {**v, "reason": "基线 41.6% 同档"}
+                   for k, v in ENVELOPE["result"]["result"]["answers"].items()}}}}
+
+    def fake_dispatch2(narrative, questions):
+        calls.append((narrative, questions))
+        return env_reason, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", fake_dispatch2)
+    db[L.COLLECTION].docs["2026-10-19:603278"] = {
+        "_id": "2026-10-19:603278", "status": "pending",
+        "auditFlag": "missing_reason", "auditNote": "缺 reason: leader_headroom"}
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert doc["auditFlag"] is None and doc["auditNote"] is None
+
+
 def test_build_one_and_sector_wire_lhb_line():
     """龙虎榜事实行（AMMO 2026-10-30a）：个股级=待判龙一优先+板内封板成员，
     板块级=双龙一轨别身位；lhb_facts=None 不出行（旧行为不变）；fetch 失败 fail-visible。"""
