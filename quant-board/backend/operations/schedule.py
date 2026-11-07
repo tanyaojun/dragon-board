@@ -83,12 +83,21 @@ def run_jiuyan_preflight(today: str) -> dict[str, Any]:
     晚间 136；THS 独立口径涨停 116+炸板 32）——名单不完整不得打标（不完整投喂
     会烧 token 且下游叙事/归因全部基于残名单）。
 
-    规则：探针 count-pc（零 jev token，韭研额度内）对落库 `jiuyan_action {date}:final`
-    的 counts.all；不一致 → 幂等重采补齐（collect_and_store，零 jev token）再核；
-    补齐后仍不一致 → ok=False（链 stoppedAt=jiuyanPreflight 拦停，人工介入）；
-    探针失败/载荷缺 all/补齐后复核不可知 → ok=True + 结构化 warning
+    规则：**非交易日直接跳过**（2026-11-07 事故：周六预检仍探针+重采，把韭研「最近
+    交易日」(11-06) 名单落到 11-07 名下产生 42 只残档；韭研端点非交易日返回最近
+    交易日名单，采了必错档）。交易日：探针 count-pc（零 jev token，韭研额度内）
+    对落库 `jiuyan_action {date}:final` 的 counts.all；不一致 → 幂等重采补齐
+    （collect_and_store，零 jev token）再核；补齐后仍不一致 → ok=False
+    （链 stoppedAt=jiuyanPreflight 拦停，人工介入）；探针失败/载荷缺 all/
+    补齐后复核不可知 → ok=True + 结构化 warning
     （远端不可知 ≠ 确认不一致，不能拦住备份链，fail-visible 待人工关注）。
     """
+    trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
+    if not trading:
+        # 同 mongodbBackup 步口径：非交易日跳过并记录判定来源（bridge→cache→weekday）
+        return {"ok": True, "date": today, "skipped": "non_trading_day",
+                "calendarSource": cal_source,
+                "note": "非交易日不探针不采不拦链（韭研非交易日返回最近交易日名单，采了必错档）"}
     from backend.operations.jiuyan_auth import resolve_auth
     from backend.operations.jiuyan_collect import collect_and_store
     from backend.operations.jiuyan_fetch import fetch_count
@@ -789,6 +798,13 @@ def _run_leader_wzs_step(today: str, dry_run: bool = False) -> dict[str, Any]:
       幂等补齐（--refresh）。"""
     if dry_run:
         return {"ok": True, "skipped": True, "reason": "dry_run"}
+    trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
+    if not trading:
+        # 2026-11-07 实证：周六链跑本步产出 {tradingDate: 11-07, status: degraded} 残档
+        # （非交易日无原料）；兄弟步均有当日原料数据门控，本步补齐交易日显式门控
+        # （同 mongodbBackup 口径，记录 calendarSource）。
+        return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
+                "calendarSource": cal_source}
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "backend.operations.leader_wzs", "--day", today],

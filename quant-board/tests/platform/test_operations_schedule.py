@@ -1180,3 +1180,22 @@ def test_relay_index_failure_does_not_flip_chain(monkeypatch: Any) -> None:
     assert result["ok"] is True  # advisory 失败不翻转
     assert result["results"]["relayIndex"]["ok"] is False
     assert calls == ["hotlist", "backup", "archiveR2", "relayIndex"]
+
+
+def test_leader_wzs_step_skips_on_non_trading_day(monkeypatch: Any) -> None:
+    """2026-11-07 审计锁定：龙头弱转强步非交易日不跑（无原料门控的步必须有交易日门控）。
+
+    周六链跑本步曾产出 {tradingDate: 11-07, status: degraded} 残档；门控同
+    mongodbBackup 口径（bridge→cache→weekday 降级链，记录 calendarSource）。"""
+    import backend.operations.schedule as sched
+
+    monkeypatch.setattr(sched, "is_trading_day_cached", lambda d: (False, "bridge"))
+
+    def _fail_run(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("非交易日不得启动 leader_wzs 子进程")
+
+    monkeypatch.setattr(sched.subprocess, "run", _fail_run)
+    out = sched._run_leader_wzs_step("2026-11-07")
+    assert out["ok"] is True
+    assert out["skipped"] is True and out["reason"] == "non_trading_day"
+    assert out["calendarSource"] == "bridge"
