@@ -258,7 +258,10 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   独立源核对收口（pos4/13/17 精确一致，pos14/15 实际流通口径自洽；pos29/pos18-32 默认集合内
   无法核对待抓包）。前端修复：会话 TTL 关闭时 server error 1106（cmd=110 紧邻 close，会话期数据
   全量到流）结构化白名单（ev.server.code===1106）+ msg 形态正则双保险，均只计统计不上横幅
-  （lastError 经 /api/kpl/status 可查）。
+  （lastError 经 /api/kpl/status 可查）。**2026-11-06 盘中探针修订：该信号已由 1106 变为 1002**
+  （75s/601 事件/8 会话：每会话必以 {'code':1002,'msg':'连接错误：1002'} 紧跟 closed by server
+  收尾，推送流全程健康），白名单同步扩为 code∈{1106,1002}；另修 kplErrKey 双引号 JSON 形态
+  （server-only 双发事件）归一缺失导致的成对重复日志。
 - **龙虎榜链路（2026-10-29 三期）**：2112 会不会上龙虎榜预测 + 3004 RealtimeLHB 双 socket
   链 + HisBeOnTheLHB 历史回看全开火验证（预登记探针，证据 .tmp_review/lhb*_probe_*）。
   关键坑：**HisBeOnTheLHB 的 a/c 与 D1 参数顺序互换**（mo0.d 第一参数→c 第二参数→a，
