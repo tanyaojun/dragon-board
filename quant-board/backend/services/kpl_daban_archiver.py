@@ -25,6 +25,12 @@
   fetched_date/same_day 时点标记）；**每轮限量 gene_limit 只**（服务端 _post_form
   全局 ≥2s 单发间隔），缺失优先、收盘后 ≥15:05 对盘中旧值刷一次终值；日期跟随涨停池
   快照交易日，全池覆盖度由 gene_pending_n 暴露（fail-visible）。
+- 题材库热度语料通道（socket 2013 StockRelatedThemeResp，theme_ 前缀字段；
+  2026-11-08 题材龙头语料第 2 项）：与 reason 通道同款合同——订阅面=涨停池成员自动跟随
+  （KPL_THEME_SUBS，默认开），按 stock_id 并集落库 theme_items（themes[{id,name,
+  number=题材热度 float}] 原样，不改写不拼接）；日期跟随涨停池快照交易日 + >3 天
+  新鲜度护栏，跨日残留条目跳过（不污染当日档）；读口 `load_theme_corpus`
+  / `GET /api/kpl/theme-heat`（:8002）。
 - 涨停原因语料通道（2203 推送，reason_ 前缀字段；2026-11-08 用户需求「作为 jev 语料
   投喂」）：按 stock_id 并集落库 reason_items（zt/fx/jc/jj/pledge/zt_group/theme/
   child_theme/label/plate/tp/rank 等原文，不改写不拼接——组合口径由消费方定）；
@@ -61,6 +67,7 @@ _UPSTREAM_BID = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=8"
 _UPSTREAM_ZB = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=2"
 _UPSTREAM_DT = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=3"
 _UPSTREAM_REASONS = "http://127.0.0.1:8002/api/kpl/zt-reasons"   # 2203 涨停原因语料
+_UPSTREAM_THEME = "http://127.0.0.1:8002/api/kpl/theme-heat"      # 2013 题材库热度语料
 
 # 通道配置：prefix=日档字段前缀；mark_broken=掉出标注（涨停池/跌停池有掉出语义，
 # 炸板池成员即曾炸板全集、竞价无掉出语义，均不标）
@@ -212,6 +219,8 @@ def load_day(db: Any, date: str, *, lane: str = "pool") -> dict[str, Any]:
     lane=bid/zb/dt：映射为与 /daban-list 同构的载荷（items/ts/max_size/…），前端零转换渲染；
     lane=reason：2203 涨停原因语料（jev 投喂原料，见 load_reason_corpus）。
     """
+    if lane == "theme":
+        return load_theme_corpus(db, date)
     if lane == "reason":
         return load_reason_corpus(db, date)
     if lane == "gene":
@@ -262,6 +271,7 @@ _REASON_FIELDS = ("zt", "fx", "jc", "jj", "pledge", "zt_group", "theme", "dd",
                   "child_theme", "label", "zt_tag", "rank", "rank_total", "rank_top",
                   "plate", "tp", "msg_id")
 _REASON_LANE = "reason"
+_THEME_LANE = "theme"
 
 
 def _ts_date(ts: Any) -> str:
@@ -372,6 +382,108 @@ def load_reason_corpus(db: Any, date: str) -> dict[str, Any]:
             "count": len(items), "ts": row.get("reason_ts"),
             "archived_at": row.get("reason_archived_at"),
             "corpus_source": row.get("reason_source") or "socket_2203"}
+
+
+def _theme_incoming(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """2013 快照 → {stock_id: item}（兼容 themes dict 与 items list 两种载荷形态）。"""
+    raw = snapshot.get("themes")
+    if raw is None:
+        raw = snapshot.get("items")
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for sid, item in raw.items():
+            if isinstance(item, dict) and str(sid or "").strip():
+                out[str(sid).strip()] = dict(item)
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                sid = str(item.get("stock_id") or "").strip()
+                if sid:
+                    out[sid] = dict(item)
+    return out
+
+
+def archive_theme_corpus(db: Any, snapshot: dict[str, Any], *,
+                         now: Optional[datetime] = None) -> dict[str, Any]:
+    """2013 题材库热度语料落库（2026-11-08 题材龙头语料第 2 项，jev 投喂原料）。
+
+    写入 kpl_daban_pool 同日档 theme_ 前缀字段（与 reason 通道同款合同）：
+    - theme_items：按 stock_id 并集（{stock_id, name, themes:[{id,name,number}], ts,
+      first_ts}），字段随最新帧刷新；
+    - theme_date/theme_ts/theme_count/theme_archived_at/theme_source；
+    - 日期 = 调用方注入的涨停池快照交易日；无 date → 不写（不猜）；
+    - 跨日残留保护：条目 ts 转北京时间早于该日 → 跳过（skipped_stale）。
+    纯函数（db 注入）；空快照/全陈旧不写既有语料（fail-visible 结构化返回）。
+    """
+    date = str(snapshot.get("date") or "")
+    if not date:
+        return {"ok": False, "reason": "no_pool_date", "lane": _THEME_LANE,
+                "date": None, "item_n": 0}
+    incoming = _theme_incoming(snapshot)
+    row = dict(db[_COLLECTION].find_one({"_id": date}) or {})
+    row.pop("_id", None)
+    members: dict[str, dict[str, Any]] = {}
+    for m in row.get("theme_items") or []:
+        sid = str(m.get("stock_id") or "")
+        if sid:
+            members[sid] = dict(m)
+    if not incoming:
+        return {"ok": False, "reason": "empty_themes", "lane": _THEME_LANE,
+                "date": date, "item_n": len(members)}
+    merged_n = skipped_stale = 0
+    for sid, it in incoming.items():
+        ts = it.get("ts")
+        ts_date = _ts_date(ts)
+        if ts_date and ts_date < date:
+            skipped_stale += 1
+            continue
+        merged = dict(members.get(sid) or {})
+        for f in ("stock_id", "name", "themes"):
+            if f in it and it[f] not in (None, "", []):
+                merged[f] = it[f]
+        merged["stock_id"] = sid
+        if ts:
+            merged["ts"] = ts
+            merged["ts_date"] = ts_date or merged.get("ts_date")
+            merged.setdefault("first_ts", ts)
+        members[sid] = merged
+        merged_n += 1
+    if not merged_n:
+        return {"ok": False, "reason": "all_stale", "lane": _THEME_LANE, "date": date,
+                "item_n": len(members), "skipped_stale": skipped_stale}
+    doc = {
+        "theme_date": date,
+        "theme_source": "socket_2013",
+        "theme_items": list(members.values()),
+        "theme_count": len(members),
+        "theme_ts": max((m.get("ts") or 0) for m in members.values()),
+        "theme_archived_at": (now or datetime.now(TZ_SHANGHAI)).isoformat(),
+    }
+    db[_COLLECTION].update_one({"_id": date}, {"$set": doc}, upsert=True)   # 字段级 $set
+    return {"ok": True, "lane": _THEME_LANE, "date": date, "item_n": len(members),
+            "merged_n": merged_n, "skipped_stale": skipped_stale}
+
+
+def load_theme_corpus(db: Any, date: str) -> dict[str, Any]:
+    """2013 题材库热度语料读口（jev 投喂原料）：{ok, date, items, count, ts, archived_at}。
+
+    fail-visible：「日档不存在」（no_archive）与「日档在但语料未落库」（no_theme_corpus，
+    该日 collector 未开 2013 订阅或盘中未运行）严格分开，不伪装空语料。
+    """
+    row = db[_COLLECTION].find_one({"_id": date})
+    if not row:
+        return {"ok": False, "degraded": True, "reason": "no_archive",
+                "date": date, "lane": _THEME_LANE}
+    items = row.get("theme_items") or []
+    if not items:
+        return {"ok": False, "degraded": True, "reason": "no_theme_corpus",
+                "date": date, "lane": _THEME_LANE, "item_n": 0,
+                "note": "日档存在但 2013 题材库语料未落库（需当日盘中运行 collector 且 KPL_THEME_SUBS≠0）"}
+    return {"ok": True, "source": "local_archive", "lane": _THEME_LANE,
+            "date": row.get("theme_date") or date, "items": items,
+            "count": len(items), "ts": row.get("theme_ts"),
+            "archived_at": row.get("theme_archived_at"),
+            "corpus_source": row.get("theme_source") or "socket_2013"}
 
 
 # ── 涨停基因（溢价基因）语料通道（2026-11-08 用户需求：题材龙头语料投喂 jev）────────────
@@ -585,6 +697,7 @@ class DabanPoolArchiver:
         zb_upstream_url: str = _UPSTREAM_ZB,
         dt_upstream_url: str = _UPSTREAM_DT,
         reason_upstream_url: str = _UPSTREAM_REASONS,
+        theme_upstream_url: str = _UPSTREAM_THEME,
         gene_fetcher: Callable[[str], dict[str, Any]] = get_zt_gene,
         gene_limit: int = 6,
     ) -> None:
@@ -597,6 +710,7 @@ class DabanPoolArchiver:
         self._zb_upstream_url = zb_upstream_url
         self._dt_upstream_url = dt_upstream_url
         self._reason_upstream_url = reason_upstream_url
+        self._theme_upstream_url = theme_upstream_url
         # 涨停基因语料（HTTP 单股粒度、协议层 ≥2s 限频）→ 每轮限量懒取，未拉满的成员
         # 留 gene_pending_n（fail-visible），供 jev 语料消费方判断覆盖度
         self._gene_fetcher = gene_fetcher
@@ -706,6 +820,27 @@ class DabanPoolArchiver:
                             {**rsn, "date": pool_date})
                     except Exception as error:
                         results["reason"] = {"ok": False, "reason": f"archive_failed:{error}"}
+            # 2013 题材库热度语料（2026-11-08 题材龙头语料第 2 项，jev 投喂原料）：
+            # 日期/新鲜度护栏与 2203 reason 通道同款（跟随涨停池快照交易日 + >3 天 skip）。
+            try:
+                thm = await self._fetch(client, self._theme_upstream_url)
+            except Exception as error:
+                results["theme"] = {"ok": False, "reason": f"fetch_failed:{error}"}
+            else:
+                if not thm.get("ok"):
+                    results["theme"] = {"ok": False,
+                                        "reason": f"collector_degraded:{thm.get('reason') or 'unknown'}"}
+                elif not pool_date:
+                    results["theme"] = {"ok": False, "reason": "no_pool_date"}
+                elif pool_date < (datetime.now(TZ_SHANGHAI) - timedelta(days=3)).date().isoformat():
+                    results["theme"] = {"ok": False, "reason": "stale_pool_date", "date": pool_date}
+                else:
+                    try:
+                        results["theme"] = await asyncio.to_thread(
+                            archive_theme_corpus, self._database_factory(),
+                            {**thm, "date": pool_date})
+                    except Exception as error:
+                        results["theme"] = {"ok": False, "reason": f"archive_failed:{error}"}
             # 涨停基因语料（2026-11-08，题材龙头语料投喂 jev）：HTTP 单股逐发（协议层
             # _post_form 全局 ≥2s 限频），每轮限量 gene_limit 只，缺失优先、收盘后刷终值。
             # 日期来源：①当轮涨停池快照交易日 ②快照缺失（采集器未运行/周末重启）时回退

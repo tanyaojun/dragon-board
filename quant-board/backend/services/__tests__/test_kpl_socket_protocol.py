@@ -346,3 +346,41 @@ class TestAntiCheat261:
         # 负数按 32 位补码写入（App: (int) long）
         body_neg = proto.parse_pb(proto.build_anti_cheat_ans_262(data, -2))[1][0]
         assert body_neg[32:36] == b"\xff\xff\xff\xfe"
+
+
+class TestStockRelatedTheme2013:
+    """2013 题材库热度推送（题材龙头语料第 2 项）：StockRelatedThemeResp 解析合同。
+
+    proto 反编译自 ServiceHqStock.java 描述符：stockId=1, items=2(repeated
+    Item{id=1, name=2, number=3 float/wiretype5})；2026-11-08。"""
+
+    def _item(self, tid: str = "80001", name: str = "光伏", num: float = 96.5) -> bytes:
+        import struct as _st
+        body = proto.pb_bytes(1, tid.encode()) + proto.pb_bytes(2, name.encode())
+        if num is not None:
+            body += b"\x1d" + _st.pack("<f", num)   # field 3 wiretype 5 (fixed32)
+        return body
+
+    def test_parse_full(self):
+        payload = (proto.pb_bytes(1, b"301697")
+                   + proto.pb_bytes(2, self._item())
+                   + proto.pb_bytes(2, self._item("80002", "有机硅", 71.0)))
+        out = proto.parse_stock_related_theme_resp(payload)
+        assert out["stock_id"] == "301697"
+        assert len(out["themes"]) == 2
+        assert out["themes"][0] == {"id": "80001", "name": "光伏", "number": 96.5}
+        assert abs(out["themes"][1]["number"] - 71.0) < 1e-5
+
+    def test_parse_pb_captures_fixed32_float(self):
+        # parse_pb 此前跳过 wiretype 5；2026-11-08 起捕获 little-endian float（新增键不影响旧读点）
+        import struct as _st
+        pb = proto.parse_pb(b"\x1d" + _st.pack("<f", 3.25))
+        assert pb[3][0] == 3.25
+
+    def test_parse_empty_and_missing_number(self):
+        out = proto.parse_stock_related_theme_resp(b"")
+        assert out["stock_id"] == "" and out["themes"] == []
+        payload = proto.pb_bytes(1, b"301697") + proto.pb_bytes(2, self._item(num=None))
+        out2 = proto.parse_stock_related_theme_resp(payload)
+        assert out2["themes"][0]["number"] is None
+        assert out2["themes"][0]["name"] == "光伏"

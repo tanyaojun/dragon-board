@@ -915,3 +915,78 @@ class TestAntiCheat261Decrypt:
         assert sent == []
         ev = next(e for e in _drain_q(q) if e["type"] == "anti_cheat_error")
         assert ev["reason"] == "challenge_payload_too_short"
+
+
+class TestThemeHeat2013:
+    """2013 题材库热度订阅（题材龙头语料第 2 项）：dispatch 快照/事件 + pid=1 自动补订
+    + drain 帧 + 读口降级（与 2203 试点完全同款模式）。"""
+
+    def _theme_payload(self, sid: str = "301697") -> bytes:
+        import struct as _st
+        item = (proto.pb_bytes(1, b"80001") + proto.pb_bytes(2, "光伏".encode())
+                + b"\x1d" + _st.pack("<f", 96.5))
+        return proto.pb_bytes(1, sid.encode()) + proto.pb_bytes(2, item)
+
+    def test_dispatch_2013_updates_snapshot_and_emits(self, svc):
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(proto.CMD_STOCK_RELATED_THEME, b"test/",
+                                                 self._theme_payload())))
+        evs = _drain_q(q)
+        ev = next(e for e in evs if e["type"] == "theme_heat")
+        assert ev["stock_id"] == "301697" and ev["themes"][0]["name"] == "光伏"
+        assert abs(ev["themes"][0]["number"] - 96.5) < 1e-5
+        snap = svc.get_theme_heat()
+        assert snap["ok"] is True and snap["count"] == 1
+        assert snap["themes"]["301697"]["themes"][0]["id"] == "80001"
+        assert "ts" in snap["themes"]["301697"] and snap["subscribed"] >= 0
+        assert svc.status()["theme_heat"] == 1
+
+    def test_dispatch_2013_decode_fail_visible(self):
+        bad = KplCollectorService(FakeCodec(fail_dec=True), device_id="t", user_id="0",
+                                  token="", stock_ids=["801044"], host="127.0.0.1", port=1,
+                                  human_delay=False)
+        bad.subscribe()
+        bad._dispatch(proto.parse_incoming(_push(proto.CMD_STOCK_RELATED_THEME, b"test/",
+                                                 b"\xaapayload")))
+        evs = _drain_q(bad.subscribe())
+        assert any(e["type"] == "theme_heat_error" and e["reason"] == "push decode failed"
+                   for e in evs)
+        assert bad.get_theme_heat()["ok"] is False
+
+    def test_get_theme_heat_degraded_when_empty(self, svc):
+        snap = svc.get_theme_heat()
+        assert snap["ok"] is False and snap["degraded"] is True
+        assert snap["reason"] == "no_theme_snapshot"
+
+    def test_2103_pid1_queues_and_drain_sends_2013_frames(self, svc):
+        from backend.services import kpl_daban_protocol as daban
+
+        def _page(pid: int, rows: list) -> bytes:
+            body = proto.pb_varint_field(1, pid) + proto.pb_varint_field(4, 0)
+            for sid, name, q0 in rows:
+                body += proto.pb_bytes(20, proto.pb_bytes(1, sid.encode())
+                                       + proto.pb_bytes(2, name.encode())
+                                       + proto.pb_bytes(100, q0.encode()))
+            return body + proto.pb_varint_field(22, len(rows) * 30)
+
+        svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(1, [("301697", "贝特利", "2亿")]))))
+        assert svc._pending_theme == ["301697"]
+        sock = FakeSocket([])
+        seq = iter(range(100, 200))
+        svc._drain_theme_subs(sock, lambda: next(seq))
+        assert len(sock.sent) == 1
+        fr = sock.sent[0]
+        assert fr[0] == proto.PKG_ROUTE
+        assert fr[7:9] == proto.CMD_STOCK_RELATED_THEME.to_bytes(2, "big")
+        assert fr[12:15] == b"\x02\x07\xdd"   # ext=`02`+cmd 2BE（2013=0x07DD）
+        assert proto.build_hq_req_pb("301697") in fr
+
+    def test_theme_subs_disabled_no_queue(self):
+        off = KplCollectorService(FakeCodec(), device_id="t", user_id="0", token="",
+                                  stock_ids=["801044"], host="127.0.0.1", port=1,
+                                  human_delay=False, theme_subs=False)
+        assert off._queue_theme_new(["301697"]) == 0
+        assert off._pending_theme == []
+        assert off.get_theme_heat()["reason"] == "no_theme_snapshot"

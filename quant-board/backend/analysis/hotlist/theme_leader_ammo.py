@@ -182,6 +182,10 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # apphq StockL2Data/GetZhangTingGene 逐股懒取落库）。上游**未标注统计窗口** → 口径注
 # 原样保留不自算；回填条目（抓取日≠日档交易日，值含此后信息）显式标注抓取日。缺失走
 # 「不可考」不补 0。判据零改动，沿 2026-10-24c/2026-11-02a 先例：纯语料补行不动题面 hash。
+# 2026-11-08d（纯语料补行，题面 hash 不动）：新增 theme_heat_line——KPL 题材库
+# （socket 2013 StockRelatedThemeResp，题材龙头语料第 2 项）个股级「题材热度」行，
+# 排打标交叉行后、基因行前（题材族聚拢）；单一事实源 kpl_daban_pool.theme_items。
+# 2013-11-08 深度题点名「题材热度」的判据缺口先落语料，判据义务是否换代另行裁决。
 # 2026-11-08c（纯语料补行，题面 hash 不动，沿 gene/AMMO 2026-11-08a 先例）：封板质量行
 # 增「首板 X（回封 Y）」时点段——zt_time/last_zt_time（epoch 秒→Asia/Shanghai HH:MM，
 # 11-06 实测 33/33 数值齐全）已在库零新采集；回封时点=当日曾炸板回封的直读证据；
@@ -197,7 +201,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # 不成立只原样透出并标「单位待校验」，禁猜换算（评审修订：元/手双假设在低价股区间
 # 数学上不可分，改为只按元假设带校验，手假设待 GetStockPanKou 实弹复核钉死单位后再
 # 启用——_seal_unit 一处切换，行文与下游零改动）。
-AMMO_VERSION_THEME_LEADER = "2026-11-08c"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
+AMMO_VERSION_THEME_LEADER = "2026-11-08d"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1280,6 +1284,73 @@ GENE_CN = (
 )
 
 
+_THEME_HEAT_TOP_N = 6   # 个股题材库条目可能 10+，叙事行只取热度前 6（余量披露总数）
+_THEME_MISSING_CN = {"no_archive": "涨停池日档缺失", "no_theme_corpus": "题材库语料未落库",
+                     "load_error": "题材库读口异常"}
+
+
+def _heat_num_fmt(v: Any) -> str:
+    """题材热度数值格式化：整数值去小数点（96.0→96），带小数一位（96.5）；其余原样。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return str(v)
+    r = round(v)
+    return str(int(r)) if abs(v - r) < 1e-6 else f"{v:.1f}"
+
+
+def theme_heat_line(entries: list[dict]) -> str | None:
+    """题材热度行（2026-11-08d 纯语料补行，题面 hash 不动）：待判龙一 KPL 题材库画像。
+
+    `entries` = [{"label", "themes": [{id,name,number}] | None, "poolMissing": 原因|None}]；
+    themes 取自 `kpl_daban_pool.theme_items`（走 load_day(lane="theme")，operations 层取数），
+    number = 2013 推送的题材热度（float）。
+
+    口径纪律：
+    - 只列热度前 6 个题材（余量「共 X 个」披露），number 降序；number 缺失/非数值的
+      条目按原序排后并「原样」带出，不丢不猜；
+    - themes=None（不在池/语料缺该股）与 themes=[]（题材库为空）严格分开；
+    - poolMissing（题材库语料整体未落库）→ 「题材库语料不可考（原因）」，**不**伪装成
+      「今日不在涨停池」（与封板质量行同款评审口径，2026-11-08 P1）；
+    - 板块级叙事不消费本行（单股画像，与基因/封板质量同口径）。
+    entries 空 → None（调用方不出行）。
+    """
+    if not entries:
+        return None
+    parts: list[str] = []
+    for entry in entries:
+        label = str(entry.get("label") or "").strip() or "该股"
+        themes = entry.get("themes")
+        pool_missing = str(entry.get("poolMissing") or "").strip()
+        if not isinstance(themes, list):
+            if pool_missing:
+                txt = (f"题材库语料不可考"
+                       f"（{_THEME_MISSING_CN.get(pool_missing, pool_missing)}）")
+            else:
+                txt = "不可考（今日不在涨停池）"
+            parts.append(f"{label}={txt}")
+            continue
+
+        def _key(t: Any) -> float:
+            n = t.get("number") if isinstance(t, dict) else None
+            return n if isinstance(n, (int, float)) and not isinstance(n, bool) \
+                else float("-inf")
+
+        ordered = sorted(themes, key=_key, reverse=True)
+        shown = ordered[:_THEME_HEAT_TOP_N]
+        segs: list[str] = []
+        for t in shown:
+            name = (str((t or {}).get("name") or "").strip()
+                    or str((t or {}).get("id") or "").strip() or "?")
+            n = (t or {}).get("number")
+            num = _heat_num_fmt(n) if isinstance(n, (int, float)) and not isinstance(n, bool) \
+                else f"原样 {n}"
+            segs.append(f"{name} {num}")
+        txt = "；".join(segs) if segs else "题材库为空"
+        if len(ordered) > _THEME_HEAT_TOP_N:
+            txt += f"（前 {_THEME_HEAT_TOP_N} 按热度，共 {len(ordered)} 个）"
+        parts.append(f"{label}：{txt}")
+    return "题材热度（KPL 题材库订阅）：" + "；".join(parts)
+
+
 def zt_gene_line(entries: list[dict]) -> str | None:
     """涨停基因行（2026-11-08a，用户需求）：待判龙一自身历史打板确定性画像。
 
@@ -1776,6 +1847,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            zhaban_line: str | None = None,
                            seal_quality_line: str | None = None,
                            driver_cross: str | None = None,
+                           theme_heat_line: str | None = None,
                            reason_line: str | None = None,
                            gene_line: str | None = None,
                            lhb_facts_line: str | None = None,
@@ -1801,6 +1873,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     排在打标交叉行后、证据块前；None 不出行。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
     事实行（lhb_line 产出，取数单一源 jev_lhb_ammo.collect_lhb_facts），排在涨停原因行后、
     证据块前；None 不出行（未传入时旧行为不变）。
+    `theme_heat_line`（2026-11-08d）= 题材热度行（theme_heat_line 产出，取数单一源
+    kpl_daban_pool.theme_items），排打标交叉行后、基因行前；None 不出行。
     `gene_line`（2026-11-08a）= 涨停基因行（zt_gene_line 产出，取数单一源
     kpl_daban_pool.gene_items），排涨停原因行前、龙虎榜行前；None 不出行。
     `seal_quality_line`（2026-11-08b / 题集 v16）= 封板质量行（seal_quality_line 产出，
@@ -1844,6 +1918,10 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(headroom)
     if driver_cross:
         lines.append(driver_cross)
+    if theme_heat_line:
+        # 2026-11-08d：题材热度行（KPL 题材库 2013 订阅），题材族聚拢——先摆当日题材
+        # 归属与热度，再看历史基因与当日原因；None 不出行（旧行为不变）
+        lines.append(theme_heat_line)
     if gene_line:
         # 2026-11-08a：涨停基因行（历史打板画像），排涨停原因行前——先摆「这只股的
         # 历史打板确定性」，再看当日原因；None 不出行（旧行为不变）

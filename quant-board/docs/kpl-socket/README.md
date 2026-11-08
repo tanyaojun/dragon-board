@@ -679,6 +679,24 @@ jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 
 
 测试：协议层 10 + 语料层 8 + 路由 2，全 mock（注入 fetcher 桩/假库，不发真实 HTTP）。
 
+### 11.5b 题材库热度语料通道（socket 2013，2026-11-08 题材龙头语料第 2 项）
+
+- 源：个股盘口「题材库」页签推送 `ServiceHqStock.StockRelatedThemeResp`
+  （stockId=1, items=2{id=1,name=2,number=3 float}，proto 反编译自 ServiceHqStock.java
+  描述符，与 2203 同批 jadx 产物互证）；请求 `Hq.HQReq{f1 stockId}`（与 2203 同款）。
+- 订阅：与 2203 试点完全同款——`KPL_THEME_SUBS`（默认开）、订阅面=涨停池（2103 pid=1）
+  成员自动跟随、无退订、每会话重建订阅（服务器 TTL 同源）；读口
+  `GET /api/kpl/theme-heat`（:8002）。
+- 写入：`archive_theme_corpus`（每轮拉 theme-heat；**字段级 $set**）；`theme_items[]`
+  （stock_id 并集，themes 原样不改写不拼接）+ `theme_date/theme_source='socket_2013'`
+  / `theme_ts` / `theme_count` / `theme_archived_at`；日期跟随涨停池快照交易日 +
+  >3 天新鲜度护栏，跨日残留条目跳过（与 reason 通道同款合同）。
+- 已接入消费方：题材龙头 JEV 题集个股级叙事 `theme_heat_line`（AMMO `2026-11-08d`
+  纯语料补行，题面 hash 不动）——待判龙一题材热度前 6 项（number 降序，余量披露总数），
+  排打标交叉行后、基因行前；板块级不消费。语料降级出「题材库语料不可考（原因）」，
+  不伪装「今日不在涨停池」（评审同款归因纪律）。
+- 测试：协议 3 + 采集器 5 + 存档器 2 + 消费端 3，全 mock。
+
 ### 11.6 测试与证据
 
 - `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码

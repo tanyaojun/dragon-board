@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v16"
     assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-08c"   # 2026-11-08c：封板质量行+时点段 / 题面 v16
+    assert doc["ammoVersion"] == "2026-11-08d"   # 2026-11-08d：+题材热度行 / 题面 v16
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1707,3 +1707,58 @@ def test_run_pool_quality_degraded_marks_unknown_not_absent(env, monkeypatch):
     assert leader_docs and all(
         "涨停池语料不可考（涨停池日档缺失）" in d["narrative"] for d in leader_docs)
     assert all("今日不在涨停池" not in d["narrative"] for d in leader_docs)
+
+
+# ---------- 2026-11-08d / 题材热度行（2013 订阅落库，题材龙头语料第 2 项） ----------
+
+def test_fetch_theme_heat_shapes(env, monkeypatch):
+    """读口三分：ok / 降级带原因（fail-visible）/ 空语料未落库。"""
+    import backend.services.kpl_daban_archiver as arch
+    calls, db = env
+    row = {"_id": "2026-10-19", "items": [{"stock_id": "000001"}],
+           "theme_items": [{"stock_id": "000001", "name": "平安银行",
+                            "themes": [{"id": "80001", "name": "光伏", "number": 96.5}]}]}
+    monkeypatch.setattr(arch, "load_theme_corpus", lambda db_, date: {"ok": True, "items": [row["theme_items"][0]]})
+    got = L.fetch_theme_heat(db, "2026-10-19")
+    assert got["items"]["000001"]["themes"][0]["name"] == "光伏" and got["degraded"] is None
+    monkeypatch.setattr(arch, "load_theme_corpus",
+                        lambda db_, date: {"ok": False, "reason": "no_theme_corpus"})
+    out = L.fetch_theme_heat(db, "2026-10-19")
+    assert out["items"] == {} and out["degraded"] == "no_theme_corpus"
+    def boom(db_, date):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_theme_corpus", boom)
+    assert L.fetch_theme_heat(db, "2026-10-19")["degraded"] == "load_error"
+
+
+def test_theme_heat_entries_pool_missing_vs_absent():
+    """评审 P1 同款归因纪律：语料降级 ≠ 不在涨停池。"""
+    rows = [{"code": "000001", "name": "平安银行", "segment": "main"},
+            {"code": "999999", "name": "不在池股", "segment": "main"}]
+    ok = L.theme_heat_entries_for_leaders(rows, {"items": {"000001": {"themes": []}}, "degraded": None})
+    assert ok[0]["themes"] == [] and ok[0]["poolMissing"] is None
+    assert ok[1]["themes"] is None and ok[1]["poolMissing"] is None
+    deg = L.theme_heat_entries_for_leaders(rows, {"items": {}, "degraded": "no_theme_corpus"})
+    assert all(e["poolMissing"] == "no_theme_corpus" for e in deg)
+
+
+def test_run_theme_heat_degraded_marks_unknown_not_absent(env, monkeypatch):
+    """端到端：题材库语料未落库时个股叙事出「题材库语料不可考」，不伪装「不在涨停池」。
+
+    同时验证题材热度行装配位置（打标交叉行后、基因行前）。"""
+    import backend.services.kpl_daban_archiver as arch
+    calls, db = env
+    monkeypatch.setattr(arch, "load_theme_corpus",
+                        lambda db_, date: {"ok": False, "reason": "no_theme_corpus"})
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
+    assert leader_docs and all(
+        "题材库语料不可考（题材库语料未落库）" in d["narrative"] for d in leader_docs)
+    assert all("题材热度（KPL 题材库订阅）" in d["narrative"] for d in leader_docs)
+    for d in leader_docs:
+        lines = d["narrative"].splitlines()
+        theme_i = next(i for i, x in enumerate(lines) if x.startswith("题材热度"))
+        gene_i = next((i for i, x in enumerate(lines) if x.startswith("涨停基因")), None)
+        if gene_i is not None:
+            assert theme_i < gene_i

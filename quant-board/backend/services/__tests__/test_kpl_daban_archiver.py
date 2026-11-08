@@ -922,3 +922,53 @@ def test_archiver_gene_backfills_when_collector_down(monkeypatch):
     assert [g["stock_id"] for g in row["gene_items"]] == ["000001", "000002"]
     assert row["gene_pending_n"] == 0
     assert row["gene_items"][0]["same_day"] is False     # 11-08 回填 11-06 档
+
+
+# ── 2013 题材库热度语料通道（2026-11-08 题材龙头语料第 2 项，与 reason 通道同款） ──
+
+def _theme_snap(date: str, items: dict, ts: float = 1794338025.0) -> dict:
+    return {"ok": True, "date": date, "themes": items, "count": len(items), "ts": ts}
+
+
+def _theme_item(sid: str, ts: float) -> dict:
+    return {"stock_id": sid, "name": "贝特利", "ts": ts,
+            "themes": [{"id": "80001", "name": "光伏", "number": 96.5},
+                       {"id": "80002", "name": "有机硅", "number": 71.0}]}
+
+
+def test_theme_corpus_merged_into_same_day_doc():
+    """语料与打板通道同集合同日档 theme_ 前缀字段（不另建数据集），字段级 $set。"""
+    from backend.services.kpl_daban_archiver import archive_theme_corpus, load_theme_corpus
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001"], date="2026-11-06"))
+    ts = datetime(2026, 11, 6, 14, 40, tzinfo=TZ_SHANGHAI).timestamp()
+    r = archive_theme_corpus(db, _theme_snap("2026-11-06", {"301697": _theme_item("301697", ts)}),
+                             now=datetime(2026, 11, 6, 14, 45, tzinfo=TZ_SHANGHAI))
+    assert r["ok"] is True and r["item_n"] == 1
+    row = db["kpl_daban_pool"].rows["2026-11-06"]
+    assert row["theme_source"] == "socket_2013" and row["theme_count"] == 1
+    assert row["theme_items"][0]["themes"][0]["name"] == "光伏"
+    # 增量合并（并集），既有条目字段随最新帧刷新
+    archive_theme_corpus(db, _theme_snap("2026-11-06",
+                                         {"002614": _theme_item("002614", ts + 30)}),
+                         now=datetime(2026, 11, 6, 14, 50, tzinfo=TZ_SHANGHAI))
+    row2 = db["kpl_daban_pool"].rows["2026-11-06"]
+    assert row2["theme_count"] == 2
+    assert "items.0.stock_id" not in row2   # 池 items 不被语料回写冲掉
+    loaded = load_theme_corpus(db, "2026-11-06")
+    assert loaded["ok"] is True and loaded["count"] == 2
+
+
+def test_theme_corpus_stale_and_empty_snapshots():
+    """跨日残留保护 + 空快照/无日期结构化降级（与 reason 通道同款合同）。"""
+    from backend.services.kpl_daban_archiver import archive_theme_corpus, load_theme_corpus
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001"], date="2026-11-06"))
+    old = datetime(2026, 11, 5, 14, 40, tzinfo=TZ_SHANGHAI).timestamp()
+    r = archive_theme_corpus(db, _theme_snap("2026-11-06", {"301697": _theme_item("301697", old)}))
+    assert r["ok"] is False and r["reason"] == "all_stale" and r["skipped_stale"] == 1
+    assert archive_theme_corpus(db, {"ok": True, "themes": {}})["reason"] == "no_pool_date"
+    assert archive_theme_corpus(db, _theme_snap("2026-11-06", {}))["reason"] == "empty_themes"
+    # 读口降级：日档缺失 vs 语料未落库严格分开
+    assert load_theme_corpus(db, "2026-11-07")["reason"] == "no_archive"
+    assert load_theme_corpus(db, "2026-11-06")["reason"] == "no_theme_corpus"

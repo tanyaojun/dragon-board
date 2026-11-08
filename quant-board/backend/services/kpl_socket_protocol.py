@@ -34,6 +34,8 @@ CMD_HK_LIST = 2304
 CMD_GROUP_QUOTAS = 3001  # Hq.GroupStockQuotasResp（板块行情）
 CMD_HQ_ID_LIST = 3006  # Hq.HQStockIdListReq（个股行情订阅，f1 repeated stockIds）
 CMD_HQ_REASONS = 2203  # Hq.HQReasonsResp（个股涨停原因实时推送，请求 Hq.HQReq{f1 stockId}）
+CMD_STOCK_RELATED_THEME = 2013  # ServiceHqStock.StockRelatedThemeResp（个股题材库热度推送，
+                                # 请求同 Hq.HQReq{f1 stockId}；2026-11-08 逆向）
 CMD_STOCK_MX_SUB = 2006   # Hq.StockMXResp 首拉+订阅（请求 Hq.HQItemReq{f1 stockId, f2 count}，App 固定 count=25）
 CMD_STOCK_MX_PUSH = 2007  # Hq.StockMXResp 增量推送（不在 @y51 订阅面内，服务端跟在 2006 订阅后推）
 CMD_TY_DAN_LABEL = 2009   # Hq.TYDanLabelResp 大单标签推送（分时图大单标记，请求 Hq.HQListReq{stockId,currNum=已收数}）
@@ -124,6 +126,9 @@ def parse_pb(data: bytes) -> Dict[int, List[Any]]:
                 out.setdefault(f, []).append(data[i : i + ln])
                 i += ln
             elif w == 5:
+                # fixed32（proto float，如 2013 题材热度 number）→ 捕获 little-endian float；
+                # 此前一律跳过（无消费方），新增键不影响既有 pb_first 读点
+                out.setdefault(f, []).append(struct.unpack("<f", data[i : i + 4])[0])
                 i += 4
             elif w == 1:
                 i += 8
@@ -504,6 +509,41 @@ def parse_hq_reasons_resp(payload: bytes) -> Dict[str, Any]:
         "tp": _sl(700),
         "raw_len": len(payload),
     }
+
+
+def parse_stock_related_theme_resp(payload: bytes) -> Dict[str, Any]:
+    """2013 StockRelatedThemeResp → 个股题材库热度推送解析（2026-11-08 题材龙头语料）。
+
+    proto 反编译自 ServiceHqStock.java 描述符（.tmp_review/main_src，与 2203 同批
+    jadx 产物互证）：StockRelatedThemeResp{stockId=1(string), items=2(repeated
+    Item{ id=1(string), name=2(string), number=3(float, wiretype=5) })}；
+    请求 Hq.HQReq{f1 stockId}（与 2203 同款，复用 build_hq_req_pb）。
+    number = App「题材库」页签的题材热度数值；items 可能含空 id/name（App 原样）。
+    fail-visible：非 float 的 number（异常 wiretype）原样透出 raw bytes 的 repr，不猜。"""
+    pb = parse_pb(payload)
+
+    def _s(field: int) -> str:
+        v = pb_first(pb, field, b"")
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v).decode("utf-8", "replace")
+        return "" if v is None else str(v)
+
+    themes: List[Dict[str, Any]] = []
+    for raw in pb.get(2, []):
+        if not isinstance(raw, (bytes, bytearray)):
+            continue
+        sub = parse_pb(bytes(raw))
+        item: Dict[str, Any] = {"id": "", "name": "", "number": None}
+        for v in sub.get(1, []):
+            item["id"] = (bytes(v).decode("utf-8", "replace")
+                          if isinstance(v, (bytes, bytearray)) else str(v))
+        for v in sub.get(2, []):
+            item["name"] = (bytes(v).decode("utf-8", "replace")
+                            if isinstance(v, (bytes, bytearray)) else str(v))
+        for v in sub.get(3, []):
+            item["number"] = v if isinstance(v, float) else repr(bytes(v))
+        themes.append(item)
+    return {"stock_id": _s(1), "themes": themes}
 
 
 def build_hq_list_req_pb(stock_id: str, curr_num: int) -> bytes:

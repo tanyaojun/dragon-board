@@ -68,6 +68,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     structure_line_dual,
     zt_gene_line,
     seal_quality_line,
+    theme_heat_line,
 )
 from backend.operations.leader_wzs import COLLECTION as WZS_COLLECTION
 from backend.operations.theme_cycle import COLLECTION as CYCLE_COLLECTION
@@ -501,6 +502,52 @@ _POOL_QUALITY_FIELDS = ("zt_tur", "max_zt_tur", "real_float", "real_turnover",
                         "zt_time", "last_zt_time")   # 2026-11-08c：+首板/回封时点（纯语料补行）
 
 
+def fetch_theme_heat(db: Any, date: str) -> dict[str, Any]:
+    """2013 题材库热度语料 → {"items": {code: {"name","themes"}}, "degraded": None|原因}。
+
+    单一事实源 = `kpl_daban_pool.theme_items`（走存档器读口 `load_day(lane="theme")`，
+    与 2203/gene 通道同库同款合同）；一次取全日共用。
+    降级（日档缺失/语料未落库/读口异常）→ items 空映射 + `degraded` 带结构化原因
+    （与封板质量行同款评审口径：「读不到」不得让下游伪装成「今日不在涨停池」）。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_theme_corpus
+        corpus = load_theme_corpus(db, date)
+    except Exception:      # 读口异常不阻断投喂：带原因降级（fail-visible）
+        return {"items": {}, "degraded": "load_error"}
+    if not corpus.get("ok"):
+        return {"items": {},
+                "degraded": str(corpus.get("reason") or "no_theme_corpus")}
+    out: dict[str, dict] = {}
+    for item in corpus.get("items") or []:
+        code = str((item or {}).get("stock_id") or "")[-6:]
+        if code and code not in out:
+            out[code] = {"name": item.get("name"),
+                         "themes": list(item.get("themes") or [])}
+    return {"items": out, "degraded": None}
+
+
+def theme_heat_entries_for_leaders(rows: list[dict], corpus: dict[str, Any]) -> list[dict]:
+    """题材热度行条目（2026-11-08d）：**仅待判龙一自身**（与基因/封板质量同口径）。
+
+    板块成员不列（题材热度是个股题材库画像，板块问题由结构/板块强度行承载）；
+    `poolMissing` = 语料整体降级原因，仅当语料在场且查无此股时才算真不在池
+    （与封板质量行同款评审口径）。themes=None（缺该股）与 []（题材库为空）分开。
+    """
+    items = corpus.get("items") or {}
+    degraded = corpus.get("degraded")
+    entries: list[dict] = []
+    for row in rows:
+        code = str(row.get("code") or "")
+        seg = row.get("segment")
+        seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
+        hit = items.get(code)
+        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+                        "themes": (hit or {}).get("themes"),
+                        "poolMissing": None if hit else degraded})
+    return entries
+
+
 def fetch_pool_quality(db: Any, date: str) -> dict[str, Any]:
     """当日涨停池量价语料 → {"items": {code: {"item","frameAt"}}, "degraded": None|原因}。
 
@@ -793,6 +840,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               strength_match: dict | None = None,
               reason_entries: list[tuple[str, str | None]] | None = None,
               gene_entries: list[dict] | None = None,
+              theme_heat_entries: list[dict] | None = None,
               seal_quality_entries: list[dict] | None = None,
               series_line: str | None = None,
               segment: str | None = None,
@@ -840,6 +888,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         market_summary=market_summary,
         driver_cross=driver_cross_line(driver_doc),
         gene_line=zt_gene_line(gene_entries or []),
+        theme_heat_line=theme_heat_line(theme_heat_entries or []),
         reason_line=limitup_reason_line(reason_entries or []),
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
                         if lhb_facts is not None else None),
@@ -1144,6 +1193,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     gene_corpus = fetch_gene_corpus(db, date)
     # 封板质量（2026-11-08b / 题集 v16）：同一日档 items 的量价字段，一次取全日共用
     pool_quality = fetch_pool_quality(db, date)
+    # 题材库热度语料（AMMO 2026-11-08d）：2013 订阅落库，一次取全日共用（个股级，板块级不消费）
+    theme_heat = fetch_theme_heat(db, date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -1259,6 +1310,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             strength_match=smatch,
             reason_entries=reason_entries_for_leaders([row], expounds),
             gene_entries=gene_entries_for_leaders([row], gene_corpus),
+            theme_heat_entries=theme_heat_entries_for_leaders([row], theme_heat),
             seal_quality_entries=seal_quality_entries_for_leaders([row], pool_quality),
             series_line=_series_line(rb, smatch),
             segment=row.get("segment"),

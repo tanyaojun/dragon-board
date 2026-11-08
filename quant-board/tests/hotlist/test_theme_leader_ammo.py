@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08c"   # 2026-11-08c：+封板时点段（纯语料补行）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08d"   # 2026-11-08d：+题材热度行（纯语料补行）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -1246,6 +1246,42 @@ def test_seal_quality_line_broken_and_unsealed_branches():
     assert "=今日曾封后炸板未回封（最后封住帧 10:20）：" in line3
     line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None}])
     assert line4.endswith("主板龙一 W=不可考（今日不在涨停池）")
+
+
+def test_theme_heat_line_variants():
+    """2026-11-08d 纯语料补行：题材热度行各形态（排序/截断/None/空/降级）。"""
+    themes = [{"id": "80001", "name": "光伏", "number": 96.5},
+              {"id": "80002", "name": "有机硅", "number": 71.0},
+              {"id": "80003", "name": "次新", "number": None},
+              {"id": "80004", "name": "化工", "number": 3.2}]
+    line = A.theme_heat_line([{"label": "主板龙一 X", "themes": themes, "poolMissing": None}])
+    # number 降序在前，非数值条目排后且「原样」带出不丢
+    assert "主板龙一 X：光伏 96.5；有机硅 71；化工 3.2；次新 原样 None" in line
+    # 截断披露：>6 个题材出「共 X 个」
+    many = [{"id": f"8{i:04d}", "name": f"T{i}", "number": float(i)} for i in range(9)]
+    line2 = A.theme_heat_line([{"label": "龙一 X", "themes": many, "poolMissing": None}])
+    assert "前 6 按热度，共 9 个" in line2 and "T8" in line2 and "T6" not in line2.split("（")[0]
+    # None vs 空 vs 降级 三分（评审 P1 同款归因纪律）
+    line3 = A.theme_heat_line([
+        {"label": "主板龙一 Y", "themes": None, "poolMissing": "no_theme_corpus"},
+        {"label": "主板龙一 Z", "themes": None, "poolMissing": None},
+        {"label": "主板龙一 W", "themes": []}])
+    assert "题材库语料不可考（题材库语料未落库）" in line3
+    assert "不可考（今日不在涨停池）" in line3 and "题材库为空" in line3
+    # entries 空 → None 不出行
+    assert A.theme_heat_line([]) is None
+
+
+def test_leader_narrative_theme_heat_placement():
+    """题材热度行排打标交叉行后、基因行前（题材族聚拢，2026-11-08d）。"""
+    lines = A.build_leader_narrative(
+        date="2026-11-06", market_line="指数 X", structure="结构行", baseline="基线行",
+        evidence_block="证据块", leader_name="X", leader_code="301697",
+        driver_cross="打标交叉行", theme_heat_line="题材热度行", gene_line="基因行",
+        reason_line="原因行")
+    idx = {name: lines.splitlines().index(name)
+           for name in ["打标交叉行", "题材热度行", "基因行", "原因行"]}
+    assert idx["打标交叉行"] < idx["题材热度行"] < idx["基因行"] < idx["原因行"]
 
 
 def test_seal_quality_line_seal_time_variants():

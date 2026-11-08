@@ -57,6 +57,8 @@ _LHB_REALTIME = _env_flag("KPL_LHB_REALTIME")
 # 2203 个股涨停原因推送试点（2026-11-08，涨停池页 tooltip 详情）：默认开，
 # 显式关闭 KPL_ZT_REASON_SUBS=0（切换需重启进程）；订阅面=涨停池成员自动跟随。
 _ZT_REASON_SUBS = _env_flag("KPL_ZT_REASON_SUBS")
+# 显式关闭 KPL_THEME_SUBS=0（切换需重启进程）；订阅面=涨停池成员自动跟随（2026-11-08 题材库）。
+_THEME_SUBS = _env_flag("KPL_THEME_SUBS")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
 _LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
@@ -82,7 +84,7 @@ _service = KplCollectorService(
     device_id=_DEVICE_ID, user_id=_USER_ID, token=_TOKEN,
     daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME,
     lhb_realtime_count=_LHB_REALTIME_COUNT,
-    zt_reason_subs=_ZT_REASON_SUBS)
+    zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS)
 
 
 def _get_service() -> KplCollectorService:
@@ -142,6 +144,12 @@ def zt_reasons() -> JSONResponse:
     无快照（采集未运行/未到流）返回结构化降级载荷（fail-visible）。
     """
     return JSONResponse(content=_get_service().get_zt_reasons())
+
+
+@app.get("/api/kpl/theme-heat")
+def theme_heat() -> JSONResponse:
+    """2013 题材库热度快照读口（题材龙头语料第 2 项，2026-11-08）。"""
+    return JSONResponse(content=_get_service().get_theme_heat())
 
 
 @app.get("/api/kpl/daban-list")

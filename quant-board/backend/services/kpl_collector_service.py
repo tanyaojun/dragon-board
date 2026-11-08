@@ -235,6 +235,7 @@ class KplCollectorService:
         lhb_realtime: bool = False,
         lhb_realtime_count: int = 120,
         zt_reason_subs: bool = True,
+        theme_subs: bool = True,
     ):
         self._codec = codec
         self._host = host
@@ -278,6 +279,14 @@ class KplCollectorService:
         self._zt_reason_subscribed: set = set()
         self._pending_zt_reason: List[str] = []
         self._zt_reason_lock = threading.Lock()
+        # 2013 个股题材库热度推送（2026-11-08 题材龙头语料第 2 项）：与 2203 完全同款
+        # 模式——订阅面=涨停池（2103 pid=1）成员自动跟随、无退订、每会话重建订阅
+        # （服务器 TTL 同源）；请求 Hq.HQReq{f1 stockId}，number=题材热度（float）。
+        self._theme_subs = bool(theme_subs)
+        self._theme_snap: Dict[str, Dict[str, Any]] = {}   # stock_id → {stock_id, themes, ts}
+        self._theme_subscribed: set = set()
+        self._pending_theme: List[str] = []
+        self._theme_lock = threading.Lock()
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
@@ -410,6 +419,28 @@ class KplCollectorService:
                 "ts": max(v.get("ts", 0) for v in snap.values()),
                 "subscribed": n_sub}
 
+    def get_theme_heat(self) -> Dict[str, Any]:
+        """2013 题材库热度快照读口：{stock_id → {stock_id, themes[], ts}}。
+
+        fail-visible：无快照结构化降级（与 2203 同款），不伪装空表。
+        themes = parse_stock_related_theme_resp.items（id/name/number=题材热度）。
+        """
+        with self._theme_lock:
+            snap = {k: {**v, "themes": list(v.get("themes") or [])}
+                    for k, v in self._theme_snap.items()}
+            n_sub = len(self._theme_subscribed)
+        if not snap:
+            return {"ok": False, "degraded": True, "reason": "no_theme_snapshot",
+                    "note": ("2013 订阅开关未开启（KPL_THEME_SUBS=0）"
+                             if not self._theme_subs else
+                             "尚无 2013 快照（需当日盘中运行，订阅面=涨停池成员，进池后数秒内到流）"),
+                    "running": self.is_running()}
+        return {"ok": True,
+                "themes": snap,
+                "count": len(snap),
+                "ts": max(v.get("ts", 0) for v in snap.values()),
+                "subscribed": n_sub}
+
     def _pool_stock_ids(self) -> List[str]:
         """涨停池（2103 pid=1）合并快照成员 id（跨页去重，保序）。"""
         out: List[str] = []
@@ -461,6 +492,47 @@ class KplCollectorService:
                 sock.sendall(frame)
             except OSError as exc:
                 self._err(f"2203 subscribe send failed ({sid}): {exc}")
+                return
+
+    def _queue_theme_new(self, stock_ids: List[str]) -> int:
+        """新入池成员入队 2013 订阅（与 2203 同款去重；会话线程 drain 发送）。"""
+        if not self._theme_subs:
+            return 0
+        new_ids: List[str] = []
+        with self._theme_lock:
+            for sid in stock_ids:
+                sid = str(sid or "").strip()
+                if sid and sid not in self._theme_subscribed:
+                    self._theme_subscribed.add(sid)
+                    new_ids.append(sid)
+                    self._pending_theme.append(sid)
+        if new_ids:
+            self._emit(KplEvent(type="theme_heat_status", ts=time.time(),
+                                note=f"queued {len(new_ids)} new 2013 subscriptions",
+                                stock_ids=new_ids))
+        return len(new_ids)
+
+    def _drain_theme_subs(self, sock: Any, next_seq: Any) -> None:
+        """发送待订阅 2013 帧（与 _drain_zt_reason_subs 同款边界：send 失败不重入队，
+        下一会话 6g 全量补订自愈）。"""
+        if not self._theme_subs:
+            return
+        with self._theme_lock:
+            pending = list(self._pending_theme)
+            self._pending_theme = []
+        if not pending:
+            return
+        ext = bytes([0x02]) + struct.pack(">H", proto.CMD_STOCK_RELATED_THEME)
+        for sid in pending:
+            req = proto.build_hq_req_pb(sid)
+            enc = self._codec.enc(req)
+            frame = proto.build_frame(proto.CMD_STOCK_RELATED_THEME, next_seq(), enc or req,
+                                      d=0, encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
+            self._dbg("C", frame)
+            try:
+                sock.sendall(frame)
+            except OSError as exc:
+                self._err(f"2013 subscribe send failed ({sid}): {exc}")
                 return
 
     def get_lhb_realtime(self) -> Dict[str, Any]:
@@ -520,6 +592,7 @@ class KplCollectorService:
             "pushes": self._stats["pushes"],
             "errors": self._stats["errors"],
             "zt_reasons": len(self._zt_reason_snap),
+            "theme_heat": len(self._theme_snap),
             "zt_reasons_subscribed": len(self._zt_reason_subscribed),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             "uptime_s": round(time.time() - self._stats["started_at"], 1)
@@ -938,6 +1011,11 @@ class KplCollectorService:
                     self._zt_reason_subscribed.clear()
                     self._pending_zt_reason.clear()
                 self._queue_zt_reason_new(self._pool_stock_ids())
+            if self._theme_subs:
+                with self._theme_lock:
+                    self._theme_subscribed.clear()
+                    self._pending_theme.clear()
+                self._queue_theme_new(self._pool_stock_ids())
             # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
             #    服务器 TTL 由重连机制兜底；610 重发每 8 tick 保留
             rot_chunks = []
@@ -996,8 +1074,9 @@ class KplCollectorService:
                             self._dbg("C", ka_frame)
                             sock.sendall(ka_frame)
                     last_keepalive = now
-                # 2203 待订阅帧 drain（新入池成员数秒内补订，不占保活节奏）
+                # 2203/2013 待订阅帧 drain（新入池成员数秒内补订，不占保活节奏）
                 self._drain_zt_reason_subs(sock, next_seq)
+                self._drain_theme_subs(sock, next_seq)
                 if fr == "timeout":
                     continue
                 if fr is None:
@@ -1130,6 +1209,30 @@ class KplCollectorService:
             self._emit(KplEvent(type="zt_reasons", ts=time.time(), cmd=cmd,
                                 source="push" if fr.get("fmt") == "push" else "resp", **data))
             return
+        if cmd == proto.CMD_STOCK_RELATED_THEME:
+            # 2013 题材库热度推送（2026-11-08 题材龙头语料）：与 2203 分支同款
+            # dec/解析 fail-visible，不静默丢弃
+            dec = self._codec.dec(payload.hex()) if payload else None
+            if not dec:
+                self._err(f"2013 push decode failed ({len(payload)}B)")
+                self._emit(KplEvent(type="theme_heat_error", ts=time.time(), cmd=cmd,
+                                    reason="push decode failed", payload_len=len(payload)))
+                return
+            try:
+                data = proto.parse_stock_related_theme_resp(dec)
+            except Exception as exc:
+                self._err(f"2013 parse error: {exc}")
+                self._emit(KplEvent(type="theme_heat_error", ts=time.time(), cmd=cmd,
+                                    reason=f"parse error: {exc}", payload_len=len(payload)))
+                return
+            self._stats["pushes"] += 1
+            sid = str(data.get("stock_id") or "").strip()
+            if sid:
+                self._theme_snap[sid] = {**data, "ts": time.time()}
+            self._emit(KplEvent(type="theme_heat", ts=time.time(), cmd=cmd,
+                                source="push" if fr.get("fmt") == "push" else "resp",
+                                stock_id=sid, themes=data.get("themes") or []))
+            return
         if cmd == proto.CMD_GROUP_QUOTAS:
             dec = self._codec.dec(payload.hex()) if payload else None
             if not dec:
@@ -1192,6 +1295,16 @@ class KplCollectorService:
                             pool_items = data.get("items") or []
                             if pool_items:
                                 self._queue_zt_reason_new(
+                                    [str(it.get("stock_id") or "").strip() for it in pool_items])
+                    except (TypeError, ValueError):
+                        pass
+                if self._theme_subs:
+                    # 2013 同款钩子：涨停池新入池成员自动补订题材库订阅
+                    try:
+                        if int(data.get("pid_type", 0)) == 1:
+                            pool_items = data.get("items") or []
+                            if pool_items:
+                                self._queue_theme_new(
                                     [str(it.get("stock_id") or "").strip() for it in pool_items])
                     except (TypeError, ValueError):
                         pass
