@@ -18,6 +18,7 @@ from collections import defaultdict
 from typing import Any, Callable
 
 from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
+from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
 
 # ── 代际戳 ──
 # 题集/口径任何一字变更必须换代（跨代不可比）。v1 = 2026-10-20 定版（龙头隔日连板两题）；
@@ -180,7 +181,12 @@ QUESTION_SET_VERSION_THEME_LEADER = "v15"
 # apphq StockL2Data/GetZhangTingGene 逐股懒取落库）。上游**未标注统计窗口** → 口径注
 # 原样保留不自算；回填条目（抓取日≠日档交易日，值含此后信息）显式标注抓取日。缺失走
 # 「不可考」不补 0。判据零改动，沿 2026-10-24c/2026-11-02a 先例：纯语料补行不动题面 hash。
-AMMO_VERSION_THEME_LEADER = "2026-11-08a"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
+# 2026-11-08b：新增 `seal_quality_line`（个股级叙事，排板内炸板面行后、基线前）——待判
+# 龙一「封单额=实际流通%/峰值封单回落/实际换手/主力净额=成交额%」，单一事实源 =
+# kpl_daban_pool.items 的 2103 quotas 具名字段（已落库零新采集）。封单单位未与 App 逐列
+# 对照 → 行内做元/手双假设自证（占实际流通比须落在合理带内），不成立只原样透出并标
+# 「单位待校验」，禁猜换算。
+AMMO_VERSION_THEME_LEADER = "2026-11-08b"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1297,6 +1303,149 @@ def zt_gene_line(entries: list[dict]) -> str | None:
     return head + "：" + "；".join(parts)
 
 
+# ── 封板质量行（AMMO 2026-11-08b / 题集 v16，用户裁决「同步改题面判据」） ──
+# 单一事实源 = kpl_daban_pool.items 的 2103 quotas 具名字段（DABAN_QUOTA_NAMES，已落库
+# 零新采集）：[14]封单 / [18]最大封单 / [17]实际流通 / [16]实际换手 / [15]主力净额 /
+# [7]成交额 / pool_state（sealed=当前封住、broken=曾入池掉出=炸板未回封）。
+# 封单单位（元 vs 手）未与 App 逐列对照 → 自证：以「封单占实际流通比落在合理带内」
+# 反推唯一成立的单位假设；不成立只原样透出并标「单位待校验」，**禁猜换算**。
+_SEAL_RATIO_BAND = (0.0005, 0.5)   # 0.05%~50%：容纳极端封单，越界即单位假设不成立
+_SEAL_CLOSE_FRAME = "14:57"        # 早于此刻的采集帧不是收盘帧，封单仍在变动
+
+
+def _qnum(v: Any) -> float | None:
+    """quota 字符串 → float；不可解析/布尔 → None（不做缺位补 0）。"""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f
+
+
+def _yi_signed(v: float) -> str:
+    """带符号亿元串（主力净额方向可读；与 jev_lhb_ammo._fmt_yi 同口径仅加符号）。"""
+    return f"{v / 1e8:+.2f}亿"
+
+
+def _raw_num(v: float) -> str:
+    """原样数值串（单位未定时只用它，不套亿元量级，避免错量级误导）。"""
+    return f"{v:.0f}" if abs(v - round(v)) < 1e-9 else f"{v:.2f}"
+
+
+def _seal_unit(item: dict) -> tuple[str, float | None]:
+    """封单口径自证 → (basis, 每原始单位的元系数)。
+
+    basis：missing（无封单值）/ yuan（元假设成立）/ hand（手假设成立）/ unknown
+    （两假设均越界）/ unverified（缺实际流通，无法自证）。
+    设计前提：元与手假设的量级差约 100×股价，两者不可能同时落在 0.05%~50% 带内。
+    """
+    zt = _qnum(item.get("zt_tur"))
+    if zt is None or zt <= 0:
+        return ("missing", None)
+    rf = _qnum(item.get("real_float"))
+    if rf is None or rf <= 0:
+        return ("unverified", None)
+    if _SEAL_RATIO_BAND[0] <= zt / rf <= _SEAL_RATIO_BAND[1]:
+        return ("yuan", 1.0)
+    price = _qnum(item.get("price"))
+    if price is not None and price > 0:
+        mult = 100.0 * price
+        if _SEAL_RATIO_BAND[0] <= zt * mult / rf <= _SEAL_RATIO_BAND[1]:
+            return ("hand", mult)
+    return ("unknown", None)
+
+
+def seal_quality_line(entries: list[dict]) -> str | None:
+    """封板质量行（2026-11-08b）：待判龙一当日封板量级（2103 quotas 量价字段）。
+
+    `entries` = [{"label": "主板龙一 名称", "item": pool_item | None,
+                  "frameAt": "HH:MM" | None, "unsealed": bool}, ...]；item 取自
+    `kpl_daban_pool` 日档 items（走 `load_day(lane="pool")`，由 operations 层取数）。
+
+    口径纪律：
+    - 封单单位（元/手）未与 App 逐列对照 → 双假设自证，不成立只原样透出；
+    - 峰值为当日最大封单，「现为峰值 X%」直接可读衰减；峰值缺失不出；
+    - 实际换手/主力净额/成交额各自独立缺失即不出该项（不补 0、不猜）；
+    - pool_state=broken（曾入池后炸板未回封）→ 显式标注「最后封住帧」，防当下值误读；
+    - 未封板龙一（断板反包候选，题面规则⑤）→ 明示本行不适用；
+    - 采集帧早于收盘 → 标「非收盘帧」；各股帧不同 → 逐股标帧。
+    entries 空 → None（调用方不出行）。
+    """
+    if not entries:
+        return None
+    frames = list(dict.fromkeys(str(e.get("frameAt") or "").strip()
+                                for e in entries if str(e.get("frameAt") or "").strip()))
+    if not frames:
+        head = "封板质量（KPL 涨停池采集帧不可考"
+    elif len(frames) == 1:
+        head = f"封板质量（KPL 涨停池 {frames[0]} 采集帧"
+        if frames[0] < _SEAL_CLOSE_FRAME:
+            head += "，非收盘帧"
+    else:
+        head = "封板质量（KPL 涨停池采集帧各异"
+    head += "）"
+
+    parts: list[str] = []
+    for entry in entries:
+        label = str(entry.get("label") or "").strip() or "该股"
+        item = entry.get("item")
+        unsealed = bool(entry.get("unsealed"))
+        frame = str(entry.get("frameAt") or "").strip()
+        if not isinstance(item, dict):
+            parts.append(f"{label}=" + ("今日未封板（无当日封单，本行不适用）" if unsealed
+                                        else "不可考（今日不在涨停池）"))
+            continue
+        broken = str(item.get("pool_state") or "").strip() == "broken"
+        if unsealed and not broken:
+            parts.append(f"{label}=今日未封板（无当日封单，本行不适用）")
+            continue
+
+        segs: list[str] = []
+        basis, mult = _seal_unit(item)
+        zt = _qnum(item.get("zt_tur"))
+        rf = _qnum(item.get("real_float"))
+        if basis == "missing":
+            segs.append("封单不可考")
+        elif basis in ("yuan", "hand"):
+            val = zt * mult
+            seg = f"封单 {_fmt_yi(val)}"
+            if rf is not None and rf > 0:
+                seg += f"=实际流通 {val / rf * 100:.1f}%"
+            segs.append(seg)
+            mx = _qnum(item.get("max_zt_tur"))
+            if mx is not None and mx > 0:
+                mxv = mx * mult
+                segs.append(f"峰值封单 {_fmt_yi(mxv)}（现为峰值 {val / mxv * 100:.0f}%）")
+        else:
+            tag = "单位待校验" if basis == "unknown" else "单位待校验（缺实际流通无法自证）"
+            segs.append(f"封单 {_raw_num(zt)}（{tag}）")
+        rt = _qnum(item.get("real_turnover"))
+        if rt is not None:
+            segs.append(f"实际换手 {rt:.1f}%")
+        mn = _qnum(item.get("main_net"))
+        amt = _qnum(item.get("amount"))
+        if mn is not None:
+            seg = f"主力净额 {_yi_signed(mn)}"
+            if amt is not None and amt > 0:
+                seg += f"=成交额 {mn / amt * 100:+.1f}%"
+            segs.append(seg)
+
+        body = "；".join(segs) if segs else "不可考"
+        if unsealed and broken:
+            frame_txt = f"（最后封住帧 {frame}）" if frame else ""
+            parts.append(f"{label}=今日曾封后炸板未回封{frame_txt}：{body}")
+            continue
+        if broken:
+            frame_txt = f"最后封住帧 {frame}，" if frame else ""
+            body = f"〔{frame_txt}其后炸板未回封〕{body}"
+        if len(frames) > 1 and frame:
+            body += f"〔帧 {frame}〕"
+        parts.append(f"{label}：{body}" if label else body)
+    return head + "：" + "；".join(parts)
+
+
 def plate_strength_line(match: dict) -> str:
     """板块强度行（v12 G2）：KPL 层1 RealRankingInfo（`get_sector_ranking`，按日查史口径）。
 
@@ -1520,6 +1669,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            market_summary: str | None = None,
                            ladder_line: str | None = None,
                            zhaban_line: str | None = None,
+                           seal_quality_line: str | None = None,
                            driver_cross: str | None = None,
                            reason_line: str | None = None,
                            gene_line: str | None = None,
@@ -1548,6 +1698,9 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     证据块前；None 不出行（未传入时旧行为不变）。
     `gene_line`（2026-11-08a）= 涨停基因行（zt_gene_line 产出，取数单一源
     kpl_daban_pool.gene_items），排涨停原因行前、龙虎榜行前；None 不出行。
+    `seal_quality_line`（2026-11-08b / 题集 v16）= 封板质量行（seal_quality_line 产出，
+    取数单一源 kpl_daban_pool.items 的 2103 quotas 字段），属该股当日盘面量级事实，
+    排板内炸板面行后、板块强度行前；None 不出行（旧调用形状不变）。
     `facts_line`（v15 P1）= 结构事实行（structure_facts_line 产出：周期/封板/高度/梯队），
     校准参考行与锚行相邻：排在基线后、空间锚前；None 不出行（旧行为不变，板块级叙事不消费）。
     """
@@ -1568,6 +1721,10 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(ladder_line)
     if zhaban_line:
         lines.append(zhaban_line)
+    if seal_quality_line:
+        # 2026-11-08b：封板质量行（该股封单量级/峰值衰减/换手/主力净额）；
+        # 板面事实（结构/梯队/炸板面）之后给个股量级，None 不出行（旧行为不变）
+        lines.append(seal_quality_line)
     if plate_strength:
         lines.append(plate_strength)
     if series_line:

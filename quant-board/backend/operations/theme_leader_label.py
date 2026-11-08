@@ -31,12 +31,14 @@ import json
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.analysis.hotlist import theme_event_digest as digest
+from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
 from backend.analysis.hotlist.theme_leader_ammo import (
@@ -65,6 +67,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     structure_line,
     structure_line_dual,
     zt_gene_line,
+    seal_quality_line,
 )
 from backend.operations.leader_wzs import COLLECTION as WZS_COLLECTION
 from backend.operations.theme_cycle import COLLECTION as CYCLE_COLLECTION
@@ -489,6 +492,72 @@ def gene_entries_for_leaders(rows: list[dict],
     return entries
 
 
+# 封板质量只看这几列（quotas 具名字段，语义见 kpl_daban_protocol.DABAN_QUOTA_NAMES；
+# warn_tag/back_zt/stock_tag/financing_tag 语义未破译或未定，本行不消费）
+_POOL_QUALITY_FIELDS = ("zt_tur", "max_zt_tur", "real_float", "real_turnover",
+                        "main_net", "amount", "price", "pool_state", "last_seen_ts")
+
+
+def fetch_pool_quality(db: Any, date: str) -> dict[str, dict]:
+    """当日涨停池量价字段映射 code → {"item": {...}, "frameAt": "HH:MM"}。
+
+    单一事实源 = `kpl_daban_pool` 日档 items（走存档器读口 `load_day(lane="pool")`，
+    与 /daban-list 同源，禁止第二套解析）；一次取全日共用。
+    未落库/降级/读口异常 → 空映射（调用方出「不可考」行，fail-visible，不阻断投喂）。
+    `frameAt` = 该股最后一帧的采集时刻（Asia/Shanghai），由 ops 层算好，
+    让 ammo 保持确定性纯函数（不依赖时区/时钟）。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_day
+        payload = load_day(db, date, lane="pool")
+    except Exception:      # 读口异常不阻断投喂：按「不可考」出行
+        return {}
+    if not payload.get("ok") or payload.get("empty"):
+        return {}
+    out: dict[str, dict] = {}
+    for item in payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("stock_id") or "")[-6:]
+        if not code or code in out:
+            continue
+        out[code] = {"item": {k: item.get(k) for k in _POOL_QUALITY_FIELDS},
+                     "frameAt": _frame_hhmm(item.get("last_seen_ts"))}
+    return out
+
+
+def _frame_hhmm(ts: Any) -> str | None:
+    """采集帧时间戳（epoch 秒，collector 本地时区）→ "HH:MM"；不可解析 → None。"""
+    try:
+        val = float(ts)
+    except (TypeError, ValueError):
+        return None
+    if val <= 0:
+        return None
+    return datetime.fromtimestamp(val, TZ_SHANGHAI).strftime("%H:%M")
+
+
+def seal_quality_entries_for_leaders(rows: list[dict],
+                                     quality: dict[str, dict]) -> list[dict]:
+    """封板质量行条目（2026-11-08b）：**仅待判龙一自身**（与涨停原因行同口径）。
+
+    `unsealed=True`（断板反包候选，题面续板⑤）= 该股今日未封板 → 行内明示本行不适用，
+    不拿往期封单冒充当日封板质量；未在涨停池 → item=None（行内出「不在涨停池」）。
+    """
+    entries: list[dict] = []
+    for row in rows:
+        code = str(row.get("code") or "")
+        seg = row.get("segment")
+        seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
+        hit = quality.get(code) or {}
+        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+                        "stockId": code,
+                        "item": hit.get("item"),
+                        "frameAt": hit.get("frameAt"),
+                        "unsealed": row.get("leaderSealedToday") is False})
+    return entries
+
+
 # 代际来源：`live` = 当日挂链（17:30，2026-10-30 改时；前瞻样本）；`backfill` = 事后补跑历史日。
 # **评估必须分开统计**：事后补跑的日子可能看到「当时还不存在」的语料（如题材料只在 10-20 采集），
 # 混进前瞻样本会把泄漏当成模型能力（预登记 §11 H1 回填方案）。
@@ -712,6 +781,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               strength_match: dict | None = None,
               reason_entries: list[tuple[str, str | None]] | None = None,
               gene_entries: list[dict] | None = None,
+              seal_quality_entries: list[dict] | None = None,
               series_line: str | None = None,
               segment: str | None = None,
               live_line: str | None = None,
@@ -749,6 +819,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
             gain10=row.get("gain10")),
         ladder_line=board_ladder_line(row),
         zhaban_line=board_zhaban_line(row),
+        seal_quality_line=seal_quality_line(seal_quality_entries or []),
         plate_strength=plate_strength_line(strength_match) if strength_match is not None else None,
         series_line=series_line,
         live_line=live_line,
@@ -1059,6 +1130,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     lhb_facts = fetch_lhb_facts(date)
     # 涨停基因语料（AMMO 2026-11-08a）：一次取全日共用（个股级叙事行，板块级不消费）
     gene_corpus = fetch_gene_corpus(db, date)
+    # 封板质量（2026-11-08b）：同一日档 items 的量价字段，一次取全日共用
+    pool_quality = fetch_pool_quality(db, date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -1174,6 +1247,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             strength_match=smatch,
             reason_entries=reason_entries_for_leaders([row], expounds),
             gene_entries=gene_entries_for_leaders([row], gene_corpus),
+            seal_quality_entries=seal_quality_entries_for_leaders([row], pool_quality),
             series_line=_series_line(rb, smatch),
             segment=row.get("segment"),
             live_line=kpl_live_line(le, board=rb, total=lm.get("total", 0),

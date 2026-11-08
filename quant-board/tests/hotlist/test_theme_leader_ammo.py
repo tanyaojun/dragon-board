@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v15"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08a"   # 2026-11-08a：涨停基因语料行（纯语料补行，题面 hash 不动）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08b"   # 2026-11-08b：封板质量语料行
     assert A.QUESTION_SET_HASH_THEME_LEADER == "97c50fd9fccb"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -122,6 +122,7 @@ def test_question_set_frozen_hash_and_versions():
     assert "全样本基础率锚" in cont, "v15 基础率锚必须写入续板题题面"
     assert "n=112 续板率 21.4%" in cont, "锚必须是实测数字（程序直算可复算，非拍脑袋）"
     assert "先验底" in cont and "≥45%" in cont, "锚语义：无差异化证据的先验底 + 高档抬升需点名强证据"
+    assert "必须先对齐的概率中枢" in cont, "v11 同桶中枢语义不得回潮"
     assert "必须先对齐的概率中枢" in cont, "v11 同桶中枢语义不得回潮"
     tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
     # v12 修订：引用义务扩源（结构再点火）+ ending 方向约束；v11 保守条款改为板块级表述
@@ -1162,3 +1163,82 @@ def test_narrative_gene_line_placement_before_reason_line():
     assert n.index("涨停基因行") < n.index("涨停原因行") < n.index("龙虎榜：")
     n2 = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278")
     assert "涨停基因" not in n2
+
+
+# ---------- 2026-11-08b / 题集 v16：封板质量行（个股级，判据引用源） ----------
+
+SEAL_ITEM = {"zt_tur": 77237472.0, "max_zt_tur": 407660096.0,
+             "real_float": 4422390777.0, "real_turnover": 14.31,
+             "main_net": 148080233.0, "amount": 593597266.0,
+             "price": "", "pool_state": "sealed", "last_seen_ts": 1794119726.2}
+
+
+def test_seal_quality_line_metrics_and_frame_disclosure():
+    """六项量价：封单占实际流通比/峰值封单回落/实际换手/主力净额占成交额；
+    采集帧早于收盘 → 标「非收盘帧」（封单仍在变动，防当收盘值读）。"""
+    line = A.seal_quality_line([{"label": "主板龙一 红太阳", "item": SEAL_ITEM,
+                                 "frameAt": "14:35"}])
+    assert line.startswith("封板质量（KPL 涨停池 14:35 采集帧，非收盘帧）：")
+    assert "封单 0.77亿=实际流通 1.7%" in line
+    assert "峰值封单 4.08亿（现为峰值 19%）" in line
+    assert "实际换手 14.3%" in line
+    assert "主力净额 +1.48亿=成交额 +24.9%" in line
+    # 收盘后帧不再加「非收盘帧」
+    line2 = A.seal_quality_line([{"label": "主板龙一 红太阳", "item": SEAL_ITEM,
+                                  "frameAt": "15:00"}])
+    assert "非收盘帧" not in line2 and "15:00 采集帧" in line2
+
+
+def test_seal_quality_line_missing_fields_never_fake_zero():
+    """缺位逐项不出（不补 0）：缺实际流通→不出占比；缺成交额→不出占额比；全缺→不可考。"""
+    no_float = dict(SEAL_ITEM, real_float=None, max_zt_tur=None)
+    line = A.seal_quality_line([{"label": "龙一 X", "item": no_float, "frameAt": "15:00"}])
+    assert "=实际流通" not in line and "峰值封单" not in line
+    assert "单位待校验（缺实际流通无法自证）" in line, "无分母无法自证单位 → 原样透出并标注"
+    no_amount = dict(SEAL_ITEM, amount=None)
+    line2 = A.seal_quality_line([{"label": "龙一 X", "item": no_amount, "frameAt": "15:00"}])
+    assert "=成交额" not in line2 and "主力净额 +1.48亿" in line2
+    empty = A.seal_quality_line([{"label": "龙一 X", "item": {}, "frameAt": "15:00"}])
+    assert empty == "封板质量（KPL 涨停池 15:00 采集帧）：龙一 X：封单不可考"
+    assert A.seal_quality_line([]) is None, "entries 空 → 不出行"
+
+
+def test_seal_quality_line_unit_selfcheck_rejects_implausible_value():
+    """单位自证：占实际流通比越界（3000%）且无价格可验手假设 → 标单位待校验，
+    只透出原样数值，**不出任何占比**（禁猜换算，防错量级入语料）。"""
+    bad = dict(SEAL_ITEM, zt_tur=1.3e11)          # 1.3e11 / 4.42e9 ≈ 2941%
+    line = A.seal_quality_line([{"label": "龙一 X", "item": bad, "frameAt": "15:00"}])
+    assert "单位待校验" in line
+    assert "=实际流通" not in line and "峰值封单" not in line
+    assert "130000000000" in line, "原样透出（不带亿量级，避免错量级误导）"
+    # 手假设成立（价格在场）：数值按 手×100×价 换算后落在带内 → 正常出比
+    hand = dict(SEAL_ITEM, zt_tur=150000.0, price=20.0)   # 15万手×100×20=3亿 / 44.2亿 ≈ 6.8%
+    line2 = A.seal_quality_line([{"label": "龙一 X", "item": hand, "frameAt": "15:00"}])
+    assert "封单 3.00亿=实际流通 6.8%" in line2
+
+
+def test_seal_quality_line_broken_and_unsealed_branches():
+    """炸板未回封 → 标最后封住帧（防当下值误读）；未封板龙一（题面续板⑤）→ 本行不适用。"""
+    broken = dict(SEAL_ITEM, pool_state="broken")
+    line = A.seal_quality_line([{"label": "主板龙一 X", "item": broken, "frameAt": "10:20"}])
+    assert "〔最后封住帧 10:20，其后炸板未回封〕" in line
+    line2 = A.seal_quality_line([{"label": "主板龙一 Y", "item": {}, "frameAt": None,
+                                  "unsealed": True}])
+    assert line2.endswith("主板龙一 Y=今日未封板（无当日封单，本行不适用）")
+    line3 = A.seal_quality_line([{"label": "主板龙一 Z", "item": broken,
+                                  "frameAt": "10:20", "unsealed": True}])
+    assert "=今日曾封后炸板未回封（最后封住帧 10:20）：" in line3
+    line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None}])
+    assert line4.endswith("主板龙一 W=不可考（今日不在涨停池）")
+
+
+def test_narrative_seal_quality_placement_after_zhaban():
+    """封板质量行排板内炸板面行后、板块强度前；None 不出行（旧调用形状不变）。"""
+    base = dict(date="2026-10-19", market_line="涨停 46 家",
+                structure="结构行", baseline="基线行", evidence_block="【题材证据】")
+    n = A.build_leader_narrative(**base, leader_name="红太阳", leader_code="000525",
+                                 zhaban_line="炸板面行", seal_quality_line="封板质量行",
+                                 plate_strength="板块强度行")
+    assert n.index("炸板面行") < n.index("封板质量行") < n.index("板块强度行")
+    n2 = A.build_leader_narrative(**base, leader_name="红太阳", leader_code="000525")
+    assert "封板质量" not in n2

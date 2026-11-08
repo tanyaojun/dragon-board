@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v15"
     assert doc["questionSetHash"] == "97c50fd9fccb"   # v15 续板题基础率锚（v1-v14 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-08a"   # 2026-11-08a：涨停基因语料行（纯语料补行，题面 hash 不动）
+    assert doc["ammoVersion"] == "2026-11-08b"   # 2026-11-08b：封板质量语料行
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1589,3 +1589,83 @@ def test_run_feeds_gene_corpus_into_leader_docs(env, monkeypatch):
     assert any("涨停基因（统计窗口上游未标注）" in d["narrative"] for d in leader_docs)
     sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
     assert sector_docs and all("涨停基因" not in d["narrative"] for d in sector_docs)
+
+
+# ---------- 2026-11-08b / 题集 v16：封板质量语料行（个股级判据引用源） ----------
+
+QUALITY_ITEM = {"zt_tur": 77237472.0, "max_zt_tur": 407660096.0,
+                "real_float": 4422390777.0, "real_turnover": 14.31,
+                "main_net": 148080233.0, "amount": 593597266.0, "price": "",
+                "pool_state": "sealed", "last_seen_ts": 1794119726.2}
+
+
+def _pool_payload(items):
+    return {"ok": True, "lane": "pool", "empty": False, "date": "2026-10-19",
+            "items": items}
+
+
+def test_fetch_pool_quality_maps_by_code_and_degraded_empty(monkeypatch):
+    """取数走存档器读口 load_day(lane=pool)：ok → code 映射 + 采集帧；
+    降级/异常 → 空映射（出「不可考」行，不阻断投喂）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    monkeypatch.setattr(arch, "load_day",
+                        lambda db, date, lane="pool": _pool_payload(
+                            [dict(QUALITY_ITEM, stock_id="603278"),
+                             dict(QUALITY_ITEM, stock_id="999999")]))
+    got = L.fetch_pool_quality(FakeDb(), "2026-10-19")
+    assert set(got) == {"603278", "999999"}
+    assert got["603278"]["item"]["zt_tur"] == 77237472.0
+    assert got["603278"]["frameAt"] == "14:35", "采集帧=该股最后一帧（Asia/Shanghai）"
+    assert "quotas" not in got["603278"]["item"], "只取本行消费的列，不搬整条 items"
+
+    monkeypatch.setattr(arch, "load_day",
+                        lambda db, date, lane="pool": {"ok": False, "reason": "no_archive"})
+    assert L.fetch_pool_quality(FakeDb(), "2026-10-19") == {}
+
+    def boom(db, date, lane="pool"):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_day", boom)
+    assert L.fetch_pool_quality(FakeDb(), "2026-10-19") == {}, "读口异常不阻断整轮投喂"
+
+
+def test_seal_quality_entries_for_leaders_labels_and_unsealed():
+    """仅待判龙一；分轨标签；断板反包候选（leaderSealedToday=False）→ unsealed 标记。"""
+    rows = [dict(ROWS[0], segment="main"), dict(ROWS[1], segment="growth"),
+            dict(ROWS[0], segment="main", leaderSealedToday=False)]
+    entries = L.seal_quality_entries_for_leaders(rows, {"603278": {"item": QUALITY_ITEM,
+                                                                  "frameAt": "14:35"}})
+    assert entries[0]["label"].startswith("主板龙一") and entries[0]["item"] is QUALITY_ITEM
+    assert entries[1]["label"].startswith("双创龙一") and entries[1]["item"] is None
+    assert entries[0]["unsealed"] is False and entries[2]["unsealed"] is True
+
+
+def test_build_one_wires_seal_quality_line_after_zhaban():
+    """个股级叙事：封板质量行在板内炸板面行之后；未传入 → 不出行（旧行为不变）。"""
+    row = dict(ROWS[0], segment="main", boardCodes=["603278"])
+    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+                        seal_quality_entries=L.seal_quality_entries_for_leaders(
+                            [row], {"603278": {"item": QUALITY_ITEM, "frameAt": "14:35"}}))
+    n = built["narrative"]
+    assert "封板质量（KPL 涨停池 14:35 采集帧，非收盘帧）：主板龙一 大业股份" in n
+    assert n.index("板内炸板面：") < n.index("封板质量（")
+    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                         market_line="涨停 46 家")
+    assert "封板质量" not in built0["narrative"]
+
+
+def test_run_feeds_pool_quality_into_leader_docs(env, monkeypatch):
+    """run 装配：量价字段按日一次取数 → 待判龙一叙事带封板质量行（板块级不消费）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    calls, db = env
+    monkeypatch.setattr(arch, "load_day",
+                        lambda db_, date, lane="pool": _pool_payload(
+                            [dict(QUALITY_ITEM, stock_id=str(r.get("code") or ""))
+                             for r in ROWS]))
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
+    assert leader_docs and all("封板质量（KPL 涨停池" in d["narrative"] for d in leader_docs)
+    sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
+    assert sector_docs and all("封板质量" not in d["narrative"] for d in sector_docs)
