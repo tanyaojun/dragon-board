@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.services import kpl_socket_protocol as proto  # noqa: E402
 from backend.services.kpl_collector_service import (  # noqa: E402
+    AntiCheatError,
     KplCollectorService,
     SignSvcAdbCodec,
     SignSvcError,
@@ -32,9 +33,9 @@ def _wrap(pkg: int, body: bytes) -> bytes:
     return bytes([pkg]) + len(body).to_bytes(4, "big") + body
 
 
-def _srv(cmd: int, payload: bytes) -> bytes:
-    """服务器主动帧: pkg 0x20 + [cmd][status][extlen][payload]"""
-    return _wrap(proto.PKG_SERVER, cmd.to_bytes(2, "big") + b"\x00" + NUL2 + payload)
+def _srv(cmd: int, payload: bytes, status: int = 0) -> bytes:
+    """服务器主动帧: pkg 0x20 + [cmd][status(=flags)][extlen][payload]"""
+    return _wrap(proto.PKG_SERVER, cmd.to_bytes(2, "big") + bytes([status]) + NUL2 + payload)
 
 
 def _echo(seq: int, cmd: int, flags: int, payload: bytes) -> bytes:
@@ -70,17 +71,27 @@ def _make_260(server_time: int = 1793033481) -> bytes:
 class FakeCodec:
     """signsvc 替身：ENC 加 0xAA 前缀，DEC 去前缀；WBE 返回固定签名。"""
 
-    def __init__(self, fail_dec: bool = False):
+    def __init__(self, fail_dec: bool = False, exec_value=0x0BADF00D, enc_fail: bool = False):
         self.fail_dec = fail_dec
         self.wbe_calls: list = []
         self.enc_calls: list = []
+        self.exec_calls: list = []
+        # 261 反作弊轮：默认返回定值；exec_value=None → 模拟 VM 失败（Long.MIN_VALUE 语义）
+        self.exec_value = exec_value
+        self.enc_fail = enc_fail
 
     def wbe(self, challenge, device_id, conn_type, cur_time):
         self.wbe_calls.append((challenge, device_id, conn_type, cur_time))
         return "ab" * 95
 
+    def exec(self, challenge, d):
+        self.exec_calls.append((challenge, d))
+        return self.exec_value
+
     def enc(self, plain: bytes):
         self.enc_calls.append(plain)
+        if self.enc_fail:
+            return None
         return b"\xaa" + plain
 
     def dec(self, cipher_hex: str):
@@ -767,3 +778,140 @@ class TestZtReasons2203:
         for fr in sent_2203_per_session[1]:
             assert fr[12:15] == b"\x02\x08\x9b"   # ext=`02`+cmd 2BE
             assert proto.build_hq_req_pb("301697") in fr or proto.build_hq_req_pb("002614") in fr
+
+
+class TestAntiCheat261:
+    """261 反作弊轮 → 262 作答（2026-11-08 实现；App 口径 qn0.g/GameClient$onChallenge$2）。"""
+
+    TOKEN = b"T" * 24 + b"O" * 8
+
+    def _261_payload(self, d: int = 3, tail: bytes = b"chal-abcdef", token: bytes = None) -> bytes:
+        tok = token if token is not None else self.TOKEN
+        data = tok + d.to_bytes(4, "big") + tail
+        return proto.pb_bytes(1, data)
+
+    def _frame(self, payload: bytes) -> dict:
+        return proto.parse_incoming(_srv(proto.CMD_ANTI_CHEAT, payload))
+
+    def test_261_answered_with_exec_value(self, svc):
+        q = svc.subscribe()
+        sent: list = []
+        svc._answer_anti_cheat(self._261_payload(d=3), sender=sent.append,
+                               next_seq=lambda: 77)
+        # EXEC 入参 = (US_ASCII 挑战串, BE32 d)
+        assert svc._codec.exec_calls == [("chal-abcdef", 3)]
+        assert len(sent) == 1
+        f = sent[0]
+        assert f[0] == proto.PKG_AUTH
+        assert int.from_bytes(f[7:9], "big") == proto.CMD_ANTI_CHEAT_ANS
+        assert int.from_bytes(f[5:7], "big") == 77
+        assert f[9] == 0x01          # flags=(d=0<<3)|enc → 只带加密位（602 同款）
+        body = f[12:]
+        assert body[0] == 0xAA       # FakeCodec ENC 前缀
+        ans = proto.parse_pb(body[1:])[1][0]
+        assert len(ans) == 36
+        assert ans[:32] == self.TOKEN
+        assert int.from_bytes(ans[32:36], "big") == 0x0BADF00D
+        ev = next(e for e in _drain_q(q) if e["type"] == "anti_cheat")
+        assert ev["ok"] and ev["encrypted"] is True and ev["d"] == 3
+        assert svc.status()["anti_cheat_rounds"] == 1
+
+    def test_261_in_session_sends_262_frame(self, svc, monkeypatch):
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+            _echo(6, 3001, 0x01, _quotes_payload()),
+            _srv(proto.CMD_ANTI_CHEAT, self._261_payload(d=5, tail=b"xyz123")),
+        ]
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        assert svc._codec.exec_calls == [("xyz123", 5)]
+        assert int.from_bytes(fake.sent[-1][7:9], "big") == proto.CMD_ANTI_CHEAT_ANS
+
+    def test_exec_vm_error_no_bogus_answer(self, svc):
+        svc._codec.exec_value = -(2 ** 63)   # Long.MIN_VALUE
+        q = svc.subscribe()
+        sent: list = []
+        with pytest.raises(AntiCheatError):
+            svc._answer_anti_cheat(self._261_payload(), sender=sent.append, next_seq=lambda: 9)
+        assert sent == []                     # 不发假答案（App 直接断连）
+        ev = next(e for e in _drain_q(q) if e["type"] == "anti_cheat_error")
+        assert ev["reason"] == "exec_vm_error"
+
+    def test_codec_without_exec_fail_visible(self, svc, monkeypatch):
+        monkeypatch.setattr(svc._codec, "exec", None)
+        q = svc.subscribe()
+        sent: list = []
+        with pytest.raises(AntiCheatError):
+            svc._answer_anti_cheat(self._261_payload(), sender=sent.append, next_seq=lambda: 9)
+        assert sent == []
+        assert next(e for e in _drain_q(q) if e["type"] == "anti_cheat_error")["reason"] == "exec_unavailable"
+
+    def test_enc_failure_falls_back_plaintext(self, svc):
+        svc._codec.enc_fail = True
+        sent: list = []
+        svc._answer_anti_cheat(self._261_payload(), sender=sent.append, next_seq=lambda: 1)
+        f = sent[0]
+        assert f[9] == 0x00                  # flags 无加密位
+        ans = proto.parse_pb(f[12:])[1][0]   # 明文 pb 直读
+        assert len(ans) == 36 and ans[:32] == self.TOKEN
+
+    def test_short_payload_ignored_without_disconnect(self, svc):
+        q = svc.subscribe()
+        sent: list = []
+        svc._answer_anti_cheat(proto.pb_bytes(1, b"short"), sender=sent.append, next_seq=lambda: 1)
+        assert sent == []
+        assert next(e for e in _drain_q(q) if e["type"] == "anti_cheat_error")["reason"] == \
+            "challenge_payload_too_short"
+
+    def test_non_ascii_challenge_refused(self, svc):
+        q = svc.subscribe()
+        sent: list = []
+        with pytest.raises(AntiCheatError):
+            svc._answer_anti_cheat(self._261_payload(tail=b"\xff\xfe"), sender=sent.append,
+                                   next_seq=lambda: 1)
+        assert sent == []
+        assert svc._codec.exec_calls == []   # 不拿解不出的串去猜白盒
+        assert next(e for e in _drain_q(q) if e["type"] == "anti_cheat_error")["reason"] == \
+            "challenge_not_ascii"
+
+
+class TestAntiCheat261Decrypt:
+    """261 读侧条件解密（评审 R1-P1）：flags enc=1 → 先 DEC 再解析（App SocketReaderThread 同款）。"""
+
+    def _261_plain(self) -> bytes:
+        data = b"T" * 24 + b"O" * 8 + (3).to_bytes(4, "big") + b"chal-xyz"
+        return proto.pb_bytes(1, data)
+
+    def test_encrypted_261_decrypted_before_parse(self, svc):
+        sent: list = []
+        enc_payload = b"\xaa" + self._261_plain()      # FakeCodec.dec 去掉 0xAA 前缀
+        svc._dispatch(proto.parse_incoming(_srv(proto.CMD_ANTI_CHEAT, enc_payload, status=0x01)),
+                      sender=sent.append, next_seq=lambda: 5)
+        assert svc._codec.exec_calls == [("chal-xyz", 3)]   # 拿到的是解密后的明文
+        assert int.from_bytes(sent[0][7:9], "big") == proto.CMD_ANTI_CHEAT_ANS
+
+    def test_plain_261_untouched(self, svc):
+        sent: list = []
+        svc._dispatch(proto.parse_incoming(_srv(proto.CMD_ANTI_CHEAT, self._261_plain())),
+                      sender=sent.append, next_seq=lambda: 5)
+        assert svc._codec.exec_calls == [("chal-xyz", 3)]
+
+    def test_dec_failure_falls_back_to_ciphertext_len_guard(self, svc):
+        """DEC 失败回退原密文 → 长度护栏 fail-visible，不炸、不发送。"""
+        svc._codec.fail_dec = True
+        q = svc.subscribe()
+        sent: list = []
+        enc_payload = b"\xaa" + self._261_plain()
+        svc._dispatch(proto.parse_incoming(_srv(proto.CMD_ANTI_CHEAT, enc_payload, status=0x01)),
+                      sender=sent.append, next_seq=lambda: 5)
+        assert sent == []
+        ev = next(e for e in _drain_q(q) if e["type"] == "anti_cheat_error")
+        assert ev["reason"] == "challenge_payload_too_short"

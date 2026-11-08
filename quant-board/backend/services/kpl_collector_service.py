@@ -42,6 +42,14 @@ class SignSvcError(RuntimeError):
     """signsvc 调用失败（含设备离线 / READY 超时 / RES null）。"""
 
 
+class AntiCheatError(RuntimeError):
+    """261 反作弊轮无法作答（EXEC 缺失/VM 失败/应答加密不可用）——必须断连重连。
+
+    App 行为同款（GameClient$onChallenge$2 / qn0.g）：execEncryptedHex 返回
+    Long.MIN_VALUE → 直接关 socket，不发假答案（发 0 会被服务器判作弊）。
+    """
+
+
 class SignSvcAdbCodec:
     """通过 adb 驱动模拟器内 signsvc 常驻进程，提供 ENC/DEC/WBE。
 
@@ -148,6 +156,19 @@ class SignSvcAdbCodec:
         if line.startswith("RESH "):
             _, _, hx = line.split(" ", 2)
             return hx.strip()
+        return None
+
+    def exec(self, challenge: str, d: int) -> Optional[int]:
+        """EXEC|<挑战串>|<d> → RES <int>（261 反作弊轮答案，白盒 execEncryptedHex）。
+
+        signsvc 的 RES 行直接是 int；`RES <Long.MIN_VALUE>` 由调用方按失败处理（App 同款）。
+        """
+        line = self._cmd(f"EXEC|{challenge}|{int(d)}")
+        if line.startswith("RES "):
+            try:
+                return int(line[4:].strip())
+            except ValueError:
+                return None
         return None
 
     def close(self) -> None:
@@ -280,7 +301,8 @@ class KplCollectorService:
         self._rx = bytearray()       # 接收缓冲（帧对齐：跨 socket.timeout 保留残帧，新会话清零）
         self._last_error = ""
         self._session_no = 0
-        self._stats = {"sessions": 0, "pushes": 0, "errors": 0, "started_at": 0.0}
+        self._stats = {"sessions": 0, "pushes": 0, "errors": 0, "started_at": 0.0,
+                       "anti_cheat_rounds": 0}
 
     # ---- 公共 API ----
 
@@ -499,6 +521,7 @@ class KplCollectorService:
             "errors": self._stats["errors"],
             "zt_reasons": len(self._zt_reason_snap),
             "zt_reasons_subscribed": len(self._zt_reason_subscribed),
+            "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             "uptime_s": round(time.time() - self._stats["started_at"], 1)
             if self._stats["started_at"]
             else 0,
@@ -624,6 +647,13 @@ class KplCollectorService:
             except SignSvcError as exc:
                 self._err(f"session#{self._session_no} signsvc: {exc}")
                 # signsvc 故障重试间隔拉长
+                self._stop.wait(5.0)
+                continue
+            except AntiCheatError as exc:
+                # 261 无法作答 → 不发假答案，直接断连重建（App 同款行为）；
+                # 退避拉长到 5s：若 261 周期性下发，2s 快速重连会刷屏（评审 R1-P2）
+                self._err(f"session#{self._session_no} anti_cheat: {exc}")
+                self._status = "reconnecting"
                 self._stop.wait(5.0)
                 continue
             except Exception as exc:  # 未知异常也必须 fail-visible
@@ -974,14 +1004,86 @@ class KplCollectorService:
                     # 服务器断开 → 返回触发重连
                     self._err(f"session#{self._session_no} closed by server")
                     return
-                self._dispatch(fr)
+                self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
         finally:
             try:
                 sock.close()
             except Exception:
                 pass
 
-    def _dispatch(self, fr: Dict[str, Any]) -> None:
+    def _dec_if_flags(self, payload: bytes, fr: Dict[str, Any]) -> bytes:
+        """enc 位 → 先 DEC 再解析（App 读侧 cmd 无关的条件解密；失败回退原密文）。
+
+        服务器主动帧（pkg 0x20）该位叫 status，echo/推送帧叫 flags —— 两名都查。
+        """
+        enc = (fr.get("flags", 0) or fr.get("status", 0)) & 1
+        if enc and payload:
+            try:
+                dec = self._codec.dec(payload.hex())
+                if dec:
+                    return dec
+            except SignSvcError:
+                pass   # 回退原载荷，由下游长度/解析护栏 fail-visible（不吞非 SignSvc 异常）
+        return payload
+
+    def _answer_anti_cheat(self, payload: bytes, *, sender: Any = None,
+                           next_seq: Any = None) -> None:
+        """261 AntiCheatChallenge → 262 应答（白盒 EXEC 注入，2026-11-08）。
+
+        App 口径（qn0.g / GameClient$onChallenge$2，反编译源码逐字对照）：
+        data = pb f1（长度<36 → 无效帧，App 丢弃且不断连）；token = data[:32] 原样回填；
+        d = BE32(data[32:36])；挑战串 = US_ASCII(data[36:]) → execEncryptedHex(串, d)；
+        应答 pb f1 = token + BE int32(结果)，帧 = cmd262 / pkg 0x30 / flags=(0<<3)|enc
+        （d=0，与 602 同款；加密失败回退明文，App 同款 fallback）。
+        EXEC 不可用 / VM 失败（Long.MIN_VALUE）→ **不发假答案**：qn0.g 对 VM 失败是静默
+        丢弃（ChallengeClient 独立 socket 路径才显式断连），但不应答必然被服务器踢；本实现
+        取断连——fail-visible 上报后抛 AntiCheatError 走重连链（5s 退避）。
+        """
+        data = proto.parse_anti_cheat_261(payload)
+        if len(data) < 36:
+            self._emit(KplEvent(type="anti_cheat_error", ts=time.time(),
+                                reason="challenge_payload_too_short", payload_len=len(data)))
+            return
+        token, d, challenge = proto.anti_cheat_challenge(data)
+        if "\ufffd" in challenge:   # US_ASCII 解不出的串不得拿去做白盒执行（不猜）
+            self._emit(KplEvent(type="anti_cheat_error", ts=time.time(),
+                                reason="challenge_not_ascii", d=d, challenge_len=len(challenge)))
+            raise AntiCheatError("261 challenge is not ASCII")
+        fn = getattr(self._codec, "exec", None)
+        value = None
+        if callable(fn):
+            try:
+                value = fn(challenge, d)
+            except SignSvcError as exc:
+                self._emit(KplEvent(type="anti_cheat_error", ts=time.time(),
+                                    reason=f"signsvc: {exc}", d=d,
+                                    challenge_len=len(challenge)))
+                raise AntiCheatError(f"EXEC failed: {exc}")
+        if value is None or value == -(2 ** 63):
+            self._emit(KplEvent(type="anti_cheat_error", ts=time.time(),
+                                reason="exec_unavailable" if not callable(fn) else "exec_vm_error",
+                                d=d, challenge_len=len(challenge)))
+            raise AntiCheatError("EXEC returned no answer (Long.MIN_VALUE/unavailable)")
+        if sender is None or next_seq is None:
+            self._emit(KplEvent(type="anti_cheat_error", ts=time.time(), reason="no_sender"))
+            return
+        ans_pb = proto.build_anti_cheat_ans_262(data, int(value))
+        enc = None
+        try:
+            enc = self._codec.enc(ans_pb)
+        except SignSvcError:
+            enc = None   # 加密失败回退明文（App x() 同款 fallback，flags enc=0）
+        body, encrypted = (enc, True) if enc else (ans_pb, False)
+        frame = proto.build_frame(proto.CMD_ANTI_CHEAT_ANS, next_seq(), body,
+                                  d=0, encrypted=encrypted)
+        self._dbg("C", frame)
+        sender(frame)
+        self._stats["anti_cheat_rounds"] = self._stats.get("anti_cheat_rounds", 0) + 1
+        self._emit(KplEvent(type="anti_cheat", ts=time.time(), ok=True,
+                            value=int(value), d=d, encrypted=bool(enc),
+                            token_len=len(token)))
+
+    def _dispatch(self, fr: Dict[str, Any], *, sender: Any = None, next_seq: Any = None) -> None:
         cmd = fr["cmd"]
         payload = fr.get("payload", b"")
         if cmd == proto.CMD_ERROR:
@@ -990,10 +1092,10 @@ class KplCollectorService:
             self._emit(KplEvent(type="error", ts=time.time(), server=err))
             return
         if cmd == proto.CMD_ANTI_CHEAT:
-            # 261 反作弊轮：data[0:32] 原样 + [32:36] 由 EXEC 计算 —— EXEC 依赖白盒，
-            # 当前会话未实现 EXEC 注入时 fail-visible 上报
-            self._emit(KplEvent(type="anti_cheat", ts=time.time(),
-                                note="EXEC round not implemented; monitoring only"))
+            # 261 反作弊轮：读侧解密与 cmd 无关（App SocketReaderThread：flags enc=1 → DEC），
+            # 解密失败回退原载荷由长度护栏 fail-visible；EXEC 注入作答（2026-11-08）
+            self._answer_anti_cheat(self._dec_if_flags(payload, fr),
+                                    sender=sender, next_seq=next_seq)
             return
         if cmd == proto.CMD_HQ_ID_LIST:
             dec = self._codec.dec(payload.hex()) if payload else None

@@ -298,50 +298,6 @@ def test_zt_reason_detail_ok_and_upstream_error(client, monkeypatch):
     assert body["ok"] is False and body["degraded"] is True and body["items"] == []
 
 
-def test_daban_genes_route_ok(client, monkeypatch):
-    """涨停基因语料读口（2026-11-08）：六元数组原文 + window_note + pending_n 透出。"""
-    from backend.services import kpl_gene_corpus as gene_svc
-
-    def _payload(db, date):
-        return {"ok": True, "source": "local_archive", "lane": "gene", "date": date,
-                "items": [{"stock_id": "301697",
-                           "gene": {"zt_count": 4, "premium5_count": 1, "next_day_red_pct": 50,
-                                    "first_seal_pct": 100, "first_broken_pct": 0,
-                                    "lianban_pct": 50},
-                           "raw": [4, 1, 50, 100, 0, 50], "raw_len": 6,
-                           "window_note": "上游未标注统计窗口（六元数组原样透出，不自算不反推）",
-                           "fetched_at": "2026-11-06T15:06:00+08:00",
-                           "source": "http_GetZhangTingGene"}],
-                "count": 1, "pending_n": 2, "archived_at": "2026-11-06T15:06:00+08:00",
-                "corpus_source": "http_GetZhangTingGene"}
-
-    monkeypatch.setattr(gene_svc, "load_gene_corpus", _payload)
-    r = client.get("/api/kpl/daban-genes", params={"date": "2026-11-06"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is True and body["lane"] == "gene" and body["count"] == 1
-    assert body["items"][0]["raw"] == [4, 1, 50, 100, 0, 50]
-    assert body["pending_n"] == 2                     # 覆盖度未满对消费方可见
-    assert "未标注统计窗口" in body["items"][0]["window_note"]
-
-
-def test_daban_genes_route_no_gene_corpus_and_validation(client, monkeypatch):
-    """日档在但语料未落库 → no_gene_corpus（不伪装空语料）；缺 date → 400 结构化降级。"""
-    from backend.services import kpl_gene_corpus as gene_svc
-
-    monkeypatch.setattr(gene_svc, "load_gene_corpus", lambda db, date: {
-        "ok": False, "degraded": True, "reason": "no_gene_corpus", "date": date,
-        "lane": "gene", "item_n": 0,
-        "failures": [{"stock_id": "000525", "reason": "1020"}],
-        "note": "日档存在但涨停基因语料未落库"})
-    r = client.get("/api/kpl/daban-genes", params={"date": "2026-11-06"})
-    assert r.status_code == 200
-    assert r.json()["reason"] == "no_gene_corpus"
-    assert r.json()["failures"][0]["reason"] == "1020"
-    r = client.get("/api/kpl/daban-genes")
-    assert r.status_code == 400 and r.json()["degraded"] is True
-
-
 def test_zt_reasons_upstream_unavailable_structured_502(client):
     _FakeAsyncClient.fail_with = OSError("connection refused")
     r = client.get("/api/kpl/zt-reasons")
@@ -603,3 +559,154 @@ def test_lhb_day_fallback_routes(client, monkeypatch):
     r = client.get("/api/kpl/lhb-stock-board?date=2020-01-01")
     body = r.json()
     assert r.status_code == 200 and body["rows"] == [] and "均为空" in body["note"]
+
+
+# ── 打板池日档读口（daban-pool/zhaban/dt，2026-11-08 增补炸板/跌停通道；全 mock）──────
+
+def _mock_pool_lane(monkeypatch, lane_payload):
+    """mock kpl_daban_pool 日档读取链（load_day/库工厂/settings），零真实 Mongo。"""
+    from backend.services import kpl_daban_archiver as arch
+    from backend.data.repositories import repository_factory as rf
+
+    class _S:
+        storage_backend = "mongodb"
+
+    monkeypatch.setattr(kpl_proxy_routes, "get_settings", lambda: _S())
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: object())
+    monkeypatch.setattr(arch, "load_day", lambda db, date, lane="pool": lane_payload(lane, date))
+
+
+def test_daban_pool_lane_routes_ok(client, monkeypatch):
+    """三读口（涨停/炸板/跌停）共用 _load_daban_lane_day：正常态透传 lane 载荷。"""
+    def payload(lane, date):
+        return {"ok": True, "source": "local_archive", "lane": lane, "date": date,
+                "items": [{"stock_id": "600001", "name": "某股", "pool_state": "sealed"}],
+                "max_size": 1, "pages": 1, "pages_expected": 1, "pages_missing": []}
+    _mock_pool_lane(monkeypatch, payload)
+    for path, lane in (("/api/kpl/daban-pool", "pool"),
+                       ("/api/kpl/daban-bidding", "bid"),
+                       ("/api/kpl/daban-zhaban", "zb"),
+                       ("/api/kpl/daban-dt", "dt")):
+        r = client.get(path, params={"date": "2026-11-08"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True and body["lane"] == lane and body["items"][0]["stock_id"] == "600001"
+
+
+def test_daban_pool_lane_routes_degraded_no_archive(client, monkeypatch):
+    """无档/该通道无数据：结构化降级（ok:false + degraded + no_archive），不伪装空列表。"""
+    def payload(lane, date):
+        return {"ok": False, "degraded": True, "reason": "no_archive",
+                "date": date, "lane": lane}
+    _mock_pool_lane(monkeypatch, payload)
+    for path in ("/api/kpl/daban-pool", "/api/kpl/daban-bidding",
+                 "/api/kpl/daban-zhaban", "/api/kpl/daban-dt"):
+        r = client.get(path, params={"date": "2026-11-08"})
+        assert r.status_code == 200
+        assert r.json()["reason"] == "no_archive"
+
+
+def test_daban_pool_lane_routes_date_validation(client):
+    """缺 date / 非法 date：400 结构化降级（实时走 WS，历史需 date=YYYY-MM-DD）。"""
+    for path in ("/api/kpl/daban-pool", "/api/kpl/daban-bidding",
+                 "/api/kpl/daban-zhaban", "/api/kpl/daban-dt"):
+        r = client.get(path)
+        assert r.status_code == 400 and r.json()["degraded"] is True
+        r = client.get(path, params={"date": "20261108"})
+        assert r.status_code == 400
+
+
+def test_daban_pool_lane_routes_storage_disabled(client, monkeypatch):
+    """storage_backend != mongodb：502 结构化降级（sqlite 通道不写库也不读）。"""
+    class _S:
+        storage_backend = "sqlite"
+
+    monkeypatch.setattr(kpl_proxy_routes, "get_settings", lambda: _S())
+    for path in ("/api/kpl/daban-pool", "/api/kpl/daban-bidding",
+                 "/api/kpl/daban-zhaban", "/api/kpl/daban-dt"):
+        r = client.get(path, params={"date": "2026-11-08"})
+        assert r.status_code == 502
+        assert r.json()["reason"] == "storage_backend_disabled"
+
+
+def test_daban_reasons_route_ok(client, monkeypatch):
+    """2203 涨停原因语料读口（2026-11-08）：lane=reason 透传给 jev 投喂原料，字段原文不改写。"""
+    def payload(lane, date):
+        return {"ok": True, "source": "local_archive", "lane": lane, "date": date,
+                "items": [{"stock_id": "301697", "zt": "光伏+次新股",
+                           "zt_group": "2连板", "plate": "光伏", "ts": 1794338025}],
+                "count": 1, "ts": 1794338025, "archived_at": "2026-11-08T15:05:00+08:00",
+                "corpus_source": "socket_2203"}
+    _mock_pool_lane(monkeypatch, payload)
+    r = client.get("/api/kpl/daban-reasons", params={"date": "2026-11-06"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["lane"] == "reason" and body["count"] == 1
+    assert body["items"][0]["zt"] == "光伏+次新股" and body["corpus_source"] == "socket_2203"
+
+
+def test_daban_reasons_route_no_reason_corpus(client, monkeypatch):
+    """日档在但语料未落库：no_reason_corpus（不伪装空语料）。"""
+    def payload(lane, date):
+        return {"ok": False, "degraded": True, "reason": "no_reason_corpus",
+                "date": date, "lane": lane, "item_n": 0}
+    _mock_pool_lane(monkeypatch, payload)
+    r = client.get("/api/kpl/daban-reasons", params={"date": "2026-11-06"})
+    assert r.status_code == 200
+    assert r.json()["reason"] == "no_reason_corpus"
+
+
+def test_daban_reasons_route_date_validation_and_storage(client, monkeypatch):
+    r = client.get("/api/kpl/daban-reasons")
+    assert r.status_code == 400 and r.json()["degraded"] is True
+
+    class _S:
+        storage_backend = "sqlite"
+
+    monkeypatch.setattr(kpl_proxy_routes, "get_settings", lambda: _S())
+    r = client.get("/api/kpl/daban-reasons", params={"date": "2026-11-06"})
+    assert r.status_code == 502 and r.json()["reason"] == "storage_backend_disabled"
+
+
+def test_daban_genes_route_ok(client, monkeypatch):
+    """涨停基因语料读口（2026-11-08）：六元数组原文 + window_note + pending_n 透出。"""
+    from backend.services import kpl_gene_corpus as gene_svc
+
+    def _payload(db, date):
+        return {"ok": True, "source": "local_archive", "lane": "gene", "date": date,
+                "items": [{"stock_id": "301697",
+                           "gene": {"zt_count": 4, "premium5_count": 1, "next_day_red_pct": 50,
+                                    "first_seal_pct": 100, "first_broken_pct": 0,
+                                    "lianban_pct": 50},
+                           "raw": [4, 1, 50, 100, 0, 50], "raw_len": 6,
+                           "window_note": "上游未标注统计窗口（六元数组原样透出，不自算不反推）",
+                           "fetched_at": "2026-11-06T15:06:00+08:00",
+                           "source": "http_GetZhangTingGene"}],
+                "count": 1, "pending_n": 2, "archived_at": "2026-11-06T15:06:00+08:00",
+                "corpus_source": "http_GetZhangTingGene"}
+
+    monkeypatch.setattr(gene_svc, "load_gene_corpus", _payload)
+    r = client.get("/api/kpl/daban-genes", params={"date": "2026-11-06"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["lane"] == "gene" and body["count"] == 1
+    assert body["items"][0]["raw"] == [4, 1, 50, 100, 0, 50]
+    assert body["pending_n"] == 2                     # 覆盖度未满对消费方可见
+    assert "未标注统计窗口" in body["items"][0]["window_note"]
+
+
+def test_daban_genes_route_no_gene_corpus_and_validation(client, monkeypatch):
+    """日档在但语料未落库 → no_gene_corpus（不伪装空语料）；缺 date → 400 结构化降级。"""
+    from backend.services import kpl_gene_corpus as gene_svc
+
+    monkeypatch.setattr(gene_svc, "load_gene_corpus", lambda db, date: {
+        "ok": False, "degraded": True, "reason": "no_gene_corpus", "date": date,
+        "lane": "gene", "item_n": 0,
+        "failures": [{"stock_id": "000525", "reason": "1020"}],
+        "note": "日档存在但涨停基因语料未落库"})
+    r = client.get("/api/kpl/daban-genes", params={"date": "2026-11-06"})
+    assert r.status_code == 200
+    assert r.json()["reason"] == "no_gene_corpus"
+    assert r.json()["failures"][0]["reason"] == "1020"
+    r = client.get("/api/kpl/daban-genes")
+    assert r.status_code == 400 and r.json()["degraded"] is True

@@ -246,10 +246,11 @@ async def on_startup() -> None:
     # 题材日频因子盘后补算（2026-09-27 Task1）：仅 mongodb 后端启用，
     # 每日 18:30 补算缺因子行的交易日，幂等覆盖写 theme_daily_factors。
     theme_daily_factors_scheduler.start()
-    # 2103 涨停池+集合竞价按日存档（2026-11-07/08 历史回放数据源）：仅 mongodb 后端启用，
-    # 每 60s 拉本机 :8002 合并快照（pidType=1/8）合并进 kpl_daban_pool 同日档
-    # （_id=交易日；涨停池=成员并集+收盘态标注 sealed/broken；集合竞价=bid_ 前缀字段，
-    # 成员并集+字段刷新，不另建数据集）。best-effort：失败不阻断启动。
+    # 2103 打板四页签 + 2203 涨停原因语料按日存档（2026-11-07/08 历史回放 + jev 语料数据源）：
+    # 仅 mongodb 后端启用，每 60s 拉本机 :8002 合并快照（pidType=1/8/2/3）与 /zt-reasons，
+    # 合并进 kpl_daban_pool 同日档（_id=交易日；涨停池=成员并集+收盘态标注 sealed/broken；
+    # 集合竞价=bid_、炸板池=zb_、跌停池=dt_ 前缀字段；涨停原因详情=reason_items 语料，
+    # 日期跟随涨停池快照交易日）。best-effort：失败不阻断启动。
     if get_settings().storage_backend == "mongodb":
         try:
             from backend.services.kpl_daban_archiver import get_daban_pool_archiver
@@ -258,7 +259,8 @@ async def on_startup() -> None:
         except Exception:
             logger.exception("daban pool archiver startup failed; continue startup")
     # 涨停基因语料增量存档（2026-11-08，题材龙头语料投喂 jev）：独立循环 + 字段级 $set
-    # 只写 gene_ 前缀，不与打板通道整 doc 读改写互踩（HTTP 单股懒取、每轮限量）。best-effort。
+    # 只写 gene_ 前缀；打板/语料通道亦为字段级 $set，各写方互不覆盖（HTTP 单股懒取、每轮
+    # 限量）。best-effort。
     if get_settings().storage_backend == "mongodb":
         try:
             from backend.services.kpl_gene_corpus import get_gene_corpus_archiver

@@ -87,7 +87,7 @@ QuantBoard 主后端 :8000
   `ErrResp {'code':1002,'msg':'连接错误：1002'}` 紧跟断连（此前为 1106）；重连链自愈、会话期
   数据全量到流，属例行噪声，前端白名单 code∈{1106,1002} 只计统计不上横幅
 - 稳定性合同 = 重连链（app 同款 ReconnectManager，2s 间隔重连），**不是单连接长寿命**
-- 261/262 反作弊轮：实测从未下发；若未来触发需把 signsvc EXEC 注入接入 collector
+- 261/262 反作弊轮：服务端从未下发（2026-10-26 至今）；**客户端作答链已于 2026-11-08 实现**（signsvc EXEC 注入，App 口径逐字节对照，见 §11.10），上线后未观测到 261，属备而不用。
 
 ## 四、数据语义与已知限制
 
@@ -155,7 +155,8 @@ QuantBoard 主后端 :8000
   已解析为 ``sons``（不等长时不猜配对，透出 ``sons_unpaired``）；工作台精选板块渲染改用
   sons 名单（sons 从未拿到时才回退旧启发式）。Type=1 查史与 Type=2 实时响应均带此字段。
 - **打板页签消费端已上线（2026-10-27 二期+三期）**：工作台侧栏「KPL 行情 › 集合竞价 /
-  即将涨停 / 风向标」——socket 2103 订阅快照读口（§十一），布局沿用精选板块「左板块右个股」，
+  即将涨停 / 风向标」（**2026-11-08 起六页已合并为【个股行情】单页，见 §11.4 同日条目**）
+  ——socket 2103 订阅快照读口（§十一），布局沿用精选板块「左板块右个股」，
   左侧=按板块字段聚合（家数+合计），右侧=App 竞价页字段全搬。
 
 ## 五、部署与运维 runbook
@@ -225,7 +226,10 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 1. ~~**3006 有符号 varint 修复**~~：已修复（§四，含负数回归用例）。
 2. ~~**quotas 列语义与 App UI 对照**~~：已完成（§四）——关键位（[0]/[1]/[2]/[3]/[7]-[12]）经独立源交叉对照与自洽验证确认；其余 60+ 列接入新消费字段时增量核对。
-3. **261/262 反作弊轮**（条件性，无法主动触发）：服务器从未下发 261；若开始下发需把 signsvc EXEC 注入接入 collector——触发时再处理。
+3. **261/262 反作弊轮**（条件性，无法主动触发）：服务端从未下发 261；客户端作答链已于
+   2026-11-08 实现并单测覆盖 §11.10，但实测 signsvc `execEncryptedHex` 对伪造 hex 一律返
+   `Long.MIN_VALUE`（见 §11.10 证据），**真机能否作答只取决于是否收到真实 261 密文**——
+   至此不再有“需人工接入”的开发项。
 4. ~~**serve_kpl_socket.py 归档债**~~：已裁定（2026-10-27）——`backend/serve_relay_page.py + relay_page/` 是已入库的同款先例（独立进程入口 + 静态页目录），`serve_kpl_socket.py + kpl_page/` 布局遵循该先例，不再迁移。
 5. **凭据已 env 化**（2026-10-27 提交前修复）：代码无凭据默认值（默认游客），正式账户值须环境变量注入，本地参考值存 `.tmp_review/kpl_credentials.env`（gitignored）；转常驻生产服务时统一收进 `.env.local` 加载链并考虑 token 失效监控。
 6. **认证 token 轮换未跟踪**（条件性）：当前值失效时需重新提取；失效表现为 610 拒绝（非 1002，认证会 fail-visible 报错）。
@@ -326,8 +330,9 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 
 - 页签↔pidType：APK 资源数组 `PatternTabs × PatternTabsServerPidType`
   （androguard 解包 base_new.apk）：竞价=**8**、即将涨停=**0**、风向标=**6**、涨停=1、
-  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。已接 8/0/6/1 四页签（2026-11-07 增补涨停，
-  前端【涨停行情】页分组键=quotas[16] zt_reason 原因字段），其余增量接。
+  炸板=2、跌停=3、新股=7、自然涨停=4、曾跌停=5。已接 8/0/6/1/2/3 六页签（2026-11-07 增补涨停，
+  前端【涨停行情】页分组键=quotas[16] zt_reason 原因字段；2026-11-08 增补炸板/跌停，
+  前端【炸板池】【跌停池】页同构），其余增量接。
   风向标页签列序（4,5,11,12,13,14,15=涨幅/涨速/板块/主力净额/成交额/实际换手/实际流通）
   与 App 同屏逐项核对一致（2026-10-27 盘后真帧：冰山冷热/襄阳轴承/九阳股份/百洋股份等 25 只）。
 - 请求 `DaBanStockListReq{f1 pidType, f2 orderType, f3 sortType, f4 index, f5 count}`，
@@ -359,7 +364,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   解析具名字段 + quotas×28 原始数组全量，快照级保存 pid_type/pages_meta（页级
   order_type/sort_type/index/count/indexes）/raw_len——前端暂不展示的字段后台全量留存，
   随时可取用（后续破译 pos20 可直接从 quotas 重提，无需重采）。
-- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0|6|1`（:8000 同路径代理透传）→
+- 读口：`GET :8002/api/kpl/daban-list?pid_type=8|0|6|1|2|3`（:8000 同路径代理透传）→
   `{ok, items[合并全量], max_size, pages, pages_expected, pages_missing, pages_meta, date, ts}`；
   页缺口显式透出（如即将涨停页盘后 maxSize=30 但推送 items 空，属上游语义非链路故障）。
 - 无快照（采集未运行/未订阅）返回结构化降级 `{ok:false, degraded:true,
@@ -415,7 +420,7 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - **涨停池历史回放（2026-11-07 增补，pid=1 专属）**：上游 HisDaBanList 白名单不认页签参数，
   实证返回默认集合非涨停池（2026-11-06 返 9 只 5~6.5% 涨幅非涨停股，连板/涨停时间/封单全空）
   ——涨停池历史帧无上游读口。本地按日存档：:8000 `DabanPoolArchiver`（mongodb 模式 startup
-  启动）每 60s 拉本机 :8002 pidType=1 合并快照，按 stock_id **成员并集**合并进
+  启动；单循环四通道 pidType=1/8/2/3，见下方竞价/炸板/跌停条目）拉本机 :8002 pidType=1 合并快照，按 stock_id **成员并集**合并进
   `kpl_daban_pool`（_id=交易日）+ 收盘态标注：`pool_state='sealed'`=收盘仍封住 /
   `'broken'`=曾入池后掉出即**炸板未回封**（字段保留其最后封住时快照 + last_seen_ts；
   回封重新入池自动恢复 sealed；页缺口帧 pages_missing 非空时跳过掉出标注防误标）；
@@ -433,15 +438,82 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   与本端点关系待对照，组合串=客户端拼接判断不变。
 - **集合竞价历史回放（2026-11-08 增补，pid=8；用户裁决：与涨停池同集合同日档，不另建数据集）**：
   同一 `kpl_daban_pool` 日档的 **bid_ 前缀字段**（bid_items/bid_ts/bid_pages_meta/…），
-  DabanPoolArchiver 单循环双通道（pidType=1/8）顺序落库、各改各前缀互不覆盖；
+  DabanPoolArchiver 单循环四通道（pidType=1/8/2/3，见下方炸板/跌停条目）顺序落库、各改各前缀互不覆盖；
   语义=成员并集+字段随最新帧刷新（竞价五件套 9:25 后冻结，成员为当日曾入列全集；
   无炸板语义，不标 pool_state）。读口 `GET /api/kpl/daban-bidding?date=`
   （映射为 /daban-list 同构载荷，零转换渲染；无档/日档存在但竞价通道无数据均结构化
   `no_archive`）。单通道故障不连带：涨停池拉取失败（含 fetch 阶段拒连/非 JSON）不阻断
   竞价通道落库，各自记 status。**单写者约束**：日档写入为「读全文→仅改本通道前缀字段→
-  整 doc 回写」，仅在单实例单 archiver 顺序执行下保证两通道不互覆盖；多实例/多 worker
+  整 doc 回写」，仅在单实例单 archiver 顺序执行下保证四通道不互覆盖；多实例/多 worker
   部署时读改写窗口重叠会丢对方通道更新，需改为 `$set` 按前缀字段写（当前本地单实例，
   已知边界记录于此）。
+- **炸板池/跌停池历史回放（2026-11-08 增补，pid=2/3；用户裁决：与涨停池同集合同日档，不新增数据集）**：
+  同一 `kpl_daban_pool` 日档的 **zb_/dt_ 前缀字段**，`DabanPoolArchiver` 单循环四通道（pidType
+  1/8/2/3）顺序落库、各改各前缀互不覆盖，单通道 fetch 失败/降级不连带其它通道（各自记 status）。
+  语义：炸板池=成员并集+字段随最新帧刷新（成员=当日曾炸板全集，回封后掉出仍留档，
+  回封语义由涨停池通道 sealed 承载，两通道互为印证，无 pool_state）；跌停池=与涨停池同款
+  收盘态标注（`pool_state='sealed'`=收盘仍跌停 / `'broken'`=曾入池后掉出即打开跌停未回封，
+  字段保留其最后封住时快照 + last_seen_ts；页缺口帧跳过掉出标注防误标）。
+  读口 `GET /api/kpl/daban-zhaban?date=`（炸板池）、`GET /api/kpl/daban-dt?date=`（跌停池）
+  （映射为 /daban-list 同构载荷，零转换渲染）。读口降级/空态分三态（fail-visible，评审 P2-1）：
+  无档或该通道无任何记录 → `no_archive`（前端逐日回退）；**源可用但池本为空**（0 家跌停、
+  0 家炸板，强市日常见）→ 首个写入记空档 + `empty:true`，读口返回 `ok:true+empty:true+items:[]`
+  （不触发回退、不伪装降级）；空帧且已有成员 → 不覆盖（`empty_snapshot_ignored`）。
+  前端：工作台侧栏「KPL 行情 › 炸板池/跌停池」——参照【涨停池】页同构，但列集按实测
+  上游覆盖选定（2026-11-06 快照实测：pid=2 帧 `zt_reason` 0/14、`zt_tur` 0/14、`plate_id` 0/14，
+  `plate`/`price`/`pct`/`open_time` 14/14；pid=3 帧 `zt_reason` 0/15、`price`/`pct` 0/15，
+  `plate`/`zt_tur` 15/15）：
+  左=**板块**分组（精确拆段，不得子串命中）+「全部」行（全量去重口径，默认选中；再点已选
+  板块=取消），列 `#/板块/家数/主力净额合计/成交额合计`，全缺聚合显 `--`；**不摆强度/量比
+  与原因列**（pid=2/3 不下发 `plate_id`/`zt_reason`，摆了只会全 `--`，同涨停行情页删无源列口径）；
+  右=个股表——炸板池 `代码/名称/现价/涨幅/换手%/连板/主力净额/成交额/概念/涨停时间/开板时间`，
+  跌停池 `代码/名称/换手%/主力净额/成交额/概念/跌停时间/封单额` +（**仅历史模式**）`状态` 列
+  (`sealed`=封住 / `broken`=打开；实时读口不带 pool_state，故实时不摆该列）。
+  日期切换+逐日回退 ≤7 天同涨停池；缺值 `--` 不猜数，全量字段仍在库内 quotas 可取。
+  存档自 2026-11-08 起，此前日期无源（如实透出不伪造）；依赖 :8000（存档器）与 :8002
+  （collector，默认订阅面已扩为 8/0/6/1/2/3 六页签×7 页）同日盘中运行方有当日档。
+- **打板六页左表「全部」行统一口径（2026-11-08 用户需求：参照炸板池）**：涨停池/集合竞价/
+  即将涨停/风向标/炸板池/跌停池六页左表首行均为「全部」，口径三件套一致：
+  ①**全量按个股去重**（`kplDabanAllSums(view, sumCols)` 共用实现；板块/原因分组会把一股
+  按多概念重复计，分组行之和大于全量属正常，不可相加当总数看）；
+  ②**默认选中「全部」不预选任何分组**，点分组=筛选右表，再点同一分组=取消回「全部」
+  （旧行为「竞价/涨停池自动选排序首组、点选不取消」已废）；
+  ③缺值不烘成 0：合计列按可解析成员数（`sumN`）判断，全缺显 `--`。
+  各页差异：涨停池「全部」行强度/量比显 `--`（两者为按板块 PlateID 匹配的排行比值，
+  全量不聚合，title 注明；无源不伪造）；其主力净额为全量成员合计；竞价页合计列为
+  竞价净额/竞价成交额，即将涨停/风向标为主力净额/成交额。左表新增 `#` 列（序号），
+  过滤框只筛分组行、不再因选中态折叠左表（选中后仍可切其它分组）。
+- **六页合并为【个股行情】单页（2026-11-08 用户需求）**：侧栏「KPL 行情」原六个入口
+  （集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池）合并为一个**【个股行情】**页（`kplstock`）；
+  **左板块列表不变，右个股列表左上方新增模式按钮组**（序=集合竞价/即将涨停/风向标/涨停池/
+  炸板池/跌停池，默认涨停池），列集与口径完全沿用各页既有实现。实现要点：六套渲染器保持独立，
+  `DABAN_PAGES[*].p` 统一为 `kplStock`（共用一套 DOM：`#kplStockPlateTable`/`#kplStockStockTable`/
+  `#kplStockStats`/`#kplStockDate`/`#kplStockBanner`），页内当前模式=`KPL.dabanView`，渲染守卫统一为
+  `dabanOn(view)`（`STATE.view===DABAN_PAGE && KPL.dabanView===view`）——侧栏/大盘 KPI 条/WS `daban_stocks`
+  触发/4s 轮询只认单页键 `DABAN_PAGE`，六模式键仅作页内模式与 pid 映射；各模式的 live/history/选日、
+  左表选中分组、列排序各自记忆（切回即复原），搜索与板块过滤词为瞬时查询、不跨模式继承（切模式清空）；
+  日期框/数据源说明/「回实时」跟随当前模式，历史存档逐日回退只在当前模式回填日期框。
+  硬约束不变：缺值 `--`、全缺不烘 0、页缺口/池空/降级原因如实透出。验证：Playwright 静态页冒烟
+  13 项（mock 2103 快照，零真实上游、零 jev）：六按钮顺序/默认模式/列集切换/模式状态独立记忆/
+  历史↔实时切换与日期框回填/无 JS 错误全部通过。
+- **实时无 2103 快照 → 本地存档回退（2026-11-08 现场修复，fail-visible）**：现场周日 12:25
+  【炸板池/跌停池】左表「暂无板块」、右表「等待 2103 快照到流」，状态栏 ×22 条
+  `no_daban_list_snapshot（pid_type=2；订阅页签=[8,0,6,1,2,3]）`。归因（AGENTS §1.2-6 先查原料）：
+  collector 会话被上游频繁重置（`session#N network: ConnectionResetError`，实测 90s 内 4 次、
+  会话 ~23s，261 反作弊轮 EXEC 未实现 + 风控期），2103 订阅爆发 42 帧（6 页签×7 页，拟人延迟
+  0.3s/帧 ≈12.6s）在会话内只来得及回前几个页签——pid 1/8/0/6 有缓存（date=11-06），pid 2/3
+  （订阅序末位）零帧 → 实时读口结构化降级。**并非数据集未采集**：本地日档
+  `kpl_daban_pool._id=2026-11-06` 已有 zb_items=14 / dt_items=15 / bid_items=175 / items=33，
+  读口 `/daban-zhaban|daban-dt|daban-pool?date=2026-11-06` 实拉 ok:true。
+  修复（纯展示层，不动协议/存储合同）：实时读口非 ok 且该模式无可用实时快照时，自动走本地日档
+  逐日回退（≤7 天）并**显式标注**「实时无快照·回退存档 YYYY-MM-DD」（统计行 + 页头数据源），
+  轮询不停、实时帧到流即清标记切回实时；回退态不改历史选日/日期框（否则被当成历史模式停 4s
+  轮询），回退扫档 60s 节流；同一条降级消息 60s 内只进一次状态栏（现场被刷 22 条）。无本地
+  存档通道的【即将涨停/风向标】保持结构化原因（不冒领存档）。**已知未解**：会话寿命仍由上游
+  风控/拟人链决定（261 作答链虽已实现但服务器不下发，见 §11.10）；本回退只保证「实时缺帧期仍
+  可见最近事实」，不掩盖 `no_daban_list_snapshot`。验证：Playwright 静态页 6 项（复现 pid=2/3
+  无快照 + 11-06 有档：回退渲染、统计行/页头标注、日期框保持空、切模式互不污染、状态栏不刷
+  重复、无 JS 错误）+ pytest 静态守卫 10/10（`tests/hotlist/test_relay_page_kplstock.py`）。
 - **2026-10-27 晚上游异常实录（阴性记录，已于 2026-10-28 复测解除）**：当晚 HisDaBanList
   全参数形态 errcode 1020 / ZhiShuStockList_W8 errcode 0+空列表，两种形态抖动；
   游客/现役凭据/socket 凭据、apiv w21-w48、Day/Date/Isst 变体、apphis/apphwhq/applhb
@@ -594,9 +666,78 @@ jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 
   fail-visible/按日共享缓存、竞昨比原料（昨日日K 解析/批量失败隔离/失败 10 分钟不重试）；
   `test_market_history_service.py`：涨跌分布合桶/本地累积缺数/KPI 指数历史。
   KPL 专项合计 **121 passed**（2026-10-28 实跑，全 mock，零真实连接）。
+  2026-11-08 炸板/跌停通道增补：`test_kpl_daban_protocol.py`（注册表 6 页签）、
+  `test_kpl_collector_service.py`（会话帧序 42 帧 2103 = 6 页签×7 页）、
+  `test_kpl_daban_archiver.py`（zb_ 并集无 pool_state / dt_ sealed-broken 回封恢复 /
+  页缺口防误标 / 四通道 fetch 隔离 / **落库阶段异常隔离 / 非掉出语义通道不写 sealed_n-broken_n /
+  旧档残留键保留 / invalid_lane / 四通道同档共存 / 合法空池记录与读取 / 页缺口后补标**）、
+  `tests/api/test_kpl_proxy_routes.py`（daban-pool/bidding/zhaban/dt 四读口：正常透传 /
+  no_archive 降级 / 日期校验 / 存储未启用 502）——四文件实跑 **117 passed**（全 mock，
+  2026-11-08 评审补丁后数字）。
+  2026-11-08 同轮再增：261 作答链（协议 3 / collector 7）与 2203 语料落库（archiver 6 /
+  路由 3）——协议+collector+archiver+daban_protocol+proxy+relay 静态守卫六文件合计
+  **181 passed**（全 mock，零真实上游/signsvc/jev）。
 - 证据工件（本地 .tmp_review/）：`kpl_daban_frames_20261027.txt`（KPL_DEBUG 帧转储，
   含 count=200 请求密文）；真实快照对照：竞价页 183/183 全量零缺口，赛福天行与 App 竞价页
   同屏逐项一致（13.02 亿/10.01%/机器人概念、海洋经济/4连板/528.0 万/966.7 万）。
+
+### 11.10 261 反作弊轮作答与 2203 涨停原因语料落库（2026-11-08 增补）
+
+#### 11.10.1 261 → 262 作答链（App 口径逐字节对照，已实现、未触发）
+
+- 服务端主动帧 `261 AntiCheatChallenge{pb f1: data}`：`data[0:32]`=token、
+  `data[32:36]`=BE32 `d`、`data[36:]`=`US_ASCII` 挑战串（App: `new String(payload,36,len-36,US_ASCII)`）；
+  `len<36` → App 丢弃且**不断连**（同款处理）。
+- 客户端：`execEncryptedHex(挑战串, d)`（signsvc `EXEC|<串>|<d>` → `RES <long>`）→
+  应答 `262 AntiCheatChallenge{data = token32 + BE32(int)}`，帧 = `cmd262 / pkg 0x30 /
+  flags=(0<<3)|enc`（`d=0`，与 602 同款；ENC 失败回退明文 flags enc=0，App `x()` 同款）。
+- **读侧条件解密**：入帧 flags/status enc=1 → 先 DEC 再解析（App SocketReaderThread cmd 无关；
+  解密失败回退原密文由长度护栏 fail-visible）。
+- **失败不造假答案**：EXEC 返 `Long.MIN_VALUE` / 不可用 / 串非 ASCII → fail-visible 事件
+  `anti_cheat_error` + 断连重连（App 的 qn0.g 对 VM 失败是静默丢弃、ChallengeClient 独立
+  socket 路径才显式断连；不应答必然被服务器踢，本实现取断连，退避 5s 防周期 261 刷屏；
+  发 0 会被判作弊）。
+- 代码：`kpl_socket_protocol.parse_anti_cheat_261` / `anti_cheat_challenge` /
+  `build_anti_cheat_ans_262`；`SignSvcAdbCodec.exec`；`KplCollectorService._answer_anti_cheat`
+  （`_dispatch` 261 分支，`sender/next_seq` 由收流循环注入，不另建发送通道）；
+  status 新增 `anti_cheat_rounds`。
+- **实测证据（2026-11-08，`.tmp_review/exec_probe_20261108.py`，独立 signsvc 进程四发）**：
+  任意伪造挑战串（ascii/hex32/hex64/d 变体）均返 `RES -9223372036854775808`（即 MIN_VALUE）
+  → 逆向确认 `SocketRepository.execEncryptedHex` 先校验「偶数长度 ≤0x400 的 hex」，再进白盒
+  执行；伪造密文解密必失败。故**真机作答只能在收到真实 261 时验证**，而服务器至今不下发。
+- 测试（全 mock）：协议 3 例（f1 提取 / token+d+ASCII 拆分 / 262 字节与负数补码）；collector
+  7 例（正常作答帧/会话内 261 发帧/VM 失败不发假答案/codec 无 exec/ENC 回退明文/短载荷忽略/
+  非 ASCII 拒答）。
+
+#### 11.10.2 2203 涨停原因语料 → kpl_daban_pool（jev 投喂原料）
+
+- 目标（用户需求）：`zt.reason` 涨停详作为 jev 语料原料落库，供后续 corpus 组装/审计；
+  **不新建数据集**，与打板四通道同档（`_id=交易日`）。
+- 写入：`archive_reason_corpus`（`kpl_daban_archiver`，每轮 60s 拉 `:8002/api/kpl/zt-reasons`；
+  **字段级 $set**，与涨停基因语料通道 `kpl_gene_corpus` 同款并发合同，各写方互不覆盖——评审
+  R2-P1：整 doc 回写会把并行写方的 gene_* 字段回写冲掉）：
+  `reason_items[]`（按 stock_id 并集，字段随最新帧刷新，`first_ts` 留存首次到流）+ `reason_date` /
+  `reason_source='socket_2203'` / `reason_ts` / `reason_count` / `reason_archived_at`。
+- 字段（2203 原文透传，**不改写不拼接**，组合口径留消费方定）：`zt`（涨停原因全文）`fx` `jc`
+  `jj` `pledge` `zt_group` `theme` `dd` `child_theme` `label` `zt_tag` `rank` `rank_total`
+  `rank_top` `plate` `tp` `msg_id` + `ts`（推送时刻）/`ts_date`。
+- **日期口径**：跟随涨停池（2103 pid=1）快照交易日：周末/盘前重推的是上一交易日详情，
+  推送 ts（如周日 11-08）> 交易日（11-06）属正常；无交易日（collector 全降级）→ 不写、
+  `no_pool_date` 结构化透出；涨停池快照日期过旧（>3 天，2103 停推缓存滞留）→ `stale_pool_date`
+  不落库（评审 R2-P2）。**跳陈旧**：条目 ts 转北京时间早于该交易日 → `skipped_stale` 不写。
+- 读口：`GET /api/kpl/daban-reasons?date=`（:8000，`load_day(lane='reason')`）→
+  `{ok,date,items,count,ts,archived_at,corpus_source}`；无档=`no_archive`，日档在但语料缺=
+  `no_reason_corpus`（fail-visible，不伪装空语料）。整日档读口 `/daban-pool` 同时可见
+  `reason_items`。
+- 实测（2026-11-08）：真实库 `dragon_board_quant.kpl_daban_pool._id=2026-11-06` 目前
+  `reason_items=[]` → 读口 `no_reason_corpus`（映射正常）；原因：当日 2203 推送未到流
+  （`/zt-reasons` 实拉 `no_zt_reason_snapshot`，短会话下 2203 与 2103 同病）。**不视为缺陷**：
+  fail-visible 已如实透出，盘中长会话/2203 到流后自动落库。
+- jev 侧纪律：本落库只提供**原料**；把语料接进题面/判据属方案变更，须走 hotlist-jev
+  预登记（AGENTS §1.2-5/6），且语料 schema 单一事实源=本节。
+- 测试（全 mock）：archiver 6 例（同档不覆打板字段/字段刷新+空值不覆盖+first_ts/跨日跳陈旧
+  含周末反向保留/无交易日与空载荷/items list 形态/单轮 fetch 落涨停池交易日与全降级 no_pool_date）
+  + 路由 3 例（透传/no_reason_corpus/日期校验与存储未启用）。
 
 ## 十二、总览页大盘走势（2026-10-28 增补，复刻 APP 直播页分时图）
 

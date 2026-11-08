@@ -361,9 +361,9 @@
      kpl-layout 高度由 fitLayoutBottom() 按实际顶部位置动态设定（page-head/banner 高度
      可变，静态 calc 不可靠），卡片纵向 flex、kpl-wrap 占满余量（模式同 .kpl-lhb-split） */
   @media (min-width:1101px){
-    #tab-lianban .kpl-layout, #tab-kpl .kpl-layout, #tab-kplzt .kpl-layout{align-items:stretch}
-    #tab-lianban .kpl-layout>.card, #tab-kpl .kpl-layout>.card, #tab-kplzt .kpl-layout>.card{display:flex;flex-direction:column;min-height:0}
-    #tab-lianban .kpl-layout>.card>.kpl-wrap, #tab-kpl .kpl-layout>.card>.kpl-wrap, #tab-kplzt .kpl-layout>.card>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
+    #tab-lianban .kpl-layout, #tab-kpl .kpl-layout, #tab-kplstock .kpl-layout{align-items:stretch}
+    #tab-lianban .kpl-layout>.card, #tab-kpl .kpl-layout>.card, #tab-kplstock .kpl-layout>.card{display:flex;flex-direction:column;min-height:0}
+    #tab-lianban .kpl-layout>.card>.kpl-wrap, #tab-kpl .kpl-layout>.card>.kpl-wrap, #tab-kplstock .kpl-layout>.card>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
     #tab-lianban .kpl-layout .kpl-pane{flex:1 1 0;display:flex;flex-direction:column;min-height:0}
     #tab-lianban .kpl-layout .kpl-pane>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
   }
@@ -372,6 +372,13 @@
   #kplSectorTable tbody tr.on td:first-child{box-shadow:inset 3px 0 0 var(--cf-blue)}
   .kpl-up{color:var(--red)}
   .kpl-down{color:var(--green)}
+  /* 个股行情页模式按钮（2026-11-08 用户需求：集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池六页合并，
+     右个股列表左上方按钮切换；选中态=当前模式 KPL.dabanView） */
+  .kpl-modebtns{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .kpl-modebtn{padding:2px 10px;font-size:12px;font-weight:400;line-height:1.7;border-radius:12px;
+    border:1px solid var(--border2);background:#fff;color:var(--muted);cursor:pointer;white-space:nowrap}
+  .kpl-modebtn:hover{border-color:var(--blue);color:var(--blue)}
+  .kpl-modebtn.on{background:var(--blue-bg);border-color:var(--blue);color:var(--blue);font-weight:600}
   .kpl-note{background:var(--amber-bg);color:var(--amber);border:1px solid #fde68a;
     border-radius:8px;padding:7px 12px;font-size:12px;line-height:1.5;margin-bottom:10px}
   .kpl-sub{font-size:11px;color:var(--muted2);line-height:1.5}
@@ -705,101 +712,32 @@
     </div>
   </section>
 
-  <section id="tab-kplbid" style="display:none">
+  <!-- 个股行情（2026-11-08 用户需求）：集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池六页合并为单页。
+       左板块列表不变；右个股列表左上方按钮切换模式（KPL.dabanView=当前模式，按钮序=DABAN_VIEWS）。
+       六套渲染器仍各自独立（DABAN_PAGES 共用 p='kplStock' 前缀写同一套 DOM，列集/口径见各渲染器头注）。 -->
+  <section id="tab-kplstock" style="display:none">
     <div class="ph-line" style="margin-bottom:14px"></div>
     <div class="card">
       <div class="flex" style="margin-bottom:10px">
-        <span class="kpl-sub kpl-uni" id="kplBidStats"></span>
+        <span class="kpl-sub kpl-uni" id="kplStockStats"></span>
         <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·竞价 · 历史=本地按日存档（kpl_daban_pool 同日档 bid_ 通道，不另建数据集）</span>
-        <input type="date" id="kplBidDate" onchange="kplDabanDateChange('kplbid')">
-        <button onclick="kplDabanBackToLive('kplbid')">回实时</button>
+        <span class="kpl-sub" id="kplStockSource"></span>
+        <input type="date" id="kplStockDate" onchange="kplDabanDateChange(KPL.dabanView)">
+        <button onclick="kplDabanBackToLive(KPL.dabanView)">回实时</button>
       </div>
-      <div id="kplBidBanner" class="kpl-note" style="display:none"></div>
+      <div id="kplStockBanner" class="kpl-note" style="display:none"></div>
       <div class="kpl-layout">
         <div class="card" style="padding:10px 12px">
-          <input class="lg-filter" id="kplBidPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="kplDabanRender('kplbid')">
-          <div class="kpl-wrap"><table id="kplBidPlateTable"></table></div>
+          <input class="lg-filter" id="kplStockPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="kplDabanRender(KPL.dabanView)">
+          <div class="kpl-wrap"><table id="kplStockPlateTable"></table></div>
         </div>
         <div class="card" style="padding:10px 12px">
-          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span id="kplBidStockTitle">个股列表</span>
-            <input class="lg-filter" id="kplBidSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender('kplbid')"></h3>
-          <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="kplBidStockTable"></table></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="tab-kplvane" style="display:none">
-    <div class="ph-line" style="margin-bottom:14px"></div>
-    <div class="card">
-      <div class="flex" style="margin-bottom:10px">
-        <span class="kpl-sub kpl-uni" id="kplVaneStats"></span>
-        <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·风向标</span>
-        <input type="date" id="kplVaneDate" onchange="kplDabanDateChange('kplvane')">
-        <button onclick="kplDabanBackToLive('kplvane')">回实时</button>
-      </div>
-      <div id="kplVaneBanner" class="kpl-note" style="display:none"></div>
-      <div class="kpl-layout">
-        <div class="card" style="padding:10px 12px">
-          <input class="lg-filter" id="kplVanePlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="kplDabanRender('kplvane')">
-          <div class="kpl-wrap"><table id="kplVanePlateTable"></table></div>
-        </div>
-        <div class="card" style="padding:10px 12px">
-          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span id="kplVaneStockTitle">个股列表</span>
-            <input class="lg-filter" id="kplVaneSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender('kplvane')"></h3>
-          <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="kplVaneStockTable"></table></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="tab-kplsoon" style="display:none">
-    <div class="ph-line" style="margin-bottom:14px"></div>
-    <div class="card">
-      <div class="flex" style="margin-bottom:10px">
-        <span class="kpl-sub kpl-uni" id="kplSoonStats"></span>
-        <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·即将涨停</span>
-        <input type="date" id="kplSoonDate" onchange="kplDabanDateChange('kplsoon')">
-        <button onclick="kplDabanBackToLive('kplsoon')">回实时</button>
-      </div>
-      <div id="kplSoonBanner" class="kpl-note" style="display:none"></div>
-      <div class="kpl-layout">
-        <div class="card" style="padding:10px 12px">
-          <input class="lg-filter" id="kplSoonPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="kplDabanRender('kplsoon')">
-          <div class="kpl-wrap"><table id="kplSoonPlateTable"></table></div>
-        </div>
-        <div class="card" style="padding:10px 12px">
-          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span id="kplSoonStockTitle">个股列表</span>
-            <input class="lg-filter" id="kplSoonSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender('kplsoon')"></h3>
-          <div class="kpl-wrap" style="max-height:calc(100vh - 320px)"><table id="kplSoonStockTable"></table></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="tab-kplzt" style="display:none">
-    <div class="ph-line" style="margin-bottom:14px"></div>
-    <div class="card">
-      <div class="flex" style="margin-bottom:10px">
-        <span class="kpl-sub kpl-uni" id="kplZtStats"></span>
-        <span style="flex:1"></span>
-        <span class="kpl-sub">数据源：KPL App 打板·涨停 ·</span>
-        <input type="date" id="kplZtDate" onchange="kplDabanDateChange('kplzt')">
-        <button onclick="kplDabanBackToLive('kplzt')">回实时</button>
-      </div>
-      <div id="kplZtBanner" class="kpl-note" style="display:none"></div>
-      <div class="kpl-layout">
-        <div class="card" style="padding:10px 12px">
-          <input class="lg-filter" id="kplZtPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="kplDabanRender('kplzt')">
-          <div class="kpl-wrap"><table id="kplZtPlateTable"></table></div>
-        </div>
-        <div class="card" style="padding:10px 12px">
-          <h3 style="margin-bottom:8px;display:flex;align-items:center"><span id="kplZtStockTitle">个股列表</span>
-            <input class="lg-filter" id="kplZtSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender('kplzt')"></h3>
-          <div class="kpl-wrap"><table id="kplZtStockTable"></table></div>
+          <h3 style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="kpl-modebtns" id="kplStockModeBtns"></span>
+            <span class="kpl-sub" id="kplStockStockTitle" style="font-weight:400">个股列表</span>
+            <input class="lg-filter" id="kplStockSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender(KPL.dabanView)">
+          </h3>
+          <div class="kpl-wrap"><table id="kplStockStockTable"></table></div>
         </div>
       </div>
     </div>
@@ -4293,15 +4231,25 @@ const NAV = [
   // KPL 行情子目录（2026-10-27 用户需求；2026-10-28 「精选板块」更名「板块行情」，页内增
   // 精选/行业页签）：精选 = 开盘啦板块强度排行实时/历史（含服务端 list_son 二级板块）；
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
-  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kpllive', '直播', '📡'], ['kplbid', '集合竞价', '⏱️'], ['kplsoon', '即将涨停', '🚀'], ['kplvane', '风向标', '🚩'], ['kplzt', '涨停池', '🔥'], ['kpllhb', '龙虎榜', '🏆']]},
+  // 2026-11-08 用户需求：打板六页（集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池）合并为
+  // 【个股行情】单页（左板块列表不变，右个股列表左上方按钮切换模式），侧栏只留一个入口。
+  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'],  ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 // ════════════════════════════════════════════════════════════════════════════
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
                     rise: ['上涨复盘'],
-                    kpl: ['板块行情'], kpllive: ['直播'], kplbid: ['集合竞价'], kplsoon: ['即将涨停'], kplvane: ['风向标'], kplzt: ['涨停池'], kpllhb: ['龙虎榜'],
+                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpllhb: ['龙虎榜'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
-
+// 打板模式集合（单一来源，评审 P2-7）：大盘 KPI 条/WS KPI 刷新/KPI 日期/轮询列表/进页开关
+// 全部引用本数组；新增模式只改这一处 + DABAN_PAGES，避免字面量枚举多处漂移。
+// 2026-11-08 用户需求：六模式不再是独立侧栏页，统一挂在【个股行情】单页（DABAN_PAGE）内按钮切换
+// （左板块列表不变，右个股列表左上方按钮）。侧栏入口只留 kplstock 一个。
+const DABAN_VIEWS = ['kplbid', 'kplsoon', 'kplvane', 'kplzt', 'kplzb', 'kpldt'];
+const DABAN_PAGE = 'kplstock';
+const DABAN_DEFAULT_MODE = 'kplzt';   // 默认模式=涨停池（字段最全；六模式各自记忆 live/history/选日）
+// 六套渲染器共用守卫：该模式在【个股行情】页内，且为当前模式
+function dabanOn(view){ return STATE.view === DABAN_PAGE && KPL.dabanView === view; }
 function renderSidebar(){
   $('sbNav').innerHTML = NAV.map(g => `<div class="sb-group">${esc(g.group)}</div>`
     + g.items.map(([k, label, ic]) => `<div class="sb-item${k.startsWith('relay/') ? ' sub' : ''}" data-view="${k}"
@@ -4660,7 +4608,7 @@ function fitLayoutBottom(sel){
 }
 function lbFitHeight(){ fitLayoutBottom('#tab-lianban .kpl-layout'); }
 function kplFitHeight(sel){ fitLayoutBottom(sel || '#tab-kpl .kpl-layout'); }
-window.addEventListener('resize', () => { lbFitHeight(); kplFitHeight(); if (STATE.view === 'kplzt') kplFitHeight('#tab-kplzt .kpl-layout'); });
+window.addEventListener('resize', () => { lbFitHeight(); kplFitHeight(); if (STATE.view === DABAN_PAGE) kplFitHeight('#tab-kplstock .kpl-layout'); });
 
 // ══════════ 盯盘清单（V4-G：候选板块强势股自选，2026-11-01；2026-11 并入连板行情右栏【盯盘】页签）══════════
 // 数据源：GET /api/hotlist-jev/watchlist（仅当日实时；票涨幅=TDX 报价，60s 轮询；
@@ -5012,14 +4960,15 @@ function setView(key){
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
   if (main === 'overview') ovIndexLoad();   // 总览：大盘分时+直播看点（30s 轮询兜底，见启动区）
   const kpiEl = $('kplMarketKpi');
-  const kplGroup = ['kpl', 'kpllive', 'kplbid', 'kplsoon', 'kplvane', 'kplzt'];   // 大盘 KPI 条=kpl 组子页公用
+  // 大盘 KPI 条=kpl 组子页公用（kpl/kpllive/个股行情；打板六模式已并入单页，2026-11-08）
+  const kplGroup = ['kpl', 'kpllive', DABAN_PAGE];
   if (kpiEl) kpiEl.style.display = kplGroup.includes(main) ? '' : 'none';
   if (main !== 'lianban') lbLeave();   // 连板行情轮询计时器只在页内活
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
   else if (main === 'lianban'){ lbEnter(); scEnter(); wlEnter(); }   // WS 保持（离开 kpl 组断链由下方 kplViewLeave 负责）；板块对比/盯盘清单轮询随本页页签活
   else kplViewLeave();
-  if (main === 'kplbid' || main === 'kplsoon' || main === 'kplvane' || main === 'kplzt') kplDabanEnter(main);   // 打板页签：进页即取快照+开轮询
-  if (main === 'kplzt') kplFitHeight('#tab-kplzt .kpl-layout');   // 涨停行情：表格高度与浏览器页面底对齐（板块行情同款）
+  if (main === DABAN_PAGE) kplDabanEnter(KPL.dabanView || DABAN_DEFAULT_MODE);   // 个股行情：进页即按当前模式取快照+开轮询
+  if (main === DABAN_PAGE) kplFitHeight('#tab-kplstock .kpl-layout');   // 表格高度与浏览器页面底对齐（板块行情同款）
   if (main === 'kpllhb') kplLhbEnter(); else kplLhbLeave();   // 龙虎榜页签：进页即取双快照+开轮询
   if (main !== 'lianban' && SC.pollTimer){ clearInterval(SC.pollTimer); SC.pollTimer = null; }   // 对比页签轮询只在连板行情页内活
   if (main !== 'lianban' && WL.pollTimer){ clearInterval(WL.pollTimer); WL.pollTimer = null; }   // 盯盘页签轮询只在连板行情页内活
@@ -5580,16 +5529,23 @@ const KPL = {
   // 打板个股列表快照（2103 订阅推送，2026-10-27 二期）：pidType → 合并快照（REST 读口按页合并；
   // WS daban_stocks 事件只做节流触发拉取，渲染唯一源=REST，避免页合并逻辑双写）
   daban: {},            // {8: {...}, 0: {...}}
-  dabanView: null,      // 当前打板子页（'kplbid' | 'kplsoon'）
+  dabanView: null,      // 个股行情当前模式（'kplbid'|'kplsoon'|'kplvane'|'kplzt'|'kplzb'|'kpldt'；2026-11-08 六页合并后为页内模式）
   dabanSort: {},        // view → {key, dir}（key=null 保持服务端推送序）
   dabanPlate: {},       // view → 左侧点选的板块过滤（空=全部）
   dabanMode: {},        // view → 'live' | 'history'（精选板块同款：日期切换+回实时）
   dabanDate: {},        // view → 历史模式日期
+  // 实时无 2103 快照时的本地存档回退标记（2026-11-08）：view → {date, reason, at, miss?}
+  // collector 会话被上游频繁重置（261 反作弊轮/风控）时 2103 推送被抑制，实时读口结构化降级；
+  // 此时按 AGENTS §4.0 「不得烘成空白」回退本地日档（≤7 天）并显式标注，不伪装成实时当前。
+  dabanFallback: {},
+  dabanBannerAt: {},    // view|msg → ts（同一条降级消息 60s 内不重复进状态栏，防 4s 轮询刷屏）
+  dabanFetching: {},    // view → true（在飞互斥：4s 轮询与 WS 触发不并发拉取/重复扫档，评审 R3-P2）
   ztRank: {date: null, byId: null, at: 0, note: ''},   // 涨停行情左表强度/量比原料（板块排行快照，按 PlateID 匹配）
   ztReasons: {at: 0, loading: false, byId: null, note: ''},   // 2203 涨停原因推送快照（试点：涨停池页 tooltip 详情；stock_id → 详情）
   ztReasonsArch: {byKey: {}, queue: [], pumping: false, note: '', bgCount: 0},   // 涨停原因全文·历史档案懒取（key=date|stock_id）
   ztAggSort: {key: 'n', dir: -1},                        // 涨停行情左表排序（默认按涨停家数；键=组对象字段名 a.n，2026-11-08 修复）
   bidAggSort: {key: 'n', dir: -1},                       // 集合竞价左表排序（默认按家数，板块行情同款）
+  poolAggSort: {kplzb: {key: 'n', dir: -1}, kpldt: {key: 'n', dir: -1}},   // 炸板池/跌停池左表排序（参照涨停行情，默认按家数）
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
   lhb: {fc: null, rt: null, his: null, hisDate: '', view: 'rt', tab: 'stock', rtMsgs: [], hisMsg: '',
         sale: null, saleDate: '', saleMsg: '', saleLoading: false,   // view：rt=当日实时 | his=历史回看；tab：stock=个股 | sale=营业部（板块行情同款页签）
@@ -5771,11 +5727,11 @@ function kplHandleEvent(ev){
       if (!stale){
         KPI_MKT.head = { yesterday_zt: ev.yesterday_zt, yesterday_fb: ev.yesterday_fb,
                          yesterday_dt: ev.yesterday_dt, source: 'socket' };
-        if (['kpl','kplbid','kplsoon','kplvane','kplzt'].includes(STATE.view)) kplRenderMarketKpi();
+        if (['kpl', 'kpllive', DABAN_PAGE].includes(STATE.view)) kplRenderMarketKpi();
       }
       break;
     case 'zt_situation':   // 2119：破板率（封板率=100−破板率，App 封板率卡同口径）
-      if (!stale){ KPI_MKT.zb = ev.today_zb_ratio; if (['kpl','kplbid','kplsoon','kplvane','kplzt'].includes(STATE.view)) kplRenderMarketKpi(); }
+      if (!stale){ KPI_MKT.zb = ev.today_zb_ratio; if (['kpl', 'kpllive', DABAN_PAGE].includes(STATE.view)) kplRenderMarketKpi(); }
       break;
     case 'zt_stocks':   // 涨停个股列表（2120）：按 plate 顿号归属聚合出各板块封板家数
       if (stale) break;
@@ -5797,7 +5753,7 @@ function kplHandleEvent(ev){
       break;
     case 'daban_stocks':   // 2103 推送（单页 30 行）：即时触发一次合并快照拉取（节流 1.5s）
       if (!stale && KPL.dabanMode[KPL.dabanView] !== 'history' && KPL.dabanView
-          && STATE.view === KPL.dabanView
+          && STATE.view === DABAN_PAGE
           && ev.pid_type === DABAN_PAGES[KPL.dabanView].pid){
         const now = Date.now();
         if (!KPL.dabanFetchAt || now - KPL.dabanFetchAt > 1500){
@@ -6591,24 +6547,31 @@ function kplViewLeave(){
   kplSetWsPill('off');
 }
 
-// ══════════ KPL 行情 · 集合竞价 / 即将涨停 / 风向标 / 涨停（2103 打板个股列表，2026-10-27 二期；涨停 2026-11-07 增补）══════════
-// 数据链：:8002 collector 订阅 2103×2（pidType 8/0，BiddingZTlQuotaPresenter 基线参数）
+// ══════════ KPL 行情 · 个股行情（集合竞价 / 即将涨停 / 风向标 / 涨停池 / 炸板池 / 跌停池，页内按钮切换）══════════
+// 2026-11-08 用户需求：上述六页合并为【个股行情】单页（DABAN_PAGE='kplstock'，侧栏一个入口），
+//   左板块列表不变，右个股列表左上方按钮切换模式（按钮序=DABAN_VIEWS，默认 DABAN_DEFAULT_MODE）。
+//   六套渲染器独立保留（列集/口径各自头注说明），DABAN_PAGES[*].p 统一='kplStock' → 共用一套 DOM
+//   （#kplStockPlateTable / #kplStockStockTable / #kplStockStats / #kplStockDate / #kplStockBanner）；
+//   页内当前模式=KPL.dabanView，渲染守卫=dabanOn(view)；各模式 live/history/选日、左表选中分组、
+//   列排序各自记忆（切回即复原），搜索与板块过滤词不跨模式继承。
+// 数据链：:8002 collector 订阅 2103×6（pidType 8/0/6/1/2/3，BiddingZTlQuotaPresenter 基线参数）
 // → 推送缓存快照 → :8000 /api/kpl/daban-list 透传；浏览器 REST 轮询 4s + WS daban_stocks
 // 事件即时覆盖。列语义=nn0.U() × assets/PatternDynamicQuota × PatternTitleVisibleArrayPosition
 // 三方对齐（kpl_daban_protocol.DABAN_QUOTA_NAMES）；数值列转 float、带单位字符串原样展示
 // （不猜换算，fail-visible）。
 const DABAN_PAGES = {
   kplbid: {
-    pid: 8, title: '集合竞价', p: 'kplBid',
+    pid: 8, title: '集合竞价', p: 'kplStock',
     // 2026-11-08 三版：页面渲染走 kplBidRender（列体系对齐【板块行情】，函数头注含口径）。
-    // 左表=板块分组（#/板块/家数/竞价净额/竞价成交额），右表=代码/名称/竞价涨幅%/竞价净额/
+    // 左表=板块分组（#/板块/家数/竞价净额/竞价成交额）+「全部」行（默认选中、按个股去重、
+    // 再点已选板块=取消）；右表=代码/名称/竞价涨幅%/竞价净额/
     // 竞价换手%/竞价成交额/竞昨比/涨停委买额/实时涨幅%/连板/概念，定义在 kplBidRender 内。
     // 历史=本地按日存档 /daban-bidding（kpl_daban_pool 同日档 bid_ 通道，逐日回退）。
     // pid=8 无 plate_id（pos21 仅涨停池下发），故左表无强度/量比列（禁止名称匹配）。
     sumCols: ['bidding_net', 'bidding_amount'],   // 左侧板块聚合的合计列
   },
   kplsoon: {
-    pid: 0, title: '即将涨停', p: 'kplSoon',
+    pid: 0, title: '即将涨停', p: 'kplStock',
     // App 即将涨停页签列序（17,4,5,11,12,13,14,15）
     cols: [
       {key: 'price', label: '现价', fmt: 'num'},
@@ -6623,7 +6586,7 @@ const DABAN_PAGES = {
     sumCols: ['main_net', 'amount'],
   },
   kplvane: {
-    pid: 6, title: '风向标', p: 'kplVane',
+    pid: 6, title: '风向标', p: 'kplStock',
     // App 风向标页签列序（4,5,11,12,13,14,15；2026-10-27 截图同屏核对）
     cols: [
       {key: 'pct', label: '涨幅', fmt: 'pct'},
@@ -6637,13 +6600,36 @@ const DABAN_PAGES = {
     sumCols: ['main_net', 'amount'],
   },
   kplzt: {
-    pid: 1, title: '涨停池', p: 'kplZt',
+    pid: 1, title: '涨停池', p: 'kplStock',
     // 2026-11-07 二版：页面渲染走 kplZtRender（字段体系对齐【板块行情】，函数头注含口径）。
     // aggKey=原因字段（左侧分组键，用户裁决：用 App「原因」字段，非「板块」字段）；
     // 左表列=#/名称/涨停/强度/主力净额/量比（可排序，键=n/name/n/strength/main_net/volume_ratio），
-    // 右表列=代码/名称/涨停原因/领涨/换手%/连板/主力净额/成交额/概念/最后涨停时间/
-    // 最大封单/封单额，定义在 kplZtRender 内。
+    // 左表首行为「全部」（2026-11-08 六页统一：全量按个股去重、强度/量比不聚合显 '--'、
+    // 默认不预选、再点已选原因=取消）；右表列=代码/名称/涨停原因/领涨/换手%/连板/主力净额/
+    // 成交额/概念/最后涨停时间/最大封单/封单额，定义在 kplZtRender 内。
     aggKey: 'zt_reason',
+  },
+  kplzb: {
+    pid: 2, title: '炸板池', p: 'kplStock',
+    // 2026-11-08 增补：参照【涨停池】页同构，页面渲染走 kplPoolRender('kplzb')。
+    // 左表按【板块】分组（实测 pid=2 帧 zt_reason 0/14 无源、plate 14/14 全有，
+    // 故与集合竞价页同口径：plate 拆多概念各计一次）；右表列按 named 字段覆盖率选，
+    // 定义在 DABAN_POOL_PAGE_CONF。
+    // 历史=本地按日存档 /daban-zhaban（kpl_daban_pool 同日档 zb_ 通道，不另建数据集；
+    // 成员=当日曾炸板全集，回封语义由涨停池通道 sealed 承载，无 pool_state 标注）。
+    sumCols: ['main_net', 'amount'],
+    sumLabels: {main_net: '主力净额', amount: '成交额'},
+    plateExact: true,   // 板块精确段匹配（家数/右表行数同口径，评审 P2-2）
+  },
+  kpldt: {
+    pid: 3, title: '跌停池', p: 'kplStock',
+    // 2026-11-08 增补：参照【涨停池】页同构，页面渲染走 kplPoolRender('kpldt')；
+    // 左表按板块分组（pid=3 帧 zt_reason 0/15 无源）；历史=本地按日存档 /daban-dt
+    // （kpl_daban_pool 同日档 dt_ 通道；与涨停池同款收盘态标注：pool_state
+    // 'sealed'=收盘仍封住 / 'broken'=曾跌停后打开未回封；状态列仅历史模式展示）。
+    sumCols: ['main_net', 'amount'],
+    sumLabels: {main_net: '主力净额', amount: '成交额'},
+    plateExact: true,   // 板块精确段匹配（家数/右表行数同口径，评审 P2-2）
   },
 };
 let kplDabanPoll = null;
@@ -6669,26 +6655,74 @@ function kplDabanSetSort(view, key){
   else { s.key = key; s.dir = -1; }
   kplDabanRender(view);
 }
+// 左表分组点选（2026-11-08 六页统一：参照炸板池）：再点已选分组=取消回「全部」
 function kplDabanSelect(view, plate){
-  KPL.dabanPlate[view] = (KPL.dabanPlate[view] === plate) ? '' : plate;   // 再点一次取消
+  KPL.dabanPlate[view] = (plate && KPL.dabanPlate[view] !== plate) ? plate : '';
   kplDabanRender(view);
 }
 async function kplDabanEnter(view){
   KPL.dabanView = view;
   if (!KPL.dabanMode[view]) KPL.dabanMode[view] = 'live';
+  kplStockChrome();          // 页内模式按钮/数据源/日期框回填（单页化 2026-11-08）
+  kplDabanRender(view);      // 先用已有快照渲染（切模式即时响应，不等拉取返回）
   kplDabanFetch(view);
   if (!kplDabanPoll){
     kplDabanPoll = setInterval(() => {
-      if (!['kplbid', 'kplsoon', 'kplvane', 'kplzt'].includes(STATE.view)){ clearInterval(kplDabanPoll); kplDabanPoll = null; return; }
-      if (KPL.dabanMode[STATE.view] !== 'live') return;   // 历史模式静态快照，不轮询
-      kplDabanFetch(STATE.view);
+      if (STATE.view !== DABAN_PAGE){ clearInterval(kplDabanPoll); kplDabanPoll = null; return; }
+      if (KPL.dabanMode[KPL.dabanView] !== 'live') return;   // 历史模式静态快照，不轮询
+      kplDabanFetch(KPL.dabanView);
     }, 4000);
   }
 }
+// ── 单页页头/模式按钮（2026-11-08 单页化）：按钮序=DABAN_VIEWS，选中态=KPL.dabanView ──
+// 数据源说明与日期框跟随当前模式（各模式 live/history/选日 各自记忆）。
+const DABAN_ARCHIVE_VIEWS = ['kplzt', 'kplbid', 'kplzb', 'kpldt'];
+function kplStockChrome(){
+  const view = KPL.dabanView;
+  const conf = DABAN_PAGES[view];
+  if (!conf) return;
+  const btns = $('kplStockModeBtns');
+  if (btns){
+    btns.innerHTML = DABAN_VIEWS.map(v => `<button class="kpl-modebtn${v === view ? ' on' : ''}"`
+      + ` title="${esc(DABAN_PAGES[v].title)} · pidType=${DABAN_PAGES[v].pid}"`
+      + ` onclick="kplStockSetMode('${v}')">${esc(DABAN_PAGES[v].title)}</button>`).join('');
+  }
+  const src = $('kplStockSource');
+  if (src){
+    // 回退存档态在页头显式标注（不在页内烘成「实时」）
+    const fb = KPL.dabanFallback[view];
+    src.textContent = '数据源：KPL App 打板·' + conf.title
+      + (KPL.dabanMode[view] !== 'history' && fb && !fb.miss && fb.date ? ' · 回退存档 ' + fb.date : '');
+  }
+  const d = $('kplStockDate');
+  if (d) d.value = KPL.dabanMode[view] === 'history' ? (KPL.dabanDate[view] || '') : '';
+}
+// 模式切换（右个股列表左上方按钮）：各模式的 live/history/选日、左表选中分组、列排序
+// 各自记忆；搜索与板块过滤词是瞬时查询，不跨模式继承（切完先看全量）。
+function kplStockSetMode(mode){
+  if (!DABAN_PAGES[mode] || KPL.dabanView === mode) return;
+  KPL.dabanView = mode;
+  for (const id of ['kplStockPlateSearch', 'kplStockSearch']){
+    const el = $(id); if (el) el.value = '';
+  }
+  kplRenderMarketKpi();          // KPI 跟随新模式日期（历史模式=该模式选日）
+  kplDabanEnter(mode);           // 即时渲染缓存快照 + 拉当前模式快照（历史走存档读口）
+  kplFitHeight('#tab-kplstock .kpl-layout');
+}
+// 模式标签（统计行/页头）：历史=选日；实时但无 2103 快照时显式标注本地存档回退日（不伪装成实时当前）
+function kplDabanModeLabel(view){
+  if (KPL.dabanMode[view] === 'history') return '历史 ' + (KPL.dabanDate[view] || '');
+  const fb = KPL.dabanFallback[view];
+  if (fb && !fb.miss && fb.date) return '实时无快照·回退存档 ' + fb.date;
+  return '实时';
+}
+// 池三页（涨停/炸板/跌停）与竞价：历史=本地按日存档，不走 HisDaBanList（默认集合非页签数据）
 async function kplDabanFetch(view){
   const conf = DABAN_PAGES[view];
   const hist = KPL.dabanMode[view] === 'history';
-  if ((view === 'kplzt' || view === 'kplbid') && hist) return kplDabanArchiveHistory(view, KPL.dabanDate[view] || KPL.today);   // 历史=本地存档，不走 HisDaBanList（默认集合非页签数据）
+  if (DABAN_ARCHIVE_VIEWS.includes(view) && hist) return kplDabanArchiveHistory(view, KPL.dabanDate[view] || KPL.today);   // 历史=本地存档，不走 HisDaBanList（默认集合非页签数据）
+  if (KPL.dabanFetching[view]) return;             // 在飞互斥：后完成方不得顶掉先到帧（评审 R3-P2）
+  KPL.dabanFetching[view] = true;
   const url = hist
     ? KPL_API + '/daban-list-history?date=' + KPL.dabanDate[view] + '&pid_type=' + conf.pid
     : KPL_API + '/daban-list?pid_type=' + conf.pid;
@@ -6696,14 +6730,36 @@ async function kplDabanFetch(view){
     // 502/400 也带结构化 JSON（fail-visible 原因透出），不能走 jget 的裸 HTTP 错误
     const resp = await fetch(url);
     const r = await resp.json().catch(() => ({ok: false, reason: 'HTTP ' + resp.status}));
-    if (r.ok) KPL.daban[conf.pid] = r;                      // 历史/实时同构渲染；失败保留旧快照
-    if (STATE.view === view) kplDabanRender(view);
+    if (r.ok){
+      KPL.daban[conf.pid] = r;                            // 历史/实时同构渲染；失败保留旧快照
+      KPL.dabanFallback[view] = null;                     // 实时恢复：清回退标记
+    } else if (!hist){
+      // 实时无 2103 快照（collector 会话被上游重置/风控期）：回退本地存档，不让页面烘成空白
+      await kplDabanLiveFallback(view, r);
+    }
+    if (dabanOn(view)) kplDabanRender(view);
     if (r.ok && view === 'kplbid') kplDabanEnsureBasis(r, view);   // 竞昨比原料按日惰性拉取
     kplDabanBanner(view, r.ok ? (hist && r.note ? r.note : '') : (r.reason || '读取失败') + (r.error ? '：' + r.error : '') + (r.note ? '：' + r.note : ''));
   } catch (e){
-    if (STATE.view === view) kplDabanRender(view);
+    if (dabanOn(view)) kplDabanRender(view);
     kplDabanBanner(view, (hist ? '历史' : '快照') + '请求失败：' + (e.message || e));
+  } finally {
+    KPL.dabanFetching[view] = false;
   }
+}
+// 实时无 2103 快照 → 本地日档回退（2026-11-08）：collector 会话被上游频繁重置（261 反作弊轮/
+// 风控期）时 2103 推送被抑制，实时读口结构化降级（no_daban_list_snapshot）。按 AGENTS §4.0，
+// 只要本地有日档就不得因此把页面展示成空白：回退最近有档交易日（≤7 天）并显式标注回退日，
+// 不伪装成「实时当前」；轮询继续跑，实时帧一旦到流即清回退标记切回实时。
+// 即将涨停/风向标无本地存档通道（DABAN_ARCHIVE_VIEWS 不含），保持结构化降级原因。
+async function kplDabanLiveFallback(view, r){
+  if (!DABAN_ARCHIVE_VIEWS.includes(view)) return;
+  const fb = KPL.dabanFallback[view];
+  const snap = KPL.daban[DABAN_PAGES[view].pid];
+  if (!fb && snap && snap.ok && !snap.fromArchive) return;   // 已有实时帧：优先展示；存档快照（历史态写入）不挡回退（评审 R3-P1）
+  if (fb && Date.now() - fb.at < 60000) return;    // 已在回退：1 分钟节流，4s 轮询不反复扫档
+  await kplDabanArchiveHistory(view, KPL.today, {fallback: true, reason: (r && r.reason) || 'no_live_snapshot'});
+  if (dabanOn(view)) kplStockChrome();             // 页头数据源/日期框跟随回退态
 }
 // 精选板块同款：日期切换进历史模式（回退逐日找有效日由后端/前端提示），回实时恢复 WS 快照
 function kplDabanDateChange(view){
@@ -6712,21 +6768,28 @@ function kplDabanDateChange(view){
   if (!v || v === KPL.today){ kplDabanBackToLive(view); return; }
   KPL.dabanMode[view] = 'history';
   KPL.dabanDate[view] = v;
+  kplStockChrome();       // 页头数据源/日期框跟随历史态（回退标注随 dabanMode 门控，评审 R3-P2）
   kplRenderMarketKpi();   // KPI 跟随日期
-  if (view === 'kplzt' || view === 'kplbid'){ kplDabanArchiveHistory(view, v); return; }   // 历史=本地存档+逐日回退（板块行情成分股同款）
+  if (DABAN_ARCHIVE_VIEWS.includes(view)){ kplDabanArchiveHistory(view, v); return; }   // 池三页+竞价：历史=本地存档+逐日回退（板块行情成分股同款）
   kplDabanFetch(view);
 }
 function kplDabanBackToLive(view){
   KPL.dabanMode[view] = 'live';
   KPL.dabanDate[view] = '';
-  $(DABAN_PAGES[view].p + 'Date').value = '';
+  kplStockChrome();   // 日期框/数据源跟随当前模式（单页化）
   kplRenderMarketKpi();   // KPI 回实时
   kplDabanFetch(view);
 }
 function kplDabanBanner(view, msg){
   const el = $(DABAN_PAGES[view].p + 'Banner');
   if (!msg){ el.style.display = 'none'; return; }
-  if (window.sbLog) sbLog('error', '[涨停复盘] ' + msg);
+  // 同一条消息 60s 内不重复进状态栏（2026-11-08：实时降级 + 4s 轮询曾把同一错误刷成数十条）
+  const key = view + '|' + msg;
+  const at = KPL.dabanBannerAt[key] || 0;
+  if (Date.now() - at >= 60000){
+    KPL.dabanBannerAt[key] = Date.now();
+    if (window.sbLog) sbLog('error', '[涨停复盘] ' + msg);
+  }
   el.style.display = 'none';   // 2026-10-30 用户裁决：报错横幅删除，只进状态栏
 }
 
@@ -7304,6 +7367,7 @@ function kplDabanRows(view, all){
       // 板块：选中名是拆分后的单概念，对原 plate 串做 includes；原因：整串一组精确匹配
       // （ztKey 同口径归一：空原因→「（无原因）」，左表该组可点选且右表能命中）
       if (conf.aggKey) rows = rows.filter(r => ztKey(r) === selKey);
+      else if (conf.plateExact) rows = rows.filter(r => kplPlateSegs(r.plate).includes(selKey));   // 池页：精确段匹配（家数/行数一致）
       else rows = rows.filter(r => String(r.plate || '').includes(selKey));
     }
   }
@@ -7355,10 +7419,30 @@ async function kplDabanEnsureBasis(snap, view){
     (j.missing || []).forEach(c => { entry.failed[c] = Date.now(); });   // 缺股 10 分钟内不重复拉
   } catch (e){ /* 原料读口异常：竞昨比列保持 '--'，随下轮快照重试 */ }
   entry.loading = false;
-  if (KPL.dabanView === view) kplDabanRender(view);   // 原料到齐后重渲染（含排序）
+  if (dabanOn(view)) kplDabanRender(view);   // 原料到齐后重渲染（含排序）
 }
 // 左侧分组聚合（2026-11-07 泛化）：默认按板块（plate 一票多概念各计一次，与 ztCount 聚合同口径）；
 // conf.aggKey 指定其它字段（涨停行情=zt_reason 原因，整串一组不拆分），分组名用 conf.aggLabel。
+// 板块串 → 精确段数组（「电力设备」不得被「电刀」子串命中；左表家数与右表过滤同口径，评审 P2-2）
+function kplPlateSegs(plate){
+  const v = String(plate || '').trim();
+  return v ? v.split(/\n|、/).map(x => x.trim()).filter(Boolean) : [];
+}
+// 「全部」行全量口径（2026-11-08 六页统一：涨停池/竞价/即将涨停/风向标/炸板池/跌停池）：
+// 左表分组会把一个股按多概念重复计（板块分组必然拆散），故「全部」行按个股去重求合计；
+// sumN 记录各列可解析成员数，全缺时该列显 '--'，不把缺失烘成 0（评审 P2-4）。
+function kplDabanAllSums(view, sumKeys){
+  const rows = kplDabanRows(view, true);
+  const sums = {}, sumN = {};
+  for (const c of (sumKeys || [])){
+    sums[c] = 0; sumN[c] = 0;
+    for (const r of rows){
+      const v = knumUnit(r[c]);
+      if (Number.isFinite(v)){ sums[c] += v; sumN[c]++; }
+    }
+  }
+  return {n: rows.length, sums, sumN};
+}
 function kplDabanPlateAgg(view){
   const conf = DABAN_PAGES[view];
   const rows = kplDabanRows(view, true);
@@ -7367,18 +7451,20 @@ function kplDabanPlateAgg(view){
   for (const r of rows){
     let keys;
     if (field === 'plate'){
-      const plate = String(r.plate || '').trim();
-      keys = plate ? plate.split(/\n|、/).map(x => x.trim()).filter(Boolean) : ['（无板块）'];
+      const segs = kplPlateSegs(r.plate);
+      keys = segs.length ? segs : ['（无板块）'];
     } else {
       const v = String(r[field] || '').trim();
       keys = [v || '（无' + (conf.aggLabel || field) + '）'];
     }
     for (const key of keys){
-      const a = agg.get(key) || {name: key, n: 0, sums: {}};
+      // sumN[c] 记录可解析成员数：全缺时聚合列显 '--'，不把缺失烘成 0（评审 P2-4）
+      const a = agg.get(key) || {name: key, n: 0, sums: {}, sumN: {}};
       a.n++;
       for (const c of conf.sumCols){
         const v = knumUnit(r[c]);   // 亿/万单位串可解析（原 parseFloat 对「4.08亿」只能取到 4.08，评审 M2；与排序/涨停页聚合同口径）
         a.sums[c] = (a.sums[c] || 0) + (Number.isFinite(v) ? v : 0);
+        if (Number.isFinite(v)) a.sumN[c] = (a.sumN[c] || 0) + 1;
       }
       agg.set(key, a);
     }
@@ -7392,29 +7478,48 @@ function kthDaban(label, view, key){
 }
 function kplDabanRender(view){
   const conf = DABAN_PAGES[view];
-  if (STATE.view !== view) return;
+  if (!dabanOn(view)) return;
   if (view === 'kplzt') return kplZtRender();   // 涨停行情二版：字段体系对齐【板块行情】，独立渲染器
   if (view === 'kplbid') return kplBidRender(); // 集合竞价三版：同上（2026-11-08 用户裁决）
+  if (view === 'kplzb' || view === 'kpldt') return kplPoolRender(view);   // 炸板池/跌停池：参照涨停行情同构（2026-11-08）
   const snap = KPL.daban[conf.pid];
   const rows = kplDabanRows(view);
-  // ── 左：分组聚合（板块行情默认板块；涨停行情=原因字段）──
+  // ── 左：分组聚合 + 「全部」行（2026-11-08 六页统一：参照炸板池页）──
   const agg = kplDabanPlateAgg(view);
   const aggName = conf.aggLabel || '板块';
+  const sel = KPL.dabanPlate[view] || '';
   const pInput = $(conf.p + 'PlateSearch');
-  const pFilter = (((pInput && pInput.value) || '') || KPL.dabanPlate[view] || '').trim().toLowerCase();
-  let ph = '<thead><tr>' + kthDaban(aggName, view, null) + '<th>家数</th>'
-    + conf.sumCols.map((c, i) => `<th>${conf.cols.find(x => x.key === c).label}${i ? '' : '合计'}</th>`).join('') + '</tr></thead><tbody>';
+  const q = String((pInput && pInput.value) || '').trim().toLowerCase();
+  const sumCols = conf.sumCols || [];
+  const sumLabel = c => (conf.cols.find(x => x.key === c) || {}).label || c;
+  const all = kplDabanAllSums(view, sumCols);
+  let ph = '<thead><tr>' + kthDaban('#', view, null) + kthDaban(aggName, view, null) + '<th>家数</th>'
+    + sumCols.map((c, i) => `<th>${sumLabel(c)}${i ? '' : '合计'}</th>`).join('') + '</tr></thead><tbody>';
+  // 「全部」行：默认选中；全量口径按个股去重（不按分组重复计），缺值 '--'
+  if (!q){
+    ph += `<tr${sel ? '' : ' class="on"'} onclick="kplDabanSelect('${view}','')">`
+      + `<td class="kpl-uni">--</td><td>全部</td>`
+      + `<td class="kpl-uni" title="全量口径：按个股去重（不按${esc(aggName)}重复计）">${all.n}</td>`
+      + sumCols.map(c => `<td class="kpl-uni${c === 'main_net' || c === 'bidding_net' ? ' ' + kclsDaban(all.sums[c]) : ''}">${all.sumN[c] ? kfmtAmt(all.sums[c]) : '--'}</td>`).join('')
+      + '</tr>';
+  }
   let pn = 0;
   for (const a of agg){
-    if (pFilter && !a.name.toLowerCase().includes(pFilter)) continue;
+    if (q && !a.name.toLowerCase().includes(q)) continue;   // 过滤词只筛分组行（选中态不再折叠左表，2026-11-08 修）
     pn++;
-    const on = KPL.dabanPlate[view] === a.name ? ' class="on"' : '';
+    const on = sel === a.name ? ' class="on"' : '';
     ph += `<tr${on} onclick="kplDabanSelect('${view}','${js(a.name)}')">`
+      + `<td class="kpl-uni">${pn}</td>`
       + `<td>${esc(a.name)}</td><td class="kpl-uni">${a.n}</td>`
-      + conf.sumCols.map(c => `<td class="kpl-uni">${kfmtAmt(a.sums[c])}</td>`).join('') + '</tr>';
+      + sumCols.map(c => `<td class="kpl-uni${c === 'main_net' || c === 'bidding_net' ? ' ' + kclsDaban(a.sums[c]) : ''}">${a.sumN[c] ? kfmtAmt(a.sums[c]) : '--'}</td>`).join('')
+      + '</tr>';
   }
-  $(conf.p + 'PlateTable').innerHTML = pn
-    ? ph + '</tbody>' : '<tbody><tr><td class="empty">暂无' + esc(aggName) + '（等待 2103 推送）</td></tr></tbody>';
+  $(conf.p + 'PlateTable').innerHTML = (pn || (!q && all.n))
+    ? ph + '</tbody>'
+    : '<tbody><tr><td class="empty">' + (q ? '无匹配' + esc(aggName) + '（过滤词无命中）' : '暂无' + esc(aggName) + '（等待 2103 推送）') + '</td></tr></tbody>';
+  // 右：个股列表标题（未选中=全部，点左侧筛选）
+  $(conf.p + 'StockTitle').textContent = sel ? sel + ' · ' + conf.title + '个股'
+    : '全部 · ' + conf.title + '个股（点左侧' + aggName + '筛选）';
   // ── 右：个股列表（App 字段全列）──
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + conf.cols.map(c => kthDaban(c.label, view, c.key)).join('') + '</tr></thead><tbody>';
@@ -7446,7 +7551,7 @@ function kplDabanRender(view){
   const ts = snap && snap.ts ? new Date(snap.ts * 1000).toLocaleTimeString('zh-CN', {hour12: false}) : '--';
   const gap = (snap && snap.pages_missing && snap.pages_missing.length)
     ? ` · 页缺口 ${snap.pages_missing.join(',')}` : '';
-  const mode = KPL.dabanMode[view] === 'history' ? `历史 ${KPL.dabanDate[view] || ''}` : '实时';
+  const mode = kplDabanModeLabel(view);
   $(conf.p + 'Stats').textContent =
     `${conf.title}（${mode}）· 快照 ${ts} · 本页 ${rows.length} 只 · 上游 maxSize ${maxN}`
     + (snap && snap.pages ? ` · 已收 ${snap.pages}/${snap.pages_expected} 页` : '') + gap
@@ -7455,7 +7560,9 @@ function kplDabanRender(view){
 
 // ══════════ 涨停行情页渲染器（kplzt，2026-11-07 二版：字段体系对齐【板块行情】）══════════
 // 左表=原因分组（分组名=KPL「原因」字段 zt_reason，用户裁决：非「板块」字段）：
-//   名称/强度/涨停/主力净额/量比。涨停=组内成员数（历史档=曾涨停全集：收盘封住 +
+//   #/名称/强度/涨停/主力净额/量比，首行为「全部」（2026-11-08 六页统一：按个股去重的
+//   全量口径、强度/量比不聚合显 '--'与缺因 title、默认不预选、再点已选原因=取消）。
+//   涨停=组内成员数（历史档=曾涨停全集：收盘封住 +
 //   盘中炸板未回封，后者红 badge 标注，字段为其最后封住时快照）；主力净额=组内合计
 //   （亿/万单位串可解析，全缺显 '--'）；强度/量比：组名与 KPL 板块排行快照
 //   （/api/kpl/sector-ranking，实时=当日 / 历史=选日，30s 节流）按板块 PlateID
@@ -7551,12 +7658,16 @@ function kplZtAgg(rows){
   }
   return list;
 }
-// 强度/量比原料：板块排行快照（实时=当日 / 历史=选日；服务端 30s TTL，本侧 30s 节流）
-function kplZtEnsureRanking(){
-  const snap = KPL.daban[DABAN_PAGES.kplzt.pid];
+// 强度/量比原料：板块排行快照（实时=当日 / 历史=选日；服务端 30s TTL，本侧 30s 节流）。
+// 当前仅涨停池页使用（炸板/跌停池 pid=2/3 实测不下发 plate_id，无强度/量比列）；
+// 缓存只以 date 为键，若将来多页共用需把 view/pid 纳入缓存键（否则同日互踩，评审 P2-6）。
+function kplZtEnsureRanking(view){
+  view = view || 'kplzt';
+  const conf = DABAN_PAGES[view];
+  const snap = KPL.daban[conf.pid];
   // 排行快照日期跟随数据自身（快照 date 字段）：周末/节假日实时快照仍为最近交易日
   // （如周日快照 date=11-06），用 KPL.today 会日期错配→强度/量比全 '--'（2026-11-08 实测修复）
-  const date = KPL.dabanMode.kplzt === 'history' ? (KPL.dabanDate.kplzt || KPL.today)
+  const date = KPL.dabanMode[view] === 'history' ? (KPL.dabanDate[view] || KPL.today)
     : (snap && snap.date ? snap.date : KPL.today);
   const st = KPL.ztRank;
   if (st.date === date && st.loading) return;   // 在飞防抖：4s 轮询重入不重复发
@@ -7575,14 +7686,14 @@ function kplZtEnsureRanking(){
         for (const list of Object.values(j.sons || {})) for (const it of (list || [])) put(it);
       } else {
         st.note = (j.reason || '读取失败') + (j.error ? '：' + j.error : '');
-        if (window.sbLog) sbLog('warn', '[涨停池] 板块排行快照读取失败（强度/量比列显 --）：' + st.note);
+        if (window.sbLog) sbLog('warn', '[池页] 板块排行快照读取失败（强度/量比列显 --）：' + st.note);
       }
-      if (STATE.view === 'kplzt') kplZtRender();
+      if (dabanOn(view)) kplDabanRender(view);
     })
     .catch(e => {
       if (st.date !== d) return;
       st.note = String(e.message || e);
-      if (STATE.view === 'kplzt') kplZtRender();
+      if (dabanOn(view)) kplDabanRender(view);
     })
     .finally(() => { if (st.date === d) st.loading = false; });
 }
@@ -7592,18 +7703,20 @@ function kplZtSetAggSort(key){
   else { s.key = key; s.dir = -1; }
   kplZtRender();
 }
-// 板块行情同款：重复点选不取消（右表始终有上下文）
+// 左表分组点选（2026-11-08 六页统一：参照炸板池）：再点已选原因=取消回「全部」
+// （旧口径为「重复点选不取消/自动选首组」，用户 2026-11-08 要求与炸板池一致：默认全量可见）
 function kplZtSelect(name){
-  if (KPL.dabanPlate.kplzt === name) return;
-  KPL.dabanPlate.kplzt = name;
+  KPL.dabanPlate.kplzt = (name && KPL.dabanPlate.kplzt !== name) ? name : '';
   kplZtRender();
 }
 // 板块行情同款：日期切换进历史模式（逐日回退找最近有档交易日，成分股 kplShiftDate 同款）
 // 打板页签历史回放通用读口（板块行情回看同款：逐日回退 ≤7 天找最近有档交易日）。
 // 涨停池 /daban-pool（2026-11-07）与集合竞价 /daban-bidding（2026-11-08）同机制，
 // 后端为 kpl_daban_pool 同日档双通道（bid_ 前缀）；无档继续回退、其它降级停止回退如实透出。
-const DABAN_ARCHIVE_API = {kplzt: '/daban-pool', kplbid: '/daban-bidding'};
-async function kplDabanArchiveHistory(view, date0){
+const DABAN_ARCHIVE_API = {kplzt: '/daban-pool', kplbid: '/daban-bidding',
+                           kplzb: '/daban-zhaban', kpldt: '/daban-dt'};
+async function kplDabanArchiveHistory(view, date0, opts){
+  const fallback = !!(opts && opts.fallback);   // true=实时无 2103 快照的回退存档（不改历史选日/日期框）
   const conf = DABAN_PAGES[view];
   for (let back = 0; back < 7; back++){
     const d = kplShiftDate(date0, back);
@@ -7614,22 +7727,36 @@ async function kplDabanArchiveHistory(view, date0){
     } catch (e){ r = {ok: false, reason: String(e.message || e)}; }
     // no_archive → 继续回退；其它降级（存储后端未启用等）停止回退如实透出
     if (r.ok || (r.reason && r.reason !== 'no_archive')){
-      if (r.ok && back){
+      if (r.ok && back && !fallback){
         KPL.dabanDate[view] = d;                     // 生效日回填（强度/量比快照与 KPI 同步跟随）
-        if ($(conf.p + 'Date')) $(conf.p + 'Date').value = d;
+        if (dabanOn(view) && $(conf.p + 'Date')) $(conf.p + 'Date').value = d;   // 仅当前模式回填日期框（单页共用）
         kplRenderMarketKpi();                        // KPI 以生效日重拉（原用选日发起，评审 P1-1）
       }
-      KPL.daban[conf.pid] = r.ok ? r : {ok: false, degraded: true, reason: r.reason};
+      if (r.ok) r.fromArchive = true;   // 存档打标：回实时后不得被当成实时帧挡住回退（评审 R3-P1）
+      KPL.daban[conf.pid] = r.ok ? r : {ok: false, degraded: true, reason: r.reason, fromArchive: true};
+      if (fallback){
+        // 回退标记：date=实际展示的存档交易日（供统计行/页头显式标注），轮询仍走实时，不回退历史模式
+        KPL.dabanFallback[view] = r.ok
+          ? {date: String(r.date || d), at: Date.now(), reason: (opts && opts.reason) || ''}
+          : {date: '', at: Date.now(), reason: (opts && opts.reason) || '', miss: true};
+      }
       if (r.ok && view === 'kplbid') kplDabanEnsureBasis(r, view);   // 竞昨比原料按日惰性拉取
-      if (STATE.view === view) kplDabanRender(view);
-      kplDabanBanner(view, r.ok ? (back ? '选择日无存档，回退生效日 ' + d : '') : (r.reason || '读取失败'));
+      if (dabanOn(view)) kplDabanRender(view);
+      if (fallback){
+        kplDabanBanner(view, r.ok
+          ? '实时无 2103 快照（' + ((opts && opts.reason) || 'no_live_snapshot') + '）· 已回退最近存档 ' + (r.date || d)
+          : '实时无 2103 快照（' + ((opts && opts.reason) || 'no_live_snapshot') + '）· 本地存档读取失败：' + (r.reason || ''));
+      } else {
+        kplDabanBanner(view, r.ok ? (back ? '选择日无存档，回退生效日 ' + d : '') : (r.reason || '读取失败'));
+      }
       return;
     }
   }
   // 近 7 天全无档：显式降级态（本地按日存档自上线起：涨停池 2026-11-07 / 集合竞价 2026-11-08）
   KPL.daban[conf.pid] = {ok: false, degraded: true, reason: 'no_archive_7d'};
-  if (STATE.view === view) kplDabanRender(view);
-  const since = {kplzt: '2026-11-07', kplbid: '2026-11-08'}[view] || '2026-11-07';
+  if (fallback) KPL.dabanFallback[view] = {date: '', at: Date.now(), reason: (opts && opts.reason) || '', miss: true};
+  if (dabanOn(view)) kplDabanRender(view);
+  const since = {kplzt: '2026-11-07', kplbid: '2026-11-08', kplzb: '2026-11-08', kpldt: '2026-11-08'}[view] || '2026-11-07';
   kplDabanBanner(view, '近 7 天无' + conf.title + '存档（本地按日存档自 ' + since + ' 起，需当日盘中运行 :8000+:8002 积累）');
 }
 // 涨停原因组合串（2026-11-08 用户需求，对照 App 详情页）：2103 zt_reason 为短原因
@@ -7666,11 +7793,11 @@ function kplZtEnsureReasons(){
         st.note = (j.reason || '读取失败') + (j.note ? '：' + j.note : '');
       }
       st.at = Date.now(); st.loading = false;
-      if (STATE.view === 'kplzt') kplDabanRender('kplzt');
+      if (dabanOn('kplzt')) kplDabanRender('kplzt');
     })
     .catch(e => {
       st.note = String(e.message || e); st.at = Date.now(); st.loading = false;
-      if (STATE.view === 'kplzt') kplDabanRender('kplzt');
+      if (dabanOn('kplzt')) kplDabanRender('kplzt');
     });
 }
 // tooltip：首行=既有组合串；详情段取数优先级：①实时态 2203 到流 ②历史档案
@@ -7683,7 +7810,6 @@ function kplZtArchDate(){
 }
 function ztReasonTip(r){
   let tip = '涨停原因：' + ztReasonFull(r);
-  if (r.plate_id) tip += `（关联板块 ID ${esc(String(r.plate_id))}，与板块行情同码制可互查）`;
   const sid = String(r.stock_id || '');
   // ① 实时态 2203 到流（collector 每会话重建订阅）
   if (KPL.dabanMode.kplzt !== 'history'){
@@ -7709,7 +7835,6 @@ function ztReasonTip(r){
   const arch = KPL.ztReasonsArch.byKey[date + '|' + sid];
   if (arch){
     if (arch.items && arch.items.length){
-      tip += '\n—— 涨停原因详情（历史档案' + (arch.matched_date ? ' ' + arch.matched_date : '') + '）';
       for (const it of arch.items){
         if (it.reason && it.reason !== String(r.zt_reason || '').trim()) tip += '\n' + it.reason;
         if (it.boom_zs) tip += '\n媒体催化：' + it.boom_zs;
@@ -7768,14 +7893,14 @@ function kplZtArchPump(){
     })
     .finally(() => {
       st.pumping = false;
-      if (STATE.view === 'kplzt') kplDabanRender('kplzt');   // 到货重渲染，tooltip 生效
+      if (dabanOn('kplzt')) kplDabanRender('kplzt');   // 到货重渲染，tooltip 生效
       setTimeout(kplZtArchPump, 1500);
     });
 }
 function kplZtRender(){
   const conf = DABAN_PAGES.kplzt;
-  if (STATE.view !== 'kplzt') return;
-  kplZtEnsureRanking();   // 强度/量比原料（30s 节流，到货后重渲染；防抖在 ensure 内）
+  if (!dabanOn('kplzt')) return;
+  kplZtEnsureRanking('kplzt');   // 强度/量比原料（30s 节流，到货后重渲染；防抖在 ensure 内）
   if (KPL.dabanMode.kplzt !== 'history') kplZtEnsureReasons();   // 2203 详情仅实时态请求（历史模式不发）
   const snap = KPL.daban[conf.pid];
   const all = kplDabanRows('kplzt', true);
@@ -7790,10 +7915,11 @@ function kplZtRender(){
     const vb = b[sort.key] == null ? -Infinity : b[sort.key];
     return ((va - vb) * (sort.dir || -1)) || String(a.name).localeCompare(String(b.name), 'zh');
   });
-  // 选中分组失效（快照变化原因消失）→ 回到排序首组；无选中 → 自动选首组（板块行情同款）
+  // 选中分组失效（快照变化原因消失）→ 回「全部」；默认不预选（同炸板池：首次进入展示全量，
+  // 不让分组隐藏记录；再点已选原因=取消，2026-11-08 六页统一）
   let sel = KPL.dabanPlate.kplzt || '';
-  if (agg.length && (!sel || !agg.some(a => a.name === sel))){
-    KPL.dabanPlate.kplzt = sel = agg[0].name;   // 自动选排序后首组
+  if (sel && agg.length && !agg.some(a => a.name === sel)){
+    KPL.dabanPlate.kplzt = sel = '';
   }
   const zth = (label, key) => {
     const mark = (sort.key === key) ? (sort.dir > 0 ? ' ▲' : ' ▼') : '';
@@ -7802,6 +7928,17 @@ function kplZtRender(){
   // 列序对齐【板块行情】左表（#/名称/涨停/强度/主力净额/量比）；组内无涨幅源（pid1 无 pct）不摆涨幅列
   let ph = '<thead><tr>' + zth('#') + zth('名称', 'name') + zth('涨停', 'n')
     + zth('强度', 'strength') + zth('主力净额', 'main_net') + zth('量比', 'volume_ratio') + '</tr></thead><tbody>';
+  // 「全部」行（同炸板池）：全量口径按个股去重（不按原因重复计）；强度/量比是各板块快照比值，
+  // 无法合法聚合 → 显 '--' 并注明，不伪造全量强度/量比
+  const allMn = kplDabanAllSums('kplzt', ['main_net']);
+  if (!q){
+    ph += `<tr${sel ? '' : ' class="on"'} onclick="kplZtSelect('')">`
+      + `<td class="kpl-uni">--</td><td>全部</td>`
+      + `<td class="kpl-uni" title="全量口径：按个股去重（不按原因重复计）">${all.length}</td>`
+      + `<td class="kpl-uni" title="强度是各板块排行快照比值，不聚合全量（选中原因才显示）">--</td>`
+      + `<td class="kpl-uni ${allMn.sums.main_net > 0 ? 'kpl-up' : allMn.sums.main_net < 0 ? 'kpl-down' : ''}" title="主力净额：全量成员合计${allMn.sumN.main_net ? '' : '（全缺显 --）'}">${allMn.sumN.main_net ? kfmtAmt(allMn.sums.main_net) : '--'}</td>`
+      + `<td class="kpl-uni" title="量比同强度，不聚合全量（选中原因才显示）">--</td></tr>`;
+  }
   let pn = 0;
   for (const a of agg){
     if (q && !a.name.toLowerCase().includes(q)) continue;
@@ -7816,10 +7953,11 @@ function kplZtRender(){
       + `<td class="kpl-uni ${mnCls}" title="主力净额：组内成员合计${a.mnN ? '' : '（全缺显 --）'}">${a.mnN ? kfmtAmt(a.main_net) : '--'}</td>`
       + `<td class="kpl-uni" title="量比：板块排行快照按 PlateID 匹配（上游推断列）${a.rankMiss ? ' · 缺因：' + esc(a.rankMiss) : ''}">${a.volume_ratio == null ? '--' : kfmtNum(a.volume_ratio)}</td></tr>`;
   }
-  $(conf.p + 'PlateTable').innerHTML = pn
+  $(conf.p + 'PlateTable').innerHTML = (pn || (!q && all.length))
     ? ph + '</tbody>' : '<tbody><tr><td class="empty">' + (q ? '无匹配原因（过滤词无命中，评审 P2-3）' : '暂无原因（等待 2103 推送）') + '</td></tr></tbody>';
-  // ── 右：选中原因的涨停个股（2103 quotas 全列）──
-  $(conf.p + 'StockTitle').textContent = sel ? sel + ' · 涨停个股' : '个股列表';
+  // ── 右：选中原因的涨停个股（2103 quotas 全列）；未选中=全部 ──
+  $(conf.p + 'StockTitle').textContent = sel ? sel + ' · 涨停个股'
+    : '全部 · 涨停个股（点左侧原因筛选）';
   const rows = kplDabanRows('kplzt');
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + kthDaban('涨停原因', 'kplzt', 'zt_reason')   // 2026-11-08 用户需求：2103 quotas pos12 原因字段
@@ -7868,18 +8006,218 @@ function kplZtRender(){
   const ts = snap && snap.ts ? new Date(snap.ts * 1000).toLocaleTimeString('zh-CN', {hour12: false}) : '--';
   const gap = (snap && snap.pages_missing && snap.pages_missing.length)
     ? ` · 页缺口 ${snap.pages_missing.join(',')}` : '';
-  const mode = KPL.dabanMode.kplzt === 'history' ? `历史 ${KPL.dabanDate.kplzt || ''}` : '实时';
+  const mode = kplDabanModeLabel('kplzt');
   const rankAge = KPL.ztRank.byId
     ? '板块排行快照（PlateID 匹配） ' + new Date(KPL.ztRank.at).toLocaleTimeString('zh-CN', {hour12: false})
     : '板块排行快照未到（强度/量比暂 --）';
   $(conf.p + 'Stats').textContent =
     `涨停行情（${mode}）· 快照 ${ts} · 分组 ${pn} · 本页 ${rows.length} 只`
     + (brokenN ? ` · 封住 ${rows.length - brokenN} · 炸板 ${brokenN}` : '')
-    + ` · 上游 maxSize ${maxN}`
+    + ` · ${maxN}`
     + (snap && snap.pages ? ` · 已收 ${snap.pages}/${snap.pages_expected} 页` : '') + gap
     + (snap && snap.date ? ` · ${snap.date}` : '')
     + ` · 强度/量比来源：${rankAge}`
     + (KPL.ztRank.note ? ` · 排行读取失败：${KPL.ztRank.note}` : '');
+}
+
+// ══════════ 炸板池/跌停池页渲染器（kplzb/kpldt，2026-11-08：参照【涨停池】页同构）══════════
+// 左表=板块分组（kplDabanPlateAgg，与集合竞价页同款：plate 精确拆段各计一次）+
+//   「全部」行（按个股去重的全量口径，默认选中）：#/板块/家数（炸板/跌停）/
+//   主力净额合计/成交额合计，可排序；再点已选板块=取消回「全部」（池子小、板块分组碎，
+//   默认展示全量不让分组隐藏记录）。缺值聚合显 '--'（不烘成 0）。
+//   **不摆强度/量比列**：实测 2026-11-06 快照 pid=2/3 帧 plate_id（quotas pos21）与
+//   zt_reason（pos16）均 0/14、0/15 全空，无源列只会全 '--'（同涨停行情页删无源列口径）。
+// 右表=个股（2103 pidType=2/3 quotas named 字段，按实测覆盖率选列）：
+//   炸板池（14/14 有值）：现价/涨幅/换手%/连板/主力净额/成交额/概念/涨停时间/开板时间；
+//   跌停池（15/15 有值）：换手%/主力净额/成交额/概念/跌停时间/封单额 +（仅历史）状态列
+//   （pool_state：'sealed'=收盘仍封住 / 'broken'=曾跌停后打开未回封）。
+//   实时读口 /daban-list 不带 pool_state（只有本地日档有），故状态列仅在历史模式出现
+//   （不摆恒 '--' 死列，评审 P1-1）。缺值一律 '--'（fail-visible）；列可排序（kthDaban）。
+//   pid=2 帧不下发 zt_reason/zt_tur、pid=3 不下发 price/pct，故不摆对应列；全量字段
+//   （quotas×28 原始数组）仍在 kpl_daban_pool 库内随时可取。
+// 历史=本地按日存档 /daban-zhaban、/daban-dt（kpl_daban_pool 同日档 zb_/dt_ 通道，
+//   不另建数据集；逐日回退同涨停行情）；「源可用但池为空（0 家）」由后端空档记录 + empty
+//   标记透出，不再逐日回退到旧日档。呈现对齐【板块行情】（kfmtNum/kfmtAmt/kcls 同款）。
+const DABAN_POOL_PAGE_CONF = {
+  kplzb: {
+    countLabel: '炸板',
+    countTitle: '炸板家数：组内成员数（历史档=当日曾炸板全集，含已回封；回封态见涨停池页）',
+    rightTitle: '炸板个股',
+    cols: [
+      {key: 'price', label: '现价', fmt: 'num'},
+      {key: 'pct', label: '涨幅', fmt: 'pct'},
+      {key: 'real_turnover', label: '换手%', fmt: 'num1'},
+      {key: 'state', label: '连板', fmt: 'state'},
+      {key: 'main_net', label: '主力净额', fmt: 'amt'},
+      {key: 'amount', label: '成交额', fmt: 'amt'},
+      {key: 'plate', label: '概念', fmt: 'plate'},
+      {key: 'zt_time', label: '涨停时间', fmt: 'hm'},
+      {key: 'open_time', label: '开板时间', fmt: 'hm'},
+    ],
+  },
+  kpldt: {
+    countLabel: '跌停',
+    countTitle: '跌停家数：组内成员数（历史档=曾跌停全集，含打开未回封——状态列标「打开」）',
+    rightTitle: '跌停个股',
+    cols: [
+      {key: 'real_turnover', label: '换手%', fmt: 'num1'},
+      {key: 'main_net', label: '主力净额', fmt: 'amt'},
+      {key: 'amount', label: '成交额', fmt: 'amt'},
+      {key: 'plate', label: '概念', fmt: 'plate'},
+      {key: 'zt_time', label: '跌停时间', fmt: 'hm'},
+      {key: 'zt_tur', label: '封单额', fmt: 'amt'},
+      {key: 'pool_state', label: '状态', fmt: 'poolstate', nosort: true},
+    ],
+  },
+};
+function kplPoolSetAggSort(view, key){
+  const s = KPL.poolAggSort[view] || (KPL.poolAggSort[view] = {key: 'n', dir: -1});
+  if (s.key === key) s.dir = -s.dir;
+  else { s.key = key; s.dir = -1; }
+  kplPoolRender(view);
+}
+// 池页点选：再点已选板块=取消回「全部」（默认不预选，池子小、分组碎，不让分组隐藏记录）
+function kplPoolSelect(view, name){
+  const cur = KPL.dabanPlate[view] || '';
+  KPL.dabanPlate[view] = (name && cur !== name) ? name : '';
+  kplPoolRender(view);
+}
+// 池页单元格：conf.cols fmt → 渲染 HTML（缺值 '--'，不猜数）
+function kplPoolCell(r, c){
+  const v = r[c.key];
+  if (c.fmt === 'plate'){
+    return `<td class="kpl-sub">${esc(String(r.plate || '').trim().replace(/\n|、/g, ' · ').slice(0, 24) || '--')}</td>`;
+  }
+  if (c.fmt === 'poolstate'){
+    // 仅历史档列集出现（实时读口无 pool_state，见 DABAN_POOL_PAGE_CONF 注释）
+    if (r.pool_state === 'broken')
+      return '<td><span class="badge" style="background:#fef3c7;color:#b45309" title="盘中曾跌停、其后掉出跌停池（打开跌停未回封）；行内字段为其最后封住时快照">打开</span></td>';
+    if (r.pool_state === 'sealed')
+      return '<td><span class="badge b-red" title="历史档收盘仍封住跌停（日档 sealed 标注）">封住</span></td>';
+    return '<td>--</td>';
+  }
+  if (c.fmt === 'state'){
+    return `<td>${esc(r.state || '--')}</td>`;
+  }
+  if (c.fmt === 'hm'){
+    return `<td class="kpl-uni" title="${v != null && v !== '' ? '原始值：' + esc(String(v)) : ''}">${kfmtHm(v)}</td>`;
+  }
+  if (c.fmt === 'num1'){
+    return `<td class="kpl-uni">${kfmtNum(knumUnit(v), 1)}</td>`;
+  }
+  if (c.fmt === 'num'){
+    return `<td class="kpl-uni">${kfmtNum(knumUnit(v))}</td>`;
+  }
+  if (c.fmt === 'pct'){
+    // 不可解析（如带 '%' 的串）→ '--'，不拼成 '--%'（评审 P2-5）
+    const n = knumUnit(v);
+    return `<td class="kpl-uni ${kcls(n)}">${Number.isFinite(n) ? kfmtNum(n) + '%' : '--'}</td>`;
+  }
+  // amt：主力净额/成交额/封单额（涨红绿跌同板块行情）
+  return `<td class="kpl-uni ${c.key === 'main_net' ? kcls(knumUnit(v)) : ''}">${kfmtAmt(knumUnit(v))}</td>`;
+}
+function kplPoolRender(view){
+  const conf = DABAN_PAGES[view], pc = DABAN_POOL_PAGE_CONF[view];
+  if (!dabanOn(view)) return;
+  const snap = KPL.daban[conf.pid];
+  // 实时读口（/daban-list）不带 pool_state，只有本地日档有；故状态列仅历史模式展示，
+  // 不摆恒 '--' 死列（评审 P1-1；同「无源列不摆」口径）。
+  const cols = KPL.dabanMode[view] === 'history' ? pc.cols : pc.cols.filter(c => c.fmt !== 'poolstate');
+  // ── 左：板块分组表（集合竞价页同款：#/板块/家数/合计列，可排序）+ 「全部」行 ──
+  const q = ($(conf.p + 'PlateSearch').value || '').trim().toLowerCase();
+  const sort = KPL.poolAggSort[view] || (KPL.poolAggSort[view] = {key: 'n', dir: -1});
+  const agg = kplDabanPlateAgg(view);
+  agg.sort((a, b) => {
+    if (sort.key === 'name') return String(a.name).localeCompare(String(b.name), 'zh') * (sort.dir || -1);
+    const va = sort.key === 'n' ? a.n : (a.sums[sort.key] || 0);
+    const vb = sort.key === 'n' ? b.n : (b.sums[sort.key] || 0);
+    return ((va - vb) * (sort.dir || -1)) || String(a.name).localeCompare(String(b.name), 'zh');
+  });
+  // 选中分组失效（快照变化板块消失）→ 回「全部」；默认不预选（池子小，板块分组会拆得很碎，
+  // 首次进入展示全量，不让分组把记录隐藏起来；再次点选已选板块=取消）。
+  let sel = KPL.dabanPlate[view] || '';
+  if (sel && agg.length && !agg.some(a => a.name === sel)){
+    KPL.dabanPlate[view] = sel = '';
+  }
+  // 「全部」行聚合：按个股去重（与左表板块多概念各计不同，全量口径唯一）；
+  // 共用 kplDabanAllSums（2026-11-08 六页统一口径）
+  const allAgg = kplDabanAllSums(view, conf.sumCols || []);
+  const ph2 = (label, key, nosort) => {
+    const mark = (key && sort.key === key) ? (sort.dir > 0 ? ' ▲' : ' ▼') : '';
+    return `<th${key && !nosort ? ` style="cursor:pointer" onclick="kplPoolSetAggSort('${view}','${key}')"` : ''}>${label}${mark}</th>`;
+  };
+  let ph = '<thead><tr>' + ph2('#') + ph2('板块', 'name') + ph2(pc.countLabel, 'n')
+    + (conf.sumCols || []).map((c, i) => {
+        const label = (conf.sumLabels && conf.sumLabels[c]) || c;   // sumLabels 在 DABAN_PAGES（不是池页 conf）
+        return ph2(label + (i ? '' : '合计'), c);
+      }).join('') + '</tr></thead><tbody>';
+  if (!q){
+    ph += `<tr${sel ? '' : ' class="on"'} onclick="kplPoolSelect('${view}','')">`
+      + `<td class="kpl-uni">--</td><td>全部</td>`
+      + `<td class="kpl-uni" title="全量口径：按个股去重（不按板块重复计）">${allAgg.n}</td>`
+      + (conf.sumCols || []).map(c => {
+          const sum = allAgg.sums[c];
+          const cls = c === 'main_net' ? (sum > 0 ? 'kpl-up' : sum < 0 ? 'kpl-down' : '') : '';
+          return `<td class="kpl-uni ${cls}">${allAgg.sumN[c] ? kfmtAmt(sum) : '--'}</td>`;
+        }).join('') + '</tr>';
+  }
+  let pn = 0;
+  for (const a of agg){
+    if (q && !a.name.toLowerCase().includes(q)) continue;
+    pn++;
+    const on = sel === a.name ? ' class="on"' : '';
+    ph += `<tr${on} onclick="kplPoolSelect('${view}','${js(a.name)}')">`
+      + `<td class="kpl-uni">${pn}</td>`
+      + `<td>${esc(a.name)}</td>`
+      + `<td class="kpl-uni" title="${pc.countTitle}">${a.n}</td>`
+      + (conf.sumCols || []).map(c => {
+          const sum = a.sums[c] || 0;
+          const cls = c === 'main_net' ? (sum > 0 ? 'kpl-up' : sum < 0 ? 'kpl-down' : '') : '';
+          return `<td class="kpl-uni ${cls}">${a.sumN[c] ? kfmtAmt(sum) : '--'}</td>`;   // 全缺显 '--'，不烘成 0（评审 P2-4）
+        }).join('') + '</tr>';
+  }
+  $(conf.p + 'PlateTable').innerHTML = (pn || (!q && allAgg.n))
+    ? ph + '</tbody>' : '<tbody><tr><td class="empty">' + (q ? '无匹配板块（过滤词无命中）' : '暂无板块（等待 2103 推送）') + '</td></tr></tbody>';
+  // ── 右：选中板块的个股（2103 pidType=2/3 quotas named 字段）──
+  $(conf.p + 'StockTitle').textContent = sel ? sel + ' · ' + pc.rightTitle
+    : '全部 · ' + pc.rightTitle + '（点左侧板块筛选）';
+  const rows = kplDabanRows(view);
+  let html = '<thead><tr><th>代码</th><th>名称</th>'
+    + cols.map(c => kthDaban(c.label, view, c.nosort ? null : c.key)).join('') + '</tr></thead><tbody>';
+  for (const r of rows){
+    const badges = [r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
+                    r.stock_tag ? `<span class="badge b-purple" title="App stockTag 标签">${esc(r.stock_tag)}</span>` : '',
+                    r.financing_tag == 1 ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8" title="financingTag=1（推断=融资标的）">融</span>' : '']
+      .filter(Boolean).join(' ');
+    html += `<tr><td class="kpl-uni">${esc(r.stock_id || '--')}</td>`
+      + `<td>${esc(r.name || '--')}${badges ? '<div style="margin-top:2px">' + badges + '</div>' : ''}</td>`
+      + cols.map(c => kplPoolCell(r, c)).join('') + '</tr>';
+  }
+  $(conf.p + 'StockTable').innerHTML = rows.length ? html + '</tbody>'
+    : '<tbody><tr><td class="empty">'
+      + (snap ? (snap.ok
+            ? (snap.empty
+                ? '该日' + conf.title + '采集成功且池为空（0 家；不属降级，已按存档日期展示）'
+                : '该板块暂无成分（快照为空或已切换，稍后自动刷新）')
+            : (snap.reason === 'no_archive' || snap.reason === 'no_archive_7d'
+                ? '该日无本地' + conf.title + '存档（存档自 2026-11-08 起，需当日盘中运行 :8000+:8002 积累；已逐日回退仍无档）'
+                : '快照不可用：' + (snap.reason || '')))
+           : '等待 2103 快照到流（进入页签即拉取，每 4s 轮询兑底）') + '</td></tr></tbody>';
+  // 统计行（页缺口/跌停池收盘态/池为空显式透出，不伪装全量）
+  const brokenN = cols.some(c => c.fmt === 'poolstate')
+    ? rows.filter(r => r.pool_state === 'broken').length : 0;
+  const maxN = snap && snap.max_size != null ? snap.max_size : '--';
+  const ts = snap && snap.ts ? new Date(snap.ts * 1000).toLocaleTimeString('zh-CN', {hour12: false}) : '--';
+  const gap = (snap && snap.pages_missing && snap.pages_missing.length)
+    ? ` · 页缺口 ${snap.pages_missing.join(',')}` : '';
+  const mode = kplDabanModeLabel(view);
+  $(conf.p + 'Stats').textContent =
+    `${conf.title}（${mode}）· 快照 ${ts} · 分组 ${pn} · 本页 ${rows.length} 只`
+    + (snap && snap.empty ? ' · 当日池为空（0 家）' : '')
+    + (brokenN ? ` · 封住 ${rows.length - brokenN} · 打开 ${brokenN}` : '')
+    + ` · 上游 maxSize ${maxN}`
+    + (snap && snap.pages ? ` · 已收 ${snap.pages}/${snap.pages_expected} 页` : '') + gap
+    + (snap && snap.date ? ` · ${snap.date}` : '');
 }
 
 // ══════════ 集合竞价页渲染器（kplbid，2026-11-08 三版：列体系对齐【板块行情】）══════════
@@ -7889,7 +8227,8 @@ function kplZtRender(){
 // 右表=竞价个股（2103 pidType=8 quotas），列体系与呈现对齐【板块行情】个股表
 //   （用户裁决 2026-11-08，弃原自成一体展示）：代码/名称/竞价涨幅%/竞价净额/竞价换手%/
 //   竞价成交额/竞昨比/涨停委买额/实时涨幅%/连板/概念。呈现同板块行情：kfmtNum/kfmtAmt/kcls
-//   同款格式化；连板=纯文本；概念=板块路径截断 24 字；点选不 toggle + 自动选首组。
+//   同款格式化；连板=纯文本；概念=板块路径截断 24 字；左表「全部」行 + 默认不预选 + 点选可取消
+//   （2026-11-08 与炸板池/涨停池等六页统一，旧「点选不 toggle + 自动选首组」已废）。
 //   不加分页：竞价列表 ≤ maxSize 百级内，kpl-wrap 滚动可承载（板块行情分页为百级成分股场景）。
 // 竞昨比=竞价成交量/昨日成交量×100%（2026-10-28 用户需求派生列，basis 缺失显 '--'，
 //   kplDabanRows 内富化；历史档同口径，basis 按存档日期惰性拉取）。
@@ -7900,15 +8239,14 @@ function kplBidSetAggSort(key){
   else { s.key = key; s.dir = -1; }
   kplBidRender();
 }
-// 板块行情同款：点选不 toggle（右表始终有上下文）
+// 左表分组点选（2026-11-08 六页统一：参照炸板池）：再点已选板块=取消回「全部」
 function kplBidSelect(name){
-  if (KPL.dabanPlate.kplbid === name) return;
-  KPL.dabanPlate.kplbid = name;
+  KPL.dabanPlate.kplbid = (name && KPL.dabanPlate.kplbid !== name) ? name : '';
   kplBidRender();
 }
 function kplBidRender(){
   const conf = DABAN_PAGES.kplbid;
-  if (STATE.view !== 'kplbid') return;
+  if (!dabanOn('kplbid')) return;
   const snap = KPL.daban[conf.pid];
   // ── 左：板块分组表（板块行情左表同款呈现）──
   const q = ($(conf.p + 'PlateSearch').value || '').trim().toLowerCase();
@@ -7920,10 +8258,11 @@ function kplBidRender(){
     const vb = sort.key === 'n' ? b.n : (b.sums[sort.key] || 0);
     return ((va - vb) * (sort.dir || -1)) || String(a.name).localeCompare(String(b.name), 'zh');
   });
-  // 选中分组失效（快照变化板块消失）→ 回到排序首组；无选中 → 自动选首组（板块行情同款）
+  // 选中分组失效（快照变化板块消失）→ 回「全部」；默认不预选（同炸板池：首次进入展示全量，
+  // 不让分组隐藏记录；再点已选板块=取消，2026-11-08 六页统一）
   let sel = KPL.dabanPlate.kplbid || '';
-  if (agg.length && (!sel || !agg.some(a => a.name === sel))){
-    KPL.dabanPlate.kplbid = sel = agg[0].name;   // 自动选排序后首组
+  if (sel && agg.length && !agg.some(a => a.name === sel)){
+    KPL.dabanPlate.kplbid = sel = '';
   }
   const bh = (label, key) => {
     const mark = (sort.key === key) ? (sort.dir > 0 ? ' ▲' : ' ▼') : '';
@@ -7931,22 +8270,32 @@ function kplBidRender(){
   };
   let ph = '<thead><tr>' + bh('#') + bh('板块', 'name') + bh('家数', 'n')
     + bh('竞价净额', 'bidding_net') + bh('竞价成交额', 'bidding_amount') + '</tr></thead><tbody>';
+  // 「全部」行（同炸板池）：全量口径按个股去重；缺值聚合显 '--'，不烘成 0（评审 P2-4）
+  const allSum = kplDabanAllSums('kplbid', ['bidding_net', 'bidding_amount']);
+  if (!q){
+    ph += `<tr${sel ? '' : ' class="on"'} onclick="kplBidSelect('')">`
+      + `<td class="kpl-uni">--</td><td>全部</td>`
+      + `<td class="kpl-uni" title="全量口径：按个股去重（不按板块重复计）">${allSum.n}</td>`
+      + `<td class="kpl-uni ${kcls(allSum.sums.bidding_net)}">${allSum.sumN.bidding_net ? kfmtAmt(allSum.sums.bidding_net) : '--'}</td>`
+      + `<td class="kpl-uni">${allSum.sumN.bidding_amount ? kfmtAmt(allSum.sums.bidding_amount) : '--'}</td></tr>`;
+  }
   let pn = 0;
   for (const a of agg){
-    if (q && !a.name.toLowerCase().includes(q)) continue;
+    if (q && !a.name.toLowerCase().includes(q)) continue;   // 过滤词只筛分组行（选中态不再折叠左表，2026-11-08 修）
     pn++;
     const on = sel === a.name ? ' class="on"' : '';
     ph += `<tr${on} onclick="kplBidSelect('${js(a.name)}')">`
       + `<td class="kpl-uni">${pn}</td>`
       + `<td>${esc(a.name)}</td>`
       + `<td class="kpl-uni">${a.n}</td>`
-      + `<td class="kpl-uni ${kcls(a.sums.bidding_net)}">${kfmtAmt(a.sums.bidding_net)}</td>`
-      + `<td class="kpl-uni">${kfmtAmt(a.sums.bidding_amount)}</td></tr>`;
+      + `<td class="kpl-uni ${kcls(a.sums.bidding_net)}">${a.sumN.bidding_net ? kfmtAmt(a.sums.bidding_net) : '--'}</td>`
+      + `<td class="kpl-uni">${a.sumN.bidding_amount ? kfmtAmt(a.sums.bidding_amount) : '--'}</td></tr>`;
   }
-  $(conf.p + 'PlateTable').innerHTML = pn
+  $(conf.p + 'PlateTable').innerHTML = (pn || (!q && allSum.n))
     ? ph + '</tbody>' : '<tbody><tr><td class="empty">' + (q ? '无匹配板块（过滤词无命中）' : '暂无板块（等待 2103 推送）') + '</td></tr></tbody>';
-  // ── 右：选中板块的竞价个股（2103 pid=8 quotas，板块行情个股表同款呈现）──
-  $(conf.p + 'StockTitle').textContent = sel ? sel + ' · 竞价个股' : '个股列表';
+  // ── 右：选中板块的竞价个股（2103 pid=8 quotas，板块行情个股表同款呈现）；未选中=全部 ──
+  $(conf.p + 'StockTitle').textContent = sel ? sel + ' · 竞价个股'
+    : '全部 · 竞价个股（点左侧板块筛选）';
   const rows = kplDabanRows('kplbid');
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + kthDaban('竞价涨幅%', 'kplbid', 'bidding_pct')
@@ -7989,7 +8338,7 @@ function kplBidRender(){
   const ts = snap && snap.ts ? new Date(snap.ts * 1000).toLocaleTimeString('zh-CN', {hour12: false}) : '--';
   const gap = (snap && snap.pages_missing && snap.pages_missing.length)
     ? ` · 页缺口 ${snap.pages_missing.join(',')}` : '';
-  const mode = KPL.dabanMode.kplbid === 'history' ? `历史 ${KPL.dabanDate.kplbid || ''}` : '实时';
+  const mode = kplDabanModeLabel('kplbid');
   $(conf.p + 'Stats').textContent =
     `集合竞价（${mode}）· 快照 ${ts} · 分组 ${pn} · 本页 ${rows.length} 只 · 上游 maxSize ${maxN}`
     + (snap && snap.pages ? ` · 已收 ${snap.pages}/${snap.pages_expected} 页` : '') + gap
@@ -8077,8 +8426,9 @@ function kplRenderMarketKpi(){
 // KPI 条跟随当前视图日期：kpl=工具条 KPL.date（历史模式才非 today），打板三页=各自 dabanDate
 function kplKpiDate(){
   if (STATE.view === 'kpl') return KPL.mode === 'history' ? KPL.date : KPL.today;
-  if (['kplbid', 'kplsoon', 'kplvane', 'kplzt'].includes(STATE.view)){
-    return KPL.dabanMode[STATE.view] === 'history' ? (KPL.dabanDate[STATE.view] || KPL.today) : KPL.today;
+  if (STATE.view === DABAN_PAGE){
+    const v = KPL.dabanView;   // 单页化：KPI 跟随页内当前模式（各模式选日各自记忆）
+    return KPL.dabanMode[v] === 'history' ? (KPL.dabanDate[v] || KPL.today) : KPL.today;
   }
   return KPL.today;
 }

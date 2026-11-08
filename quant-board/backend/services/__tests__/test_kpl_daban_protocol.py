@@ -319,7 +319,8 @@ class TestDabanStockList2103:
 
     def test_registry_has_2103(self):
         assert dp.DABAN_RESP_PARSERS[dp.CMD_DABAN_STOCK_LIST] is dp.parse_daban_stock_list
-        assert dp.DABAN_LIST_PIDS == {8: "bidding", 0: "about_to_zt", 6: "wind_vane", 1: "zt_pool"}
+        assert dp.DABAN_LIST_PIDS == {8: "bidding", 0: "about_to_zt", 6: "wind_vane", 1: "zt_pool",
+                                      2: "zhaban_pool", 3: "dt_pool"}
 
 
 # ── 历史行解析（HisDaBanList HTTP，qg.q1 × PatternDynamicQuota 列位语义）────────

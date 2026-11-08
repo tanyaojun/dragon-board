@@ -145,11 +145,26 @@ async def plate_tree() -> JSONResponse:
 @router.get("/daban-list")
 async def daban_list(pid_type: int = 8) -> JSONResponse:
     """2103 打板个股列表快照（KPL App 打板页签）：pid_type 8=集合竞价 / 0=即将涨停 /
-    6=风向标 / 1=涨停池。
+    6=风向标 / 1=涨停池 / 2=炸板池 / 3=跌停池。
 
     数据源=socket 2103 订阅推送的最近快照（collector 缓存），非历史回看——历史走 /daban-list-history。
     """
     return await _proxy_get(f"/api/kpl/daban-list?pid_type={pid_type}")
+
+
+def _load_daban_lane_day(date: str, *, lane: str) -> JSONResponse:
+    """kpl_daban_pool 日档读口公共段（daban-pool/bidding/zhaban/dt）：日期校验 + 存储护栏 + load_day。"""
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    if get_settings().storage_backend != "mongodb":
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
+            status_code=502)
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    from backend.services.kpl_daban_archiver import load_day
+
+    return JSONResponse(content=load_day(get_runtime_mongodb_database(), date, lane=lane))
 
 
 @router.get("/daban-pool")
@@ -162,17 +177,7 @@ def daban_pool(date: str = "") -> JSONResponse:
     {ok:false, degraded:true, reason:'no_archive'}（fail-visible，不回退默认集合冒充）。
     storage_backend 非 mongodb 同样结构化降级。
     """
-    bad = _validate_date(date)
-    if bad is not None:
-        return bad
-    if get_settings().storage_backend != "mongodb":
-        return JSONResponse(
-            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
-            status_code=502)
-    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-    from backend.services.kpl_daban_archiver import load_day
-
-    return JSONResponse(content=load_day(get_runtime_mongodb_database(), date))
+    return _load_daban_lane_day(date, lane="pool")
 
 
 @router.get("/daban-bidding")
@@ -180,22 +185,49 @@ def daban_bidding(date: str = "") -> JSONResponse:
     """集合竞价（2103 pidType=8）按日存档读口（2026-11-08 历史回放）。
 
     数据源=本地 MongoDB kpl_daban_pool 同日档的 bid_ 前缀字段（用户裁决：不另建数据集），
-    DabanPoolArchiver 单循环双通道按日 upsert；载荷映射为与 /daban-list 同构
+    DabanPoolArchiver 单循环多通道按日 upsert；载荷映射为与 /daban-list 同构
     （items/ts/max_size/…），前端零转换渲染。无档返回结构化
     {ok:false, degraded:true, reason:'no_archive'}（fail-visible，不回退默认集合冒充）。
     storage_backend 非 mongodb 同样结构化降级。
     """
-    bad = _validate_date(date)
-    if bad is not None:
-        return bad
-    if get_settings().storage_backend != "mongodb":
-        return JSONResponse(
-            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
-            status_code=502)
-    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-    from backend.services.kpl_daban_archiver import load_day
+    return _load_daban_lane_day(date, lane="bid")
 
-    return JSONResponse(content=load_day(get_runtime_mongodb_database(), date, lane="bid"))
+
+@router.get("/daban-zhaban")
+def daban_zhaban(date: str = "") -> JSONResponse:
+    """炸板池（2103 pidType=2）按日存档读口（2026-11-08 历史回放）。
+
+    数据源=本地 MongoDB kpl_daban_pool 同日档的 zb_ 前缀字段（用户裁决：与涨停池同
+    数据集，不新增）；成员口径=当日曾炸板全集（回封后掉出仍留档，回封语义由涨停池
+    通道 sealed 承载），字段随最新帧刷新，无 pool_state。载荷与 /daban-list 同构。
+    无档/无数据返回结构化降级（fail-visible，不伪装空列表）。
+    """
+    return _load_daban_lane_day(date, lane="zb")
+
+
+@router.get("/daban-dt")
+def daban_dt(date: str = "") -> JSONResponse:
+    """跌停池（2103 pidType=3）按日存档读口（2026-11-08 历史回放）。
+
+    数据源=本地 MongoDB kpl_daban_pool 同日档的 dt_ 前缀字段（用户裁决：与涨停池同
+    数据集，不新增）；与涨停池同款收盘态标注——items 内 pool_state：'sealed'=收盘
+    仍跌停 / 'broken'=曾入池后掉出即打开跌停未回封（字段为其最后封住时快照）。
+    载荷与 /daban-list 同构；无档/无数据返回结构化降级（fail-visible）。
+    """
+    return _load_daban_lane_day(date, lane="dt")
+
+
+@router.get("/daban-reasons")
+def daban_reasons(date: str = "") -> JSONResponse:
+    """2203 涨停原因语料按日读口（2026-11-08，jev 投喂原料）。
+
+    数据源=本地 MongoDB kpl_daban_pool 同日档的 reason_ 前缀字段（用户裁决：不另建
+    数据集），由 DabanPoolArchiver 每轮拉 :8002 /zt-reasons 落库；items = 2203 原文
+    字段（zt/fx/zt_group/theme/plate/tp/rank 等，不改写不拼接），日期跟随涨停池快照
+    交易日（周末/盘前推送的是上一交易日详情）。无档 → no_archive；日档在但语料未
+    落库 → no_reason_corpus（fail-visible，不伪装空语料）。
+    """
+    return _load_daban_lane_day(date, lane="reason")
 
 
 @router.get("/daban-genes")

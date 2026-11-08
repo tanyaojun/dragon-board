@@ -311,3 +311,38 @@ class TestStockMX2006:
     def test_parse_ty_dan_label_resp_empty(self):
         out = proto.parse_ty_dan_label_resp(b"")
         assert out["total"] == 0 and out["items"] == [] and out["day"] == ""
+
+
+class TestAntiCheat261:
+    """261/262 反作弊轮（2026-11-08 实现）：App 口径逐字节对照（qn0.g / GameClient$onChallenge$2）。"""
+
+    def _data(self, value: int = 0x0BADF00D, tail: bytes = b"chal-abcdef") -> bytes:
+        return b"T" * 24 + b"O" * 8 + value.to_bytes(4, "big") + tail
+
+    def test_parse_anti_cheat_261_takes_field1(self):
+        data = self._data()
+        payload = proto.pb_bytes(1, data) + proto.pb_bytes(2, b"ignored")
+        assert proto.parse_anti_cheat_261(payload) == data
+        assert proto.parse_anti_cheat_261(b"") == b""
+
+    def test_anti_cheat_challenge_splits_token_d_and_ascii(self):
+        data = self._data(value=7, tail=b"c1|8fd")
+        token, d, challenge = proto.anti_cheat_challenge(data)
+        assert token == b"T" * 24 + b"O" * 8
+        assert d == 7
+        assert challenge == "c1|8fd"
+        # <36 字节：App 丢弃且不断连（返回空 token/0/空串）
+        assert proto.anti_cheat_challenge(b"short") == (b"", 0, "")
+
+    def test_build_anti_cheat_ans_262_token_passthrough_and_be_int32(self):
+        data = self._data()
+        ans = proto.build_anti_cheat_ans_262(data, 0x1A2B3C4D)
+        parsed = proto.parse_pb(ans)
+        assert len(parsed[1]) == 1
+        body = parsed[1][0]
+        assert len(body) == 36
+        assert body[:32] == data[:32]            # token 原样回填
+        assert body[32:36] == (0x1A2B3C4D).to_bytes(4, "big")
+        # 负数按 32 位补码写入（App: (int) long）
+        body_neg = proto.parse_pb(proto.build_anti_cheat_ans_262(data, -2))[1][0]
+        assert body_neg[32:36] == b"\xff\xff\xff\xfe"

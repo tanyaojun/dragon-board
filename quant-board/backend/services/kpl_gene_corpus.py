@@ -3,12 +3,13 @@
 题材龙头语料投喂 jev 模型；前端页面暂不上）。
 
 为什么独立于 DabanPoolArchiver（2026-11-08 决策）：
-- 打板通道（2103 socket 合并快照）由 DabanPoolArchiver 按 60s 整轮拉取、整 doc 读改写；
-  涨停基因是 **HTTP 单股粒度**（apphq StockL2Data/GetZhangTingGene，服务端 _post_form
-  全局 ≥2s 单发间隔），只能逐股懒取、天然分期补齐——节奏与约束都不同；
-- 独立模块 + 独立循环，且写库用 **字段级 $set（只动 gene_ 前缀字段）**，不与打板通道的
-  整 doc replace 互相踩写（两者同进程同事件循环、各自 to_thread 落库，整 doc 读改写会
-  丢更新）。日档同一集合 kpl_daban_pool（用户裁决：不另建数据集）。
+- 打板通道（2103 socket 合并快照）由 DabanPoolArchiver 按 60s 整轮拉取；涨停基因是
+  **HTTP 单股粒度**（apphq StockL2Data/GetZhangTingGene，服务端 _post_form 全局 ≥2s
+  单发间隔），只能逐股懒取、天然分期补齐——节奏与约束都不同；
+- 独立模块 + 独立循环，写库用 **字段级 $set（只动 gene_ 前缀字段）**；2026-11-08 评审
+  R2-P1 后打板/reason 通道也已改为字段级 $set，各写方互不覆盖（此前打板整 doc 回写会
+  把并行写方的 gene_* 字段回写冲掉，回归用例见 test_kpl_daban_archiver.test_gene_corpus_
+  fields_survive_lane_writes）。日档同一集合 kpl_daban_pool（用户裁决：不另建数据集）。
 
 落库（gene_ 前缀字段，与 reason_ 同款）：
 - gene_items：按 stock_id 并集 [{stock_id, gene{zt_count, premium5_count, next_day_red_pct,

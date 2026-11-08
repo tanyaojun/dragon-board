@@ -47,12 +47,15 @@ CMD_FORECAST_LHB = 2112      # ServiceHqDaban.ForecastLHBResp（会不会上龙�
 
 # 2103 pidType → 页签（APK 资源数组 PatternTabs × PatternTabsServerPidType，2026-10-27
 # androguard 解包 base_new.apk：['竞价','即将涨停','风向标','涨停','炸板','跌停',…]
-# × ['8','0','6','1','2','3',…]）。已接：竞价/即将涨停/风向标/涨停；其余增量。
+# × ['8','0','6','1','2','3',…]）。已接：竞价/即将涨停/风向标/涨停/炸板/跌停
+# （2026-11-08 增补炸板/跌停，JEV 工作台【炸板池】【跌停池】页）。
 DABAN_LIST_PIDS: Dict[int, str] = {
     8: "bidding",       # 集合竞价
     0: "about_to_zt",   # 即将涨停
     6: "wind_vane",     # 风向标
     1: "zt_pool",       # 涨停（2026-11-07 增补：JEV 工作台【涨停行情】页，分组键=quotas[16] zt_reason）
+    2: "zhaban_pool",   # 炸板（2026-11-08 增补：JEV 工作台【炸板池】页）
+    3: "dt_pool",       # 跌停（2026-11-08 增补：JEV 工作台【跌停池】页）
 }
 
 DABAN_SUB_CMDS: tuple = (

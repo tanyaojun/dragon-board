@@ -298,6 +298,43 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   原料读口 `/api/kpl/daban-prev-day-basis`（腾讯 ifzq 日K，param 必须带 sh/sz/bj 前缀；
   按日缓存 12h、失败 10 分钟不重试、missing fail-visible）。口径自洽校验 8/8（竞价成交额/实际流通
   与 2103 竞价换手逐只吻合）。详见 kpl-socket README §11.2。
+- **炸板池/跌停池页（2026-11-08 用户需求）**：工作台侧栏「KPL 行情 › 炸板池/跌停池」——
+  参照【涨停池】页同构（2103 pidType=2/3，collector 默认订阅面扩为 8/0/6/1/2/3 六页签）；
+  读写全部入同一 `kpl_daban_pool` 日档 zb_/dt_ 前缀通道（用户裁决：不新增数据集），
+  `DabanPoolArchiver` 单循环四通道顺序落库、单通道失败不连带；跌停池与涨停池同款
+  pool_state sealed/broken 标注（broken=打开跌停未回封），炸板池无标注（成员=当日
+  曾炸板全集，回封态见涨停池通道）。读口 `/api/kpl/daban-zhaban|daban-dt?date=`；
+  前端参照涨停池同构但**按实测上游覆盖选列**（pid=2/3 帧 `zt_reason`/`plate_id` 全空，故左表按
+  板块分组、不摆原因/强度/量比；pid=3 无 price/pct，pid=2 无 zt_tur；跌停池状态列仅历史模式展示），
+  左表带「全部」行且默认不预选（池小分组碎，不让分组隐藏记录），板块精确段匹配使家数=右表行数；
+  「源可用但池为空（0 家）」由后端空档 `empty:true` 透出（不逐日回退到旧日档）；
+  缺值一律 '--'（fail-visible）。pytest 四文件 117 passed（全 mock）。
+  详见 kpl-socket README §11.1/§11.4/§11.6。
+- **打板六页左表「全部」行（2026-11-08 用户需求，参照炸板池）**：涨停池/集合竞价/即将涨停/
+  风向标 四页左表首行均增「全部」行（与炸板/跌停池共用 `kplDabanAllSums`：全量按个股去重、
+  `sumN` 全缺显 `--`），口径统一：默认选中「全部」不预选分组，点分组筛选、再点取消回「全部」
+  （旧「自动选首组 + 点选不取消」已废）；涨停池「全部」行强度/量比显 `--`（板块排行比值
+  不可聚合，无源不伪造），主力净额为全量成员合计；左表加 `#` 列，过滤框只筛分组行、不再
+  因选中态折叠左表。E2E 四页 33 项断言全通过（家数=右表行数/取消回全量/无 JS 错误）。
+- **六页合并为【个股行情】单页（2026-11-08 用户需求）**：侧栏「KPL 行情」下集合竞价/即将涨停/
+  风向标/涨停池/炸板池/跌停池六个入口合并为一个【个股行情】页（`kplstock`，图标 🧾）——
+  **左板块列表不变，右个股列表左上方新增模式按钮组**（默认涨停池；六模式列集/口径一律沿用
+  既有实现，未改字段语义）：`DABAN_PAGES[*].p` 统一为 `kplStock`（共用一套 DOM），页内当前模式
+  `KPL.dabanView`，渲染守卫统一 `dabanOn(view)`；侧栏/KPI 条/WS `daban_stocks` 触发/4s 轮询只认
+  `DABAN_PAGE`；各模式 live/history/选日、选中分组、列排序各自记忆，搜索/板块过滤词不跨模式继承；
+  日期框/数据源/「回实时」跟随当前模式。硬约束不变（缺值 `--`、全缺不烘 0、页缺口/池空如实透出）。
+  验证：Playwright 静态页冒烟 13/13（mock 2103 快照，零真实上游与零 jev 调用）。
+- **实时无 2103 快照 → 本地存档回退（2026-11-08 现场修复）**：【炸板池/跌停池】实时模式的
+  「暂无板块 / 等待 2103 快照到流」+ 状态栏 ×22 `no_daban_list_snapshot(pid_type=2)`。排查结论：
+  数据集**有**数据（`kpl_daban_pool._id=2026-11-06` 的 zb_items=14/dt_items=15/bid_items=175），
+  读口实拉 ok:true；缺的是 collector **实时帧**——会话被上游频繁重置（~23s/次，261 反作弊 EXEC
+  未实现 + 风控期），42 帧 2103 订阅爆发在会话内只回得及前几个页签（pid 2/3 订阅序末位）。
+  修复：实时读口非 ok 且该模式无可用实时快照 → 逐日回退本地日档（≤7 天）并显式标注
+  「实时无快照·回退存档 YYYY-MM-DD」（统计行/页头），轮询不停、实时恢复即切回；回退态不改
+  历史选日/日期框、扫档 60s 节流、同一条降级消息 60s 内只入状态栏一次。无存档通道的
+  即将涨停/风向标不冒领回退。未解：261 EXEC 才能修 collector 会话寿命（只影响实时帧覆盖
+  度，不影响存档回放与展示）。验证：Playwright 6/6（复现 pid=2/3 无快照 + 11-06 有档）+ pytest
+  静态守卫 10/10。
 - **风向标空帧抑制（2026-10-28 盘中修复）**：pid 6 上游全 Resp 形态且列表重建窗口高频回空帧
   （14 帧 12 空/2 满），无条件覆盖页缓存致读口恒空——空帧不覆盖非空页缓存（fail-visible 广播保留，
   含回归用例），盘中实测 25 项稳定到流。
@@ -309,3 +346,22 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   （用户裁决：不回推主题材名，避免单列双口径）；产业库空 → `degraded:jiuyan_board`
   + 响应 `jiuyanBoard` meta 披露；板块 chips/筛选/分布共用 resolved 值。真库对拍
   2026-11-06 上涨名单 20/45 命中。详见 docs/hotlist-jev/jev-dieban-review-design.md §2 板块行。
+- **261 反作弊轮作答链实现 + 2203 涨停原因语料落库（2026-11-08 用户需求，同一轮）**：
+  ① 261→262：App 口径逐字节对照（`data[0:32]` token 原样回填、`[32:36]`=BE32 `d`、`[36:]`=
+  US_ASCII 挑战串 → signsvc `EXEC|<串>|<d>`；应答 262 `pkg 0x30 / flags=(0<<3)|enc / d=0`，ENC
+  失败回退明文），EXEC 失败/不可用/非 ASCII 一律 `anti_cheat_error` + 断连（不造假答案，App 同款）；
+  代码落在 `kpl_socket_protocol.parse_anti_cheat_261|anti_cheat_challenge|
+  build_anti_cheat_ans_262`、`SignSvcAdbCodec.exec`、`KplCollectorService._answer_anti_cheat`
+  + status `anti_cheat_rounds`。实测（独立 signsvc 进程四发探针）：任意伪造挑战串均返
+  `Long.MIN_VALUE`（`SocketRepository.execEncryptedHex` 先校验偶数长度 hex 再进白盒，伪造密文
+  必失败）→ 真机作答只在收到真实 261 时才能验证，而服务端至今未下发（备而不用）。零真实上游
+  单测：协议 3 + collector 7。
+  ② 2203 涨停原因语料：`archive_reason_corpus` 每轮拉 `:8002/api/kpl/zt-reasons` 写入
+  `kpl_daban_pool` 同日档 `reason_items`（按 stock_id 并集、字段随帧刷新、留 `first_ts`），
+  原文透传不改写不拼接；日期跟随涨停池快照交易日（周末重推=上一交易日详情），条目 ts 早于
+  该日 → `skipped_stale` 不写，无交易日 → `no_pool_date` 不猜；读口
+  `GET /api/kpl/daban-reasons?date=`（`load_day(lane='reason')`），`no_archive` 与
+  `no_reason_corpus` 严格分开。真库核对：`_id=2026-11-06` 当前 `reason_items=[]` → 读口如实
+  `no_reason_corpus`（当日 `/zt-reasons` 本身 `no_zt_reason_snapshot`，短会话下 2203 与 2103
+  同病），非缺陷。**jev 侧纪律**：本落库只供原料，接进题面/判据属方案变更须走 hotlist-jev
+  预登记；语料 schema 单一事实源=`docs/kpl-socket/README.md §11.6`。测试：archiver 6 + 路由 3。

@@ -422,6 +422,43 @@ def build_hq_req_pb(stock_id: str) -> bytes:
     return pb_bytes(1, stock_id.encode("utf-8"))
 
 
+def parse_anti_cheat_261(payload: bytes) -> bytes:
+    """261 AntiCheatChallenge pb：f1 data（token32 + BE32 d + ASCII 挑战串）。
+
+    服务端主动帧，payload 不加密（客户端直接 parse_pb）。App 侧取法
+    （qn0.g / GameClient$onChallenge$2，反编译源码逐字对照）：
+    data = f1；data 长度 < 36 视为无效帧（App 直接丢弃不断连）。
+    """
+    pb = parse_pb(payload)
+    data = pb_first(pb, 1, b"")
+    return bytes(data) if isinstance(data, (bytes, bytearray)) else b""
+
+
+def anti_cheat_challenge(data: bytes) -> Tuple[bytes, int, str]:
+    """拆 261 data → (token32, d, 挑战串)。
+
+    App 口径：`new String(data, 36, len-36, US_ASCII)` = 挑战串；
+    `d = BE32(data[32:36])` 作为 execEncryptedHex 第二参。
+    """
+    if len(data) < 36:
+        return b"", 0, ""
+    token = data[:32]
+    d = int.from_bytes(data[32:36], "big")
+    challenge = bytes(data[36:]).decode("ascii", "replace")
+    return token, d, challenge
+
+
+def build_anti_cheat_ans_262(data: bytes, value: int) -> bytes:
+    """262 应答 pb：f1 = token32 + BE int32（EXEC 结果）。
+
+    App 口径（qn0.g）：`new byte[36]` 前 32 字节原样回填 token，
+    `[32:36] = (int) execEncryptedHex` 大端写入；外层 = AntiCheatChallenge{data}。
+    `value` 取 Long.MIN_VALUE 时属 VM 失败（App 会直接断连），调用方不得发送。
+    """
+    body = bytes(data[:32]) + struct.pack(">I", int(value) & 0xFFFFFFFF)
+    return pb_bytes(1, body)
+
+
 def parse_hq_reasons_resp(payload: bytes) -> Dict[str, Any]:
     """2203 HQReasonsResp → 个股涨停原因实时推送解析。
 
