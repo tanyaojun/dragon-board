@@ -111,6 +111,13 @@
 3. **quotas 缩放注意**：GetStockPanKou 的 real 为浮点原样（非 ×10000）；socket 侧 WT.price 等
    为 varint 需查缩放；两源接入时按「独立源交叉+自洽验证」逐列核对（§四 同款纪律）。
 4. 首板被板率/题材热度等 App 专有字段**原样落库不自算**。
+5. **涨停原因全文·历史档案链（2026-11-08 浏览器验收补链）**：2203 试点只覆盖当日盘中实时态；
+   历史/存档态 tooltip 大段详情走 `GetDayZhangTing`（c=HisLimitResumption，单股+最近涨停日，
+   实测 errcode=0）：读口 `GET /api/kpl/zt-reasons/detail?date=&stock_id=`（:8000，服务
+   `kpl_zt_reason_history`；端点无 Date 参数，按展示日期过滤 List 项内 Date，不匹配透出
+   matched_date 不伪装；复用 _post_form 全局 ≥2s 限频 + 300s TTL 缓存）；前端懒取泵
+   （≥1.5s 逐发、失败占位防重发、日期切换丢弃过时任务）；tooltip 优先级 ①2203 ②档案
+   ③回退不伪装。测试全 mock（红线 7）。
 
 ## 五、证据
 

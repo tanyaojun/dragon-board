@@ -223,6 +223,29 @@ async def zt_reasons() -> JSONResponse:
     return await _proxy_get("/api/kpl/zt-reasons")
 
 
+@router.get("/zt-reasons/detail")
+def zt_reason_detail(date: str = "", stock_id: str = "") -> JSONResponse:
+    """涨停原因全文·历史档案单股读口（GetDayZhangTing，2026-11-08 浏览器验收补链）。
+
+    背景：2203 推送只覆盖当日盘中实时态；历史/存档态（如周末看上一交易日）tooltip
+    大段详情走本读口单股懒取（前端渲染队逐发，服务端 _post_form 全局 ≥2s 限频兜底）。
+    端点无 Date 参数，返回该股最近涨停日条目，按展示日期过滤（不匹配透出 matched_date
+    不伪装）。缺参 422；上游异常结构化降级（fail-visible）。消费端：涨停池页 tooltip。
+    """
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    sid = str(stock_id or "").strip()
+    if not sid.isdigit() or not 5 <= len(sid) <= 6:
+        return JSONResponse(status_code=422, content={
+            "ok": False, "degraded": True, "reason": "invalid_stock_id",
+            "note": "必传 stock_id=5-6 位数字代码（单股粒度懒取）"})
+    from backend.services import kpl_zt_reason_history as zt_his
+    result = zt_his.get_stock_zt_reason(date, sid)
+    status_code = 200 if result.get("ok") else 502
+    return JSONResponse(content=result, status_code=status_code)
+
+
 @router.get("/lhb-history")
 def lhb_history(date: str = ""):
     """HisBeOnTheLHB 历史龙虎榜读口（task-4）：a=OnTheLHBList 分组榜单 + 个股行。

@@ -486,6 +486,14 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   读口 `GET /api/kpl/zt-reasons`（:8002+:8000 透传）；前端涨停池页【涨停原因】tooltip 显示
   推送全文详情（历史模式不用且不发请求；未到流回退组合串不伪装；快照时效由推送 ts 自证）；
   env `KPL_ZT_REASON_SUBS=0` 关闭。pytest：协议+collector+proxy 合计 10 新用例全 mock。
+- **历史/存档态详情补链（2026-11-08 浏览器验收补链）**：2203 只覆盖当日盘中实时态，
+  周末/回看历史存档时 tooltip 回退组合串无大段详情——补 HTTP 档案链
+  `GetDayZhangTing`（apphis，单股+最近涨停日，实测合同见 stock-detail-sources）:
+  读口 `GET /api/kpl/zt-reasons/detail?date=&stock_id=`（:8000 直连，服务
+  `kpl_zt_reason_history`，复用 _post_form 全局 ≥2s 限频；无 Date 参数→按展示日期过滤
+  List 项内 Date，不匹配透出 matched_date 不伪装；缓存 300s TTL）；前端懒取泵逐发
+  （≥1.5s 间隔、失败占位防重发、日期切换丢弃过时任务）；tooltip 取数优先级
+  ①2203 到流 ②历史档案 ③回退组合串不伪装。pytest：服务 8 + 路由 2 全 mock。
 
 ### 11.8 大单分时推送实弹验证（2026-11-08 补收口）
 

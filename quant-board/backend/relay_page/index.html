@@ -5587,6 +5587,7 @@ const KPL = {
   dabanDate: {},        // view → 历史模式日期
   ztRank: {date: null, byId: null, at: 0, note: ''},   // 涨停行情左表强度/量比原料（板块排行快照，按 PlateID 匹配）
   ztReasons: {at: 0, loading: false, byId: null, note: ''},   // 2203 涨停原因推送快照（试点：涨停池页 tooltip 详情；stock_id → 详情）
+  ztReasonsArch: {byKey: {}, queue: [], pumping: false, note: ''},   // 涨停原因全文·历史档案懒取（GetDayZhangTing 单股逐发；key=date|stock_id）
   ztAggSort: {key: 'n', dir: -1},                        // 涨停行情左表排序（默认按涨停家数；键=组对象字段名 a.n，2026-11-08 修复）
   bidAggSort: {key: 'n', dir: -1},                       // 集合竞价左表排序（默认按家数，板块行情同款）
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
@@ -7672,27 +7673,86 @@ function kplZtEnsureReasons(){
       if (STATE.view === 'kplzt') kplDabanRender('kplzt');
     });
 }
-// tooltip：首行=既有组合串；2203 到流则追加详情大段（zt 全文/梯队/题材/排名/板块）。
-// 历史模式不用 2203（快照为实时态，跨日期误归因）；未到流回退旧提示不伪装。
+// tooltip：首行=既有组合串；详情段取数优先级：①实时态 2203 到流 ②历史档案
+//（GetDayZhangTing 单股懒取，2203 未到流/历史态都走）③回退旧提示不伪装。
+function kplZtArchDate(){
+  return KPL.dabanMode.kplzt === 'history' ? (KPL.dabanDate.kplzt || KPL.today) : KPL.today;
+}
 function ztReasonTip(r){
   let tip = '涨停原因：' + ztReasonFull(r);
   if (r.plate_id) tip += `（关联板块 ID ${esc(String(r.plate_id))}，与板块行情同码制可互查）`;
-  if (KPL.dabanMode.kplzt === 'history') return tip;
-  const d = KPL.ztReasons.byId && KPL.ztReasons.byId.get(String(r.stock_id || ''));
-  if (!d) return tip;
-  tip += '\n—— 涨停原因详情（2203 推送';
-  if (d.ts) tip += ' ' + new Date(d.ts).toLocaleTimeString('zh-CN', {hour12: false});
-  tip += '）';
-  const ztShort = String(r.zt_reason || '').trim();
-  if (d.zt && (!ztShort || d.zt !== ztShort)) tip += '\n' + d.zt;
-  if (d.zt_group) tip += '\n梯队：' + d.zt_group;
-  if (d.theme) tip += '\n题材：' + d.theme;
-  if (d.child_theme) tip += '\n子题材：' + d.child_theme;
-  if (d.label) tip += '\n标签：' + d.label;
-  if (d.rank) tip += '\n排名：' + d.rank + (d.rank_total ? '/' + d.rank_total : '');
-  if (d.plate && d.plate !== String(r.plate || '')) tip += '\n关联板块：' + d.plate;
-  if (d.rank_top && d.rank_top.length) tip += '\nTop：' + d.rank_top.join('、');
+  const sid = String(r.stock_id || '');
+  // ① 实时态 2203 到流（collector 每会话重建订阅）
+  if (KPL.dabanMode.kplzt !== 'history'){
+    const d = KPL.ztReasons.byId && KPL.ztReasons.byId.get(sid);
+    if (d){
+      tip += '\n—— 涨停原因详情（2203 推送';
+      if (d.ts) tip += ' ' + new Date(d.ts).toLocaleTimeString('zh-CN', {hour12: false});
+      tip += '）';
+      const ztShort = String(r.zt_reason || '').trim();
+      if (d.zt && (!ztShort || d.zt !== ztShort)) tip += '\n' + d.zt;
+      if (d.zt_group) tip += '\n梯队：' + d.zt_group;
+      if (d.theme) tip += '\n题材：' + d.theme;
+      if (d.child_theme) tip += '\n子题材：' + d.child_theme;
+      if (d.label) tip += '\n标签：' + d.label;
+      if (d.rank) tip += '\n排名：' + d.rank + (d.rank_total ? '/' + d.rank_total : '');
+      if (d.plate && d.plate !== String(r.plate || '')) tip += '\n关联板块：' + d.plate;
+      if (d.rank_top && d.rank_top.length) tip += '\nTop：' + d.rank_top.join('、');
+      return tip;
+    }
+  }
+  // ② 历史档案（含实时态 2203 未到流的该股补位；日期=页面展示日期）
+  const date = kplZtArchDate();
+  const arch = KPL.ztReasonsArch.byKey[date + '|' + sid];
+  if (arch){
+    if (arch.items && arch.items.length){
+      tip += '\n—— 涨停原因详情（历史档案' + (arch.matched_date ? ' ' + arch.matched_date : '') + '）';
+      for (const it of arch.items){
+        if (it.reason && it.reason !== String(r.zt_reason || '').trim()) tip += '\n' + it.reason;
+        if (it.boom_zs) tip += '\n媒体催化：' + it.boom_zs;
+      }
+    }
+    return tip;   // 空条目（当日无涨停记录/失败占位）= 回退串，不伪装不重发
+  }
+  // ③ 未取过 → 懒取入队（泵控频逐发；到货后重渲染 tooltip 生效）
+  if (sid) kplZtArchQueue(sid, date);
   return tip;
+}
+// 懒取泵：队列逐发（前端 ≥1.5s 间隔，服务端 _post_form 全局 ≥2s 限频兑底）；
+// 失败也占位防重复请求风暴；过时任务（日期已切换）直接丢弃不白拉。
+function kplZtArchQueue(sid, date){
+  const st = KPL.ztReasonsArch;
+  const key = date + '|' + sid;
+  if (st.byKey[key] !== undefined || st.queue.some(q => q.key === key)) return;
+  st.queue.push({key, sid, date});
+  kplZtArchPump();
+}
+function kplZtArchPump(){
+  const st = KPL.ztReasonsArch;
+  if (st.pumping) return;
+  const job = st.queue.shift();
+  if (!job) return;
+  if (job.date !== kplZtArchDate()){   // 展示日期已切换：丢弃过时任务，不白拉
+    setTimeout(kplZtArchPump, 0);
+    return;
+  }
+  st.pumping = true;
+  fetch(KPL_API + '/zt-reasons/detail?date=' + job.date + '&stock_id=' + job.sid)
+    .then(r => r.json().catch(() => ({ok: false, reason: 'HTTP ' + r.status})))
+    .then(j => {
+      st.byKey[job.key] = j.ok
+        ? {items: j.items || [], matched_date: j.matched_date || ''}
+        : {items: [], matched_date: '', err: (j.reason || '读取失败')};
+      st.note = j.ok ? '' : (j.reason || '读取失败');
+    })
+    .catch(e => {
+      st.byKey[job.key] = {items: [], matched_date: '', err: String(e.message || e)};
+    })
+    .finally(() => {
+      st.pumping = false;
+      if (STATE.view === 'kplzt') kplDabanRender('kplzt');   // 到货重渲染，tooltip 生效
+      setTimeout(kplZtArchPump, 1500);
+    });
 }
 function kplZtRender(){
   const conf = DABAN_PAGES.kplzt;

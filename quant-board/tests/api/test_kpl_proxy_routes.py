@@ -265,6 +265,39 @@ def test_zt_reasons_passthrough(client):
     assert body["reasons"]["301697"]["zt"] == "光伏+次新股"
 
 
+def test_zt_reason_detail_validation(client):
+    """历史档案单股读口：缺 date/坏 stock_id 均 422 结构化降级。"""
+    _FakeAsyncClient.fail_with = None
+    r = client.get("/api/kpl/zt-reasons/detail", params={"date": "2026-11-06"})
+    assert r.status_code == 422 and r.json()["reason"] == "invalid_stock_id"
+    r = client.get("/api/kpl/zt-reasons/detail", params={"date": "bad", "stock_id": "301697"})
+    assert r.status_code == 400   # _validate_date 惯例 400（同 lhb-history 族）
+    r = client.get("/api/kpl/zt-reasons/detail", params={"date": "2026-11-06", "stock_id": "abc"})
+    assert r.status_code == 422
+
+
+def test_zt_reason_detail_ok_and_upstream_error(client, monkeypatch):
+    from backend.services import kpl_zt_reason_history as zt_his
+    _FakeAsyncClient.fail_with = None
+    monkeypatch.setattr(zt_his, "fetch_stock_zt_reason_raw",
+                        lambda sid: {"StockID": sid, "List": [
+                            {"ZSCode": ["801070"], "Reason": "光伏+次新股；据……", "Date": "2026-11-06",
+                             "SCLT": "日内龙一", "GNSM": "据……全文", "Boom_ZS": "据媒体报道……"}]})
+    r = client.get("/api/kpl/zt-reasons/detail", params={"date": "2026-11-06", "stock_id": "301697"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["matched_date"] == "2026-11-06"
+    assert body["items"][0]["reason"].startswith("光伏+次新股")
+    monkeypatch.setattr(zt_his, "fetch_stock_zt_reason_raw", lambda sid: (
+        _ for _ in ()).throw(
+        __import__("backend.services.kpl_ranking_service", fromlist=["KplRankingError"]).KplRankingError(
+            "kpl_errcode", errorCode="1020", error="严格白名单")))
+    r = client.get("/api/kpl/zt-reasons/detail", params={"date": "2026-11-06", "stock_id": "000525"})
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and body["degraded"] is True and body["items"] == []
+
+
 def test_zt_reasons_upstream_unavailable_structured_502(client):
     _FakeAsyncClient.fail_with = OSError("connection refused")
     r = client.get("/api/kpl/zt-reasons")
