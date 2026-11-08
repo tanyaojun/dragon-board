@@ -82,7 +82,7 @@ def test_question_set_frozen_hash_and_versions():
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
     assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08b"   # 2026-11-08b：封板质量语料行 + 题面 v16 判据
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "7cec6926166d"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
     # v14：+leader_rebound_popularity（事件驱动题，事件门在 operations 层）
@@ -126,7 +126,9 @@ def test_question_set_frozen_hash_and_versions():
     # v16（预登记 theme-leader-v16-seal-quality-preregistration-20261108，2026-11-08 用户裁决
     # 「同步改题面判据」）：续板题⑦/空间题⑥ 把「封板质量」行写成显式可量化判据引用源
     assert "⑦封板质量量化（v16）" in cont, "v16 续板题规则⑦必须在场"
-    assert "唯一可量化判据源" in cont and "单位待校验时，不得据此" in cont,         "⑦语义：封板质量行=唯一可量化源，不可考/单位待校验禁调档"
+    assert "唯一可量化判据源" in cont and "不得以封板质量为由调档" in cont, \
+        "⑦语义（评审消歧）：行不可考/待校验=封板质量维度禁用，不禁其他证据调档"
+    assert "仍可按规则①凭基线" in cont, "⑦与规则①相容：其他锚外证据通道保留"
     assert "规则⑤（今日未封板的断板反包候选）不适用本项" in cont, "⑦与断板分支互斥"
     ins_space = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
     assert "⑥封板质量量化（v16）" in ins_space, "v16 空间题规则⑥必须在场"
@@ -1221,10 +1223,12 @@ def test_seal_quality_line_unit_selfcheck_rejects_implausible_value():
     assert "单位待校验" in line
     assert "=实际流通" not in line and "峰值封单" not in line
     assert "130000000000" in line, "原样透出（不带亿量级，避免错量级误导）"
-    # 手假设成立（价格在场）：数值按 手×100×价 换算后落在带内 → 正常出比
-    hand = dict(SEAL_ITEM, zt_tur=150000.0, price=20.0)   # 15万手×100×20=3亿 / 44.2亿 ≈ 6.8%
+    # 评审 P1 根因处置：元/手两假设在低价股区间数学上不可分 → 手假设不启用；
+    # 15万手形值按元假设 0.0034% 越界 → 待校验（绝不猜换算出 3.00亿）
+    hand = dict(SEAL_ITEM, zt_tur=150000.0, price=20.0)
     line2 = A.seal_quality_line([{"label": "龙一 X", "item": hand, "frameAt": "15:00"}])
-    assert "封单 3.00亿=实际流通 6.8%" in line2
+    assert "封单 150000（单位待校验）" in line2
+    assert "3.00亿" not in line2 and "=实际流通" not in line2
 
 
 def test_seal_quality_line_broken_and_unsealed_branches():
@@ -1240,6 +1244,61 @@ def test_seal_quality_line_broken_and_unsealed_branches():
     assert "=今日曾封后炸板未回封（最后封住帧 10:20）：" in line3
     line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None}])
     assert line4.endswith("主板龙一 W=不可考（今日不在涨停池）")
+
+
+def test_seal_quality_line_pool_missing_vs_absent():
+    """评审 P1：语料降级（日档缺失/读口异常）≠ 不在涨停池——归因分开表述，禁捏造事实。"""
+    line = A.seal_quality_line([{"label": "主板龙一 X", "item": None, "frameAt": None,
+                                 "poolMissing": "no_archive"}])
+    assert line.endswith("主板龙一 X=涨停池语料不可考（涨停池日档缺失）")
+    line2 = A.seal_quality_line([{"label": "主板龙一 Y", "item": None, "frameAt": None,
+                                  "poolMissing": "load_error"}])
+    assert "涨停池语料不可考（涨停池读口异常）" in line2
+    line3 = A.seal_quality_line([{"label": "主板龙一 Z", "item": None, "frameAt": None,
+                                  "poolMissing": None}])
+    assert line3.endswith("主板龙一 Z=不可考（今日不在涨停池）"), (
+        "语料在场且查无此股才允许「不在涨停池」归因")
+    # 未封板优先级高于降级：断板候选的「本行不适用」语义不受日档缺失影响
+    line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None,
+                                  "unsealed": True, "poolMissing": "no_archive"}])
+    assert line4.endswith("主板龙一 W=今日未封板（无当日封单，本行不适用）")
+
+
+def test_seal_quality_line_rejects_low_side_hand_trap():
+    """评审 P1：元比率低于带下界而手假设落带 → 拒绝定性（unknown），
+    不输出放大 100×价 的伪封单额。"""
+    trap = {"zt_tur": 3e6, "max_zt_tur": None, "real_float": 1e10, "real_turnover": None,
+            "main_net": None, "amount": None, "price": 20.0,
+            "pool_state": "sealed", "last_seen_ts": None}
+    # r1 = 3e6/1e10 = 0.03% < 0.05% 下界；r2 = 3e6×2000/1e10 = 60% 落带 → 单选手假设会伪报 60 亿
+    line = A.seal_quality_line([{"label": "龙一 X", "item": trap, "frameAt": "15:00"}])
+    assert "单位待校验" in line
+    assert "实际流通" not in line and "峰值封单" not in line
+    assert "3000000" in line, "原样透出，不套亿量级"
+
+
+def test_seal_quality_line_unsealed_sealed_conflict_disclosed():
+    """评审 P2：推导侧未封板但池档仍 sealed → 显式披露两源口径差，不静默吞。"""
+    line = A.seal_quality_line([{"label": "主板龙一 X", "item": dict(SEAL_ITEM),
+                                 "frameAt": "14:35", "unsealed": True}])
+    assert "涨停池仍标 sealed，两源口径差" in line
+
+
+def test_seal_quality_line_small_amount_uses_wan_unit():
+    """评审 P2：极小封单不再退化「0.00亿」（两位小数非零显零），改万单位；占比 <1% 两位小数。"""
+    small = dict(SEAL_ITEM, zt_tur=8e5, max_zt_tur=None,
+                 real_float=1.5e9, real_turnover=14.31)   # 80 万封单 / 15 亿流通 = 0.05%
+    line = A.seal_quality_line([{"label": "龙一 X", "item": small, "frameAt": "15:00"}])
+    assert "封单 80.0万=实际流通 0.05%" in line
+    assert "0.00亿" not in line and "0.0%" not in line
+
+
+def test_seal_quality_line_peak_ratio_sanity_gate():
+    """评审 P2：峰值占实际流通超出 (0,100%] → 口径自证未过，不出读数。"""
+    bad_peak = dict(SEAL_ITEM, max_zt_tur=1e11)   # 峰值占流通 ≈ 2261%，物理不可能
+    line = A.seal_quality_line([{"label": "龙一 X", "item": bad_peak, "frameAt": "15:00"}])
+    assert "峰值封单不可考（口径自证未过）" in line
+    assert "封单 0.77亿" in line, "当前封单不受峰值异常影响"
 
 
 def test_narrative_seal_quality_placement_after_zhaban():

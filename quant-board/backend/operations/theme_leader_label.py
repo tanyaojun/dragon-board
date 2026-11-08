@@ -498,22 +498,27 @@ _POOL_QUALITY_FIELDS = ("zt_tur", "max_zt_tur", "real_float", "real_turnover",
                         "main_net", "amount", "price", "pool_state", "last_seen_ts")
 
 
-def fetch_pool_quality(db: Any, date: str) -> dict[str, dict]:
-    """当日涨停池量价字段映射 code → {"item": {...}, "frameAt": "HH:MM"}。
+def fetch_pool_quality(db: Any, date: str) -> dict[str, Any]:
+    """当日涨停池量价语料 → {"items": {code: {"item","frameAt"}}, "degraded": None|原因}。
 
     单一事实源 = `kpl_daban_pool` 日档 items（走存档器读口 `load_day(lane="pool")`，
     与 /daban-list 同源，禁止第二套解析）；一次取全日共用。
-    未落库/降级/读口异常 → 空映射（调用方出「不可考」行，fail-visible，不阻断投喂）。
-    `frameAt` = 该股最后一帧的采集时刻（Asia/Shanghai），由 ops 层算好，
+    降级（日档缺失/读口异常/当日池空）→ items 空映射 + `degraded` 带结构化原因
+    （评审 2026-11-08 P1：「读不到」必须原样透出，不得让下游伪装成「今日不在涨停池」），
+    不阻断投喂。`frameAt` = 该股最后一帧的采集时刻（Asia/Shanghai），由 ops 层算好，
     让 ammo 保持确定性纯函数（不依赖时区/时钟）。
     """
     try:
         from backend.services.kpl_daban_archiver import load_day
         payload = load_day(db, date, lane="pool")
-    except Exception:      # 读口异常不阻断投喂：按「不可考」出行
-        return {}
-    if not payload.get("ok") or payload.get("empty"):
-        return {}
+    except Exception:      # 读口异常不阻断投喂：带原因降级（fail-visible）
+        return {"items": {}, "degraded": "load_error"}
+    if not payload.get("ok"):
+        return {"items": {},
+                "degraded": str(payload.get("reason") or "no_archive")}
+    if payload.get("empty"):
+        # 「采集成功且池为空」也是降级（对 THS 侧封板的龙头是两源矛盾），不冒充「不在池」
+        return {"items": {}, "degraded": "pool_empty"}
     out: dict[str, dict] = {}
     for item in payload.get("items") or []:
         if not isinstance(item, dict):
@@ -523,7 +528,7 @@ def fetch_pool_quality(db: Any, date: str) -> dict[str, dict]:
             continue
         out[code] = {"item": {k: item.get(k) for k in _POOL_QUALITY_FIELDS},
                      "frameAt": _frame_hhmm(item.get("last_seen_ts"))}
-    return out
+    return {"items": out, "degraded": None}
 
 
 def _frame_hhmm(ts: Any) -> str | None:
@@ -542,19 +547,23 @@ def seal_quality_entries_for_leaders(rows: list[dict],
     """封板质量行条目（2026-11-08b）：**仅待判龙一自身**（题集 v16 判据引用源口径）。
 
     `unsealed=True`（断板反包候选，题面续板⑤）= 该股今日未封板 → 行内明示本行不适用，
-    不拿往期封单冒充当日封板质量；未在涨停池 → item=None（行内出「不在涨停池」）。
+    不拿往期封单冒充当日封板质量；`poolMissing` = 涨停池语料整体降级原因（评审 P1：
+    「读不到」≠「不在池」，两者在行内分开表述）——仅当语料在场且查无此股时才算真不在池。
     """
+    items = quality.get("items") or {}
+    degraded = quality.get("degraded")
     entries: list[dict] = []
     for row in rows:
         code = str(row.get("code") or "")
         seg = row.get("segment")
         seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
-        hit = quality.get(code) or {}
+        hit = items.get(code) or {}
         entries.append({"label": f"{seg_cn} {row.get('name') or code}",
                         "stockId": code,
                         "item": hit.get("item"),
                         "frameAt": hit.get("frameAt"),
-                        "unsealed": row.get("leaderSealedToday") is False})
+                        "unsealed": row.get("leaderSealedToday") is False,
+                        "poolMissing": None if hit else degraded})
     return entries
 
 

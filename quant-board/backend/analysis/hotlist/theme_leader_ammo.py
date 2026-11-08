@@ -189,8 +189,10 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # hash 随换代变更，v15 旧答跨代不可比（预登记
 # docs/hotlist-jev/theme-leader-v16-seal-quality-preregistration-20261108.md）。
 # 封单单位未与 App 逐列对照 → 行内做元/手双假设自证（占实际流通比须落在合理带内），
-# 不成立只原样透出并标「单位待校验」，禁猜换算。
-AMMO_VERSION_THEME_LEADER = "2026-11-08b"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
+# 不成立只原样透出并标「单位待校验」，禁猜换算（评审修订：元/手双假设在低价股区间
+# 数学上不可分，改为只按元假设带校验，手假设待 GetStockPanKou 实弹复核钉死单位后再
+# 启用——_seal_unit 一处切换，行文与下游零改动）。
+AMMO_VERSION_THEME_LEADER = "2026-11-08b"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -497,9 +499,11 @@ QUESTIONS_THEME_LEADER = {
                         "其轨内按 10 日涨幅取出的龙一，身位表述以轨内为准，另一轨龙一仅作"
                         "板块结构事实；⑦封板质量量化（v16）：叙事「封板质量」行是本行封板"
                         "质量的唯一可量化判据源（封单额=实际流通比、峰值封单回落、实际换手、"
-                        "主力净额占成交额比）。档位偏离最细同桶基准一档以上时，理由必须点名"
-                        "该行至少一项具体数字；该行缺失或标注不可考/单位待校验时，不得据此"
-                        "调档，也不得自行补 0。规则⑤（今日未封板的断板反包候选）不适用本项。",
+                        "主力净额占成交额比）。该行在场且未标不可考/单位待校验时：档位偏离"
+                        "最细同桶基准一档以上，理由必须点名该行至少一项具体数字；该行缺失、"
+                        "不可考或标单位待校验时，不得以封板质量为由调档（仍可按规则①凭基线"
+                        "行数字与锚外其他证据调档），也不得自行补 0。规则⑤（今日未封板的"
+                        "断板反包候选）不适用本项。",
         "criteria": {
             "high_ge65": "高概率 ≥65%：结构位置强（连板高度领先 + 封板早 + 板块家数多）"
                          "且题材有当日/近两日新催化（含题材事件/题材新闻新增），"
@@ -1317,14 +1321,39 @@ def zt_gene_line(entries: list[dict]) -> str | None:
 # 单一事实源 = kpl_daban_pool.items 的 2103 quotas 具名字段（DABAN_QUOTA_NAMES，已落库
 # 零新采集）：[14]封单 / [18]最大封单 / [17]实际流通 / [16]实际换手 / [15]主力净额 /
 # [7]成交额 / pool_state（sealed=当前封住、broken=曾入池掉出=炸板未回封）。
-# 封单单位（元 vs 手）未与 App 逐列对照 → 自证：以「封单占实际流通比落在合理带内」
-# 反推唯一成立的单位假设；不成立只原样透出并标「单位待校验」，**禁猜换算**。
+# 封单单位（元 vs 手）未与 App 逐列对照，且两假设在同一观测下**数学上不可分**
+# （元比率 r1 与手比率 r2=r1×100×价 在低价股区间可同时落带，评审 2026-11-08 P1）→
+# GetStockPanKou 实弹复核钉死单位前，只按元假设做带校验（App 封单列以亿展示、quotas
+# 数值元惯例均指向元）：带内出行，带外只原样透出并标「单位待校验」，**禁猜换算**。
 _SEAL_RATIO_BAND = (0.0005, 0.5)   # 0.05%~50%：容纳极端封单，越界即单位假设不成立
 _SEAL_CLOSE_FRAME = "14:57"        # 早于此刻的采集帧不是收盘帧，封单仍在变动
+# 涨停池语料整体缺失的降级原因 → 行内中文化（评审 2026-11-08 P1：读不到 ≠ 不在池，
+# 禁止把「档案缺失」伪装成「今日不在涨停池」这个具体事实）
+_POOL_MISSING_CN = {
+    "no_archive": "涨停池日档缺失",
+    "pool_empty": "涨停池当日为空",
+    "load_error": "涨停池读口异常",
+    "invalid_lane": "涨停池通道非法",
+}
+
+
+def _fmt_amount_yuan(val: float) -> str:
+    """亿元串；<0.01 亿退化万单位（两位小数会把 50 万渲染成 0.00亿，非零显 0 是误导）。"""
+    if val >= 1e6:
+        return _fmt_yi(val)
+    return f"{val / 1e4:.1f}万"
+
+
+def _fmt_ratio_pct(pct: float) -> str:
+    """占比百分串：<1% 用两位小数（0.05% 被 .1f 渲染成 0.0% 同样是「非零显零」）。"""
+    return f"{pct:.1f}%" if pct >= 1 else f"{pct:.2f}%"
 
 
 def _qnum(v: Any) -> float | None:
-    """quota 字符串 → float；不可解析/布尔 → None（不做缺位补 0）。"""
+    """quota 字符串 → float；不可解析/布尔 → None（不做缺位补 0）。
+
+    不解析带「万/亿」后缀的字符串（实测 2026-11-06 日档 33 成员该七列全为数值形态）；
+    若上游改形态会整项退化为「不可考」，fail-visible，不猜换算（评审 2026-11-08 P2）。"""
     if v is None or isinstance(v, bool):
         return None
     try:
@@ -1347,9 +1376,14 @@ def _raw_num(v: float) -> str:
 def _seal_unit(item: dict) -> tuple[str, float | None]:
     """封单口径自证 → (basis, 每原始单位的元系数)。
 
-    basis：missing（无封单值）/ yuan（元假设成立）/ hand（手假设成立）/ unknown
-    （两假设均越界）/ unverified（缺实际流通，无法自证）。
-    设计前提：元与手假设的量级差约 100×股价，两者不可能同时落在 0.05%~50% 带内。
+    basis：missing（无封单值）/ yuan（元假设落在合理带）/ unknown（元假设越界）/
+    unverified（缺实际流通，无法校验）。
+    单位候选只有元/手，但同一 (封单, 流通, 价) 观测下**数学上不可分**：元比率 r1=zt/rf
+    与手比率 r2=r1×100×price 在低价股区间可同时落带（评审 2026-11-08 P1——单选手假设
+    会输出放大 100×价 的伪封单额，单选元假设会把手真值低估 100×价 倍）。故在
+    GetStockPanKou 实弹复核钉死单位前（预登记 v16 §3），只按元假设做带校验：
+    带内 → 元口径出行；带外 → 「单位待校验」，不出任何派生比。复核若证明单位=手，
+    本函数改返回 ("yuan", 100.0 * price) 一处即可，行文与下游零改动。
     """
     zt = _qnum(item.get("zt_tur"))
     if zt is None or zt <= 0:
@@ -1359,11 +1393,6 @@ def _seal_unit(item: dict) -> tuple[str, float | None]:
         return ("unverified", None)
     if _SEAL_RATIO_BAND[0] <= zt / rf <= _SEAL_RATIO_BAND[1]:
         return ("yuan", 1.0)
-    price = _qnum(item.get("price"))
-    if price is not None and price > 0:
-        mult = 100.0 * price
-        if _SEAL_RATIO_BAND[0] <= zt * mult / rf <= _SEAL_RATIO_BAND[1]:
-            return ("hand", mult)
     return ("unknown", None)
 
 
@@ -1375,12 +1404,16 @@ def seal_quality_line(entries: list[dict]) -> str | None:
     `kpl_daban_pool` 日档 items（走 `load_day(lane="pool")`，由 operations 层取数）。
 
     口径纪律：
-    - 封单单位（元/手）未与 App 逐列对照 → 双假设自证，不成立只原样透出；
+    - 封单单位（元/手）未与 App 逐列对照且两假设数学上不可分（评审 P1）→ 只按元假设
+      带校验，越界只原样透出并标「单位待校验」，不出任何派生比；
     - 峰值为当日最大封单，「现为峰值 X%」直接可读衰减；峰值缺失不出；
     - 实际换手/主力净额/成交额各自独立缺失即不出该项（不补 0、不猜）；
     - pool_state=broken（曾入池后炸板未回封）→ 显式标注「最后封住帧」，防当下值误读；
     - 未封板龙一（断板反包候选，题面规则⑤）→ 明示本行不适用；
-    - 采集帧早于收盘 → 标「非收盘帧」；各股帧不同 → 逐股标帧。
+    - 采集帧早于收盘 → 标「非收盘帧」；各股帧不同 → 逐股标帧；
+    - poolMissing（涨停池日档整体缺失/读口异常）→ 「涨停池语料不可考（原因）」，
+      **不**伪装成「今日不在涨停池」（后者仅用于档案存在且查无此股，评审 2026-11-08 P1）；
+    - 峰值封单占实际流通超出 (0, 100%] → 视为口径自证未过，不出读数（评审 P2）。
     entries 空 → None（调用方不出行）。
     """
     if not entries:
@@ -1403,13 +1436,24 @@ def seal_quality_line(entries: list[dict]) -> str | None:
         item = entry.get("item")
         unsealed = bool(entry.get("unsealed"))
         frame = str(entry.get("frameAt") or "").strip()
+        pool_missing = str(entry.get("poolMissing") or "").strip()
         if not isinstance(item, dict):
-            parts.append(f"{label}=" + ("今日未封板（无当日封单，本行不适用）" if unsealed
-                                        else "不可考（今日不在涨停池）"))
+            if unsealed:
+                txt = "今日未封板（无当日封单，本行不适用）"
+            elif pool_missing:
+                txt = (f"涨停池语料不可考"
+                       f"（{_POOL_MISSING_CN.get(pool_missing, pool_missing)}）")
+            else:
+                txt = "不可考（今日不在涨停池）"
+            parts.append(f"{label}={txt}")
             continue
         broken = str(item.get("pool_state") or "").strip() == "broken"
         if unsealed and not broken:
-            parts.append(f"{label}=今日未封板（无当日封单，本行不适用）")
+            # 评审 P2：推导侧（leaderSealedToday=False）与池档 sealed 矛盾时显式披露，不静默吞
+            conflict = str(item.get("pool_state") or "").strip() == "sealed"
+            txt = ("今日未封板（无当日封单，本行不适用"
+                   + ("；涨停池仍标 sealed，两源口径差）" if conflict else "）"))
+            parts.append(f"{label}={txt}")
             continue
 
         segs: list[str] = []
@@ -1420,14 +1464,20 @@ def seal_quality_line(entries: list[dict]) -> str | None:
             segs.append("封单不可考")
         elif basis in ("yuan", "hand"):
             val = zt * mult
-            seg = f"封单 {_fmt_yi(val)}"
+            seg = f"封单 {_fmt_amount_yuan(val)}"
             if rf is not None and rf > 0:
-                seg += f"=实际流通 {val / rf * 100:.1f}%"
+                seg += f"=实际流通 {_fmt_ratio_pct(val / rf * 100)}"
             segs.append(seg)
             mx = _qnum(item.get("max_zt_tur"))
             if mx is not None and mx > 0:
                 mxv = mx * mult
-                segs.append(f"峰值封单 {_fmt_yi(mxv)}（现为峰值 {val / mxv * 100:.0f}%）")
+                # 峰值复用同一 mult（同属封单族 quotas 列），但独立做量级校验：
+                # 峰值占实际流通超出 (0, 100%] 物理不可能 → 口径自证未过，不出读数
+                if rf is not None and rf > 0 and not (0 < mxv / rf <= 1.0):
+                    segs.append("峰值封单不可考（口径自证未过）")
+                else:
+                    segs.append(f"峰值封单 {_fmt_amount_yuan(mxv)}"
+                                f"（现为峰值 {val / mxv * 100:.0f}%）")
         else:
             tag = "单位待校验" if basis == "unknown" else "单位待校验（缺实际流通无法自证）"
             segs.append(f"封单 {_raw_num(zt)}（{tag}）")
