@@ -122,6 +122,22 @@ def test_archive_gene_corpus_all_failed_and_no_date():
     assert archive_gene_corpus(db, {"genes": [_gene("000001")]})["reason"] == "no_pool_date"
 
 
+def test_gene_point_in_time_flags():
+    """时点语义：抓取日==日档交易日 → same_day=True；回填 → False + 读口 note 提示。"""
+    db = _FakeDb()
+    db._coll.rows["2026-11-06"] = _pool_row("2026-11-06", ["000001", "000002"])
+    same_day = datetime(2026, 11, 6, 15, 30, tzinfo=TZ_SHANGHAI)
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_gene("000001")]}, now=same_day)
+    backfill = datetime(2026, 11, 8, 20, 0, tzinfo=TZ_SHANGHAI)
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_gene("000002")]}, now=backfill)
+    items = {it["stock_id"]: it for it in db._coll.rows["2026-11-06"]["gene_items"]}
+    assert items["000001"]["same_day"] is True and items["000001"]["fetched_date"] == "2026-11-06"
+    assert items["000002"]["same_day"] is False and items["000002"]["fetched_date"] == "2026-11-08"
+    out = load_gene_corpus(db, "2026-11-06")
+    assert out["same_day_n"] == 1 and out["backfill_n"] == 1
+    assert "回填抓取" in out["note"] and "不得当该日盘后已知信息使用" in out["note"]
+
+
 def test_load_gene_corpus_degraded_and_ok():
     db = _FakeDb()
     assert load_gene_corpus(db, "2026-11-06")["reason"] == "no_archive"

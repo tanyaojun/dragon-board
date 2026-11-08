@@ -17,6 +17,11 @@
 - gene_date / gene_source / gene_count / gene_pending_n（涨停池成员中尚无基因的只数）
   / gene_failures（失败条目，fail-visible）/ gene_archived_at
 
+时点语义（重要）：`GetZhangTingGene` 返回的是**抓取时点**统计，不是「该交易日盘后」统计——
+回填历史日档（如周一抓上周五的池）时值已含此后信息。故每条 item 记 `fetched_date` /
+`same_day`（抓取日 == 日档交易日 → True），消费方据此决定能否当「当日已知信息」用；
+禁用回填值冒充当日盘后快照（AGENTS §1.2-5 研究口径诚信）。
+
 拉取策略（控发数）：每轮只拉 limit 只（默认 6，服务端 ≥2s 间隔天然限速）；缺失优先，
 收盘后（≥15:05）对盘中拉到的旧值各刷新一次终值；全部失败且无既有语料 → ok False。
 
@@ -121,8 +126,11 @@ def archive_gene_corpus(db: Any, payload: dict[str, Any], *,
         if not sid:
             failures.append({"stock_id": "", "reason": "missing_stock_id"})
             continue
+        fetched_date = stamp[:10]
         item: dict[str, Any] = {
             "stock_id": sid,
+            "fetched_date": fetched_date,
+            "same_day": fetched_date == date,   # False=回填（值含抓取日之后的信息）
             "gene": res.get("gene") or {},
             "gene_labels": res.get("gene_labels") or {},
             "raw": res.get("raw"),
@@ -171,12 +179,18 @@ def load_gene_corpus(db: Any, date: str) -> dict[str, Any]:
                 "date": date, "lane": _GENE_LANE, "item_n": 0,
                 "failures": row.get("gene_failures") or [],
                 "note": "日档存在但涨停基因语料未落库（存档器未运行或该轮全部拉取失败）"}
-    return {"ok": True, "source": "local_archive", "lane": _GENE_LANE,
+    backfill_n = sum(1 for it in items if it.get("same_day") is False)
+    out = {"ok": True, "source": "local_archive", "lane": _GENE_LANE,
             "date": row.get("gene_date") or date, "items": items,
             "count": len(items), "pending_n": row.get("gene_pending_n") or 0,
+            "same_day_n": len(items) - backfill_n, "backfill_n": backfill_n,
             "failures": row.get("gene_failures") or [],
             "archived_at": row.get("gene_archived_at"),
             "corpus_source": row.get("gene_source") or "http_GetZhangTingGene"}
+    if backfill_n:
+        out["note"] = (f"{backfill_n} 条为回填抓取（fetched_date≠日档交易日）："
+                       "值含抓取日之后的信息，不得当该日盘后已知信息使用")
+    return out
 
 
 class GeneCorpusArchiver:
