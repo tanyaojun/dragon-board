@@ -69,6 +69,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     zt_gene_line,
     seal_quality_line,
     theme_heat_line,
+    notice_count_line,
 )
 from backend.operations.leader_wzs import COLLECTION as WZS_COLLECTION
 from backend.operations.theme_cycle import COLLECTION as CYCLE_COLLECTION
@@ -548,6 +549,44 @@ def theme_heat_entries_for_leaders(rows: list[dict], corpus: dict[str, Any]) -> 
     return entries
 
 
+def fetch_notice_corpus(db: Any, date: str) -> dict[str, Any]:
+    """公告计数语料 → {"items": {code: item}, "degraded": None|原因}。
+
+    单一事实源 = `kpl_daban_pool.notice_items`（走 load_day(lane="notice")）；与 gene 通道
+    同款懒取落库（每轮限量、pending_n 暴露覆盖度），降级带结构化原因（fail-visible）。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_notice_corpus
+        corpus = load_notice_corpus(db, date)
+    except Exception:
+        return {"items": {}, "degraded": "load_error"}
+    if not corpus.get("ok"):
+        return {"items": {},
+                "degraded": str(corpus.get("reason") or "no_notice_corpus")}
+    out: dict[str, dict] = {}
+    for item in corpus.get("items") or []:
+        code = str((item or {}).get("stock_id") or "")[-6:]
+        if code and code not in out:
+            out[code] = item
+    return {"items": out, "degraded": None}
+
+
+def notice_entries_for_leaders(rows: list[dict], corpus: dict[str, Any]) -> list[dict]:
+    """公告计数行条目：仅待判龙一自身（与基因/封板质量/题材热度同口径）。"""
+    items = corpus.get("items") or {}
+    degraded = corpus.get("degraded")
+    entries: list[dict] = []
+    for row in rows:
+        code = str(row.get("code") or "")
+        seg = row.get("segment")
+        seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
+        hit = items.get(code)
+        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+                        "item": hit,
+                        "poolMissing": None if hit else degraded})
+    return entries
+
+
 def fetch_pool_quality(db: Any, date: str) -> dict[str, Any]:
     """当日涨停池量价语料 → {"items": {code: {"item","frameAt"}}, "degraded": None|原因}。
 
@@ -841,6 +880,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               reason_entries: list[tuple[str, str | None]] | None = None,
               gene_entries: list[dict] | None = None,
               theme_heat_entries: list[dict] | None = None,
+              notice_entries: list[dict] | None = None,
               seal_quality_entries: list[dict] | None = None,
               series_line: str | None = None,
               segment: str | None = None,
@@ -889,6 +929,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         driver_cross=driver_cross_line(driver_doc),
         gene_line=zt_gene_line(gene_entries or []),
         theme_heat_line=theme_heat_line(theme_heat_entries or []),
+        notice_count_line=notice_count_line(notice_entries or []),
         reason_line=limitup_reason_line(reason_entries or []),
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
                         if lhb_facts is not None else None),
@@ -1195,6 +1236,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     pool_quality = fetch_pool_quality(db, date)
     # 题材库热度语料（AMMO 2026-11-08d）：2013 订阅落库，一次取全日共用（个股级，板块级不消费）
     theme_heat = fetch_theme_heat(db, date)
+    # 公告计数语料（AMMO 2026-11-08e）：懒取落库，一次取全日共用（个股级，板块级不消费）
+    notice_corpus = fetch_notice_corpus(db, date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -1311,6 +1354,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             reason_entries=reason_entries_for_leaders([row], expounds),
             gene_entries=gene_entries_for_leaders([row], gene_corpus),
             theme_heat_entries=theme_heat_entries_for_leaders([row], theme_heat),
+            notice_entries=notice_entries_for_leaders([row], notice_corpus),
             seal_quality_entries=seal_quality_entries_for_leaders([row], pool_quality),
             series_line=_series_line(rb, smatch),
             segment=row.get("segment"),

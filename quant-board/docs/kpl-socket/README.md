@@ -697,6 +697,23 @@ jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 
   不伪装「今日不在涨停池」（评审同款归因纪律）。
 - 测试：协议 3 + 采集器 5 + 存档器 2 + 消费端 3，全 mock。
 
+### 11.5c 公告计数语料通道（apphis CompanyNotice/GetCompanyCount，题材龙头语料第 3 项）
+
+- 源：`POST https://apphis.longhuvip.com/w1/api/index.php`（**apphis 域**）
+  `c=CompanyNotice&a=GetCompanyCount&StockID=<单股>`；响应
+  `{news, report, announcement, CID, Date, errcode}`（2026-11-08 实弹 301697
+  errcode=0）；协议层 `backend/services/kpl_stock_notice.py`。
+- **计数统计窗口上游未标注**（当日/累计不可判）→ window_note 原样透出，不自算不反推
+  （与 gene 同款纪律）；**公告标题/正文不进叙事**（只出计数与上游数据日期，内容消费另行裁决）。
+- 落库：与 gene 通道同款懒取（每轮限量 notice_limit、缺失优先、收盘后 ≥15:05 刷终值、
+  日期回退 latest_archived_pool_day）；`notice_items[]` + notice_ 前缀字段级 $set；
+  `same_day=False` 标记回填条目；读口 `load_notice_corpus`（lane="notice"）。
+- 已接入消费方：题材龙头 JEV 题集个股级叙事 `notice_count_line`（AMMO `2026-11-08e`
+  纯语料补行，题面 hash 不动）——待判龙一「公告 X/研报 Y/新闻 Z/数据日期」，
+  排涨停原因行后、龙虎榜行前；板块级不消费；降级出「公告计数语料不可考（原因）」，
+  不伪装「今日不在涨停池」。
+- pytest 红线：parse 全 mock；fetch 仅运维/语料补拉路径真实调用（_pytest_guard）。
+
 ### 11.6 测试与证据
 
 - `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码

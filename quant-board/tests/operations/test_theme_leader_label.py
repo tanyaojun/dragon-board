@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v16"
     assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-08d"   # 2026-11-08d：+题材热度行 / 题面 v16
+    assert doc["ammoVersion"] == "2026-11-08e"   # 2026-11-08e：+公告计数行 / 题面 v16
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1762,3 +1762,47 @@ def test_run_theme_heat_degraded_marks_unknown_not_absent(env, monkeypatch):
         gene_i = next((i for i, x in enumerate(lines) if x.startswith("涨停基因")), None)
         if gene_i is not None:
             assert theme_i < gene_i
+
+
+# ---------- 2026-11-08e / 公告计数行（题材龙头语料第 3 项） ----------
+
+def test_fetch_notice_corpus_shapes(env, monkeypatch):
+    """读口三分：ok / 降级带原因 / 读口异常。"""
+    import backend.services.kpl_daban_archiver as arch
+    calls, db = env
+    item = {"stock_id": "000001", "counts": {"announcement": 1, "report": 0, "news": 0}}
+    monkeypatch.setattr(arch, "load_notice_corpus",
+                        lambda db_, date: {"ok": True, "items": [item]})
+    got = L.fetch_notice_corpus(db, "2026-10-19")
+    assert got["items"]["000001"]["counts"]["announcement"] == 1 and got["degraded"] is None
+    monkeypatch.setattr(arch, "load_notice_corpus",
+                        lambda db_, date: {"ok": False, "reason": "no_notice_corpus"})
+    out = L.fetch_notice_corpus(db, "2026-10-19")
+    assert out["items"] == {} and out["degraded"] == "no_notice_corpus"
+    def boom(db_, date):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_notice_corpus", boom)
+    assert L.fetch_notice_corpus(db, "2026-10-19")["degraded"] == "load_error"
+
+
+def test_run_notice_degraded_marks_unknown_not_absent(env, monkeypatch):
+    """端到端：公告计数语料未落库时出「公告计数语料不可考」，不伪装「不在涨停池」；
+    行装配位置 = 涨停原因行后、龙虎榜行前。"""
+    import backend.services.kpl_daban_archiver as arch
+    calls, db = env
+    monkeypatch.setattr(arch, "load_notice_corpus",
+                        lambda db_, date: {"ok": False, "reason": "no_notice_corpus"})
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
+    assert leader_docs and all(
+        "公告计数语料不可考（公告计数语料未落库）" in d["narrative"] for d in leader_docs)
+    for d in leader_docs:
+        lines = d["narrative"].splitlines()
+        notice_i = next(i for i, x in enumerate(lines) if x.startswith("公告计数"))
+        reason_i = next((i for i, x in enumerate(lines) if x.startswith("涨停原因")), None)
+        lhb_i = next((i for i, x in enumerate(lines) if x.startswith("龙虎榜")), None)
+        if reason_i is not None:
+            assert reason_i < notice_i
+        if lhb_i is not None:
+            assert notice_i < lhb_i

@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08d"   # 2026-11-08d：+题材热度行（纯语料补行）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08e"   # 2026-11-08e：+公告计数行（纯语料补行）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -1270,6 +1270,34 @@ def test_theme_heat_line_variants():
     assert "不可考（今日不在涨停池）" in line3 and "题材库为空" in line3
     # entries 空 → None 不出行
     assert A.theme_heat_line([]) is None
+
+
+def test_notice_count_line_variants():
+    """2026-11-08e 纯语料补行：公告计数行各形态（真 0 带出/缺位不可考/降级归因）。"""
+    wn = "计数统计窗口上游未标注"
+    item = {"counts": {"announcement": 2, "report": 0, "news": None},
+            "upstream_date": "20261108", "window_note": wn}
+    line = A.notice_count_line([{"label": "主板龙一 X", "item": item, "poolMissing": None}])
+    # 真 0 是真实计数照常带出；缺位逐项「不可考」不补 0；window_note 随行头带出
+    assert "主板龙一 X：公告 2/研报 0/新闻不可考/数据日期 20261108" in line
+    assert wn in line
+    line2 = A.notice_count_line([
+        {"label": "主板龙一 Y", "item": None, "poolMissing": "no_notice_corpus"},
+        {"label": "主板龙一 Z", "item": None, "poolMissing": None}])
+    assert "公告计数语料不可考（公告计数语料未落库）" in line2
+    assert "不可考（今日不在涨停池）" in line2
+    assert A.notice_count_line([]) is None
+
+
+def test_leader_narrative_notice_placement():
+    """公告计数行排涨停原因行后、龙虎榜行前（2026-11-08e）。"""
+    lines = A.build_leader_narrative(
+        date="2026-11-06", market_line="指数 X", structure="结构行", baseline="基线行",
+        evidence_block="证据块", leader_name="X", leader_code="301697",
+        reason_line="原因行", notice_count_line="公告计数行", lhb_facts_line="龙虎榜行")
+    idx = {name: lines.splitlines().index(name)
+           for name in ["原因行", "公告计数行", "龙虎榜行"]}
+    assert idx["原因行"] < idx["公告计数行"] < idx["龙虎榜行"]
 
 
 def test_leader_narrative_theme_heat_placement():

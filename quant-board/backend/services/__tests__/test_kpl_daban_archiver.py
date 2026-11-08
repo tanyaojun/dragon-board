@@ -21,6 +21,9 @@ from backend.services.kpl_daban_archiver import (
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 
+from backend.services import kpl_stock_notice as N
+
+
 class _FakeCollection:
     def __init__(self) -> None:
         self.rows: dict[str, dict] = {}
@@ -972,3 +975,39 @@ def test_theme_corpus_stale_and_empty_snapshots():
     # 读口降级：日档缺失 vs 语料未落库严格分开
     assert load_theme_corpus(db, "2026-11-07")["reason"] == "no_archive"
     assert load_theme_corpus(db, "2026-11-06")["reason"] == "no_theme_corpus"
+
+
+# ── 公告计数语料通道（2026-11-08 题材龙头语料第 3 项，与 gene 通道同款懒取） ──
+
+def _notice_result(sid: str, ok: bool = True) -> dict:
+    if not ok:
+        return {"ok": False, "reason": "http_error", "stock_id": sid}
+    return {"ok": True, "stock_id": sid,
+            "counts": {"announcement": 2, "report": 1, "news": 0},
+            "upstream_date": "20261106", "window_note": N.WINDOW_NOTE}
+
+
+def test_notice_corpus_lazy_targets_and_merge():
+    """懒取目标（缺失优先/收盘后终值刷新）+ 并集落库 + pending/failures 暴露。"""
+    from backend.services.kpl_daban_archiver import (archive_notice_corpus,
+                                                     load_notice_corpus, pick_notice_targets)
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001", "000002"], date="2026-11-06"))
+    now = datetime(2026, 11, 6, 14, 40, tzinfo=TZ_SHANGHAI)
+    plan = pick_notice_targets(db, "2026-11-06", limit=1, now=now)
+    assert plan["ok"] is True and plan["targets"] == ["000001"] and plan["pending_n"] == 2
+    r = archive_notice_corpus(db, {"date": "2026-11-06", "notices": [
+        _notice_result("000001"), _notice_result("000002", ok=False)]},
+        now=now)
+    assert r["ok"] is True and r["item_n"] == 1 and r["failures_n"] == 1 and r["pending_n"] == 1
+    row = db["kpl_daban_pool"].rows["2026-11-06"]
+    assert row["notice_source"] == "http_GetCompanyCount"
+    assert row["notice_items"][0]["counts"]["announcement"] == 2
+    assert row["notice_items"][0]["same_day"] is True
+    loaded = load_notice_corpus(db, "2026-11-06")
+    assert loaded["ok"] is True and loaded["count"] == 1 and loaded["backfill_n"] == 0
+    # 全失败且无既有 → 结构化降级不覆盖
+    r2 = archive_notice_corpus(db, {"date": "2026-11-07",
+                                    "notices": [_notice_result("X", ok=False)]})
+    assert r2["ok"] is False and r2["reason"] == "no_notice_fetched"
+    assert load_notice_corpus(db, "2026-11-07")["reason"] == "no_archive"

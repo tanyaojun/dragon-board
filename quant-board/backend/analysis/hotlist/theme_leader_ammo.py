@@ -182,6 +182,10 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # apphq StockL2Data/GetZhangTingGene 逐股懒取落库）。上游**未标注统计窗口** → 口径注
 # 原样保留不自算；回填条目（抓取日≠日档交易日，值含此后信息）显式标注抓取日。缺失走
 # 「不可考」不补 0。判据零改动，沿 2026-10-24c/2026-11-02a 先例：纯语料补行不动题面 hash。
+# 2026-11-08e（纯语料补行，题面 hash 不动）：新增 notice_count_line——公告/新闻/研报
+# 计数（apphis CompanyNotice/GetCompanyCount，题材龙头语料第 3 项），排涨停原因行后、
+# 龙虎榜行前（事件/风险画像族）；单一事实源 kpl_daban_pool.notice_items；计数统计窗口
+# 上游未标注 → window_note 随行带出；公告标题/正文不进叙事（只出计数与日期）。
 # 2026-11-08d（纯语料补行，题面 hash 不动）：新增 theme_heat_line——KPL 题材库
 # （socket 2013 StockRelatedThemeResp，题材龙头语料第 2 项）个股级「题材热度」行，
 # 排打标交叉行后、基因行前（题材族聚拢）；单一事实源 kpl_daban_pool.theme_items。
@@ -201,7 +205,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # 不成立只原样透出并标「单位待校验」，禁猜换算（评审修订：元/手双假设在低价股区间
 # 数学上不可分，改为只按元假设带校验，手假设待 GetStockPanKou 实弹复核钉死单位后再
 # 启用——_seal_unit 一处切换，行文与下游零改动）。
-AMMO_VERSION_THEME_LEADER = "2026-11-08d"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
+AMMO_VERSION_THEME_LEADER = "2026-11-08e"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1351,6 +1355,62 @@ def theme_heat_line(entries: list[dict]) -> str | None:
     return "题材热度（KPL 题材库订阅）：" + "；".join(parts)
 
 
+_NOTICE_MISSING_CN = {"no_archive": "涨停池日档缺失", "no_notice_corpus": "公告计数语料未落库",
+                      "load_error": "公告计数读口异常"}
+
+
+def notice_count_line(entries: list[dict]) -> str | None:
+    """公告计数行（2026-11-08e 纯语料补行，题面 hash 不动）：待判龙一公告/新闻/研报密度。
+
+    `entries` = [{"label", "item": notice_item | None, "poolMissing": 原因|None}]；
+    item 取自 `kpl_daban_pool.notice_items`（走 load_day(lane="notice")，operations 层取数），
+    counts = {announcement, report, news}（GetCompanyCount 三计数）。
+
+    口径纪律：
+    - 计数统计窗口上游未标注 → window_note 随行带出（当日/累计不可判，不自算不反推）；
+    - **公告标题/正文不进叙事**（只出计数与上游数据日期；内容消费另行裁决）；
+    - 计数为 0 是真实计数照常带出（字段在场≠缺失，不混淆 AGENTS §4.0）；
+    - 部分计数缺位 → 缺位项「不可考」逐项带出（partial，不补 0）；
+    - poolMissing → 「公告计数语料不可考（原因）」，不伪装「今日不在涨停池」。
+    entries 空 → None（调用方不出行）。
+    """
+    if not entries:
+        return None
+    label_cn = {"announcement": "公告", "report": "研报", "news": "新闻"}
+    parts: list[str] = []
+    window_notes: list[str] = []
+    for entry in entries:
+        label = str(entry.get("label") or "").strip() or "该股"
+        item = entry.get("item")
+        pool_missing = str(entry.get("poolMissing") or "").strip()
+        if not isinstance(item, dict):
+            if pool_missing:
+                txt = (f"公告计数语料不可考"
+                       f"（{_NOTICE_MISSING_CN.get(pool_missing, pool_missing)}）")
+            else:
+                txt = "不可考（今日不在涨停池）"
+            parts.append(f"{label}={txt}")
+            continue
+        counts = item.get("counts") or {}
+        segs: list[str] = []
+        for key in ("announcement", "report", "news"):
+            v = counts.get(key)
+            segs.append(f"{label_cn[key]} {_heat_num_fmt(v)}"
+                        if isinstance(v, (int, float)) and not isinstance(v, bool)
+                        else f"{label_cn[key]}不可考")
+        date_txt = str(item.get("upstream_date") or "").strip()
+        if date_txt:
+            segs.append(f"数据日期 {date_txt}")
+        parts.append(f"{label}：{'/'.join(segs)}")
+        wn = str(item.get("window_note") or "").strip()
+        if wn and wn not in window_notes:
+            window_notes.append(wn)
+    head = "公告计数（KPL 公告/研报/新闻）"
+    if window_notes:
+        head += "（" + window_notes[0] + "）"
+    return head + "：" + "；".join(parts)
+
+
 def zt_gene_line(entries: list[dict]) -> str | None:
     """涨停基因行（2026-11-08a，用户需求）：待判龙一自身历史打板确定性画像。
 
@@ -1850,6 +1910,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            theme_heat_line: str | None = None,
                            reason_line: str | None = None,
                            gene_line: str | None = None,
+                           notice_count_line: str | None = None,
                            lhb_facts_line: str | None = None,
                            rebound_line: str | None = None,
                            plate_strength: str | None = None,
@@ -1870,7 +1931,9 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     None 不出行（打标缺席由 driver_cross_line 出 fail-visible 缺席行，不走本参数）。
     `plate_strength`（AMMO 2026-10-28a G2）= KPL 板块强度行，属板级盘面事实，排在炸板面行后、
     基线前；None 不出行。`reason_line`（AMMO 2026-10-28a §4.1）= 涨停原因行（韭研 expound），
-    排在打标交叉行后、证据块前；None 不出行。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
+    排在打标交叉行后、证据块前；None 不出行。`notice_count_line`（2026-11-08e）= 公告计数行
+    （notice_count_line 产出，取数单一源 kpl_daban_pool.notice_items），排涨停原因行后、
+    龙虎榜行前；None 不出行。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
     事实行（lhb_line 产出，取数单一源 jev_lhb_ammo.collect_lhb_facts），排在涨停原因行后、
     证据块前；None 不出行（未传入时旧行为不变）。
     `theme_heat_line`（2026-11-08d）= 题材热度行（theme_heat_line 产出，取数单一源
@@ -1928,6 +1991,10 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(gene_line)
     if reason_line:
         lines.append(reason_line)
+    if notice_count_line:
+        # 2026-11-08e：公告计数行（公告/研报/新闻密度，事件/风险画像），排涨停原因行后、
+        # 龙虎榜行前；None 不出行（旧行为不变）
+        lines.append(notice_count_line)
     if lhb_facts_line:
         lines.append(lhb_facts_line)
     if rebound_line:
