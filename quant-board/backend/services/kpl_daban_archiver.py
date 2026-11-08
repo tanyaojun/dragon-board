@@ -393,10 +393,30 @@ def _pool_member_ids(row: dict[str, Any]) -> list[str]:
     return out
 
 
-def _close_cutoff(now: datetime) -> datetime:
-    """该日的收盘后刷新截止时刻（本地 15:05）。"""
-    return now.replace(hour=_GENE_CLOSE_CUTOFF[0], minute=_GENE_CLOSE_CUTOFF[1],
-                       second=0, microsecond=0)
+def _close_cutoff(date: str) -> str:
+    """该日档的收盘后刷新截止时刻（该交易日本地 15:05，ISO 可比字符串）。
+
+    按**日档交易日**而非当前日计算：回填历史日档时 fetched_at 天然晚于该截止点，
+    不会被当轮反复刷新（每档至多一次盘中值 + 一次终值）。
+    """
+    return f"{date}T{_GENE_CLOSE_CUTOFF[0]:02d}:{_GENE_CLOSE_CUTOFF[1]:02d}:00+08:00"
+
+
+_GENE_BACKFILL_DAYS = 10   # :8002 停推时的回填窗口（更早的档不再补，避免无意义开火）
+
+
+def latest_archived_pool_day(db: Any, *, now: Optional[datetime] = None) -> Optional[str]:
+    """最近一个「含涨停池成员」的日档交易日（:8002 无快照时 gene 通道的回填目标）。
+
+    基因端点走 apphq HTTP，与采集器无关；只缺「今天是哪个交易日」这一信息。周末/盘前
+    采集器重启后内存快照为空时，用库内最近的池日档补语料（fail-visible：无档返回 None，
+    不猜日期）。窗口 _GENE_BACKFILL_DAYS 天，避免把很久以前的档当轮反复刷。
+    """
+    stamp = now or datetime.now(TZ_SHANGHAI)
+    floor = (stamp.date() - timedelta(days=_GENE_BACKFILL_DAYS)).isoformat()
+    row = db[_COLLECTION].find_one({"items.0": {"$exists": True}, "_id": {"$gte": floor}},
+                                   sort=[("_id", -1)])
+    return str(row["_id"]) if row else None
 
 
 def pick_gene_targets(db: Any, date: str, *, limit: int = 6,
@@ -419,8 +439,8 @@ def pick_gene_targets(db: Any, date: str, *, limit: int = 6,
         sid = str((g or {}).get("stock_id") or "").strip()
         if sid:
             done[sid] = str(g.get("fetched_at") or "")
-    cutoff = _close_cutoff(stamp).isoformat()
-    after_close = stamp >= _close_cutoff(stamp)
+    cutoff = _close_cutoff(date)
+    after_close = stamp.isoformat() >= cutoff
     missing = [sid for sid in members if sid not in done]
     refresh = [sid for sid in members if sid in done and after_close and done[sid] < cutoff]
     ordered = missing + refresh
@@ -688,17 +708,25 @@ class DabanPoolArchiver:
                         results["reason"] = {"ok": False, "reason": f"archive_failed:{error}"}
             # 涨停基因语料（2026-11-08，题材龙头语料投喂 jev）：HTTP 单股逐发（协议层
             # _post_form 全局 ≥2s 限频），每轮限量 gene_limit 只，缺失优先、收盘后刷终值。
+            # 日期来源：①当轮涨停池快照交易日 ②快照缺失（采集器未运行/周末重启）时回退
+            # 库内最近含成员的日档 —— 基因端点走 apphq HTTP 不依赖采集器，仅需日档日期；
+            # 两者都无才 skip（不猜日期、不错挂）。
+            gene_date, gene_date_source = pool_date, "snapshot"
             try:
-                if not pool_date:
+                db = self._database_factory()
+                if not gene_date:
+                    gene_date = await asyncio.to_thread(latest_archived_pool_day, db)
+                    gene_date_source = "local_archive" if gene_date else "none"
+                if not gene_date:
                     results["gene"] = {"ok": False, "reason": "no_pool_date"}
                 else:
-                    db = self._database_factory()
-                    plan = await asyncio.to_thread(pick_gene_targets, db, pool_date,
+                    plan = await asyncio.to_thread(pick_gene_targets, db, gene_date,
                                                    limit=self._gene_limit)
                     genes = [await asyncio.to_thread(self._gene_fetcher, sid)
                              for sid in (plan.get("targets") or [])]
                     results["gene"] = await asyncio.to_thread(
-                        archive_gene_corpus, db, {"date": pool_date, "genes": genes})
+                        archive_gene_corpus, db, {"date": gene_date, "genes": genes})
+                    results["gene"]["date_source"] = gene_date_source
                     if plan.get("ok") is False:
                         results["gene"]["plan_reason"] = plan.get("reason")
             except Exception as error:

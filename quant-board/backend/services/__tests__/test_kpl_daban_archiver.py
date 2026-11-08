@@ -36,8 +36,38 @@ class _FakeCollection:
         assert upsert or row is not None, "非 upsert 更新不应凭空造档"
         row.update(update["$set"])
 
-    def find_one(self, q: dict) -> dict | None:
-        return self.rows.get(q["_id"])
+    def find_one(self, q: dict, sort: list | None = None) -> dict | None:
+        """仿 Mongo 语义：精确 _id 走 key 查找，其余条件走扫描；**返回副本**不暴露内行。
+
+        （返回副本是关键：读口 load_day 会 pop _id，若返回 live dict 会把库内 _id 抹掉，
+        而字段级 $set 写库不再补写 _id —— mock 与生产 Mongo 的 copy 语义必须一致。）
+        """
+        if not sort and set(q) == {"_id"} and isinstance(q["_id"], str):
+            row = self.rows.get(q["_id"])
+            return dict(row) if row else None
+        rows = [(k, dict(r)) for k, r in self.rows.items()]
+        if sort:
+            for field, direction in reversed(sort):
+                rows.sort(key=lambda kv: str(kv[1].get(field) or ""), reverse=direction < 0)
+        for _key, row in rows:
+            ok = True
+            for field, cond in q.items():
+                val = row.get(field)
+                if field == "items.0":          # 数组非空判定（先于 $exists 分支）
+                    if not row.get("items"):
+                        ok = False
+                elif isinstance(cond, dict):
+                    if "$exists" in cond and (val is not None) != bool(cond["$exists"]):
+                        ok = False
+                    if "$gte" in cond and not (val is not None and str(val) >= str(cond["$gte"])):
+                        ok = False
+                elif val != cond:
+                    ok = False
+                if not ok:
+                    break
+            if ok:
+                return row
+        return None
 
 
 class _FakeDb:
@@ -714,6 +744,21 @@ def test_pick_gene_targets_missing_first_limit_and_close_refresh():
     assert plan3["targets"] == ["000002", "000003"] and plan3["refresh_n"] == 0
 
 
+def test_latest_archived_pool_day_fallback():
+    """:8002 无快照时用库内最近含成员的日档（限 10 天内，超窗不补）。"""
+    from backend.services.kpl_daban_archiver import latest_archived_pool_day
+
+    db = _FakeDb()
+    assert latest_archived_pool_day(db) is None
+    archive_snapshot(db, _snap(100.0, ["000001"], date="2026-11-05"))
+    archive_snapshot(db, _snap(200.0, ["000002"], date="2026-11-06"))
+    db._coll.rows["2026-10-01"] = {"_id": "2026-10-01", "items": [{"stock_id": "000009"}]}
+    now = datetime(2026, 11, 8, 20, 0, tzinfo=TZ_SHANGHAI)
+    assert latest_archived_pool_day(db, now=now) == "2026-11-06"      # 最近档
+    assert latest_archived_pool_day(db, now=datetime(2026, 11, 20, 20, 0,
+                                                     tzinfo=TZ_SHANGHAI)) is None   # 超窗
+
+
 def test_pick_gene_targets_no_archive_and_empty_pool():
     assert pick_gene_targets(_FakeDb(), "2026-11-06")["reason"] == "no_archive"
     db = _FakeDb()
@@ -837,3 +882,43 @@ def test_archiver_gene_lane_round(monkeypatch):
     assert [g["stock_id"] for g in row["gene_items"]] == ["000001"]
     assert row["gene_failures"][0]["stock_id"] == "000002"
     assert archiver.status()["lastResult"]["pool"]["ok"] is True   # 其它通道不受影响
+
+
+def test_archiver_gene_backfills_when_collector_down(monkeypatch):
+    """采集器未运行（快照全降级）时：gene 通道回退库内最近日档补语料，其它通道正常降级。"""
+    import asyncio
+    from backend.services import kpl_daban_archiver as arch
+
+    class _S:
+        storage_backend = "mongodb"
+
+    class _Resp:
+        def json(self):
+            return {"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"}
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            return _Resp()
+
+    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001", "000002"], date="2026-11-06"))
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, gene_fetcher=_fake_gene, gene_limit=2)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]
+    assert res["pool"]["ok"] is False and "collector_degraded" in res["pool"]["reason"]
+    assert res["gene"]["ok"] is True and res["gene"]["date_source"] == "local_archive"
+    row = db._coll.rows["2026-11-06"]
+    assert [g["stock_id"] for g in row["gene_items"]] == ["000001", "000002"]
+    assert row["gene_pending_n"] == 0
+    assert row["gene_items"][0]["same_day"] is False     # 11-08 回填 11-06 档
