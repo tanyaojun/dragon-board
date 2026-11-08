@@ -116,8 +116,9 @@
    实测 errcode=0）：读口 `GET /api/kpl/zt-reasons/detail?date=&stock_id=`（:8000，服务
    `kpl_zt_reason_history`；端点无 Date 参数，按展示日期过滤 List 项内 Date，不匹配透出
    matched_date 不伪装；复用 _post_form 全局 ≥2s 限频 + 300s TTL 缓存）；前端懒取泵
-   （≥1.5s 逐发、失败占位防重发、日期切换丢弃过时任务）；tooltip 优先级 ①2203 ②档案
-   ③回退不伪装。测试全 mock（红线 7）。
+   （≥1.5s 逐发、失败占位防重发、日期切换丢弃过时任务）；过滤日期取池快照真实交易日
+   （实时态 snap.date，周末/盘前=上一交易日；历史态=所选日期）；后台预取限前 40 行、
+   悬停插队；文本归一在服务层。tooltip 优先级 ①2203 ②档案 ③回退不伪装。测试全 mock（红线 7）。
 
 ## 五、证据
 

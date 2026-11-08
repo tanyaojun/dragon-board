@@ -5587,7 +5587,7 @@ const KPL = {
   dabanDate: {},        // view → 历史模式日期
   ztRank: {date: null, byId: null, at: 0, note: ''},   // 涨停行情左表强度/量比原料（板块排行快照，按 PlateID 匹配）
   ztReasons: {at: 0, loading: false, byId: null, note: ''},   // 2203 涨停原因推送快照（试点：涨停池页 tooltip 详情；stock_id → 详情）
-  ztReasonsArch: {byKey: {}, queue: [], pumping: false, note: ''},   // 涨停原因全文·历史档案懒取（GetDayZhangTing 单股逐发；key=date|stock_id）
+  ztReasonsArch: {byKey: {}, queue: [], pumping: false, note: '', bgCount: 0},   // 涨停原因全文·历史档案懒取（key=date|stock_id）
   ztAggSort: {key: 'n', dir: -1},                        // 涨停行情左表排序（默认按涨停家数；键=组对象字段名 a.n，2026-11-08 修复）
   bidAggSort: {key: 'n', dir: -1},                       // 集合竞价左表排序（默认按家数，板块行情同款）
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
@@ -7676,7 +7676,10 @@ function kplZtEnsureReasons(){
 // tooltip：首行=既有组合串；详情段取数优先级：①实时态 2203 到流 ②历史档案
 //（GetDayZhangTing 单股懒取，2203 未到流/历史态都走）③回退旧提示不伪装。
 function kplZtArchDate(){
-  return KPL.dabanMode.kplzt === 'history' ? (KPL.dabanDate.kplzt || KPL.today) : KPL.today;
+  if (KPL.dabanMode.kplzt === 'history') return KPL.dabanDate.kplzt || KPL.today;
+  // 实时态取池快照真实交易日（周末/盘前=上一交易日；用 KPL.today 会与上游最近涨停日不匹配→永远回退）
+  const snap = KPL.daban[(DABAN_PAGES.kplzt || {}).pid];
+  return (snap && snap.date) || KPL.today;
 }
 function ztReasonTip(r){
   let tip = '涨停原因：' + ztReasonFull(r);
@@ -7714,18 +7717,32 @@ function ztReasonTip(r){
     }
     return tip;   // 空条目（当日无涨停记录/失败占位）= 回退串，不伪装不重发
   }
-  // ③ 未取过 → 懒取入队（泵控频逐发；到货后重渲染 tooltip 生效）
-  if (sid) kplZtArchQueue(sid, date);
+  // ③ 未取过 → 懒取入队（悬停行由 onmouseenter 插队；此处仅前 40 行后台预取）
+  if (sid) kplZtArchQueue(sid, date, false);
   return tip;
 }
 // 懒取泵：队列逐发（前端 ≥1.5s 间隔，服务端 _post_form 全局 ≥2s 限频兑底）；
-// 失败也占位防重复请求风暴；过时任务（日期已切换）直接丢弃不白拉。
-function kplZtArchQueue(sid, date){
+// 后台预取限前 ZT_ARCH_BG_MAX 行（控发数）；悬停行插队优先；失败也占位防重发风暴；
+// 过时任务（展示日期已切换）丢弃不白拉。
+const ZT_ARCH_BG_MAX = 40;
+function kplZtArchQueue(sid, date, front){
   const st = KPL.ztReasonsArch;
   const key = date + '|' + sid;
-  if (st.byKey[key] !== undefined || st.queue.some(q => q.key === key)) return;
-  st.queue.push({key, sid, date});
+  if (!sid || st.byKey[key] !== undefined) return;
+  const at = st.queue.findIndex(q => q.key === key);
+  if (at >= 0){
+    if (front && at > 0) st.queue.unshift(st.queue.splice(at, 1)[0]);
+    return;
+  }
+  if (!front && st.bgCount >= ZT_ARCH_BG_MAX) return;
+  if (!front) st.bgCount += 1;
+  const job = {key, sid, date};
+  if (front) st.queue.unshift(job); else st.queue.push(job);
   kplZtArchPump();
+}
+function kplZtArchHover(el){
+  const sid = el && el.dataset ? String(el.dataset.sid || '') : '';
+  if (sid) kplZtArchQueue(sid, kplZtArchDate(), true);
 }
 function kplZtArchPump(){
   const st = KPL.ztReasonsArch;
@@ -7733,6 +7750,7 @@ function kplZtArchPump(){
   const job = st.queue.shift();
   if (!job) return;
   if (job.date !== kplZtArchDate()){   // 展示日期已切换：丢弃过时任务，不白拉
+    st.queue = []; st.bgCount = 0;
     setTimeout(kplZtArchPump, 0);
     return;
   }
@@ -7825,7 +7843,7 @@ function kplZtRender(){
     const lead = leadIdx >= 0 ? kplZtLong(leadIdx + 1) : '';
     html += `<tr><td class="kpl-uni">${esc(r.stock_id || '--')}</td>`
       + `<td>${esc(r.name || '--')}${badges ? '<div style="margin-top:2px">' + badges + '</div>' : ''}</td>`
-      + `<td class="kpl-sub" title="${esc(ztReasonTip(r))}">${esc(ztReasonFull(r))}</td>`
+      + `<td class="kpl-sub" title="${esc(ztReasonTip(r))}" data-sid="${esc(String(r.stock_id || ''))}" onmouseenter="kplZtArchHover(this)">${esc(ztReasonFull(r))}</td>`
       + `<td><span class="badge b-purple" title="组内推算领涨序：连板高度↓→封板时间早↑→主力净额↓（非 App 下发字段）">${lead || '--'}</span></td>`
       + `<td class="kpl-uni">${kfmtNum(knumUnit(r.real_turnover), 1)}</td>`
       + `<td>${esc(r.state || '--')}${r.pool_state === 'broken' ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c" title="盘中曾涨停、其后掉出涨停池（炸板未回封）；行内字段为其最后封住时快照">炸板</span>' : ''}</td>`

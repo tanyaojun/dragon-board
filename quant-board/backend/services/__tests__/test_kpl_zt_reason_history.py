@@ -41,6 +41,16 @@ class TestParseZtReasonHistory:
         out = svc.parse_zt_reason_history({"StockID": "000525", "List": []}, "2026-11-06")
         assert out["ok"] is True and out["items"] == [] and out["matched_date"] == ""
 
+    def test_text_normalized(self):
+        """CRLF/全角空格/连续空行归一（原生 tooltip 换行卫生）。"""
+        payload = {"StockID": "000525", "List": [{
+            "Date": "2026-11-06",
+            "Reason": "农业(农药)；\r\n\r\n\r\n羊年异动\u3000\u3000见注",
+            "GNSM": " 首行\r次行 ", "Boom_ZS": "", "ZSCode": []}]}
+        it = svc.parse_zt_reason_history(payload, "2026-11-06")["items"][0]
+        assert it["reason"] == "农业(农药)；\n\n羊年异动 见注"
+        assert it["gns"] == "首行\n次行"
+
     def test_malformed_body(self):
         out = svc.parse_zt_reason_history({"List": None}, "2026-11-06")
         assert out["ok"] is True and out["items"] == [] and out["dropped"] == 0

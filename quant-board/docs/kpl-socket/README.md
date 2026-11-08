@@ -492,8 +492,12 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   读口 `GET /api/kpl/zt-reasons/detail?date=&stock_id=`（:8000 直连，服务
   `kpl_zt_reason_history`，复用 _post_form 全局 ≥2s 限频；无 Date 参数→按展示日期过滤
   List 项内 Date，不匹配透出 matched_date 不伪装；缓存 300s TTL）；前端懒取泵逐发
-  （≥1.5s 间隔、失败占位防重发、日期切换丢弃过时任务）；tooltip 取数优先级
-  ①2203 到流 ②历史档案 ③回退组合串不伪装。pytest：服务 8 + 路由 2 全 mock。
+  （≥1.5s 间隔、失败占位防重发、日期切换丢弃过时任务）。**过滤日期口径（首版 bug）**：
+  取池快照真实交易日——实时态 `snap.date`（周末/盘前=上一交易日，用 `KPL.today` 会与
+  上游最近涨停日不匹配→永远回退），历史态取所选日期；无匹配日透出 matched_date 不伪装。
+  后台预取限前 40 行（控发数），悬停行插队优先（`onmouseenter` → 队列 unshift）。
+  文本归一（CRLF/全角空格/多空行）在服务层做（原生 tooltip 换行卫生）。
+  tooltip 取数优先级 ①2203 到流 ②历史档案 ③回退组合串不伪装。pytest：服务 9 + 路由 2 全 mock。
 
 ### 11.8 大单分时推送实弹验证（2026-11-08 补收口）
 

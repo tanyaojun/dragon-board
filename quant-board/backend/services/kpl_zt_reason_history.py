@@ -18,6 +18,7 @@ pytest 纪律：parse 为纯函数全 mock 覆盖；fetch 仅人工运维路径�
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Dict, List
 
@@ -57,6 +58,18 @@ def fetch_stock_zt_reason_raw(stock_id: str) -> Dict[str, Any]:
     return data
 
 
+_WS_RE = re.compile("[ \t\u3000]+")
+_NL_RE = re.compile("\n{3,}")
+
+
+def _clean_text(s: Any) -> str:
+    """文本归一：上游 Reason/GNSM 含 CRLF 与全角空格，原生 tooltip 会显示成乱序换行。"""
+    t = str(s or "").replace("\r\n", "\n").replace("\r", "\n")
+    t = _WS_RE.sub(" ", t)
+    t = _NL_RE.sub("\n\n", t)
+    return t.strip()
+
+
 def parse_zt_reason_history(data: Dict[str, Any], date: str) -> Dict[str, Any]:
     """GetDayZhangTing → 结构化（按展示日期过滤；无匹配日条目不伪装，透出 matched_date）。
 
@@ -78,13 +91,13 @@ def parse_zt_reason_history(data: Dict[str, Any], date: str) -> Dict[str, Any]:
         zs = it.get("ZSCode")
         items.append({
             "date": d,
-            "reason": str(it.get("Reason") or ""),
-            "gns": str(it.get("GNSM") or ""),
-            "boom_zs": str(it.get("Boom_ZS") or ""),
-            "sclt": str(it.get("SCLT") or ""),
+            "reason": _clean_text(it.get("Reason")),
+            "gns": _clean_text(it.get("GNSM")),
+            "boom_zs": _clean_text(it.get("Boom_ZS")),
+            "sclt": _clean_text(it.get("SCLT")),
             "zs_codes": [str(x) for x in zs if str(x)] if isinstance(zs, list) else [],
         })
-    matched = next((d for d in (dates_seen or [""]) if d), "")
+    matched = next((d for d in dates_seen if d), "")
     out: Dict[str, Any] = {
         "ok": True,
         "stock_id": str(data.get("StockID") or ""),
@@ -92,7 +105,7 @@ def parse_zt_reason_history(data: Dict[str, Any], date: str) -> Dict[str, Any]:
         "items": items,
         "dropped": dropped,
     }
-    if date and items == [] and matched and matched != date:
+    if date and not items and matched and matched != date:
         out["note"] = f"上游仅回最近涨停日 {matched}（无 {date} 条目），不伪装该日详情"
     return out
 
