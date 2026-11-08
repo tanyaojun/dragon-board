@@ -298,6 +298,50 @@ def test_zt_reason_detail_ok_and_upstream_error(client, monkeypatch):
     assert body["ok"] is False and body["degraded"] is True and body["items"] == []
 
 
+def test_daban_genes_route_ok(client, monkeypatch):
+    """涨停基因语料读口（2026-11-08）：六元数组原文 + window_note + pending_n 透出。"""
+    from backend.services import kpl_gene_corpus as gene_svc
+
+    def _payload(db, date):
+        return {"ok": True, "source": "local_archive", "lane": "gene", "date": date,
+                "items": [{"stock_id": "301697",
+                           "gene": {"zt_count": 4, "premium5_count": 1, "next_day_red_pct": 50,
+                                    "first_seal_pct": 100, "first_broken_pct": 0,
+                                    "lianban_pct": 50},
+                           "raw": [4, 1, 50, 100, 0, 50], "raw_len": 6,
+                           "window_note": "上游未标注统计窗口（六元数组原样透出，不自算不反推）",
+                           "fetched_at": "2026-11-06T15:06:00+08:00",
+                           "source": "http_GetZhangTingGene"}],
+                "count": 1, "pending_n": 2, "archived_at": "2026-11-06T15:06:00+08:00",
+                "corpus_source": "http_GetZhangTingGene"}
+
+    monkeypatch.setattr(gene_svc, "load_gene_corpus", _payload)
+    r = client.get("/api/kpl/daban-genes", params={"date": "2026-11-06"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["lane"] == "gene" and body["count"] == 1
+    assert body["items"][0]["raw"] == [4, 1, 50, 100, 0, 50]
+    assert body["pending_n"] == 2                     # 覆盖度未满对消费方可见
+    assert "未标注统计窗口" in body["items"][0]["window_note"]
+
+
+def test_daban_genes_route_no_gene_corpus_and_validation(client, monkeypatch):
+    """日档在但语料未落库 → no_gene_corpus（不伪装空语料）；缺 date → 400 结构化降级。"""
+    from backend.services import kpl_gene_corpus as gene_svc
+
+    monkeypatch.setattr(gene_svc, "load_gene_corpus", lambda db, date: {
+        "ok": False, "degraded": True, "reason": "no_gene_corpus", "date": date,
+        "lane": "gene", "item_n": 0,
+        "failures": [{"stock_id": "000525", "reason": "1020"}],
+        "note": "日档存在但涨停基因语料未落库"})
+    r = client.get("/api/kpl/daban-genes", params={"date": "2026-11-06"})
+    assert r.status_code == 200
+    assert r.json()["reason"] == "no_gene_corpus"
+    assert r.json()["failures"][0]["reason"] == "1020"
+    r = client.get("/api/kpl/daban-genes")
+    assert r.status_code == 400 and r.json()["degraded"] is True
+
+
 def test_zt_reasons_upstream_unavailable_structured_502(client):
     _FakeAsyncClient.fail_with = OSError("connection refused")
     r = client.get("/api/kpl/zt-reasons")

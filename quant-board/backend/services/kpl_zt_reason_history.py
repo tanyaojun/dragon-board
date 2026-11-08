@@ -18,6 +18,7 @@ pytest 纪律：parse 为纯函数全 mock 覆盖；fetch 仅人工运维路径�
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from typing import Any, Dict, List
@@ -42,11 +43,27 @@ def _global_params() -> Dict[str, Any]:
             "Index": "0", "STAT_SDK_TYPE": "50", **creds}
 
 
+def _real_post_form() -> bool:
+    """`_post_form` 是否仍为生产实现（未被测试 monkeypatch）——pytest 护栏判据。"""
+    return getattr(_post_form, "__module__", "") == "backend.services.kpl_ranking_service"
+
+
+def _pytest_guard() -> None:
+    """硬护栏：pytest 进程内禁止真实调用上游（AGENTS 红线 7：测试全 mock）。
+
+    测试必须 monkeypatch `_post_form` 或注入 fetcher；真实调用只走运维/语料补拉路径。
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and _real_post_form():
+        raise RuntimeError(
+            "pytest 禁止真实调用 KPL 上游 HTTP（红线 7）：请 monkeypatch _post_form 或注入 fetcher")
+
+
 def fetch_stock_zt_reason_raw(stock_id: str) -> Dict[str, Any]:
     """单股最近涨停记录（带缓存；真实调用仅运维路径，pytest 全 mock）。"""
     cached = _CACHE.get(stock_id)
     if cached and time.time() - cached["ts"] < _CACHE_TTL_SECONDS:
         return cached["data"]
+    _pytest_guard()
     if len(_CACHE) >= _CACHE_MAX_KEYS:
         _CACHE.clear()
     data = _post_form(_HOST_HISTORY,

@@ -524,6 +524,62 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   + 实弹验证 + 文档固化；cmd 合同保留供未来局部需求（L2/逐笔研究、回测微观结构）复用，
   不建 collector 订阅面、不建读口、不改前端。若未来接入，仍需先定订阅面/窗口/cap 三项。
 
+### 11.9 涨停基因（溢价基因）语料通道（2026-11-08 增补，题材龙头语料投喂 jev）
+
+用户裁决（2026-11-08）：溢价基因只出协议层 + 落库 `kpl_daban_pool` 数据集作为题材龙头
+语料投喂 jev 模型，**前端页面暂不上**。
+
+端点合同（HTTP 全表探测实弹，`.tmp_review/kpl_stockpage_probe_results_2026-11-08.jsonl`
+tag=`premium_gene`，errcode=0）：
+
+```
+POST https://apphq.longhuvip.com/w1/api/index.php
+c=StockL2Data&a=GetZhangTingGene&StockID=<单股>  + 公共参数（游客 UserID/Token=0 亦可）
+→ {"List":[4,1,50,100,0,50],"ttag":0.001306,"errcode":"0"}
+```
+
+六元数组逐位语义（顺序即上游顺序，与 App 盘口 tab 逐项对齐；实测 301697）：
+
+| 位 | 字段名 | 含义 | 实测 |
+| --- | --- | --- | --- |
+| 0 | `zt_count` | 涨停次数 | 4 |
+| 1 | `premium5_count` | 溢价 5% 次数 | 1 |
+| 2 | `next_day_red_pct` | 次日红盘率 % | 50.00 |
+| 3 | `first_seal_pct` | 首板封板率 % | 100.00 |
+| 4 | `first_broken_pct` | 首板被板率 % | 0.00 |
+| 5 | `lianban_pct` | 连板率 % | 50.00 |
+
+**统计窗口上游未标注**（App 与反编译源码均无天数常量）→ `window_note` 原样透出，
+禁止自算/反推；缺位不补 0（`partial` + `missing_fields` 透出）。
+
+落库（`kpl_daban_pool` 同日档，`gene_` 前缀字段——与 `reason_` 同款不另建数据集）：
+
+- `gene_items`：按 stock_id 并集 `[{stock_id, gene{六字段}, gene_labels, raw 六元数组原样,
+  raw_len, window_note, partial?/missing_fields?, fetched_at, source}]`；
+- `gene_date` / `gene_source`(=`http_GetZhangTingGene`) / `gene_count` /
+  `gene_pending_n`（涨停池成员中尚无基因的只数=覆盖度）/ `gene_failures`（失败条目，
+  fail-visible）/ `gene_archived_at`；
+- 写库用**字段级 `$set`（只动 `gene_` 前缀）**，不与 `DabanPoolArchiver` 的整 doc 读改写
+  互踩（同一进程两循环各自 to_thread 落库，整 doc 回写会丢更新）。
+
+实现（二层分离）：
+
+- 协议层 `backend/services/kpl_stock_gene.py`：`fetch_zt_gene_raw` / `parse_zt_gene` /
+  `get_zt_gene`（复用 `_post_form` 全局 ≥2s 单发间隔 + 300s TTL 缓存；**pytest 硬护栏**
+  `_pytest_guard`：pytest 进程内未 mock `_post_form` 直接抛错，红线 7）；
+- 语料层 `backend/services/kpl_gene_corpus.py`：`pick_gene_targets`（缺失优先 + 收盘后
+  ≥15:05 对盘中旧值刷一次终值）/ `archive_gene_corpus` / `load_gene_corpus` /
+  `GeneCorpusArchiver`（独立 60s 循环，每轮 `limit=6` 只逐股懒取——服务端 2s 间隔天然
+  限速，全池 ~33 只约 6 轮补齐；`main.py` startup/shutdown 挂载，status 暴露 lastResult）；
+- 读口 `GET /api/kpl/daban-genes?date=YYYY-MM-DD`（:8000，无档 → `no_archive`；日档在但
+  语料未落库 → `no_gene_corpus`；`pending_n>0` = 覆盖度未满，消费方可见）。
+
+jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 六字段作为题材龙头的
+历史打板确定性画像（涨停次数/溢价 5% 次数/次日红盘率/首板封板率/首板被板率/连板率）
+拼进语料；窗口未标注这点必须原样带注释，不写成「近 N 日」。
+
+测试：协议层 10 + 语料层 8 + 路由 2，全 mock（注入 fetcher 桩/假库，不发真实 HTTP）。
+
 ### 11.6 测试与证据
 
 - `test_kpl_daban_protocol.py`：2103 请求构造（App 基线字节）/解析（竞价列+即将涨停列+乱码

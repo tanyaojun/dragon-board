@@ -198,6 +198,31 @@ def daban_bidding(date: str = "") -> JSONResponse:
     return JSONResponse(content=load_day(get_runtime_mongodb_database(), date, lane="bid"))
 
 
+@router.get("/daban-genes")
+def daban_genes(date: str = "") -> JSONResponse:
+    """涨停基因（溢价基因）语料按日读口（2026-11-08，题材龙头语料投喂 jev）。
+
+    数据源=本地 MongoDB kpl_daban_pool 同日档的 gene_ 前缀字段（用户裁决：不另建数据集），
+    由 GeneCorpusArchiver 独立循环每轮限量逐股懒取 apphq `StockL2Data/GetZhangTingGene`
+    落库（协议层 backend/services/kpl_stock_gene.py）。item 结构：{stock_id,
+    gene{zt_count, premium5_count, next_day_red_pct, first_seal_pct, first_broken_pct,
+    lianban_pct}, raw 六元数组原样, window_note, fetched_at, source}。
+    fail-visible：无档 → no_archive；日档在但语料未落库 → no_gene_corpus；
+    pending_n>0 = 涨停池成员尚有未拉的股（覆盖度未满，消费方可见）。
+    """
+    bad = _validate_date(date)
+    if bad is not None:
+        return bad
+    if get_settings().storage_backend != "mongodb":
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
+            status_code=502)
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    from backend.services.kpl_gene_corpus import load_gene_corpus
+
+    return JSONResponse(content=load_gene_corpus(get_runtime_mongodb_database(), date))
+
+
 @router.get("/lhb-forecast")
 async def lhb_forecast() -> JSONResponse:
     """2112 会不会上龙虎榜预测快照（task-4）：透传 :8002 collector 读口。
