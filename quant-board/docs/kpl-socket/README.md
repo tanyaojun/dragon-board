@@ -631,8 +631,8 @@ c=StockL2Data&a=GetZhangTingGene&StockID=<单股>  + 公共参数（游客 UserI
 - `gene_date` / `gene_source`(=`http_GetZhangTingGene`) / `gene_count` /
   `gene_pending_n`（涨停池成员中尚无基因的只数=覆盖度）/ `gene_failures`（失败条目，
   fail-visible）/ `gene_archived_at`；
-- 写库**随打板通道同一单写者循环**（读全文 → 只改本通道字段 → 整 doc 回写），不另起
-  第二循环、不用字段级 `$set`——单写者顺序执行，与 bid/zb/dt/reason 各改各前缀，无互踩。
+- 写库**随打板/reason 通道同一循环 + 同款字段级 `$set`**（读全文 → 只改本通道 `gene_`
+  字段 → `$set` 回写）——与 bid/zb/dt/reason 各改各前缀、各写方互不覆盖；不另起第二循环。
 
 实现（一处通道 + 一个协议层）：
 
@@ -722,7 +722,7 @@ jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 
 - 目标（用户需求）：`zt.reason` 涨停详作为 jev 语料原料落库，供后续 corpus 组装/审计；
   **不新建数据集**，与打板四通道同档（`_id=交易日`）。
 - 写入：`archive_reason_corpus`（`kpl_daban_archiver`，每轮 60s 拉 `:8002/api/kpl/zt-reasons`；
-  **字段级 $set**，与涨停基因语料通道 `kpl_gene_corpus` 同款并发合同，各写方互不覆盖——评审
+  **字段级 $set**，与 gene 语料通道（同文件）同款并发合同，各写方互不覆盖——评审
   R2-P1：整 doc 回写会把并行写方的 gene_* 字段回写冲掉）：
   `reason_items[]`（按 stock_id 并集，字段随最新帧刷新，`first_ts` 留存首次到流）+ `reason_date` /
   `reason_source='socket_2203'` / `reason_ts` / `reason_count` / `reason_archived_at`。

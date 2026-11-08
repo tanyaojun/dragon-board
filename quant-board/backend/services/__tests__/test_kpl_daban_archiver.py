@@ -30,7 +30,7 @@ class _FakeCollection:
         self.rows[q["_id"]] = doc
 
     def update_one(self, q: dict, update: dict, upsert: bool = False) -> None:
-        """生产已改字段级 $set（与 kpl_gene_corpus 同款并发合同）；假库同语义合并。"""
+        """生产已改字段级 $set（各通道含 gene 通道同款并发合同）；假库同语义合并。"""
         assert "_id" not in update["$set"], "$set 不得改写 _id"
         row = self.rows.setdefault(q["_id"], {"_id": q["_id"]}) if upsert else self.rows.get(q["_id"])
         assert upsert or row is not None, "非 upsert 更新不应凭空造档"

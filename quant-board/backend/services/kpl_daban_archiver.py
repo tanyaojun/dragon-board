@@ -94,8 +94,8 @@ def archive_lane_snapshot(
     - 无掉出语义通道（集合竞价/炸板池，mark_broken=False）：只做并集 + 字段刷新
       （竞价五件套 9:25 后冻结，成员为当日曾入列全集；炸板池回封语义由涨停池通道
       sealed 承载，两通道互为印证）。
-    日档读写以「读全文 → 只改本通道前缀字段 → 字段级 $set 回写」进行（与涨停基因语料
-    通道 kpl_gene_corpus 同款并发合同），各通道/各写方互不覆盖。
+    日档读写以「读全文 → 只改本通道前缀字段 → 字段级 $set 回写」进行（本文件 gene 通道
+    同款并发合同），各通道/各写方互不覆盖。
     纯函数（db 注入，pytest 用假库）；空帧/缺日期不写（结构化返回，不伪装成功）。
     """
     cfg = _LANES[lane]
@@ -138,7 +138,7 @@ def archive_lane_snapshot(
             p + "raw_len": snapshot.get("raw_len"),
             p + "archived_at": (now or datetime.now(TZ_SHANGHAI)).isoformat(),
         }
-        # 字段级 $set（与 kpl_gene_corpus 同款）：只写本通道前缀字段，upsert 由过滤器
+        # 字段级 $set（与 gene 通道同款）：只写本通道前缀字段，upsert 由过滤器
         # 等值条件带上 _id；避免整 doc 回写把 gene 语料等并行写方的字段回写冲掉（评审 R2-P1）
         db[_COLLECTION].update_one({"_id": date}, {"$set": empty_doc}, upsert=True)
         return {"ok": True, "lane": lane, "date": date, "item_n": 0, "empty": True}
@@ -435,7 +435,7 @@ def archive_gene_corpus(db: Any, payload: dict[str, Any], *,
 
     payload: {"date": 交易日, "genes": [get_zt_gene 结果, ...]}
     写入 kpl_daban_pool 同日档 gene_ 前缀字段（与打板通道同款「读全文 → 只改本通道字段
-    → 整 doc 回写」，单写者顺序执行）：
+    → 字段级 $set 回写」，各通道/各写方互不覆盖）：
     - gene_items：按 stock_id 并集（仅 ok 条目；raw 六元数组原样 + 具名字段 + window_note
       + fetched_date/same_day 时点标记 + fetched_at + source），失败条目进 gene_failures；
     - gene_date/gene_source/gene_count/gene_pending_n/gene_failures/gene_archived_at；
@@ -500,7 +500,8 @@ def archive_gene_corpus(db: Any, payload: dict[str, Any], *,
         "gene_failures": failures,
         "gene_archived_at": stamp,
     }
-    db[_COLLECTION].replace_one({"_id": date}, {"_id": date, **row, **doc}, upsert=True)
+    # 字段级 $set（与打板/reason 通道同款并发合同）：只写 gene_ 前缀，不整 doc 回写
+    db[_COLLECTION].update_one({"_id": date}, {"$set": doc}, upsert=True)
     return {"ok": True, "lane": _GENE_LANE, "date": date, "item_n": len(members),
             "merged_n": merged_n, "failures_n": len(failures), "pending_n": len(pending)}
 
@@ -628,7 +629,8 @@ class DabanPoolArchiver:
         return resp.json()
 
     async def _archive_once(self) -> None:
-        # 单写者约束：同通道写方仅本服务单实例；跨写方（gene 语料通道）为字段级 $set 互不覆盖；
+        # 单写者约束：同通道写方仅本服务单实例；跨通道（含 gene 语料通道）各写各前缀字段
+        # 且均为字段级 $set，互不覆盖；
         # 四通道 fetch/archive 均逐通道 try/except，任一通道失败不阻断其它通道（含 fetch 阶段）。
         self._last_run_at = datetime.now(TZ_SHANGHAI).isoformat()
         results: dict[str, Any] = {}
