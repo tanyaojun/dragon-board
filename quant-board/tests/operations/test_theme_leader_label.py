@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v15"
     assert doc["questionSetHash"] == "97c50fd9fccb"   # v15 续板题基础率锚（v1-v14 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-07a"   # P2-4：梯队行领先差带符号；v15 P1 事实行不变
+    assert doc["ammoVersion"] == "2026-11-08a"   # 2026-11-08a：涨停基因语料行（纯语料补行，题面 hash 不动）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1516,3 +1516,76 @@ def test_strength_alias_ai_yingshi_maps_to_ai_yingyong():
     # 其他板块零影响：既有尾缀剥离匹配保持
     m2 = L.match_board_strength({"ok": True, "items": items}, "机器人")
     assert m2["ok"] is False and m2["reason"] == "unmatched", "夹具无机器人概念行，不得猜配"
+
+
+# ---------- 2026-11-08a：涨停基因语料接入题集（待判龙一自身） ----------
+
+GENE_ITEM = {"stock_id": "603278",
+             "gene": {"zt_count": 4, "premium5_count": 1, "next_day_red_pct": 50,
+                      "first_seal_pct": 100, "first_broken_pct": 0, "lianban_pct": 50},
+             "raw": [4, 1, 50, 100, 0, 50],
+             "window_note": "上游未标注统计窗口（六元数组原样透出，不自算不反推）",
+             "fetched_date": "2026-10-19", "same_day": True}
+
+
+def test_fetch_gene_corpus_maps_by_code_and_degraded_is_empty(monkeypatch):
+    """取数走存档器读口（单一事实源）：ok → code 映射；降级/异常 → 空映射（出不可考行）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    monkeypatch.setattr(arch, "load_gene_corpus",
+                        lambda db, date: {"ok": True,
+                                          "items": [GENE_ITEM,
+                                                    dict(GENE_ITEM, stock_id="301697")]})
+    got = L.fetch_gene_corpus(FakeDb(), "2026-10-19")
+    assert set(got) == {"603278", "301697"} and got["603278"]["raw"] == [4, 1, 50, 100, 0, 50]
+
+    monkeypatch.setattr(arch, "load_gene_corpus",
+                        lambda db, date: {"ok": False, "reason": "no_gene_corpus"})
+    assert L.fetch_gene_corpus(FakeDb(), "2026-10-19") == {}
+
+    def boom(db, date):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_gene_corpus", boom)
+    assert L.fetch_gene_corpus(FakeDb(), "2026-10-19") == {}, "读口异常不阻断整轮投喂"
+
+
+def test_gene_entries_for_leaders_labels_and_missing():
+    """仅待判龙一自身；分轨标签；无该股语料 → item=None（尾部出不可考）。"""
+    rows = [dict(ROWS[0], segment="main"), dict(ROWS[1], segment="growth")]
+    entries = L.gene_entries_for_leaders(rows, {"603278": GENE_ITEM})
+    assert entries[0]["label"].startswith("主板龙一")
+    assert entries[0]["item"] is GENE_ITEM
+    assert entries[1]["label"].startswith("双创龙一") and entries[1]["item"] is None
+
+
+def test_build_one_wires_gene_line_before_reason_line():
+    """个股级叙事：涨停基因行排涨停原因行前；未传入 → 不出行（旧行为不变）。"""
+    row = dict(ROWS[0], segment="main", boardCodes=["603278"])
+    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+                        gene_entries=L.gene_entries_for_leaders([row],
+                                                                {"603278": GENE_ITEM}),
+                        reason_entries=[("主板龙一 大业股份", "机器人")])
+    n = built["narrative"]
+    assert "涨停基因（统计窗口上游未标注）：主板龙一 大业股份=涨停4次" in n
+    assert n.index("涨停基因（") < n.index("涨停原因：")
+    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                         market_line="涨停 46 家")
+    assert "涨停基因" not in built0["narrative"]
+
+
+def test_run_feeds_gene_corpus_into_leader_docs(env, monkeypatch):
+    """run 装配：语料按日一次取数 → 待判龙一叙事带基因行（板块级不消费，省 token）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    calls, db = env
+    monkeypatch.setattr(arch, "load_gene_corpus",
+                        lambda db_, date: {"ok": True, "items": [
+                            dict(GENE_ITEM, stock_id=str(r.get("code") or "")[-6:])
+                            for r in ROWS]})
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
+    assert leader_docs, "至少一条个股级 doc"
+    assert any("涨停基因（统计窗口上游未标注）" in d["narrative"] for d in leader_docs)
+    sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
+    assert sector_docs and all("涨停基因" not in d["narrative"] for d in sector_docs)

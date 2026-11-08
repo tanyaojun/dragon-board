@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v15"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-07a"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08a"   # 2026-11-08a：涨停基因语料行（纯语料补行，题面 hash 不动）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "97c50fd9fccb"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -1103,3 +1103,62 @@ def test_v14_rebuild_leader_narrative_wires_rebound_line():
     assert n1.index("人气证据链（事件）") < n1.index("证据块"), "链行在证据块前"
     n0 = A.build_leader_narrative(**kw)
     assert "人气证据链" not in n0, "非事件日叙事不含链行"
+
+
+# ---------- 2026-11-08a：涨停基因语料行（待判龙一自身历史打板画像） ----------
+
+GENE_ITEM = {
+    "stock_id": "000525",
+    "gene": {"zt_count": 5, "premium5_count": 3, "next_day_red_pct": 100,
+             "first_seal_pct": 66.6667, "first_broken_pct": 0, "lianban_pct": 33.3333},
+    "raw": [5, 3, 100, 66.6667, 0, 33.3333],
+    "window_note": "上游未标注统计窗口（六元数组原样透出，不自算不反推）",
+    "fetched_date": "2026-11-06", "same_day": True,
+}
+
+
+def test_zt_gene_line_six_fields_units_and_no_fake_zero():
+    """六元按序带单位；缺失走「不可考」不补 0；小数 1 位截断。"""
+    line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM},
+                           {"label": "双创龙一 301697", "item": None}])
+    assert line.startswith("涨停基因")
+    assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、首板被板0%、连板33.3%" in line
+    assert "双创龙一 301697=不可考" in line
+    assert A.zt_gene_line([]) is None
+
+
+def test_zt_gene_line_window_note_and_backfill_marker():
+    """统计窗口上游未标注必须带出（禁写成近 N 日）；回填条目标注抓取日。"""
+    line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM}])
+    assert "统计窗口上游未标注" in line and "近" not in line.replace("溢价5%", "")
+    backfill = dict(GENE_ITEM, same_day=False, fetched_date="2026-11-08")
+    line2 = A.zt_gene_line([{"label": "主板龙一 000525", "item": backfill}])
+    assert "2026-11-08 抓取含此后信息" in line2
+    assert "抓取" not in line              # 同日抓取（same_day=True）不标注
+    # 多抓取日 → 逐股点名（不能聚合成一条，否则分不清哪只股是哪天的值）
+    backfill2 = dict(GENE_ITEM, stock_id="301697", same_day=False, fetched_date="2026-11-07")
+    line3 = A.zt_gene_line([{"label": "主板龙一 000525", "item": backfill},
+                            {"label": "双创龙一 301697", "item": backfill2}])
+    assert "000525 抓取于 2026-11-08" in line3 and "301697 抓取于 2026-11-07" in line3
+
+
+def test_zt_gene_line_partial_gene_marks_missing_field():
+    """部分字段缺失（partial）：该字段单项「不可考」，其余照出，不整体丢弃。"""
+    partial = dict(GENE_ITEM, gene={"zt_count": 4, "premium5_count": 1,
+                                    "next_day_red_pct": 50, "first_seal_pct": 100,
+                                    "first_broken_pct": None, "lianban_pct": 50})
+    line = A.zt_gene_line([{"label": "龙一 301697", "item": partial}])
+    assert "首板被板不可考" in line and "首板封板100%" in line
+
+
+def test_narrative_gene_line_placement_before_reason_line():
+    """涨停基因行排涨停原因行前、龙虎榜行前；None 不出行（旧行为不变）。"""
+    base = dict(date="2026-10-19", market_line="涨停 46 家",
+                structure="结构行", baseline="基线行", evidence_block="【题材证据】")
+    lhb = A.lhb_line(LHB_FACTS, codes=["603278"], roles={"603278": "待判龙一"})
+    n = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278",
+                                 gene_line="涨停基因行", reason_line="涨停原因行",
+                                 lhb_facts_line=lhb)
+    assert n.index("涨停基因行") < n.index("涨停原因行") < n.index("龙虎榜：")
+    n2 = A.build_leader_narrative(**base, leader_name="大业股份", leader_code="603278")
+    assert "涨停基因" not in n2

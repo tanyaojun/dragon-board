@@ -174,7 +174,13 @@ QUESTION_SET_VERSION_THEME_LEADER = "v15"
 # rebound_popularity_line——弱转强事件股专属证据行组（事件行/窗内逐日表现/板内跟随/
 # 周期背景），全部复用已落地数据零新采集；仅事件日出行，与 v14 事件门同源。原四题
 # 判据引用源未变，不构成题面改动。
-AMMO_VERSION_THEME_LEADER = "2026-11-07a"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
+# 2026-11-08a（用户需求：涨停基因语料接入题集，前端不上）：新增 `zt_gene_line`（个股级
+# 叙事，排涨停原因行前、龙虎榜行前）：待判龙一自身「涨停次数/溢价5%次数/次日红盘率/
+# 首板封板率/首板被板率/连板率」六元（单一事实源 = kpl_daban_pool.gene_items，
+# apphq StockL2Data/GetZhangTingGene 逐股懒取落库）。上游**未标注统计窗口** → 口径注
+# 原样保留不自算；回填条目（抓取日≠日档交易日，值含此后信息）显式标注抓取日。缺失走
+# 「不可考」不补 0。判据零改动，沿 2026-10-24c/2026-11-02a 先例：纯语料补行不动题面 hash。
+AMMO_VERSION_THEME_LEADER = "2026-11-08a"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1222,6 +1228,75 @@ def limitup_reason_line(entries: list[tuple[str, str | None]]) -> str | None:
     return "涨停原因：" + "；".join(parts)
 
 
+def _gene_num(v: Any) -> str:
+    """基因数值渲染：整数去小数点（100 → 100），小数保留 1 位（66.6667 → 66.7）。
+
+    只做显示截断，不改写上游数值语义（原样值仍在 gene_items.raw 留档）；None → 不可考。
+    """
+    if v is None:
+        return "不可考"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "不可考"
+    if abs(f - round(f)) < 1e-9:
+        return str(int(round(f)))
+    return f"{f:.1f}"
+
+
+# (字段, 标签, 单位)：单位随值写出，避免「涨停5」这类缺单位读法（数值仍原样不改写）
+GENE_CN = (
+    ("zt_count", "涨停", "次"),
+    ("premium5_count", "溢价5%", "次"),
+    ("next_day_red_pct", "次日红盘", "%"),
+    ("first_seal_pct", "首板封板", "%"),
+    ("first_broken_pct", "首板被板", "%"),
+    ("lianban_pct", "连板", "%"),
+)
+
+
+def zt_gene_line(entries: list[dict]) -> str | None:
+    """涨停基因行（2026-11-08a，用户需求）：待判龙一自身历史打板确定性画像。
+
+    `entries` = [{"label": "主板龙一 000525", "item": gene_item | None}, ...]；item 取自
+    `kpl_daban_pool.gene_items`（`load_gene_corpus` 读口，单一事实源）：
+    {stock_id, gene{六字段}, raw, window_note, fetched_date, same_day}。
+    - 上游未标注统计窗口 → 口径注原样带出（**不得**写成「近 N 日」）；
+    - 回填条目（same_day=False，抓取日晚于日档交易日 → 值含此后信息）逐条标注抓取日，
+      防被当「该日盘后已知信息」；
+    - 缺位/无该股语料 → 「不可考」，不补 0 不猜。
+    entries 空 → None（调用方不出行）。
+    """
+    if not entries:
+        return None
+    parts: list[str] = []
+    notes: list[str] = []
+    backfill_dates: list[str] = []
+    backfill_codes: list[str] = []
+    for entry in entries:
+        label = str(entry.get("label") or "").strip()
+        item = entry.get("item") or {}
+        gene = item.get("gene") or {}
+        if not gene:
+            parts.append(f"{label}=不可考" if label else "不可考")
+            continue
+        seg = "、".join(f"{cn}{_gene_num(gene.get(k))}{unit}"
+                        for k, cn, unit in GENE_CN)
+        parts.append(f"{label}={seg}" if label else seg)
+        if str(item.get("window_note") or "").strip():
+            notes.append("统计窗口上游未标注")
+        if item.get("same_day") is False and str(item.get("fetched_date") or "").strip():
+            backfill_dates.append(str(item["fetched_date"]).strip())
+            backfill_codes.append(str(item.get("stock_id") or "").strip() or "该股")
+    # 回填披露（值含抓取日之后的信息）：同一抓取日聚合一条，多日逐股点名（防误当该日盘后已知）
+    if len(set(backfill_dates)) == 1:
+        notes.append(f"{backfill_dates[0]} 抓取含此后信息")
+    elif backfill_dates:
+        notes.extend(f"{code} 抓取于 {d}" for d, code in zip(backfill_dates, backfill_codes))
+    head = "涨停基因（" + "、".join(dict.fromkeys(notes)) + "）" if notes else "涨停基因"
+    return head + "：" + "；".join(parts)
+
+
 def plate_strength_line(match: dict) -> str:
     """板块强度行（v12 G2）：KPL 层1 RealRankingInfo（`get_sector_ranking`，按日查史口径）。
 
@@ -1447,6 +1522,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            zhaban_line: str | None = None,
                            driver_cross: str | None = None,
                            reason_line: str | None = None,
+                           gene_line: str | None = None,
                            lhb_facts_line: str | None = None,
                            rebound_line: str | None = None,
                            plate_strength: str | None = None,
@@ -1470,6 +1546,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     排在打标交叉行后、证据块前；None 不出行。`lhb_facts_line`（AMMO 2026-10-30a）= 龙虎榜
     事实行（lhb_line 产出，取数单一源 jev_lhb_ammo.collect_lhb_facts），排在涨停原因行后、
     证据块前；None 不出行（未传入时旧行为不变）。
+    `gene_line`（2026-11-08a）= 涨停基因行（zt_gene_line 产出，取数单一源
+    kpl_daban_pool.gene_items），排涨停原因行前、龙虎榜行前；None 不出行。
     `facts_line`（v15 P1）= 结构事实行（structure_facts_line 产出：周期/封板/高度/梯队），
     校准参考行与锚行相邻：排在基线后、空间锚前；None 不出行（旧行为不变，板块级叙事不消费）。
     """
@@ -1503,6 +1581,10 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         lines.append(headroom)
     if driver_cross:
         lines.append(driver_cross)
+    if gene_line:
+        # 2026-11-08a：涨停基因行（历史打板画像），排涨停原因行前——先摆「这只股的
+        # 历史打板确定性」，再看当日原因；None 不出行（旧行为不变）
+        lines.append(gene_line)
     if reason_line:
         lines.append(reason_line)
     if lhb_facts_line:

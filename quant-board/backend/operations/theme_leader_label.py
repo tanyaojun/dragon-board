@@ -64,6 +64,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     rebound_popularity_line,
     structure_line,
     structure_line_dual,
+    zt_gene_line,
 )
 from backend.operations.leader_wzs import COLLECTION as WZS_COLLECTION
 from backend.operations.theme_cycle import COLLECTION as CYCLE_COLLECTION
@@ -449,6 +450,45 @@ def reason_entries_for_leaders(rows: list[dict], expounds: dict[str, tuple[str, 
         name, reason = expounds.get(code, (str(row.get("name") or ""), None))
         entries.append((f"{seg_cn} {name}", reason))
     return entries
+def fetch_gene_corpus(db: Any, date: str) -> dict[str, dict]:
+    """当日涨停基因语料映射 code → gene_item（单一事实源 `kpl_daban_pool.gene_items`）。
+
+    取数走存档器读口 `load_gene_corpus`（禁止第二套解析/第二份库），一次取全日共用。
+    未落库/降级/该日无档 → 空映射（调用方出「不可考」行，fail-visible，不伪装无基因）；
+    语料条数不完整不影响出已覆盖的股（覆盖度由 gene_pending_n 另行可见）。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_gene_corpus
+        corpus = load_gene_corpus(db, date)
+    except Exception:      # 读口异常不阻断投喂：按「不可考」出行，异常本身上抛会打断整轮
+        return {}
+    if not corpus.get("ok"):
+        return {}
+    out: dict[str, dict] = {}
+    for item in corpus.get("items") or []:
+        code = str((item or {}).get("stock_id") or "")[-6:]
+        if code and code not in out:
+            out[code] = item
+    return out
+
+
+def gene_entries_for_leaders(rows: list[dict],
+                             genes: dict[str, dict]) -> list[dict]:
+    """涨停基因行条目（2026-11-08a）：**仅待判龙一自身**（与涨停原因行同口径）。
+
+    板块成员基因不列——基因是「这只股的历史打板确定性」，板块问题（深度/延续）由结构
+    行承载，不重复；无该股语料 → item=None（zt_gene_line 出「不可考」）。
+    """
+    entries: list[dict] = []
+    for row in rows:
+        code = str(row.get("code") or "")
+        seg = row.get("segment")
+        seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
+        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+                        "item": genes.get(code)})
+    return entries
+
+
 # 代际来源：`live` = 当日挂链（17:30，2026-10-30 改时；前瞻样本）；`backfill` = 事后补跑历史日。
 # **评估必须分开统计**：事后补跑的日子可能看到「当时还不存在」的语料（如题材料只在 10-20 采集），
 # 混进前瞻样本会把泄漏当成模型能力（预登记 §11 H1 回填方案）。
@@ -671,6 +711,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               board_history: dict[str, list[tuple[str, int]]] | None = None,
               strength_match: dict | None = None,
               reason_entries: list[tuple[str, str | None]] | None = None,
+              gene_entries: list[dict] | None = None,
               series_line: str | None = None,
               segment: str | None = None,
               live_line: str | None = None,
@@ -715,6 +756,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         market_summary=market_summary,
         driver_cross=driver_cross_line(driver_doc),
+        gene_line=zt_gene_line(gene_entries or []),
         reason_line=limitup_reason_line(reason_entries or []),
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
                         if lhb_facts is not None else None),
@@ -1015,6 +1057,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     expounds = expound_map(db, date)
     # 龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用（与板块强度/直播同哲学）
     lhb_facts = fetch_lhb_facts(date)
+    # 涨停基因语料（AMMO 2026-11-08a）：一次取全日共用（个股级叙事行，板块级不消费）
+    gene_corpus = fetch_gene_corpus(db, date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -1129,6 +1173,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             board_history=board_history,
             strength_match=smatch,
             reason_entries=reason_entries_for_leaders([row], expounds),
+            gene_entries=gene_entries_for_leaders([row], gene_corpus),
             series_line=_series_line(rb, smatch),
             segment=row.get("segment"),
             live_line=kpl_live_line(le, board=rb, total=lm.get("total", 0),
