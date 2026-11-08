@@ -423,12 +423,14 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   `no_archive`，前端逐日回退 ≤7 天找最近有档交易日并回填生效日，
   板块行情成分股 kplShiftDate 同款）。存档自 2026-11-07 起，此前日期无源（如实透出不伪造）。
   依赖：:8000（存档器）与 :8002（collector）同日盘中运行方有当日档。
-- **个股涨停原因详情（概念解析全文）无上游源，待 MITM 抓包（2026-11-08）**：App 个股
-  详情页「涨停原因」tab（组合原因串 + 分段概念解析全文）不在 2103 推送内（全帧 quotas
-  无含「+」串；pos12=短原因如「ST摘帽」，组合串=客户端拼接）；盲探 apphis 12 候选
-  action（ZhangTingReason/StockZtReason/ReasonList 等×StockDetail/HisHomeDingPan）
-  全部 errcode 1020 严格白名单（与 HisDaBanList 同款）。后续需抓一次真实 App 请求
-  （详情页→涨停原因 tab，导出 HAR）后补端点与解析；此前 tooltip 只显原因构成不伪装。
+- **个股涨停原因详情（概念解析全文）已定位（2026-11-08 勘误，推翻同日早前「无上游源待 MITM」结论）**：
+  纯静态逆向 `.tmp_review/main_src/` 即定位，无需 MITM——历史=apphis `c=HisLimitResumption
+  &a=GetDayZhangTing&StockID&Index&STAT_SDK_TYPE`（List 项含 GNSM 概念说明全文/SCLT 梯队标签/
+  Boom_ZS 爆发解析/ZSCode 板块组），实时=apphq `c=StockLineData&a=GetKLineZhangTing`，游客凭据
+  即 errcode=0（301697 实测）。个股详情页（分时/盘口/五档/所属板块/题材库/溢价基因等）全部
+  数据源入口探测与合同固化见 [stock-detail-sources-20261108.md](stock-detail-sources-20261108.md)
+  （含 socket 2001-2015/2203/2030 个股级订阅面与 HTTP 全表）；2103 pos12 短原因（如「ST摘帽」）
+  与本端点关系待对照，组合串=客户端拼接判断不变。
 - **集合竞价历史回放（2026-11-08 增补，pid=8；用户裁决：与涨停池同集合同日档，不另建数据集）**：
   同一 `kpl_daban_pool` 日档的 **bid_ 前缀字段**（bid_items/bid_ts/bid_pages_meta/…），
   DabanPoolArchiver 单循环双通道（pidType=1/8）顺序落库、各改各前缀互不覆盖；
@@ -470,6 +472,45 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   （东财 push2ex 涨跌分布**仅最近完成交易日可得**，本地 `data/market_breadth_daily.json` 逐日持久化累积，
   更早日期结构化缺数 fail-visible 不伪装；服务 `backend/services/market_history_service.py`，
   测试 `test_market_history_service.py` 全 mock）。历史 note/缺数原因经 KPI 卡副行/页内横幅透出。
+
+### 11.7 个股级数据源探测收口 + 2203 涨停原因推送试点（2026-11-08）
+
+- **个股详情页全量数据源入口已探测收口**（盯盘/F10/笔记/公告全部实弹，25 发 24 命中）：
+  HTTP 全表（盘口 GetStockPanKou / 所属板块 GetStockIDPlate Type=2 / 溢价基因 GetZhangTingGene /
+  涨停原因全文 GetDayZhangTing+GetKLineZhangTing / 分时分笔竞价 / 盯盘大单BS量比换手 / F10 六端点 /
+  公告计数）+ socket 个股级订阅面（2001-2015/2203/2030 cmd 表）——合同固化
+  [stock-detail-sources-20261108.md](stock-detail-sources-20261108.md)。
+- **2203 涨停原因推送试点已接入 collector**（用户裁决）：订阅面=涨停池（2103 pid=1）成员自动跟随，
+  **每会话重建订阅**（服务器 TTL≈60-90s，重连后清已订阅集合全量补订，2026-11-08 评审 P0 修复）；
+  `Hq.HQReasonsResp`（zt/fx/jc/jj/pledge/ztGroup/theme/rank/plate/tp，proto 反编译合同）；
+  读口 `GET /api/kpl/zt-reasons`（:8002+:8000 透传）；前端涨停池页【涨停原因】tooltip 显示
+  推送全文详情（历史模式不用且不发请求；未到流回退组合串不伪装；快照时效由推送 ts 自证）；
+  env `KPL_ZT_REASON_SUBS=0` 关闭。pytest：协议+collector+proxy 合计 10 新用例全 mock。
+
+### 11.8 大单分时推送实弹验证（2026-11-08 补收口）
+
+- **cmd 合同定位**（qn0.java 645-660 + StockQuotationInfoPresenter 3498/4171）：
+  - `2006 StockMXResp` 首拉+订阅：请求 `Hq.HQItemReq{stockId, count}`（App 固定 count=25）；
+  - `2007 StockMXResp` 增量推送：**不在 @y51 订阅面**，服务端跟在 2006 订阅后推（App 收到后 append）；
+  - `2009 TYDanLabelResp` 大单标签：请求 `Hq.HQListReq{stockId, currNum=已收数}`（增量）。
+- **proto 合同**（Hq.java 描述符 + nn0.y/nn0.Q 互证）：
+  - StockMXResp{stockId=1, day=2, total=4, items=10×{time=1, price=2, priceColor=3, vol=4,
+    volColor=5, tur=6, origin=7}}；time=9 位 HHMMSS+毫秒；**price=元×10000**；vol=手；
+    tur=该笔成交额（元）；priceColor/volColor=服务端染色原样透出。
+  - TYDanLabelResp{stockId=1, day=2, total=9, items=10×{tag=1, timestamp=2(unix秒), tur=3(额)}}；
+    tag 档位（大单/超大单）App 未硬编码，原样落库不自算。
+- **实弹验证**（休市时段单会话 2 发，301697）：2006 返当日最近 5 条 + total=1344，首条
+  time=145700000(14:57:00)/price=366000(=36.60 元涨停价，20cm ✓)/vol=5 手/tur=18300
+  （=5×36.60×100，成交额公式精确吻合 ✓）；2009 返 total=0（该股当日无大单标签，盘后行为待
+  盘中核对）；无错误帧。证据：`.tmp_review/kpl_mx_probe_results_20261108.jsonl` +
+  `kpl_mx_probe_20261108.py`。
+- **协议层已落地**：`kpl_socket_protocol.CMD_STOCK_MX_SUB=2006/CMD_STOCK_MX_PUSH=2007/
+  CMD_TY_DAN_LABEL=2009` + `build_hq_item_req_pb` + `build_hq_list_req_pb`（2015/2001-2004 通用）
+  + `parse_stock_mx_resp` + `parse_ty_dan_label_resp`，pytest 6 新用例（字节+全字段+空 payload）。
+- **接入裁决（2026-11-08 用户拍板）：2006/2007/2009 不接入 JEV 叙事工作台**（逐笔成交全量推送
+  流量/帧量大、工作台无逐笔消费场景）。本轮收口范围 = 协议层落地（build/parse + 6 pytest 用例）
+  + 实弹验证 + 文档固化；cmd 合同保留供未来局部需求（L2/逐笔研究、回测微观结构）复用，
+  不建 collector 订阅面、不建读口、不改前端。若未来接入，仍需先定订阅面/窗口/cap 三项。
 
 ### 11.6 测试与证据
 

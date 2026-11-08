@@ -207,12 +207,13 @@ class KplCollectorService:
         human_delay: bool = True,
         daban_subs: bool = True,
         daban_market_type: int = 1,
-        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1),
+        daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1, 2, 3),
         daban_list_page_size: int = 30,
         daban_list_pages: int = 7,
         daban_lhb: bool = False,
         lhb_realtime: bool = False,
         lhb_realtime_count: int = 120,
+        zt_reason_subs: bool = True,
     ):
         self._codec = codec
         self._host = host
@@ -229,8 +230,9 @@ class KplCollectorService:
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
         self._daban_market_type = daban_market_type
-        # 2103 打板个股列表页签（8=集合竞价 0=即将涨停 6=风向标 1=涨停，
-        # kpl_daban_protocol.DABAN_LIST_PIDS）。
+        # 2103 打板个股列表页签（8=集合竞价 0=即将涨停 6=风向标 1=涨停 2=炸板 3=跌停，
+        # kpl_daban_protocol.DABAN_LIST_PIDS；2026-11-08 增补炸板/跌停，历史存档同入
+        # kpl_daban_pool 日档 zb_/dt_ 前缀通道，不新增数据集）。
         # 2026-10-27 实测（KPL_DEBUG 帧解密核对）：请求 count=200 服务器接受但推送页固定
         # 30 行（Resp.count 恒 30，竞价页 maxSize≈183）——分页只能 index 偏移多页订阅（App
         # 翻页同款），每页一帧订阅、按 Resp.index 合并成全量快照。
@@ -246,6 +248,15 @@ class KplCollectorService:
         # 放宽 120（实际上榜全名单 ~83 只需一次拉全；服务器若设上限会在开火验证中暴露）
         self._lhb_realtime = bool(lhb_realtime)
         self._lhb_realtime_count = max(1, int(lhb_realtime_count))
+        # 2203 个股涨停原因推送试点（2026-11-08 用户裁决）：订阅面=涨停池（2103 pid=1）
+        # 快照成员，随页帧自动跟随新增成员；无退订（涨停池成员日内增量小，残留订阅代价
+        # =服务器周期重推，读口按需取用；边界记录于 stock-detail-sources 文档 §四）。
+        # 请求 Hq.HQReq{f1 stockId}（App 同款，StockQuotationInfoPresenter 3470-3530）。
+        self._zt_reason_subs = bool(zt_reason_subs)
+        self._zt_reason_snap: Dict[str, Dict[str, Any]] = {}   # stock_id → 推送解析 + ts
+        self._zt_reason_subscribed: set = set()
+        self._pending_zt_reason: List[str] = []
+        self._zt_reason_lock = threading.Lock()
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
@@ -354,6 +365,82 @@ class KplCollectorService:
                     "running": self.is_running()}
         return {"ok": True, **snap}
 
+    def get_zt_reasons(self) -> Dict[str, Any]:
+        """2203 涨停原因快照读口（试点）：{stock_id → 推送解析详情}。
+
+        fail-visible：无快照（未开订阅/未到流）结构化降级，不伪装空表。
+        订阅面=涨停池（2103 pid=1）成员，详情/梯队/题材字段见
+        parse_hq_reasons_resp（proto 反编译合同）。
+        快照时效由条目内推送 ts 自证（采集进程重启后自然清零；跨日残留
+        由次日重启消除，属已知边界）。"""
+        with self._zt_reason_lock:
+            snap = {k: dict(v) for k, v in self._zt_reason_snap.items()}
+            n_sub = len(self._zt_reason_subscribed)
+        if not snap:
+            return {"ok": False, "degraded": True, "reason": "no_zt_reason_snapshot",
+                    "note": ("2203 订阅开关未开启（KPL_ZT_REASON_SUBS=0）"
+                             if not self._zt_reason_subs else
+                             "尚无 2203 快照（需当日盘中运行，订阅面=涨停池成员，进池后数秒内到流）"),
+                    "running": self.is_running()}
+        return {"ok": True,
+                "reasons": snap,
+                "count": len(snap),
+                "ts": max(v.get("ts", 0) for v in snap.values()),
+                "subscribed": n_sub}
+
+    def _pool_stock_ids(self) -> List[str]:
+        """涨停池（2103 pid=1）合并快照成员 id（跨页去重，保序）。"""
+        out: List[str] = []
+        for page in (self._daban_lists.get(1) or {}).values():
+            for it in (page.get("items") or []):
+                sid = str(it.get("stock_id") or "").strip()
+                if sid and sid not in out:
+                    out.append(sid)
+        return out
+
+    def _queue_zt_reason_new(self, stock_ids: List[str]) -> int:
+        """新入池成员入队 2203 订阅（去重；会话线程 drain 发送）。"""
+        if not self._zt_reason_subs:
+            return 0
+        new_ids: List[str] = []
+        with self._zt_reason_lock:
+            for sid in stock_ids:
+                sid = str(sid or "").strip()
+                if sid and sid not in self._zt_reason_subscribed:
+                    self._zt_reason_subscribed.add(sid)
+                    new_ids.append(sid)
+                    self._pending_zt_reason.append(sid)
+        if new_ids:
+            self._emit(KplEvent(type="zt_reasons_status", ts=time.time(),
+                                note=f"queued {len(new_ids)} new 2203 subscriptions",
+                                stock_ids=new_ids))
+        return len(new_ids)
+
+    def _drain_zt_reason_subs(self, sock: Any, next_seq: Any) -> None:
+        """发送待订阅 2203 帧（仅会话线程调用；异常 fail-visible 不杀会话）。
+
+        边界：sendall 失败时剩余 pending 不重入队（本会话丢失），下一会话
+        6g 全量补订自愈（2026-11-08 评审 P2，随 P0 每会话重建订阅修复）。"""
+        if not self._zt_reason_subs:
+            return
+        with self._zt_reason_lock:
+            pending = list(self._pending_zt_reason)
+            self._pending_zt_reason = []
+        if not pending:
+            return
+        ext = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_REASONS)
+        for sid in pending:
+            req = proto.build_hq_req_pb(sid)
+            enc = self._codec.enc(req)
+            frame = proto.build_frame(proto.CMD_HQ_REASONS, next_seq(), enc or req,
+                                      d=0, encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
+            self._dbg("C", frame)
+            try:
+                sock.sendall(frame)
+            except OSError as exc:
+                self._err(f"2203 subscribe send failed ({sid}): {exc}")
+                return
+
     def get_lhb_realtime(self) -> Dict[str, Any]:
         """3004/3101 RealtimeLHB 快照读口（task-4）：空帧抑制后最新非空帧。
 
@@ -410,6 +497,8 @@ class KplCollectorService:
             "sessions": self._stats["sessions"],
             "pushes": self._stats["pushes"],
             "errors": self._stats["errors"],
+            "zt_reasons": len(self._zt_reason_snap),
+            "zt_reasons_subscribed": len(self._zt_reason_subscribed),
             "uptime_s": round(time.time() - self._stats["started_at"], 1)
             if self._stats["started_at"]
             else 0,
@@ -811,6 +900,14 @@ class KplCollectorService:
                     sock.sendall(rl_frame)
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
+            # 6g) 2203 涨停原因试点：每会话重建订阅——服务器 TTL≈60-90s，重连后原订阅面已失效，
+            # 跨会话去重会让第二会话起一帧不发、推送静默停流（2026-11-08 评审 P0）：先清
+            # 已订阅集合再全量补订；页帧到达后的新增成员由 _dispatch 自动入队，drain 在收流循环内
+            if self._zt_reason_subs:
+                with self._zt_reason_lock:
+                    self._zt_reason_subscribed.clear()
+                    self._pending_zt_reason.clear()
+                self._queue_zt_reason_new(self._pool_stock_ids())
             # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
             #    服务器 TTL 由重连机制兜底；610 重发每 8 tick 保留
             rot_chunks = []
@@ -869,6 +966,8 @@ class KplCollectorService:
                             self._dbg("C", ka_frame)
                             sock.sendall(ka_frame)
                     last_keepalive = now
+                # 2203 待订阅帧 drain（新入池成员数秒内补订，不占保活节奏）
+                self._drain_zt_reason_subs(sock, next_seq)
                 if fr == "timeout":
                     continue
                 if fr is None:
@@ -906,6 +1005,28 @@ class KplCollectorService:
             self._emit(KplEvent(type="stock_quotes", ts=time.time(),
                                 source="push" if fr.get("fmt") == "push" else "resp",
                                 **quotes))
+            return
+        if cmd == proto.CMD_HQ_REASONS:
+            # 2203 涨停原因推送（试点）：dec/解析 fail-visible，不静默丢弃
+            dec = self._codec.dec(payload.hex()) if payload else None
+            if not dec:
+                self._err(f"2203 push decode failed ({len(payload)}B)")
+                self._emit(KplEvent(type="zt_reasons_error", ts=time.time(), cmd=cmd,
+                                    reason="push decode failed", payload_len=len(payload)))
+                return
+            try:
+                data = proto.parse_hq_reasons_resp(dec)
+            except Exception as exc:
+                self._err(f"2203 parse error: {exc}")
+                self._emit(KplEvent(type="zt_reasons_error", ts=time.time(), cmd=cmd,
+                                    reason=f"parse error: {exc}", payload_len=len(payload)))
+                return
+            self._stats["pushes"] += 1
+            sid = str(data.get("stock_id") or "").strip()
+            if sid:
+                self._zt_reason_snap[sid] = {**data, "ts": time.time()}
+            self._emit(KplEvent(type="zt_reasons", ts=time.time(), cmd=cmd,
+                                source="push" if fr.get("fmt") == "push" else "resp", **data))
             return
         if cmd == proto.CMD_GROUP_QUOTAS:
             dec = self._codec.dec(payload.hex()) if payload else None
@@ -962,6 +1083,16 @@ class KplCollectorService:
                         self._daban_lists.setdefault(pid, {})[idx] = {**data, "ts": time.time()}
                 except (TypeError, ValueError):
                     pass
+                if self._zt_reason_subs:
+                    # 2203 试点钩子：涨停池（pid=1）新入池成员自动补订（去重；drain 在收流循环）
+                    try:
+                        if int(data.get("pid_type", 0)) == 1:
+                            pool_items = data.get("items") or []
+                            if pool_items:
+                                self._queue_zt_reason_new(
+                                    [str(it.get("stock_id") or "").strip() for it in pool_items])
+                    except (TypeError, ValueError):
+                        pass
             event_type = DABAN_EVENT_NAMES.get(cmd) or LHB_EVENT_NAMES.get(cmd, "daban")
             if cmd == daban.CMD_FORECAST_LHB:
                 # 2112 空帧抑制（同 2103/3004 规；2026-10-29 午间实测：休市推流

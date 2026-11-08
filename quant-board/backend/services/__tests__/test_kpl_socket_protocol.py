@@ -206,3 +206,108 @@ class TestIndexSimpleQuotes:
         assert out["items"][0]["price"] == 113000
         assert out["items"][0]["inc_rate"] == 125
         assert out["items"][0]["inc_price"] is None
+
+
+class TestHQReasons2203:
+    """2203 涨停原因推送（试点）：HQReq 构造 + HQReasonsResp 解析（proto 反编译合同）。"""
+
+    def test_build_hq_req_pb_bytes(self):
+        # Hq.HQReq{f1 stockId}：单 len-delimited 字段，App 同款（StockQuotationInfoPresenter）
+        assert proto.build_hq_req_pb("301697") == b"\x0a\x06" + b"301697"
+
+    def test_parse_hq_reasons_resp_full(self):
+        payload = (
+            proto.pb_bytes(1, b"301697")
+            + proto.pb_bytes(2, "光伏+次新股；据投资者关系活动记录表……".encode())
+            + proto.pb_bytes(3, "异动提醒文本".encode())
+            + proto.pb_bytes(6, "质押文本".encode())
+            + proto.pb_varint_field(10, 3)
+            + proto.pb_varint_field(11, 44)
+            + proto.pb_bytes(12, "801070".encode())
+            + proto.pb_bytes(12, "801631".encode())
+            + proto.pb_bytes(13, "2连板".encode())
+            + proto.pb_bytes(14, "光伏".encode())
+            + proto.pb_varint_field(100, 2)      # f100 ztTag（多字节 tag a2 06）
+            + proto.pb_varint_field(500, 7)      # f500 msgId
+            + proto.pb_bytes(600, "光伏".encode())   # f600 plate
+            + proto.pb_bytes(700, "tp1".encode())
+            + proto.pb_bytes(700, "tp2".encode())
+        )
+        out = proto.parse_hq_reasons_resp(payload)
+        assert out["stock_id"] == "301697"
+        assert out["zt"].startswith("光伏+次新股")
+        assert out["fx"] == "异动提醒文本"
+        assert out["pledge"] == "质押文本"
+        assert out["rank"] == 3 and out["rank_total"] == 44
+        assert out["rank_top"] == ["801070", "801631"]
+        assert out["zt_group"] == "2连板" and out["theme"] == "光伏"
+        assert out["zt_tag"] == 2 and out["msg_id"] == 7
+        assert out["plate"] == "光伏" and out["tp"] == ["tp1", "tp2"]
+        assert out["jc"] == "" and out["jj"] == ""   # 缺字段回空串不报错
+
+    def test_parse_hq_reasons_resp_empty_payload(self):
+        out = proto.parse_hq_reasons_resp(b"")
+        assert out["stock_id"] == "" and out["zt"] == "" and out["rank_top"] == []
+        assert out["raw_len"] == 0
+
+
+class TestStockMX2006:
+    """2006/2007 分时成交明细 + 2009 大单标签（大单分时试点，2026-11-08 实弹验证）。"""
+
+    def test_build_hq_item_req_pb_bytes(self):
+        # Hq.HQItemReq{f1 stockId, f2 count}：App 侧 2006 固定 count=25
+        assert proto.build_hq_item_req_pb("301697", 25) == b"\x0a\x06" + b"301697" + b"\x10\x19"
+
+    def test_build_hq_list_req_pb_bytes(self):
+        # Hq.HQListReq{f1 stockId, f2 currNum}：2009/2015/2001-2004 增量通用
+        assert proto.build_hq_list_req_pb("301697", 0) == b"\x0a\x06" + b"301697" + b"\x10\x00"
+
+    def test_parse_stock_mx_resp_full(self):
+        item = (
+            proto.pb_varint_field(1, 145700000)   # time 9 位 HHMMSS+ms
+            + proto.pb_varint_field(2, 366000)     # price 元×10000 → 36.60
+            + proto.pb_varint_field(3, 1)          # priceColor
+            + proto.pb_varint_field(4, 5)          # vol 手
+            + proto.pb_varint_field(5, 0)          # volColor
+            + proto.pb_varint_field(6, 18300)      # tur 成交额元
+            + proto.pb_varint_field(7, 0)          # origin
+        )
+        payload = (
+            proto.pb_bytes(1, b"301697")
+            + proto.pb_bytes(2, b"20261106")
+            + proto.pb_varint_field(4, 1344)
+            + proto.pb_bytes(10, item)
+        )
+        out = proto.parse_stock_mx_resp(payload)
+        assert out["stock_id"] == "301697" and out["day"] == "20261106"
+        assert out["total"] == 1344 and len(out["items"]) == 1
+        it = out["items"][0]
+        assert it["time"] == 145700000 and it["price"] == 366000
+        assert it["price_color"] == 1 and it["vol"] == 5
+        assert it["vol_color"] == 0 and it["tur"] == 18300 and it["origin"] == 0
+        # 缩放互证（实弹：5手×36.60元×100股 = 18300 元）
+        assert it["vol"] * (it["price"] / 10000) * 100 == it["tur"]
+
+    def test_parse_stock_mx_resp_empty(self):
+        out = proto.parse_stock_mx_resp(b"")
+        assert out["stock_id"] == "" and out["total"] == 0 and out["items"] == []
+
+    def test_parse_ty_dan_label_resp_full(self):
+        lab = (
+            proto.pb_varint_field(1, 2)
+            + proto.pb_varint_field(2, 1794338025)
+            + proto.pb_varint_field(3, 5200000)
+        )
+        payload = (
+            proto.pb_bytes(1, b"301697")
+            + proto.pb_bytes(2, b"20261106")
+            + proto.pb_varint_field(9, 4)
+            + proto.pb_bytes(10, lab)
+        )
+        out = proto.parse_ty_dan_label_resp(payload)
+        assert out["stock_id"] == "301697" and out["total"] == 4
+        assert out["items"] == [{"tag": 2, "timestamp": 1794338025, "tur": 5200000}]
+
+    def test_parse_ty_dan_label_resp_empty(self):
+        out = proto.parse_ty_dan_label_resp(b"")
+        assert out["total"] == 0 and out["items"] == [] and out["day"] == ""

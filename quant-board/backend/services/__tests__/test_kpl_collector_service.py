@@ -48,6 +48,15 @@ def _push(cmd: int, ext: bytes, payload: bytes) -> bytes:
     return _wrap(proto.PKG_PUSH, body)
 
 
+def _drain_q(q):
+    evs = []
+    while True:
+        try:
+            evs.append(q.get_nowait())
+        except queue.Empty:
+            return evs
+
+
 def _make_260(server_time: int = 1793033481) -> bytes:
     body = (
         (260).to_bytes(2, "big") + b"\x00" + NUL2
@@ -147,8 +156,8 @@ class TestSessionStateMachine:
         assert len(svc._codec.wbe_calls) == 1
         assert svc._codec.wbe_calls[0][0] == "2db64e49ca378ac2a21331deca1a7425"
         # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 7 打板/情绪帧（含 2100 打板头）
-        # + 28 帧 2103（4 页签 8/0/6/1×7 页；2026-11-07 增补涨停页签）
-        assert len(fake.sent) == 42
+        # + 42 帧 2103（6 页签 8/0/6/1/2/3×7 页；2026-11-07 增补涨停、2026-11-08 增补炸板/跌停页签）
+        assert len(fake.sent) == 56
         assert fake.sent[0][7:9] == (610).to_bytes(2, "big")
         assert fake.sent[1][7:9] == (602).to_bytes(2, "big")
         assert fake.sent[2][7:9] == (2301).to_bytes(2, "big")
@@ -158,8 +167,8 @@ class TestSessionStateMachine:
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
         # 6c) 打板/情绪订阅帧：2114/2115/2116/2119/2120/2126（ext 路由头 02 <cmdBE>）
         daban_cmds_sent = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
-        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 28
-        # 2103 分页订阅：4 页签（8/0/6/1）×7 页，body=0xAA+req → pidType=f1、index=f4、count=f5=30
+        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 42
+        # 2103 分页订阅：6 页签（8/0/6/1/2/3）×7 页，body=0xAA+req → pidType=f1、index=f4、count=f5=30
         from backend.services import kpl_daban_protocol as daban
         pages = []
         for f in fake.sent[14:]:
@@ -169,7 +178,9 @@ class TestSessionStateMachine:
         assert pages == ([(8, i * 30, 30) for i in range(7)]
                          + [(0, i * 30, 30) for i in range(7)]
                          + [(6, i * 30, 30) for i in range(7)]
-                         + [(1, i * 30, 30) for i in range(7)])
+                         + [(1, i * 30, 30) for i in range(7)]
+                         + [(2, i * 30, 30) for i in range(7)]
+                         + [(3, i * 30, 30) for i in range(7)])
         for f, c in zip(fake.sent[7:14], daban_cmds_sent[:7]):
             assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
@@ -627,3 +638,132 @@ class TestLhbSnapshots:
         snap = svc.get_lhb_realtime()
         assert snap["indexes"] == [0, 1, 2]
         _json.dumps(snap, ensure_ascii=False)  # 不抛即合格
+
+
+class TestZtReasons2203:
+    """2203 涨停原因推送试点（2026-11-08）：dispatch 快照/事件 + 2103 pid=1 自动补订 + 读口降级。"""
+
+    def _reasons_payload(self, sid: str = "301697", zt: str = "光伏+次新股") -> bytes:
+        return (
+            proto.pb_bytes(1, sid.encode())
+            + proto.pb_bytes(2, zt.encode())
+            + proto.pb_bytes(13, "2连板".encode())
+            + proto.pb_bytes(14, "光伏".encode())
+            + proto.pb_varint_field(500, 7)
+        )
+
+    def test_dispatch_2203_updates_snapshot_and_emits(self, svc):
+        q = svc.subscribe()
+        svc._dispatch(proto.parse_incoming(_push(proto.CMD_HQ_REASONS, b"test/",
+                                                 self._reasons_payload())))
+        evs = _drain_q(q)
+        ev = next(e for e in evs if e["type"] == "zt_reasons")
+        assert ev["stock_id"] == "301697" and ev["zt"].startswith("光伏+次新股")
+        assert ev["zt_group"] == "2连板" and ev["msg_id"] == 7
+        snap = svc.get_zt_reasons()
+        assert snap["ok"] is True and snap["count"] == 1
+        assert snap["reasons"]["301697"]["zt"].startswith("光伏+次新股")
+        assert "ts" in snap["reasons"]["301697"] and snap["subscribed"] >= 0
+        assert svc.status()["zt_reasons"] == 1
+
+    def test_dispatch_2203_decode_fail_visible(self):
+        bad = KplCollectorService(FakeCodec(fail_dec=True), device_id="t", user_id="0",
+                                  token="", stock_ids=["801044"], host="127.0.0.1", port=1,
+                                  human_delay=False)
+        q = bad.subscribe()
+        bad._dispatch(proto.parse_incoming(_push(proto.CMD_HQ_REASONS, b"test/", b"\xaapayload")))
+        evs = _drain_q(q)
+        assert any(e["type"] == "zt_reasons_error" and e["reason"] == "push decode failed" for e in evs)
+        assert bad.get_zt_reasons()["ok"] is False
+
+    def test_get_zt_reasons_degraded_when_empty(self, svc):
+        snap = svc.get_zt_reasons()
+        assert snap["ok"] is False and snap["degraded"] is True
+        assert snap["reason"] == "no_zt_reason_snapshot"
+
+    def test_2103_pid1_queues_and_drain_sends_frames(self, svc):
+        from backend.services import kpl_daban_protocol as daban
+        import struct as _st
+
+        def _page(pid: int, rows: list) -> bytes:
+            body = proto.pb_varint_field(1, pid) + proto.pb_varint_field(4, 0)
+            for sid, name, q0 in rows:
+                body += proto.pb_bytes(20, proto.pb_bytes(1, sid.encode())
+                                       + proto.pb_bytes(2, name.encode())
+                                       + proto.pb_bytes(100, q0.encode()))
+            return body + proto.pb_varint_field(22, len(rows) * 30)
+
+        q = svc.subscribe()
+        # pid=8（集合竞价）不入队；pid=1（涨停池）入队
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(8, [("603028", "赛福天", "1亿")]))))
+        assert svc._pending_zt_reason == []
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(1, [("301697", "贝特利", "2亿"),
+                                                           ("002614", "奥佳华", "3亿")]))))
+        assert svc._pending_zt_reason == ["301697", "002614"]
+        # 重复帧去重（同成员不重复订阅）
+        svc._dispatch(proto.parse_incoming(_push(daban.CMD_DABAN_STOCK_LIST, b"daban/",
+                                                 _page(1, [("301697", "贝特利", "2亿")]))))
+        assert svc._pending_zt_reason == ["301697", "002614"]
+        # drain：帧号 2203、ext=02 089B、body=HQReq{f1 stockId}（enc 前缀 0xAA 由 FakeCodec 加）
+        sock = FakeSocket([])
+        sent = 0
+        seq = iter(range(100, 200))
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        assert len(sock.sent) == 2 and sent == 0
+        for fr, sid in zip(sock.sent, ["301697", "002614"]):
+            assert fr[0] == proto.PKG_ROUTE
+            assert fr[7:9] == proto.CMD_HQ_REASONS.to_bytes(2, "big")   # pkg(1)+len(4)+seq(2) 后为 cmd
+            assert fr[10:12] == (3).to_bytes(2, "big") and fr[12:15] == b"\x02\x08\x9b"   # extlen=3 + ext(`02`+cmd 2BE)
+            assert proto.build_hq_req_pb(sid) in fr                     # HQReq{f1}
+        assert svc._pending_zt_reason == []
+        evs = _drain_q(q)
+        assert any(e["type"] == "zt_reasons_status" and len(e["stock_ids"]) == 2 for e in evs)
+
+    def test_zt_reason_subs_disabled_no_queue(self):
+        off = KplCollectorService(FakeCodec(), device_id="t", user_id="0", token="",
+                                  stock_ids=["801044"], host="127.0.0.1", port=1,
+                                  human_delay=False, zt_reason_subs=False)
+        assert off._queue_zt_reason_new(["301697"]) == 0
+        assert off._pending_zt_reason == []
+        assert off.get_zt_reasons()["reason"] == "no_zt_reason_snapshot"
+        snap = {"ok": True}
+        off._zt_reason_snap["301697"] = {"stock_id": "301697", "ts": 1}
+        assert off.get_zt_reasons()["ok"] is True   # 开关关不清既有快照
+
+    def test_session_rebuilds_2203_subs_each_reconnect(self, monkeypatch):
+        # 评审 P0（2026-11-08）：服务器 TTL≈60-90s，重连后原订阅面已失效；
+        # _zt_reason_subscribed 若跨会话持久，第二会话起一帧不发、推送静默停流。
+        # 修复 = 每会话 6g 先清已订阅集合再全量补订；本测试预置涨停池快照，
+        # 连跑两轮 _session，断言每轮都发出 2203 订阅帧。
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        svc = KplCollectorService(
+            FakeCodec(), device_id="test-dev", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+        )
+        # 预置涨停池（2103 pid=1）快照：两个成员已"订阅过"（模拟首会话状态）
+        svc._daban_lists[1] = {0: {"pid_type": 1, "index": 0, "items": [{"stock_id": "301697"}, {"stock_id": "002614"}], "ts": 1.0}}
+        svc._zt_reason_subscribed.update({"301697", "002614"})
+
+        sent_2203_per_session = []
+        for session_no in range(2):
+            fake = FakeSocket(responses)
+            monkeypatch.setattr(svc, "_tls_connect", lambda f=fake: f)
+            svc._session()
+            sent_2203_per_session.append(
+                [f for f in fake.sent if int.from_bytes(f[7:9], "big") == proto.CMD_HQ_REASONS])
+        # 两轮会话各发 2 帧（两成员全量重订），去重集合不跨会话持久
+        assert [len(fs) for fs in sent_2203_per_session] == [2, 2]
+        for fr in sent_2203_per_session[1]:
+            assert fr[12:15] == b"\x02\x08\x9b"   # ext=`02`+cmd 2BE
+            assert proto.build_hq_req_pb("301697") in fr or proto.build_hq_req_pb("002614") in fr

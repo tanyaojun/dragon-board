@@ -33,6 +33,10 @@ CMD_STOCK_LIST = 2303  # Hq.StockSearchListNewResp（version + txtUrl）
 CMD_HK_LIST = 2304
 CMD_GROUP_QUOTAS = 3001  # Hq.GroupStockQuotasResp（板块行情）
 CMD_HQ_ID_LIST = 3006  # Hq.HQStockIdListReq（个股行情订阅，f1 repeated stockIds）
+CMD_HQ_REASONS = 2203  # Hq.HQReasonsResp（个股涨停原因实时推送，请求 Hq.HQReq{f1 stockId}）
+CMD_STOCK_MX_SUB = 2006   # Hq.StockMXResp 首拉+订阅（请求 Hq.HQItemReq{f1 stockId, f2 count}，App 固定 count=25）
+CMD_STOCK_MX_PUSH = 2007  # Hq.StockMXResp 增量推送（不在 @y51 订阅面内，服务端跟在 2006 订阅后推）
+CMD_TY_DAN_LABEL = 2009   # Hq.TYDanLabelResp 大单标签推送（分时图大单标记，请求 Hq.HQListReq{stockId,currNum=已收数}）
 CMD_CHALLENGE = 260
 CMD_ANTI_CHEAT = 261
 CMD_ANTI_CHEAT_ANS = 262
@@ -408,6 +412,153 @@ def _signed64(v: Any) -> Any:
     if isinstance(v, int) and v >= (1 << 63):
         return v - (1 << 64)
     return v
+
+
+def build_hq_req_pb(stock_id: str) -> bytes:
+    """Hq.HQReq{f1 stockId}：ServiceHqStock 单股订阅通用请求体。
+
+    2203 涨停原因推送试点（2026-11-08）用；App 侧 2010/2012/2013/2203/2204 等
+    均用此请求（StockQuotationInfoPresenter 3470-3530）。"""
+    return pb_bytes(1, stock_id.encode("utf-8"))
+
+
+def parse_hq_reasons_resp(payload: bytes) -> Dict[str, Any]:
+    """2203 HQReasonsResp → 个股涨停原因实时推送解析。
+
+    proto 反编译自 Hq.java 描述符（2026-11-08，字段号经 msgId=500 与既有
+    parse 基准互证）：stockId=1, zt=2(涨停原因), fx=3(风险提示/异动),
+    jc=4(减持), jj=5(解禁), pledge=6(质押), rank=10, rankTotal=11,
+    rankTop=12(repeated), ztGroup=13(涨停梯队串), theme=14(题材), dd=15,
+    childTheme=16, label=17, ztTag=100(uint32), msgId=500(uint64),
+    plate=600(关联板块名), tp=700(repeated)。与 HTTP GetStockPanKou 的
+    ZTReason/FXReason/JianChi/JieJin/Pledge 字段族同源互证。"""
+    pb = parse_pb(payload)
+
+    def _s(field: int) -> str:
+        v = pb_first(pb, field, b"")
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v).decode("utf-8", "replace")
+        return "" if v is None else str(v)
+
+    def _sl(field: int) -> List[str]:
+        out: List[str] = []
+        for v in pb.get(field, []):
+            out.append(bytes(v).decode("utf-8", "replace") if isinstance(v, (bytes, bytearray)) else str(v))
+        return out
+
+    return {
+        "stock_id": _s(1),
+        "zt": _s(2),
+        "fx": _s(3),
+        "jc": _s(4),
+        "jj": _s(5),
+        "pledge": _s(6),
+        "rank": _signed64(pb_first(pb, 10, 0)),
+        "rank_total": _signed64(pb_first(pb, 11, 0)),
+        "rank_top": _sl(12),
+        "zt_group": _s(13),
+        "theme": _s(14),
+        "dd": _s(15),
+        "child_theme": _s(16),
+        "label": _s(17),
+        "zt_tag": _signed64(pb_first(pb, 100, 0)),
+        "msg_id": _signed64(pb_first(pb, 500, 0)),
+        "plate": _s(600),
+        "tp": _sl(700),
+        "raw_len": len(payload),
+    }
+
+
+def build_hq_list_req_pb(stock_id: str, curr_num: int) -> bytes:
+    """Hq.HQListReq{f1 stockId(string), f2 currNum(uint32)}：增量分页订阅通用请求体。
+
+    2009 大单标签（currNum=已收数）/ 2015 逐笔委托 / 2001-2004 分时价量（App 传
+    本地已收数实现增量）。"""
+    return pb_bytes(1, stock_id.encode("utf-8")) + pb_varint_field(2, int(curr_num))
+
+
+def build_hq_item_req_pb(stock_id: str, count: int) -> bytes:
+    """Hq.HQItemReq{f1 stockId(string), f2 count(uint32)}：2006 分时成交明细首拉请求。
+
+    App 侧 StockQuotationInfoPresenter 3498 固定 count=25（首拉最近 25 条成交，
+    之后同订阅由服务端经 2007 推增量）。"""
+    return pb_bytes(1, stock_id.encode("utf-8")) + pb_varint_field(2, int(count))
+
+
+def parse_stock_mx_resp(payload: bytes) -> Dict[str, Any]:
+    """2006/2007 StockMXResp → 分时成交明细（大单分时试点，2026-11-08）。
+
+    proto 反编译自 Hq.java 描述符：stockId=1, day=2, total=4,
+    items=10(repeated Item{time=1, price=2, priceColor=3, vol=4, volColor=5,
+    tur=6, origin=7})。
+
+    缩放/语义（App 侧 nn0.y + DataStyleHelper 互证）：
+    - time 为 9 位 int（HHMMSS+毫秒，V0 补齐 9 位取 HH/MM）；price 为 元×10000
+      （DataStyleHelper.S0 = /10000.0f）；vol 为 手（>10000 App 显示“万”手）；
+      turnoverMoney 公式 = vol*price/100（= vol手*100股*price元，单位 元）。
+    - priceColor/volColor 为服务端涨跌染色（0/1/2 红绿白系，原样透出不自算）；
+      origin 为交易所来源 int。
+    """
+    pb = parse_pb(payload)
+
+    def _s(field: int) -> str:
+        v = pb_first(pb, field, b"")
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v).decode("utf-8", "replace")
+        return "" if v is None else str(v)
+
+    items: List[Dict[str, Any]] = []
+    for raw in pb.get(10, []):
+        sub = parse_pb(raw)
+        items.append({
+            "time": _signed64(pb_first(sub, 1, 0)),
+            "price": _signed64(pb_first(sub, 2, 0)),
+            "price_color": _signed64(pb_first(sub, 3, 0)),
+            "vol": _signed64(pb_first(sub, 4, 0)),
+            "vol_color": _signed64(pb_first(sub, 5, 0)),
+            "tur": _signed64(pb_first(sub, 6, 0)),
+            "origin": _signed64(pb_first(sub, 7, 0)),
+        })
+    return {
+        "stock_id": _s(1),
+        "day": _s(2),
+        "total": _signed64(pb_first(pb, 4, 0)),
+        "items": items,
+        "raw_len": len(payload),
+    }
+
+
+def parse_ty_dan_label_resp(payload: bytes) -> Dict[str, Any]:
+    """2009 TYDanLabelResp → 大单标签推送（分时图大单标记，tag 语义服务端定义原样透出）。
+
+    proto 反编译自 Hq.java 描述符：stockId=1, day=2, total=9,
+    items=10(repeated Item{tag=1, timestamp=2(int64 unix秒), tur=3(uint64 成交额)})。
+    App 侧 nn0.Q：tag 原样入 bean（ee1 TYDanBean），timestamp 格式化 HH:mm 显示，
+    tur 经 O(tur,7) 千分位显示；tag 具体档位（大单/超大单）App 未硬编码，不自算。
+    """
+    pb = parse_pb(payload)
+
+    def _s(field: int) -> str:
+        v = pb_first(pb, field, b"")
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v).decode("utf-8", "replace")
+        return "" if v is None else str(v)
+
+    items: List[Dict[str, Any]] = []
+    for raw in pb.get(10, []):
+        sub = parse_pb(raw)
+        items.append({
+            "tag": _signed64(pb_first(sub, 1, 0)),
+            "timestamp": _signed64(pb_first(sub, 2, 0)),
+            "tur": _signed64(pb_first(sub, 3, 0)),
+        })
+    return {
+        "stock_id": _s(1),
+        "day": _s(2),
+        "total": _signed64(pb_first(pb, 9, 0)),
+        "items": items,
+        "raw_len": len(payload),
+    }
 
 
 def parse_index_simple_quotes(payload: bytes) -> Dict[str, Any]:

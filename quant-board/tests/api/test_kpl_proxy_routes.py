@@ -251,6 +251,28 @@ def test_daban_list_passthrough(client):
     assert body["ok"] is True and body["max_size"] == 181
 
 
+def test_zt_reasons_passthrough(client):
+    """2203 涨停原因推送快照（试点）：透传 :8002 collector 读口，结构原样回浏览器。"""
+    _FakeAsyncClient.responses = [
+        _FakeResponse({"ok": True, "count": 1,
+                       "reasons": {"301697": {"stock_id": "301697", "zt": "光伏+次新股",
+                                              "zt_group": "2连板", "theme": "光伏"}}})
+    ]
+    r = client.get("/api/kpl/zt-reasons")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["count"] == 1
+    assert body["reasons"]["301697"]["zt"] == "光伏+次新股"
+
+
+def test_zt_reasons_upstream_unavailable_structured_502(client):
+    _FakeAsyncClient.fail_with = OSError("connection refused")
+    r = client.get("/api/kpl/zt-reasons")
+    assert r.status_code == 502
+    body = r.json()
+    assert body["ok"] is False and "kpl_upstream_unavailable" in body["reason"]
+
+
 def test_daban_list_upstream_unavailable_structured_502(client):
     _FakeAsyncClient.fail_with = OSError("connection refused")
     r = client.get("/api/kpl/daban-list")

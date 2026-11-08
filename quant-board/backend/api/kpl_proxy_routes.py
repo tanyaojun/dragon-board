@@ -213,6 +213,16 @@ async def lhb_realtime() -> JSONResponse:
     return await _proxy_get("/api/kpl/lhb-realtime")
 
 
+@router.get("/zt-reasons")
+async def zt_reasons() -> JSONResponse:
+    """2203 涨停原因推送快照（试点，2026-11-08）：透传 :8002 collector 读口。
+
+    订阅面=涨停池（2103 pid=1）成员，随入池自动补订；无快照结构化降级（fail-visible）。
+    消费端：涨停池页个股列表【涨停原因】tooltip 大段详情。
+    """
+    return await _proxy_get("/api/kpl/zt-reasons")
+
+
 @router.get("/lhb-history")
 def lhb_history(date: str = ""):
     """HisBeOnTheLHB 历史龙虎榜读口（task-4）：a=OnTheLHBList 分组榜单 + 个股行。

@@ -5586,6 +5586,7 @@ const KPL = {
   dabanMode: {},        // view → 'live' | 'history'（精选板块同款：日期切换+回实时）
   dabanDate: {},        // view → 历史模式日期
   ztRank: {date: null, byId: null, at: 0, note: ''},   // 涨停行情左表强度/量比原料（板块排行快照，按 PlateID 匹配）
+  ztReasons: {at: 0, loading: false, byId: null, note: ''},   // 2203 涨停原因推送快照（试点：涨停池页 tooltip 详情；stock_id → 详情）
   ztAggSort: {key: 'n', dir: -1},                        // 涨停行情左表排序（默认按涨停家数；键=组对象字段名 a.n，2026-11-08 修复）
   bidAggSort: {key: 'n', dir: -1},                       // 集合竞价左表排序（默认按家数，板块行情同款）
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
@@ -7634,18 +7635,70 @@ async function kplDabanArchiveHistory(view, date0){
 // （如美晨科技「ST摘帽」），App 详情页展示「ST摘帽+汽车零部件」= zt_reason + '+' +
 // 板块首概念（plate 首段）；两者同串（如「绿色电力」+plate「绿色电力、电力」）只显原因。
 // 涨停原因 tooltip=用户可读的原因构成（原因段 + 板块首段 + 关联板块 ID），
-//   不放开发口径说明；概念解析全文待上游端点 MITM 抓包（2026-11-08 盲探 12 候选
-//   action 全部 errcode 1020 严格白名单，与 HisDaBanList 同款，见 README §11.4）。
+//   不放开发口径说明；概念解析全文来源已定位（2026-11-08 勘误）：HTTP
+//   GetDayZhangTing/GetKLineZhangTing（GNSM 字段）+ socket 2203 推送（zt 字段），
+//   本页试点走 2203（collector 自动订阅涨停池成员，见 ztReasonTip/kplZtEnsureReasons）。
 function ztReasonFull(r){
   const reason = String(r.zt_reason || '').trim();
   const plate0 = String(r.plate || '').trim().split(/\n|、/)[0] || '';
   if (!reason && !plate0) return '--';
   return reason && plate0 && reason !== plate0 ? reason + '+' + plate0 : (reason || plate0);
 }
+// 2203 涨停原因推送快照（试点，2026-11-08）：涨停池页个股列表【涨停原因】tooltip 详情。
+// 订阅面=涨停池成员（collector 随 2103 pid=1 帧自动补订，每会话重建订阅）；快照时效由
+// 条目 ts 自证（历史模式不用，避免跨日期误归因）；无快照/该股未到流回退旧 tooltip
+//（组合串+板块 ID，不伪装）。节流不看 byId：失败态同样 30s 窗，防 4s 轮询重试风暴
+//（2026-11-08 评审 P2）。
+function kplZtEnsureReasons(){
+  const st = KPL.ztReasons;
+  if (st.loading) return;
+  if (Date.now() - st.at < 30000) return;
+  st.loading = true;
+  fetch(KPL_API + '/zt-reasons')
+    .then(r => r.json().catch(() => ({ok: false, reason: 'HTTP ' + r.status})))
+    .then(j => {
+      if (j.ok){
+        st.byId = new Map();
+        for (const [sid, d] of Object.entries(j.reasons || {})) st.byId.set(String(sid), d);
+        st.note = '';
+      } else {
+        st.note = (j.reason || '读取失败') + (j.note ? '：' + j.note : '');
+      }
+      st.at = Date.now(); st.loading = false;
+      if (STATE.view === 'kplzt') kplDabanRender('kplzt');
+    })
+    .catch(e => {
+      st.note = String(e.message || e); st.at = Date.now(); st.loading = false;
+      if (STATE.view === 'kplzt') kplDabanRender('kplzt');
+    });
+}
+// tooltip：首行=既有组合串；2203 到流则追加详情大段（zt 全文/梯队/题材/排名/板块）。
+// 历史模式不用 2203（快照为实时态，跨日期误归因）；未到流回退旧提示不伪装。
+function ztReasonTip(r){
+  let tip = '涨停原因：' + ztReasonFull(r);
+  if (r.plate_id) tip += `（关联板块 ID ${esc(String(r.plate_id))}，与板块行情同码制可互查）`;
+  if (KPL.dabanMode.kplzt === 'history') return tip;
+  const d = KPL.ztReasons.byId && KPL.ztReasons.byId.get(String(r.stock_id || ''));
+  if (!d) return tip;
+  tip += '\n—— 涨停原因详情（2203 推送';
+  if (d.ts) tip += ' ' + new Date(d.ts).toLocaleTimeString('zh-CN', {hour12: false});
+  tip += '）';
+  const ztShort = String(r.zt_reason || '').trim();
+  if (d.zt && (!ztShort || d.zt !== ztShort)) tip += '\n' + d.zt;
+  if (d.zt_group) tip += '\n梯队：' + d.zt_group;
+  if (d.theme) tip += '\n题材：' + d.theme;
+  if (d.child_theme) tip += '\n子题材：' + d.child_theme;
+  if (d.label) tip += '\n标签：' + d.label;
+  if (d.rank) tip += '\n排名：' + d.rank + (d.rank_total ? '/' + d.rank_total : '');
+  if (d.plate && d.plate !== String(r.plate || '')) tip += '\n关联板块：' + d.plate;
+  if (d.rank_top && d.rank_top.length) tip += '\nTop：' + d.rank_top.join('、');
+  return tip;
+}
 function kplZtRender(){
   const conf = DABAN_PAGES.kplzt;
   if (STATE.view !== 'kplzt') return;
   kplZtEnsureRanking();   // 强度/量比原料（30s 节流，到货后重渲染；防抖在 ensure 内）
+  if (KPL.dabanMode.kplzt !== 'history') kplZtEnsureReasons();   // 2203 详情仅实时态请求（历史模式不发）
   const snap = KPL.daban[conf.pid];
   const all = kplDabanRows('kplzt', true);
   const leaders = kplZtLeaderMap(all);
@@ -7712,7 +7765,7 @@ function kplZtRender(){
     const lead = leadIdx >= 0 ? kplZtLong(leadIdx + 1) : '';
     html += `<tr><td class="kpl-uni">${esc(r.stock_id || '--')}</td>`
       + `<td>${esc(r.name || '--')}${badges ? '<div style="margin-top:2px">' + badges + '</div>' : ''}</td>`
-      + `<td class="kpl-sub" title="涨停原因：${esc(ztReasonFull(r))}${r.plate_id ? `（关联板块 ID ${esc(String(r.plate_id))}，与板块行情同码制可互查）` : ''}">${esc(ztReasonFull(r))}</td>`
+      + `<td class="kpl-sub" title="${esc(ztReasonTip(r))}">${esc(ztReasonFull(r))}</td>`
       + `<td><span class="badge b-purple" title="组内推算领涨序：连板高度↓→封板时间早↑→主力净额↓（非 App 下发字段）">${lead || '--'}</span></td>`
       + `<td class="kpl-uni">${kfmtNum(knumUnit(r.real_turnover), 1)}</td>`
       + `<td>${esc(r.state || '--')}${r.pool_state === 'broken' ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c" title="盘中曾涨停、其后掉出涨停池（炸板未回封）；行内字段为其最后封住时快照">炸板</span>' : ''}</td>`

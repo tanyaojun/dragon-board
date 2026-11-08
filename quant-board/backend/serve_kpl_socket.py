@@ -54,6 +54,9 @@ def _env_flag(name: str) -> bool:
 
 _DABAN_LHB = _env_flag("KPL_DABAN_LHB")
 _LHB_REALTIME = _env_flag("KPL_LHB_REALTIME")
+# 2203 个股涨停原因推送试点（2026-11-08，涨停池页 tooltip 详情）：默认开，
+# 显式关闭 KPL_ZT_REASON_SUBS=0（切换需重启进程）；订阅面=涨停池成员自动跟随。
+_ZT_REASON_SUBS = _env_flag("KPL_ZT_REASON_SUBS")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
 _LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
@@ -78,7 +81,8 @@ _service = KplCollectorService(
     _codec,
     device_id=_DEVICE_ID, user_id=_USER_ID, token=_TOKEN,
     daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME,
-    lhb_realtime_count=_LHB_REALTIME_COUNT)
+    lhb_realtime_count=_LHB_REALTIME_COUNT,
+    zt_reason_subs=_ZT_REASON_SUBS)
 
 
 def _get_service() -> KplCollectorService:
@@ -129,6 +133,15 @@ def lhb_forecast() -> JSONResponse:
 def lhb_realtime() -> JSONResponse:
     """3004/3101 RealtimeLHB 快照（task-4）：无快照返回结构化降级（fail-visible）。"""
     return JSONResponse(content=_get_service().get_lhb_realtime())
+
+
+@app.get("/api/kpl/zt-reasons")
+def zt_reasons() -> JSONResponse:
+    """2203 涨停原因推送快照（试点）：{stock_id → 原因详情}，订阅面=涨停池成员。
+
+    无快照（采集未运行/未到流）返回结构化降级载荷（fail-visible）。
+    """
+    return JSONResponse(content=_get_service().get_zt_reasons())
 
 
 @app.get("/api/kpl/daban-list")
