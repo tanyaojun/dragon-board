@@ -365,6 +365,9 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   未破译）；**quotas[21] 已破译（2026-11-07）= 涨停原因关联板块 PlateID（801xxx，与板块排行
   PlateID 同码制；11-06 收盘帧 31/33 命中 /sector-ranking）→ 具名 `plate_id`，涨停行情页
   强度/量比按此精确匹配（禁止名称匹配，用户裁决）；未破译位/新位一律原样留 quotas。**
+- **quotas[8] zt_time / [25] last_zt_time（首板/最后涨停时间，epoch 秒）**：2026-11-08c 起
+  随封板质量行消费（「首板 X（回封 Y）」时点段，epoch→Asia/Shanghai HH:MM 固定偏移；
+  回封时点仅晚于首板时带出；11-06 实测 33/33 数值齐全）——纯语料补行，题面 hash 不动。
 - **2103 全字段落库（2026-11-07 用户要求）**：涨停池日档 `kpl_daban_pool` items 保存
   解析具名字段 + quotas×28 原始数组全量，快照级保存 pid_type/pages_meta（页级
   order_type/sort_type/index/count/indexes）/raw_len——前端暂不展示的字段后台全量留存，

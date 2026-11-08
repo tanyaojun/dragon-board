@@ -494,8 +494,11 @@ def gene_entries_for_leaders(rows: list[dict],
 
 # 封板质量只看这几列（quotas 具名字段，语义见 kpl_daban_protocol.DABAN_QUOTA_NAMES；
 # warn_tag/back_zt/stock_tag/financing_tag 语义未破译或未定，本行不消费）
+# 2026-11-08c 纯语料补行：+ zt_time/last_zt_time（首板/回封时点，epoch 秒，
+# 消费方 ammo._seal_time_seg 转 Asia/Shanghai HH:MM）
 _POOL_QUALITY_FIELDS = ("zt_tur", "max_zt_tur", "real_float", "real_turnover",
-                        "main_net", "amount", "price", "pool_state", "last_seen_ts")
+                        "main_net", "amount", "price", "pool_state", "last_seen_ts",
+                        "zt_time", "last_zt_time")   # 2026-11-08c：+首板/回封时点（纯语料补行）
 
 
 def fetch_pool_quality(db: Any, date: str) -> dict[str, Any]:

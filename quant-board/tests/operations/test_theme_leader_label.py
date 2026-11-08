@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v16"
     assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-08b"   # 2026-11-08b：封板质量语料行 + 题面 v16
+    assert doc["ammoVersion"] == "2026-11-08c"   # 2026-11-08c：封板质量行+时点段 / 题面 v16
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1596,7 +1596,8 @@ def test_run_feeds_gene_corpus_into_leader_docs(env, monkeypatch):
 QUALITY_ITEM = {"zt_tur": 77237472.0, "max_zt_tur": 407660096.0,
                 "real_float": 4422390777.0, "real_turnover": 14.31,
                 "main_net": 148080233.0, "amount": 593597266.0, "price": "",
-                "pool_state": "sealed", "last_seen_ts": 1794119726.2}
+                "pool_state": "sealed", "last_seen_ts": 1794119726.2,
+                "zt_time": 1793929260.0, "last_zt_time": 1793929260.0}
 
 
 def _pool_payload(items):
@@ -1624,6 +1625,7 @@ def test_fetch_pool_quality_maps_by_code_and_degraded_empty(monkeypatch):
     got = L.fetch_pool_quality(FakeDb(), "2026-10-19")
     assert set(got["items"]) == {"603278", "999999"} and got["degraded"] is None
     assert got["items"]["603278"]["item"]["zt_tur"] == 77237472.0
+    assert got["items"]["603278"]["item"]["zt_time"] == 1793929260.0, "2026-11-08c：时点字段随语料带出"
     assert got["items"]["603278"]["frameAt"] == "14:35", "采集帧=该股最后一帧（Asia/Shanghai）"
     assert "quotas" not in got["items"]["603278"]["item"], "只取本行消费的列，不搬整条 items"
 

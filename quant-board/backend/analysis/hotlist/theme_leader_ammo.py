@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
@@ -181,6 +182,10 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # apphq StockL2Data/GetZhangTingGene 逐股懒取落库）。上游**未标注统计窗口** → 口径注
 # 原样保留不自算；回填条目（抓取日≠日档交易日，值含此后信息）显式标注抓取日。缺失走
 # 「不可考」不补 0。判据零改动，沿 2026-10-24c/2026-11-02a 先例：纯语料补行不动题面 hash。
+# 2026-11-08c（纯语料补行，题面 hash 不动，沿 gene/AMMO 2026-11-08a 先例）：封板质量行
+# 增「首板 X（回封 Y）」时点段——zt_time/last_zt_time（epoch 秒→Asia/Shanghai HH:MM，
+# 11-06 实测 33/33 数值齐全）已在库零新采集；回封时点=当日曾炸板回封的直读证据；
+# 历史若为 "HH:MM" 字符串原样带出，缺失出「首板时点不可考」，不补 0。
 # 2026-11-08b（题集 v16，用户裁决「同步改题面判据」）：①新增 `seal_quality_line`（个股级
 # 叙事，排板内炸板面行后、基线前）——待判龙一「封单额=实际流通%/峰值封单回落/实际换手/
 # 主力净额=成交额%」，单一事实源 = kpl_daban_pool.items 的 2103 quotas 具名字段（已落库
@@ -192,7 +197,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # 不成立只原样透出并标「单位待校验」，禁猜换算（评审修订：元/手双假设在低价股区间
 # 数学上不可分，改为只按元假设带校验，手假设待 GetStockPanKou 实弹复核钉死单位后再
 # 启用——_seal_unit 一处切换，行文与下游零改动）。
-AMMO_VERSION_THEME_LEADER = "2026-11-08b"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
+AMMO_VERSION_THEME_LEADER = "2026-11-08c"   # 封板质量语料行 + 题集 v16 判据（⑦/⑥）；评审消歧修订
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1326,7 +1331,44 @@ def zt_gene_line(entries: list[dict]) -> str | None:
 # GetStockPanKou 实弹复核钉死单位前，只按元假设做带校验（App 封单列以亿展示、quotas
 # 数值元惯例均指向元）：带内出行，带外只原样透出并标「单位待校验」，**禁猜换算**。
 _SEAL_RATIO_BAND = (0.0005, 0.5)   # 0.05%~50%：容纳极端封单，越界即单位假设不成立
-_SEAL_CLOSE_FRAME = "14:57"        # 早于此刻的采集帧不是收盘帧，封单仍在变动
+_SEAL_CLOSE_FRAME = "14:57"
+# Asia/Shanghai 无夏令时（固定 UTC+8）→ 固定偏移即可确定性转换，不依赖 tzdata
+_TZ_CN = timezone(timedelta(hours=8))
+
+
+def _hhmm_from_ts(ts: Any) -> str | None:
+    """epoch 秒 → Asia/Shanghai "HH:MM"；非数值/非正 → None（调用方出不可考）。"""
+    n = _qnum(ts)
+    if n is None or n <= 0:
+        return None
+    return datetime.fromtimestamp(n, _TZ_CN).strftime("%H:%M")
+
+
+def _seal_time_seg(item: dict) -> str:
+    """首板/回封时点段（2026-11-08c 纯语料补行）：zt_time=首次涨停、last_zt_time=最后涨停。
+
+    App 常态给 epoch 秒（2026-11-06 实测 33/33 数值）；历史若给 "HH:MM" 字符串则原样带出；
+    两值都缺 → 不可考；last 早于首板属数据异常，显式标注不猜。
+    """
+    first = _hhmm_from_ts(item.get("zt_time"))
+    if first is None:
+        raw = str(item.get("zt_time") or "").strip()
+        if re.fullmatch(r"\d{1,2}:\d{2}", raw):
+            first = raw
+    last = _hhmm_from_ts(item.get("last_zt_time"))
+    if last is None:
+        raw = str(item.get("last_zt_time") or "").strip()
+        if re.fullmatch(r"\d{1,2}:\d{2}", raw):
+            last = raw
+    if first is None:
+        return "首板时点不可考"
+    if last is None:
+        return f"首板 {first}"
+    if last < first:
+        return f"首板 {first}（时点异常：最后涨停早于首板，原样 {last}）"
+    if last > first:
+        return f"首板 {first}（回封 {last}）"
+    return f"首板 {first}"        # 早于此刻的采集帧不是收盘帧，封单仍在变动
 # 涨停池语料整体缺失的降级原因 → 行内中文化（评审 2026-11-08 P1：读不到 ≠ 不在池，
 # 禁止把「档案缺失」伪装成「今日不在涨停池」这个具体事实）
 _POOL_MISSING_CN = {
@@ -1411,6 +1453,8 @@ def seal_quality_line(entries: list[dict]) -> str | None:
     - pool_state=broken（曾入池后炸板未回封）→ 显式标注「最后封住帧」，防当下值误读；
     - 未封板龙一（断板反包候选，题面规则⑤）→ 明示本行不适用；
     - 采集帧早于收盘 → 标「非收盘帧」；各股帧不同 → 逐股标帧；
+    - 首板/回封时点（2026-11-08c 纯语料补行，题面不动）：zt_time/last_zt_time epoch 秒
+      → Asia/Shanghai HH:MM；回封时点仅在晚于首板时带出（=当日曾炸板回封的直读证据）；
     - poolMissing（涨停池日档整体缺失/读口异常）→ 「涨停池语料不可考（原因）」，
       **不**伪装成「今日不在涨停池」（后者仅用于档案存在且查无此股，评审 2026-11-08 P1）；
     - 峰值封单占实际流通超出 (0, 100%] → 视为口径自证未过，不出读数（评审 P2）。
@@ -1481,6 +1525,7 @@ def seal_quality_line(entries: list[dict]) -> str | None:
         else:
             tag = "单位待校验" if basis == "unknown" else "单位待校验（缺实际流通无法自证）"
             segs.append(f"封单 {_raw_num(zt)}（{tag}）")
+        segs.append(_seal_time_seg(item))
         rt = _qnum(item.get("real_turnover"))
         if rt is not None:
             segs.append(f"实际换手 {rt:.1f}%")

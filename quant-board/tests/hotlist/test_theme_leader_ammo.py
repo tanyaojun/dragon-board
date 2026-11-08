@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08b"   # 2026-11-08b：封板质量语料行 + 题面 v16 判据
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08c"   # 2026-11-08c：+封板时点段（纯语料补行）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -1182,7 +1182,8 @@ def test_narrative_gene_line_placement_before_reason_line():
 SEAL_ITEM = {"zt_tur": 77237472.0, "max_zt_tur": 407660096.0,
              "real_float": 4422390777.0, "real_turnover": 14.31,
              "main_net": 148080233.0, "amount": 593597266.0,
-             "price": "", "pool_state": "sealed", "last_seen_ts": 1794119726.2}
+             "price": "", "pool_state": "sealed", "last_seen_ts": 1794119726.2,
+             "zt_time": 1793929260.0, "last_zt_time": 1793929260.0}   # 09:41
 
 
 def test_seal_quality_line_metrics_and_frame_disclosure():
@@ -1192,6 +1193,7 @@ def test_seal_quality_line_metrics_and_frame_disclosure():
                                  "frameAt": "14:35"}])
     assert line.startswith("封板质量（KPL 涨停池 14:35 采集帧，非收盘帧）：")
     assert "封单 0.77亿=实际流通 1.7%" in line
+    assert "首板 09:41" in line and "回封" not in line, "时点段：首板带出、无回封不带"
     assert "峰值封单 4.08亿（现为峰值 19%）" in line
     assert "实际换手 14.3%" in line
     assert "主力净额 +1.48亿=成交额 +24.9%" in line
@@ -1211,7 +1213,7 @@ def test_seal_quality_line_missing_fields_never_fake_zero():
     line2 = A.seal_quality_line([{"label": "龙一 X", "item": no_amount, "frameAt": "15:00"}])
     assert "=成交额" not in line2 and "主力净额 +1.48亿" in line2
     empty = A.seal_quality_line([{"label": "龙一 X", "item": {}, "frameAt": "15:00"}])
-    assert empty == "封板质量（KPL 涨停池 15:00 采集帧）：龙一 X：封单不可考"
+    assert empty == "封板质量（KPL 涨停池 15:00 采集帧）：龙一 X：封单不可考；首板时点不可考"
     assert A.seal_quality_line([]) is None, "entries 空 → 不出行"
 
 
@@ -1244,6 +1246,27 @@ def test_seal_quality_line_broken_and_unsealed_branches():
     assert "=今日曾封后炸板未回封（最后封住帧 10:20）：" in line3
     line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None}])
     assert line4.endswith("主板龙一 W=不可考（今日不在涨停池）")
+
+
+def test_seal_quality_line_seal_time_variants():
+    """2026-11-08c 纯语料补行：首板/回封时点段各形态。"""
+    # 回封（last > first）
+    reseal = dict(SEAL_ITEM, zt_time=1793929260.0, last_zt_time=1793947920.0)  # 09:41→14:52
+    line = A.seal_quality_line([{"label": "龙一 X", "item": reseal, "frameAt": "15:00"}])
+    assert "首板 09:41（回封 14:52）" in line
+    # 字符串 "HH:MM" 形态原样带出
+    strfmt = dict(SEAL_ITEM, zt_time="10:05", last_zt_time="10:05")
+    line2 = A.seal_quality_line([{"label": "龙一 X", "item": strfmt, "frameAt": "15:00"}])
+    assert "首板 10:05" in line2
+    # 缺失 → 不可考，不补 0
+    line3 = A.seal_quality_line([{"label": "龙一 X",
+                                  "item": dict(SEAL_ITEM, zt_time=None, last_zt_time=None),
+                                  "frameAt": "15:00"}])
+    assert "首板时点不可考" in line3
+    # 异常：最后涨停早于首板 → 显式标注 + 原样带出，不猜
+    bad = dict(SEAL_ITEM, zt_time=1793929260.0, last_zt_time=1793929000.0)
+    line4 = A.seal_quality_line([{"label": "龙一 X", "item": bad, "frameAt": "15:00"}])
+    assert "首板 09:41（时点异常：最后涨停早于首板，原样" in line4
 
 
 def test_seal_quality_line_pool_missing_vs_absent():
