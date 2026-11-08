@@ -11,9 +11,12 @@ from backend.services.kpl_daban_archiver import (
     DabanPoolArchiver,
     archive_bid_snapshot,
     archive_dt_snapshot,
+    archive_gene_corpus,
     archive_snapshot,
     archive_zb_snapshot,
     load_day,
+    load_gene_corpus,
+    pick_gene_targets,
 )
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
@@ -60,6 +63,16 @@ def _snap(ts: float, stock_ids: list[str], pages_missing: list[int] | None = Non
                               "4", "801464", "", "", "", "", "", ""]}
                   for sid in stock_ids],
     }
+
+
+def _fake_gene(sid: str) -> dict:
+    """基因 fetcher 桩（红线 7：pytest 内不得真实调用 apphq）。"""
+    return {"ok": True, "stock_id": sid,
+            "gene": {"zt_count": 4, "premium5_count": 1, "next_day_red_pct": 50,
+                     "first_seal_pct": 100, "first_broken_pct": 0, "lianban_pct": 50},
+            "gene_labels": {"zt_count": "涨停次数"},
+            "raw": [4, 1, 50, 100, 0, 50], "raw_len": 6,
+            "window_note": "上游未标注统计窗口（六元数组原样透出，不自算不反推）"}
 
 
 def _states(row: dict) -> dict[str, str]:
@@ -313,7 +326,8 @@ def test_archive_once_lane_isolation(monkeypatch):
     monkeypatch.setattr(arch.httpx, "AsyncClient", _FailClient)
     db = _FakeDb()
     archiver = DabanPoolArchiver(
-        settings=_S(), database_factory=lambda: db, interval_seconds=60)
+        settings=_S(), database_factory=lambda: db, interval_seconds=60,
+        gene_fetcher=_fake_gene)
     asyncio.run(archiver._archive_once())
     res = archiver.status()["lastResult"]
     # 涨停/竞价正常落库；炸板池 fetch 失败、跌停池 collector 降级：各自结构化透出，互不连带
@@ -591,7 +605,8 @@ def test_archive_once_fetches_reason_corpus_with_pool_date(monkeypatch):
 
     monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
     db = _FakeDb()
-    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db, interval_seconds=60)
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, gene_fetcher=_fake_gene)
     asyncio.run(archiver._archive_once())
     res = archiver.status()["lastResult"]
     assert res["pool"]["ok"] is True and res["reason"]["ok"] is True
@@ -610,7 +625,8 @@ def test_archive_once_fetches_reason_corpus_with_pool_date(monkeypatch):
 
     monkeypatch.setattr(arch.httpx, "AsyncClient", _Degraded)
     db2 = _FakeDb()
-    archiver2 = DabanPoolArchiver(settings=_S(), database_factory=lambda: db2, interval_seconds=60)
+    archiver2 = DabanPoolArchiver(settings=_S(), database_factory=lambda: db2,
+                                  interval_seconds=60, gene_fetcher=_fake_gene)
     asyncio.run(archiver2._archive_once())
     assert archiver2.status()["lastResult"]["reason"]["reason"] == "no_pool_date"
     # 竞价通道仍可独立落库；语料字段不写（日期不明不猜）
@@ -672,3 +688,152 @@ def test_reason_corpus_stale_pool_date_skipped(monkeypatch):
     assert res["reason"]["ok"] is False and res["reason"]["reason"] == "stale_pool_date"
     # pool 通道照常落自己的档（那是它的事实）；语料字段不得挂进旧交易日档
     assert "reason_items" not in db._coll.rows.get("2026-10-01", {})
+
+
+# ── 涨停基因语料通道（2026-11-08，题材龙头语料投喂 jev；前端不上）───────────────
+
+def test_pick_gene_targets_missing_first_limit_and_close_refresh():
+    """缺失优先、limit 控发数、收盘后仅对盘中旧值刷一次（不重复刷新）。"""
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001", "000002", "000003"], date="2026-11-06"))
+    before_close = datetime(2026, 11, 6, 10, 30, tzinfo=TZ_SHANGHAI)
+    plan = pick_gene_targets(db, "2026-11-06", limit=2, now=before_close)
+    assert plan["ok"] is True and plan["targets"] == ["000001", "000002"]
+    assert plan["pending_n"] == 3 and plan["refresh_n"] == 0 and plan["after_close"] is False
+
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_fake_gene("000001")]},
+                        now=before_close)
+    after_close = datetime(2026, 11, 6, 15, 30, tzinfo=TZ_SHANGHAI)
+    plan2 = pick_gene_targets(db, "2026-11-06", limit=5, now=after_close)
+    assert plan2["targets"] == ["000002", "000003", "000001"]   # 缺失优先、旧值排队尾
+    assert plan2["pending_n"] == 2 and plan2["refresh_n"] == 1 and plan2["after_close"] is True
+
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_fake_gene("000001")]},
+                        now=after_close)
+    plan3 = pick_gene_targets(db, "2026-11-06", limit=5, now=after_close)
+    assert plan3["targets"] == ["000002", "000003"] and plan3["refresh_n"] == 0
+
+
+def test_pick_gene_targets_no_archive_and_empty_pool():
+    assert pick_gene_targets(_FakeDb(), "2026-11-06")["reason"] == "no_archive"
+    db = _FakeDb()
+    db._coll.rows["2026-11-06"] = {"_id": "2026-11-06", "items": []}
+    assert pick_gene_targets(db, "2026-11-06")["reason"] == "empty_pool"
+
+
+def test_archive_gene_corpus_union_pending_and_failures():
+    """并集写入 + raw 原样 + 覆盖度 pending + 失败进 gene_failures（不伪装 0）。"""
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001", "000002"], date="2026-11-06"))
+    out = archive_gene_corpus(db, {"date": "2026-11-06", "genes": [
+        _fake_gene("000001"),
+        {"ok": False, "stock_id": "000002", "degraded": True, "reason": "1020", "error": "白名单"},
+    ]}, now=datetime(2026, 11, 6, 14, 0, tzinfo=TZ_SHANGHAI))
+    assert out["ok"] is True and out["merged_n"] == 1 and out["failures_n"] == 1
+    assert out["pending_n"] == 1
+    row = db._coll.rows["2026-11-06"]
+    assert row["gene_count"] == 1 and row["gene_pending_n"] == 1
+    assert row["gene_items"][0]["raw"] == [4, 1, 50, 100, 0, 50]
+    assert row["gene_items"][0]["source"] == "http_GetZhangTingGene"
+    assert row["gene_items"][0]["same_day"] is True
+    assert row["gene_failures"][0]["stock_id"] == "000002"
+    assert [m["stock_id"] for m in row["items"]] == ["000001", "000002"]   # 打板通道不被覆盖
+    assert "reason_items" not in row and "zb_items" not in row
+
+    out2 = archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_fake_gene("000002")]},
+                               now=datetime(2026, 11, 6, 14, 30, tzinfo=TZ_SHANGHAI))
+    assert out2["pending_n"] == 0 and out2["item_n"] == 2
+    assert db._coll.rows["2026-11-06"]["gene_failures"] == []
+
+
+def test_gene_point_in_time_flags():
+    """回填（抓取日≠日档交易日）标 same_day=False + 读口 backfill_n/note 提示。"""
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001", "000002"], date="2026-11-06"))
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_fake_gene("000001")]},
+                        now=datetime(2026, 11, 6, 15, 30, tzinfo=TZ_SHANGHAI))
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_fake_gene("000002")]},
+                        now=datetime(2026, 11, 8, 20, 0, tzinfo=TZ_SHANGHAI))
+    items = {it["stock_id"]: it for it in db._coll.rows["2026-11-06"]["gene_items"]}
+    assert items["000001"]["same_day"] is True and items["000001"]["fetched_date"] == "2026-11-06"
+    assert items["000002"]["same_day"] is False and items["000002"]["fetched_date"] == "2026-11-08"
+    out = load_gene_corpus(db, "2026-11-06")
+    assert out["same_day_n"] == 1 and out["backfill_n"] == 1
+    assert "回填抓取" in out["note"] and "不得当该日盘后已知信息使用" in out["note"]
+
+
+def test_archive_gene_corpus_all_failed_and_no_date():
+    db = _FakeDb()
+    archive_snapshot(db, _snap(100.0, ["000001"], date="2026-11-06"))
+    out = archive_gene_corpus(db, {"date": "2026-11-06", "genes": [
+        {"ok": False, "stock_id": "000001", "reason": "1020", "error": "白名单"}]})
+    assert out["ok"] is False and out["reason"] == "no_gene_fetched"
+    assert "gene_items" not in db._coll.rows["2026-11-06"]   # 不写、不覆盖既有
+    assert db._coll.rows["2026-11-06"]["items"]             # 打板通道原样
+    assert archive_gene_corpus(db, {"genes": [_fake_gene("000001")]})["reason"] == "no_pool_date"
+
+
+def test_load_gene_corpus_degraded_and_ok():
+    db = _FakeDb()
+    assert load_gene_corpus(db, "2026-11-06")["reason"] == "no_archive"
+    archive_snapshot(db, _snap(100.0, ["000001"], date="2026-11-06"))
+    assert load_gene_corpus(db, "2026-11-06")["reason"] == "no_gene_corpus"
+    archive_gene_corpus(db, {"date": "2026-11-06", "genes": [_fake_gene("000001")]})
+    out = load_gene_corpus(db, "2026-11-06")
+    assert out["ok"] is True and out["count"] == 1 and out["pending_n"] == 0
+    assert out["corpus_source"] == "http_GetZhangTingGene"
+    assert "未标注统计窗口" in out["items"][0]["window_note"]
+    assert load_day(db, "2026-11-06", lane="gene")["count"] == 1   # 统一 lane 分发
+
+
+def test_archiver_gene_lane_round(monkeypatch):
+    """单轮：pool 落库后按 limit 懒取基因写 gene_items，失败只记 failures 不连带其它通道。"""
+    import asyncio
+    from backend.services import kpl_daban_archiver as arch
+
+    class _S:
+        storage_backend = "mongodb"
+
+    class _Resp:
+        def __init__(self, content):
+            self._c = content
+
+        def json(self):
+            return self._c
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            if url.endswith("pid_type=1"):
+                return _Resp(_snap(100.0, ["000001", "000002", "000003"], date="2026-11-06"))
+            if url.endswith("/zt-reasons"):
+                return _Resp({"ok": False, "degraded": True, "reason": "no_zt_reason_snapshot"})
+            return _Resp({"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"})
+
+    calls: list[str] = []
+
+    def _fetch(sid: str) -> dict:
+        calls.append(sid)
+        return _fake_gene(sid) if sid != "000002" else {"ok": False, "stock_id": sid,
+                                                       "reason": "1020", "error": "白名单"}
+
+    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
+    db = _FakeDb()
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, gene_fetcher=_fetch, gene_limit=2)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]["gene"]
+    assert calls == ["000001", "000002"]         # limit=2 控发数
+    assert res["ok"] is True and res["merged_n"] == 1 and res["pending_n"] == 2
+    row = db._coll.rows["2026-11-06"]
+    assert [g["stock_id"] for g in row["gene_items"]] == ["000001"]
+    assert row["gene_failures"][0]["stock_id"] == "000002"
+    assert archiver.status()["lastResult"]["pool"]["ok"] is True   # 其它通道不受影响

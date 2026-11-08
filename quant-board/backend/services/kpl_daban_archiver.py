@@ -19,6 +19,12 @@
   同款收盘态标注——sealed=收盘仍跌停 / broken=曾入池后掉出即打开跌停未回封
   （字段保留其最后封住时快照 + last_seen_ts；回封跌停自动恢复 sealed）；
   页缺口帧跳过掉出标注防误标。
+- 涨停基因语料通道（apphq StockL2Data/GetZhangTingGene，gene_ 前缀字段；
+  2026-11-08 用户需求「题材龙头语料投喂 jev」；前端暂不上）：单股粒度 HTTP 逐股懒取，
+  按 stock_id 并集落库 gene_items（六元数组原样 raw + 具名字段 + window_note +
+  fetched_date/same_day 时点标记）；**每轮限量 gene_limit 只**（服务端 _post_form
+  全局 ≥2s 单发间隔），缺失优先、收盘后 ≥15:05 对盘中旧值刷一次终值；日期跟随涨停池
+  快照交易日，全池覆盖度由 gene_pending_n 暴露（fail-visible）。
 - 涨停原因语料通道（2203 推送，reason_ 前缀字段；2026-11-08 用户需求「作为 jev 语料
   投喂」）：按 stock_id 并集落库 reason_items（zt/fx/jc/jj/pledge/zt_group/theme/
   child_theme/label/plate/tp/rank 等原文，不改写不拼接——组合口径由消费方定）；
@@ -46,6 +52,7 @@ import httpx
 
 from backend.core.settings import get_settings
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+from backend.services.kpl_stock_gene import get_zt_gene
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 _COLLECTION = "kpl_daban_pool"
@@ -207,6 +214,8 @@ def load_day(db: Any, date: str, *, lane: str = "pool") -> dict[str, Any]:
     """
     if lane == "reason":
         return load_reason_corpus(db, date)
+    if lane == "gene":
+        return load_gene_corpus(db, date)
     row = db[_COLLECTION].find_one({"_id": date})
     if not row:
         return {"ok": False, "degraded": True, "reason": "no_archive", "date": date, "lane": lane}
@@ -365,7 +374,177 @@ def load_reason_corpus(db: Any, date: str) -> dict[str, Any]:
             "corpus_source": row.get("reason_source") or "socket_2203"}
 
 
+# ── 涨停基因（溢价基因）语料通道（2026-11-08 用户需求：题材龙头语料投喂 jev）────────────
+# 协议层见 backend/services/kpl_stock_gene.py（apphq StockL2Data/GetZhangTingGene，
+# 六元数组=涨停次数/溢价5%次数/次日红盘率%/首板封板率%/首板被板率%/连板率%，
+# 上游未标注统计窗口 → 原样透出 window_note，不自算）。与 reason_items 同款：不另建
+# 数据集，同一 kpl_daban_pool 日档 gene_ 前缀字段；本通道随打板通道单写者整 doc 回写。
+_GENE_LANE = "gene"
+_GENE_CLOSE_CUTOFF = (15, 5)   # 收盘后刷新时点 15:05：盘中先拉保可用，收盘后刷终值
+
+
+def _pool_member_ids(row: dict[str, Any]) -> list[str]:
+    """日档涨停池成员 stock_id（无前缀 items 字段），保持原始顺序。"""
+    out: list[str] = []
+    for m in row.get("items") or []:
+        sid = str((m or {}).get("stock_id") or "").strip()
+        if sid and sid not in out:
+            out.append(sid)
+    return out
+
+
+def _close_cutoff(now: datetime) -> datetime:
+    """该日的收盘后刷新截止时刻（本地 15:05）。"""
+    return now.replace(hour=_GENE_CLOSE_CUTOFF[0], minute=_GENE_CLOSE_CUTOFF[1],
+                       second=0, microsecond=0)
+
+
+def pick_gene_targets(db: Any, date: str, *, limit: int = 6,
+                      now: Optional[datetime] = None) -> dict[str, Any]:
+    """挑本轮要拉基因的成员（纯函数，不写库）：缺失优先，收盘后补一次终值刷新。
+
+    顺序：①涨停池成员中尚无 gene_items 的股（按池内顺序）→ ②收盘后（≥15:05）对盘中
+    拉的旧值（fetched_at < 当日 15:05）各刷新一次。limit 控发数（协议层 _post_form 全局
+    ≥2s 单发间隔，不能一轮打 30 只）。日档不存在/池为空 → targets 空 + 结构化 reason。
+    """
+    stamp = now or datetime.now(TZ_SHANGHAI)
+    row = dict(db[_COLLECTION].find_one({"_id": date}) or {})
+    members = _pool_member_ids(row)
+    if not members:
+        reason = "no_archive" if not row else "empty_pool"
+        return {"ok": False, "reason": reason, "date": date,
+                "targets": [], "pending_n": 0, "refresh_n": 0}
+    done: dict[str, str] = {}
+    for g in row.get("gene_items") or []:
+        sid = str((g or {}).get("stock_id") or "").strip()
+        if sid:
+            done[sid] = str(g.get("fetched_at") or "")
+    cutoff = _close_cutoff(stamp).isoformat()
+    after_close = stamp >= _close_cutoff(stamp)
+    missing = [sid for sid in members if sid not in done]
+    refresh = [sid for sid in members if sid in done and after_close and done[sid] < cutoff]
+    ordered = missing + refresh
+    return {"ok": True, "date": date, "targets": ordered[:max(0, int(limit))],
+            "pending_n": len(missing), "refresh_n": len(refresh),
+            "member_n": len(members), "gene_n": len(done), "after_close": after_close}
+
+
+def archive_gene_corpus(db: Any, payload: dict[str, Any], *,
+                        now: Optional[datetime] = None) -> dict[str, Any]:
+    """涨停基因语料落库（2026-11-08 用户需求：题材龙头语料投喂 jev）。
+
+    payload: {"date": 交易日, "genes": [get_zt_gene 结果, ...]}
+    写入 kpl_daban_pool 同日档 gene_ 前缀字段（与打板通道同款「读全文 → 只改本通道字段
+    → 整 doc 回写」，单写者顺序执行）：
+    - gene_items：按 stock_id 并集（仅 ok 条目；raw 六元数组原样 + 具名字段 + window_note
+      + fetched_date/same_day 时点标记 + fetched_at + source），失败条目进 gene_failures；
+    - gene_date/gene_source/gene_count/gene_pending_n/gene_failures/gene_archived_at；
+      gene_pending_n = 涨停池成员中尚无基因的只数（消费方据此判语料覆盖度）。
+    时点语义：端点返回「抓取时点」统计，回填历史日档（fetched_date≠交易日）的值含此后
+    信息 → same_day=False，读口透出 backfill_n + note（不得当该日盘后已知信息用）。
+    本批无一成功且无既有语料 → ok False（no_gene_fetched），不覆盖既有、不伪装。
+    """
+    date = str(payload.get("date") or "")
+    genes = payload.get("genes") or []
+    if not date:
+        return {"ok": False, "reason": "no_pool_date", "lane": _GENE_LANE,
+                "date": None, "item_n": 0}
+    stamp = (now or datetime.now(TZ_SHANGHAI)).isoformat()
+    fetched_date = stamp[:10]
+    row = dict(db[_COLLECTION].find_one({"_id": date}) or {})
+    row.pop("_id", None)
+    members: dict[str, dict[str, Any]] = {}
+    for g in row.get("gene_items") or []:
+        sid = str((g or {}).get("stock_id") or "").strip()
+        if sid:
+            members[sid] = dict(g)
+    merged_n = 0
+    failures: list[dict[str, Any]] = []
+    for res in (genes if isinstance(genes, list) else []):
+        res = res if isinstance(res, dict) else {}
+        sid = str(res.get("stock_id") or "").strip()
+        if not res.get("ok"):
+            failures.append({"stock_id": sid, "reason": res.get("reason") or "failed",
+                             "error": str(res.get("error") or "")[:120]})
+            continue
+        if not sid:
+            failures.append({"stock_id": "", "reason": "missing_stock_id"})
+            continue
+        item: dict[str, Any] = {
+            "stock_id": sid,
+            "gene": res.get("gene") or {},
+            "gene_labels": res.get("gene_labels") or {},
+            "raw": res.get("raw"),
+            "raw_len": res.get("raw_len"),
+            "window_note": res.get("window_note"),
+            "fetched_date": fetched_date,
+            "same_day": fetched_date == date,   # False=回填（值含抓取日之后的信息）
+            "fetched_at": stamp,
+            "source": "http_GetZhangTingGene",
+        }
+        if res.get("partial"):
+            item["partial"] = True
+            item["missing_fields"] = res.get("missing_fields") or []
+        members[sid] = item
+        merged_n += 1
+    if not merged_n and not members:
+        return {"ok": False, "reason": "no_gene_fetched", "lane": _GENE_LANE,
+                "date": date, "item_n": 0, "failures_n": len(failures)}
+    pending = [sid for sid in _pool_member_ids(row) if sid not in members]
+    doc = {
+        "gene_date": date,
+        "gene_source": "http_GetZhangTingGene",
+        "gene_items": list(members.values()),
+        "gene_count": len(members),
+        "gene_pending_n": len(pending),
+        "gene_failures": failures,
+        "gene_archived_at": stamp,
+    }
+    db[_COLLECTION].replace_one({"_id": date}, {"_id": date, **row, **doc}, upsert=True)
+    return {"ok": True, "lane": _GENE_LANE, "date": date, "item_n": len(members),
+            "merged_n": merged_n, "failures_n": len(failures), "pending_n": len(pending)}
+
+
+def load_gene_corpus(db: Any, date: str) -> dict[str, Any]:
+    """涨停基因语料读口（jev 投喂原料）：{ok, date, items, count, pending_n, ...}。
+
+    fail-visible：「日档不存在」（no_archive）与「日档在但基因语料未落库」
+    （no_gene_corpus）严格分开，不伪装空语料；pending_n>0 = 涨停池成员尚有未拉的股；
+    backfill_n>0 = 回填条目（值含抓取日之后信息，不得当该日盘后已知信息用）。
+    """
+    row = db[_COLLECTION].find_one({"_id": date})
+    if not row:
+        return {"ok": False, "degraded": True, "reason": "no_archive",
+                "date": date, "lane": _GENE_LANE}
+    items = row.get("gene_items") or []
+    if not items:
+        return {"ok": False, "degraded": True, "reason": "no_gene_corpus",
+                "date": date, "lane": _GENE_LANE, "item_n": 0,
+                "failures": row.get("gene_failures") or [],
+                "note": "日档存在但涨停基因语料未落库（存档器未运行或该轮全部拉取失败）"}
+    backfill_n = sum(1 for it in items if it.get("same_day") is False)
+    out = {"ok": True, "source": "local_archive", "lane": _GENE_LANE,
+           "date": row.get("gene_date") or date, "items": items,
+           "count": len(items), "pending_n": row.get("gene_pending_n") or 0,
+           "same_day_n": len(items) - backfill_n, "backfill_n": backfill_n,
+           "failures": row.get("gene_failures") or [],
+           "archived_at": row.get("gene_archived_at"),
+           "corpus_source": row.get("gene_source") or "http_GetZhangTingGene"}
+    if backfill_n:
+        out["note"] = (f"{backfill_n} 条为回填抓取（fetched_date≠日档交易日）："
+                       "值含抓取日之后的信息，不得当该日盘后已知信息使用")
+    return out
+
+
 class DabanPoolArchiver:
+    """周期拉取 :8002 涨停池/集合竞价/炸板池/跌停池快照 + 2203 涨停原因语料 + 涨停基因
+    语料，按日存档（main.py startup 启动，mongodb 模式专用；2026-11-08 增补炸板/跌停
+    通道与 reason_items 语料、gene_items 语料（HTTP 逐股懒取、每轮限量），
+    同一 kpl_daban_pool 日档各改各前缀/字段）。
+
+    单任务循环内顺序处理四打板通道，再拉一次 2203 语料，最后拉本轮限量涨停基因：
+    任一通道失败不阻断其它通道（各自结构化记 lastResult）。
+    """
     """周期拉取 :8002 涨停池/集合竞价/炸板池/跌停池快照 + 2203 涨停原因语料，按日存档
     （main.py startup 启动，mongodb 模式专用；2026-11-08 增补炸板/跌停通道与
     reason_items 语料，同一 kpl_daban_pool 日档各改各前缀/字段）。
@@ -385,6 +564,8 @@ class DabanPoolArchiver:
         zb_upstream_url: str = _UPSTREAM_ZB,
         dt_upstream_url: str = _UPSTREAM_DT,
         reason_upstream_url: str = _UPSTREAM_REASONS,
+        gene_fetcher: Callable[[str], dict[str, Any]] = get_zt_gene,
+        gene_limit: int = 6,
     ) -> None:
         current = settings or get_settings()
         self.enabled = current.storage_backend == "mongodb"
@@ -395,6 +576,10 @@ class DabanPoolArchiver:
         self._zb_upstream_url = zb_upstream_url
         self._dt_upstream_url = dt_upstream_url
         self._reason_upstream_url = reason_upstream_url
+        # 涨停基因语料（HTTP 单股粒度、协议层 ≥2s 限频）→ 每轮限量懒取，未拉满的成员
+        # 留 gene_pending_n（fail-visible），供 jev 语料消费方判断覆盖度
+        self._gene_fetcher = gene_fetcher
+        self._gene_limit = max(1, int(gene_limit))
         self._task: asyncio.Task[None] | None = None
         self._last_run_at: str | None = None
         self._last_result: dict[str, Any] | None = None
@@ -422,6 +607,7 @@ class DabanPoolArchiver:
             "enabled": self.enabled,
             "running": self._task is not None,
             "intervalSeconds": self.interval_seconds,
+            "geneLimit": self._gene_limit,
             "lastRunAt": self._last_run_at,
             "lastResult": self._last_result,
             "lastError": self._last_error,
@@ -498,6 +684,23 @@ class DabanPoolArchiver:
                             {**rsn, "date": pool_date})
                     except Exception as error:
                         results["reason"] = {"ok": False, "reason": f"archive_failed:{error}"}
+            # 涨停基因语料（2026-11-08，题材龙头语料投喂 jev）：HTTP 单股逐发（协议层
+            # _post_form 全局 ≥2s 限频），每轮限量 gene_limit 只，缺失优先、收盘后刷终值。
+            try:
+                if not pool_date:
+                    results["gene"] = {"ok": False, "reason": "no_pool_date"}
+                else:
+                    db = self._database_factory()
+                    plan = await asyncio.to_thread(pick_gene_targets, db, pool_date,
+                                                   limit=self._gene_limit)
+                    genes = [await asyncio.to_thread(self._gene_fetcher, sid)
+                             for sid in (plan.get("targets") or [])]
+                    results["gene"] = await asyncio.to_thread(
+                        archive_gene_corpus, db, {"date": pool_date, "genes": genes})
+                    if plan.get("ok") is False:
+                        results["gene"]["plan_reason"] = plan.get("reason")
+            except Exception as error:
+                results["gene"] = {"ok": False, "reason": f"archive_failed:{error}"}
         self._last_result = results
         self._last_error = None if all(r.get("ok") for r in results.values()) \
             else ";".join(f"{k}:{r.get('reason')}" for k, r in results.items() if not r.get("ok"))

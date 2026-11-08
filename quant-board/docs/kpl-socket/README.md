@@ -631,20 +631,28 @@ c=StockL2Data&a=GetZhangTingGene&StockID=<单股>  + 公共参数（游客 UserI
 - `gene_date` / `gene_source`(=`http_GetZhangTingGene`) / `gene_count` /
   `gene_pending_n`（涨停池成员中尚无基因的只数=覆盖度）/ `gene_failures`（失败条目，
   fail-visible）/ `gene_archived_at`；
-- 写库用**字段级 `$set`（只动 `gene_` 前缀）**，不与 `DabanPoolArchiver` 的整 doc 读改写
-  互踩（同一进程两循环各自 to_thread 落库，整 doc 回写会丢更新）。
+- 写库**随打板通道同一单写者循环**（读全文 → 只改本通道字段 → 整 doc 回写），不另起
+  第二循环、不用字段级 `$set`——单写者顺序执行，与 bid/zb/dt/reason 各改各前缀，无互踩。
 
-实现（二层分离）：
+实现（一处通道 + 一个协议层）：
 
 - 协议层 `backend/services/kpl_stock_gene.py`：`fetch_zt_gene_raw` / `parse_zt_gene` /
   `get_zt_gene`（复用 `_post_form` 全局 ≥2s 单发间隔 + 300s TTL 缓存；**pytest 硬护栏**
   `_pytest_guard`：pytest 进程内未 mock `_post_form` 直接抛错，红线 7）；
-- 语料层 `backend/services/kpl_gene_corpus.py`：`pick_gene_targets`（缺失优先 + 收盘后
-  ≥15:05 对盘中旧值刷一次终值）/ `archive_gene_corpus` / `load_gene_corpus` /
-  `GeneCorpusArchiver`（独立 60s 循环，每轮 `limit=6` 只逐股懒取——服务端 2s 间隔天然
-  限速，全池 ~33 只约 6 轮补齐；`main.py` startup/shutdown 挂载，status 暴露 lastResult）；
-- 读口 `GET /api/kpl/daban-genes?date=YYYY-MM-DD`（:8000，无档 → `no_archive`；日档在但
-  语料未落库 → `no_gene_corpus`；`pending_n>0` = 覆盖度未满，消费方可见）。
+- 通道（2026-11-08 用户裁决并入主存档器，避免双循环维护成本）：`kpl_daban_archiver.py`
+  内 `_GENE_LANE` + `pick_gene_targets`（缺失优先 + 收盘后 ≥15:05 对盘中旧值刷一次终值）
+  / `archive_gene_corpus` / `load_gene_corpus`，由 `DabanPoolArchiver` 在同一 60s 循环
+  里 + `load_day(lane="gene")` 分发；每轮 `gene_limit=6` 只逐股懒取（协议层 2s 间隔天然
+  限速，全池 ~33 只约 6 轮补齐），失败只记 lastResult 不退循环；status 暴露 `geneLimit`
+  与本轮 `gene` 结果（merged_n/pending_n/failures_n）；
+- 读口 `GET /api/kpl/daban-genes?date=YYYY-MM-DD`（与 daban-pool/bidding/zhaban/dt/reasons
+  共用 `_load_daban_lane_day`；无档 → `no_archive`；日档在但语料未落库 → `no_gene_corpus`；
+  `pending_n>0` = 覆盖度未满；`backfill_n>0` = 回填条目）。
+
+异步/限频可靠性（用户提问记录）：基因拉取在循环内以 `asyncio.to_thread(self._gene_fetcher)`
+逐股执行，协议层 `_post_form` 自带全局 2s 间隔锁 + 15s 超时；最坏一轮 6×(2s+超时) 仍远小于
+下一轮间隔累积，循环体 `sleep(interval)` 在轮末进行（轮超时只推迟下一轮，不叠跑）；
+任一通道异常/超时只进 `lastResult`+`lastError`，不退循环、不阻断其它通道。
 
 jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 六字段作为题材龙头的
 历史打板确定性画像（涨停次数/溢价 5% 次数/次日红盘率/首板封板率/首板被板率/连板率）

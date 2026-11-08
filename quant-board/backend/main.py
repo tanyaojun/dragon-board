@@ -258,16 +258,6 @@ async def on_startup() -> None:
             get_daban_pool_archiver().start()
         except Exception:
             logger.exception("daban pool archiver startup failed; continue startup")
-    # 涨停基因语料增量存档（2026-11-08，题材龙头语料投喂 jev）：独立循环 + 字段级 $set
-    # 只写 gene_ 前缀；打板/语料通道亦为字段级 $set，各写方互不覆盖（HTTP 单股懒取、每轮
-    # 限量）。best-effort。
-    if get_settings().storage_backend == "mongodb":
-        try:
-            from backend.services.kpl_gene_corpus import get_gene_corpus_archiver
-
-            get_gene_corpus_archiver().start()
-        except Exception:
-            logger.exception("gene corpus archiver startup failed; continue startup")
     # KPL 题材个股人气缓存（2026-09 热度口径 = KPL 人气总和，tck2.js）：后台线程
     # 每 10 分钟全量刷新，启动即预热一轮。best-effort：失败不阻断启动，
     # 题材热度缺失会以 kpl_hotness_unavailable 标记暴露在前端。
@@ -424,9 +414,6 @@ async def on_shutdown() -> None:
     from backend.services.kpl_daban_archiver import close_daban_pool_archiver
 
     await close_daban_pool_archiver()
-    from backend.services.kpl_gene_corpus import close_gene_corpus_archiver
-
-    await close_gene_corpus_archiver()
     # KPL 缓存只在 mongodb 模式启动（与 startup 对称）：非 mongo 部署不尝试
     # 停止，避免每次关闭都打印 "kpl hotness shutdown failed" 异常栈（审计 L4）。
     if get_settings().storage_backend == "mongodb":
