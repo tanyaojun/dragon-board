@@ -76,10 +76,11 @@ def fetch_notice_count_raw(stock_id: str) -> Dict[str, Any]:
 
 def parse_notice_count(data: Dict[str, Any], *, stock_id: str = "") -> Dict[str, Any]:
     """计数响应 → 具名字段（缺位不补 0，partial 标记 fail-visible，AGENTS §4.0）。"""
-    sid = str(data.get("StockID") or stock_id or "")
+    # 评审 2026-11-08 P2：isinstance 判定前置（非 dict 输入走结构化降级而非 AttributeError）
     if not isinstance(data, dict) or "announcement" not in data and "news" not in data:
         return {"ok": False, "degraded": True, "reason": "unexpected_payload",
-                "stock_id": sid, "raw": data, "window_note": WINDOW_NOTE}
+                "stock_id": str(stock_id), "raw": data, "window_note": WINDOW_NOTE}
+    sid = str(data.get("StockID") or stock_id or "")
     counts: Dict[str, Any] = {}
     missing: list[str] = []
     for name in COUNT_FIELDS:

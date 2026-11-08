@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import math
 import struct
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -519,7 +520,8 @@ def parse_stock_related_theme_resp(payload: bytes) -> Dict[str, Any]:
     Item{ id=1(string), name=2(string), number=3(float, wiretype=5) })}；
     请求 Hq.HQReq{f1 stockId}（与 2203 同款，复用 build_hq_req_pb）。
     number = App「题材库」页签的题材热度数值；items 可能含空 id/name（App 原样）。
-    fail-visible：非 float 的 number（异常 wiretype）原样透出 raw bytes 的 repr，不猜。"""
+    fail-visible：非有限 float（NaN/Inf）与非 float 形态（varint/bytes）原样 repr 透出，
+    不猜、不出派生值（评审 2026-11-08 P2：NaN/Inf 会让 JSON 端点序列化出非法字面量）。"""
     pb = parse_pb(payload)
 
     def _s(field: int) -> str:
@@ -541,7 +543,15 @@ def parse_stock_related_theme_resp(payload: bytes) -> Dict[str, Any]:
             item["name"] = (bytes(v).decode("utf-8", "replace")
                             if isinstance(v, (bytes, bytearray)) else str(v))
         for v in sub.get(3, []):
-            item["number"] = v if isinstance(v, float) else repr(bytes(v))
+            # 评审 2026-11-08 P2：NaN/Inf 由 struct.unpack("<f") 产生（非法 JSON 序列化 +
+            # 下游 round OverflowError），非有限值并入 fail-visible 分支原样 repr；
+            # varint 形态（wiretype 0 → int）按 repr(v) 带出原值（bytes(int) 会按值分配零字节）
+            if isinstance(v, float) and math.isfinite(v):
+                item["number"] = v
+            elif isinstance(v, (bytes, bytearray)):
+                item["number"] = repr(bytes(v)[:80])
+            else:
+                item["number"] = repr(v)[:80]
         themes.append(item)
     return {"stock_id": _s(1), "themes": themes}
 

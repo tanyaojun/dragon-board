@@ -377,6 +377,24 @@ class TestStockRelatedTheme2013:
         pb = proto.parse_pb(b"\x1d" + _st.pack("<f", 3.25))
         assert pb[3][0] == 3.25
 
+    def test_parse_non_finite_and_varint_number_fail_visible(self):
+        """评审 P2：NaN/Inf（fixed32 unpack 可产）与 varint 形态 → repr 原样，不出派生值。"""
+        import struct as _st
+        nan_payload = (proto.pb_bytes(1, b"301697")
+                       + proto.pb_bytes(2, self._item() + b"\x1d" + _st.pack("<f", float("nan"))))
+        out = proto.parse_stock_related_theme_resp(nan_payload)
+        n = out["themes"][0]["number"]
+        assert isinstance(n, str) and "nan" in n
+        inf_payload = (proto.pb_bytes(1, b"301697")
+                       + proto.pb_bytes(2, self._item() + b"\x1d" + _st.pack("<f", float("inf"))))
+        out2 = proto.parse_stock_related_theme_resp(inf_payload)
+        assert isinstance(out2["themes"][0]["number"], str) and "inf" in out2["themes"][0]["number"]
+        # varint 形态（wiretype 0 → int）：repr(v) 带出原值（不得 bytes(int) 按值分配零字节）
+        varint_payload = (proto.pb_bytes(1, b"301697")
+                          + proto.pb_bytes(2, self._item() + b"\x18\x05"))   # f3 varint=5
+        out3 = proto.parse_stock_related_theme_resp(varint_payload)
+        assert out3["themes"][0]["number"] == "5"
+
     def test_parse_empty_and_missing_number(self):
         out = proto.parse_stock_related_theme_resp(b"")
         assert out["stock_id"] == "" and out["themes"] == []

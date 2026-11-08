@@ -1312,6 +1312,24 @@ def test_leader_narrative_theme_heat_placement():
     assert idx["打标交叉行"] < idx["题材热度行"] < idx["基因行"] < idx["原因行"]
 
 
+def test_hhmm_from_ts_out_of_range_degrades():
+    """评审 P2：epoch 越界（毫秒形态 1.7e12）/NaN/Inf → None（「首板时点不可考」），
+    不抛 OverflowError 打挂整轮投喂。"""
+    assert A._hhmm_from_ts(1.7e12) is None
+    assert A._hhmm_from_ts(float("nan")) is None
+    assert A._hhmm_from_ts(float("inf")) is None
+    huge = dict(SEAL_ITEM, zt_time=1.7e12, last_zt_time=1.7e12)
+    line = A.seal_quality_line([{"label": "龙一 X", "item": huge, "frameAt": "15:00"}])
+    assert "首板时点不可考" in line   # 结构化降级，不崩
+
+
+def test_heat_num_fmt_non_finite():
+    """评审 P2：_heat_num_fmt 对 NaN/Inf 原样 str（HTTP JSON 层可产），不出 OverflowError。"""
+    assert A._heat_num_fmt(float("nan")) == "nan"
+    assert A._heat_num_fmt(float("inf")) == "inf"
+    assert A._heat_num_fmt(96.5) == "96.5" and A._heat_num_fmt(71.0) == "71"
+
+
 def test_seal_quality_line_seal_time_variants():
     """2026-11-08c 纯语料补行：首板/回封时点段各形态。"""
     # 回封（last > first）

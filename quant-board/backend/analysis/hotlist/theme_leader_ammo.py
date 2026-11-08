@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import math
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -189,7 +190,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # 2026-11-08d（纯语料补行，题面 hash 不动）：新增 theme_heat_line——KPL 题材库
 # （socket 2013 StockRelatedThemeResp，题材龙头语料第 2 项）个股级「题材热度」行，
 # 排打标交叉行后、基因行前（题材族聚拢）；单一事实源 kpl_daban_pool.theme_items。
-# 2013-11-08 深度题点名「题材热度」的判据缺口先落语料，判据义务是否换代另行裁决。
+# 2026-11-08 深度题点名「题材热度」的判据缺口先落语料，判据义务是否换代另行裁决。
 # 2026-11-08c（纯语料补行，题面 hash 不动，沿 gene/AMMO 2026-11-08a 先例）：封板质量行
 # 增「首板 X（回封 Y）」时点段——zt_time/last_zt_time（epoch 秒→Asia/Shanghai HH:MM，
 # 11-06 实测 33/33 数值齐全）已在库零新采集；回封时点=当日曾炸板回封的直读证据；
@@ -1294,8 +1295,11 @@ _THEME_MISSING_CN = {"no_archive": "涨停池日档缺失", "no_theme_corpus": "
 
 
 def _heat_num_fmt(v: Any) -> str:
-    """题材热度数值格式化：整数值去小数点（96.0→96），带小数一位（96.5）；其余原样。"""
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
+    """题材热度数值格式化：整数值去小数点（96.0→96），带小数一位（96.5）；其余原样。
+
+    非有限 float（NaN/Inf，HTTP JSON 层可产）原样 str，防 round OverflowError
+    （评审 2026-11-08 P2）。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
         return str(v)
     r = round(v)
     return str(int(r)) if abs(v - r) < 1e-6 else f"{v:.1f}"
@@ -1468,11 +1472,18 @@ _TZ_CN = timezone(timedelta(hours=8))
 
 
 def _hhmm_from_ts(ts: Any) -> str | None:
-    """epoch 秒 → Asia/Shanghai "HH:MM"；非数值/非正 → None（调用方出不可考）。"""
+    """epoch 秒 → Asia/Shanghai "HH:MM"；非数值/非正/越界 → None（调用方出不可考）。
+
+    评审 2026-11-08 P2：超范围正值（如上游漂移成毫秒形态 1.7e12）或 NaN/Inf 会让
+    datetime.fromtimestamp 抛 OverflowError/OSError/ValueError——退化「首板时点不可考」
+    （§4.0 结构化降级），不得打挂整轮投喂。"""
     n = _qnum(ts)
-    if n is None or n <= 0:
+    if n is None or n <= 0 or not math.isfinite(n):
         return None
-    return datetime.fromtimestamp(n, _TZ_CN).strftime("%H:%M")
+    try:
+        return datetime.fromtimestamp(n, _TZ_CN).strftime("%H:%M")
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _seal_time_seg(item: dict) -> str:

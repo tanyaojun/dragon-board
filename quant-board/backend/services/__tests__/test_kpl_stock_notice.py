@@ -30,3 +30,11 @@ def test_get_notice_count_error_degrades(monkeypatch):
     monkeypatch.setattr(N, "_post_form", boom)
     out = N.get_notice_count("301697")
     assert out["ok"] is False and "RuntimeError" in out["reason"]
+
+
+def test_parse_notice_count_non_dict_degrades():
+    """评审 P2：isinstance 判定前置——非 dict 输入走 unexpected_payload 而非 AttributeError。"""
+    out = N.parse_notice_count(None, stock_id="301697")       # type: ignore[arg-type]
+    assert out["ok"] is False and out["reason"] == "unexpected_payload"
+    out2 = N.parse_notice_count(["x"], stock_id="301697")     # type: ignore[arg-type]
+    assert out2["ok"] is False and out2["reason"] == "unexpected_payload"
