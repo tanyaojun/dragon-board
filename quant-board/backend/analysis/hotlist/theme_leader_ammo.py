@@ -91,7 +91,7 @@ from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
 # ②P1 结构事实行（structure_facts_line，Q8:A 并列披露不仲裁）：周期状态/当日封板/
 # 真连板高度/板内梯队四字段程序直读随语料投喂，行首标注「供校准参考 · 不作判据」；
 # ③深度/延续/空间/人气四题题面一字不改（v13 §2.4 纪律），hash 随续板题面变更跨代不可比。
-QUESTION_SET_VERSION_THEME_LEADER = "v15"
+QUESTION_SET_VERSION_THEME_LEADER = "v16"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -181,11 +181,15 @@ QUESTION_SET_VERSION_THEME_LEADER = "v15"
 # apphq StockL2Data/GetZhangTingGene 逐股懒取落库）。上游**未标注统计窗口** → 口径注
 # 原样保留不自算；回填条目（抓取日≠日档交易日，值含此后信息）显式标注抓取日。缺失走
 # 「不可考」不补 0。判据零改动，沿 2026-10-24c/2026-11-02a 先例：纯语料补行不动题面 hash。
-# 2026-11-08b：新增 `seal_quality_line`（个股级叙事，排板内炸板面行后、基线前）——待判
-# 龙一「封单额=实际流通%/峰值封单回落/实际换手/主力净额=成交额%」，单一事实源 =
-# kpl_daban_pool.items 的 2103 quotas 具名字段（已落库零新采集）。封单单位未与 App 逐列
-# 对照 → 行内做元/手双假设自证（占实际流通比须落在合理带内），不成立只原样透出并标
-# 「单位待校验」，禁猜换算。
+# 2026-11-08b（题集 v16，用户裁决「同步改题面判据」）：①新增 `seal_quality_line`（个股级
+# 叙事，排板内炸板面行后、基线前）——待判龙一「封单额=实际流通%/峰值封单回落/实际换手/
+# 主力净额=成交额%」，单一事实源 = kpl_daban_pool.items 的 2103 quotas 具名字段（已落库
+# 零新采集）；②**题面换代**：续板题规则⑦、空间题规则⑥ 把「封板质量」行写成显式判据
+# 引用源（偏离锚须点名该行数字；不可考/单位待校验时不得据此调档），criteria 各档文案不动；
+# hash 随换代变更，v15 旧答跨代不可比（预登记
+# docs/hotlist-jev/theme-leader-v16-seal-quality-preregistration-20261108.md）。
+# 封单单位未与 App 逐列对照 → 行内做元/手双假设自证（占实际流通比须落在合理带内），
+# 不成立只原样透出并标「单位待校验」，禁猜换算。
 AMMO_VERSION_THEME_LEADER = "2026-11-08b"   # P2-4：梯队形态行领先差带符号/持平（负差原成「+-1」）；v15 P1 事实行不变
 
 
@@ -491,7 +495,11 @@ QUESTIONS_THEME_LEADER = {
                         "（confidence ≤0.6），不得以「无同构历史锚」作为 insufficient 理由；"
                         "⑥若叙事标注分轨（主板/双创），待判龙头为"
                         "其轨内按 10 日涨幅取出的龙一，身位表述以轨内为准，另一轨龙一仅作"
-                        "板块结构事实。",
+                        "板块结构事实；⑦封板质量量化（v16）：叙事「封板质量」行是本行封板"
+                        "质量的唯一可量化判据源（封单额=实际流通比、峰值封单回落、实际换手、"
+                        "主力净额占成交额比）。档位偏离最细同桶基准一档以上时，理由必须点名"
+                        "该行至少一项具体数字；该行缺失或标注不可考/单位待校验时，不得据此"
+                        "调档，也不得自行补 0。规则⑤（今日未封板的断板反包候选）不适用本项。",
         "criteria": {
             "high_ge65": "高概率 ≥65%：结构位置强（连板高度领先 + 封板早 + 板块家数多）"
                          "且题材有当日/近两日新催化（含题材事件/题材新闻新增），"
@@ -531,7 +539,9 @@ QUESTIONS_THEME_LEADER = {
                         "新证据；与延续题 strong_extend 明显矛盾时同样须引用锚行数字说明；"
                         "⑤若叙事标注分轨（主板/双创），待判龙头为其轨内龙一，空间判断以轨内"
                         "身位为准（双创 20cm 生态与主板 10cm 不同，另一轨龙一仅作板块结构"
-                        "事实）。",
+                        "事实）；⑥封板质量量化（v16）：叙事「封板质量」行可作为锚外新证据的"
+                        "一类（封单占实际流通比、峰值回落、主力净额比）；偏离「空间锚」档位"
+                        "且理由引用封板质量时，须点名该行具体数字；该行不可考时不得据此调档。",
         "criteria": {
             "space_2plus": "仍有 ≥2 板空间：题材强延续（发酵期）且该龙头是身位无可替代的"
                            "龙一/总龙头，梯队与催化双支撑",
@@ -1358,7 +1368,7 @@ def _seal_unit(item: dict) -> tuple[str, float | None]:
 
 
 def seal_quality_line(entries: list[dict]) -> str | None:
-    """封板质量行（2026-11-08b）：待判龙一当日封板量级（2103 quotas 量价字段）。
+    """封板质量行（2026-11-08b，题集 v16 判据引用源）：待判龙一当日封板量级。
 
     `entries` = [{"label": "主板龙一 名称", "item": pool_item | None,
                   "frameAt": "HH:MM" | None, "unsealed": bool}, ...]；item 取自
@@ -1700,7 +1710,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     kpl_daban_pool.gene_items），排涨停原因行前、龙虎榜行前；None 不出行。
     `seal_quality_line`（2026-11-08b / 题集 v16）= 封板质量行（seal_quality_line 产出，
     取数单一源 kpl_daban_pool.items 的 2103 quotas 字段），属该股当日盘面量级事实，
-    排板内炸板面行后、板块强度行前；None 不出行（旧调用形状不变）。
+    排板内炸板面行后、板块强度行前；None 不出行（旧调用形状不变）。题面续板⑦/空间⑥
+    以本行为封板质量的唯一可量化判据源（v16 换代）。
     `facts_line`（v15 P1）= 结构事实行（structure_facts_line 产出：周期/封板/高度/梯队），
     校准参考行与锚行相邻：排在基线后、空间锚前；None 不出行（旧行为不变，板块级叙事不消费）。
     """
@@ -1722,7 +1733,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     if zhaban_line:
         lines.append(zhaban_line)
     if seal_quality_line:
-        # 2026-11-08b：封板质量行（该股封单量级/峰值衰减/换手/主力净额）；
+        # 2026-11-08b（题集 v16）：封板质量行（该股封单量级/峰值衰减/换手/主力净额）；
         # 板面事实（结构/梯队/炸板面）之后给个股量级，None 不出行（旧行为不变）
         lines.append(seal_quality_line)
     if plate_strength:

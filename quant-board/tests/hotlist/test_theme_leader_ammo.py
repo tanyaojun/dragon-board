@@ -80,9 +80,9 @@ def test_question_set_frozen_hash_and_versions():
     事实源，龙一+板内并列；板块强度行 plate_strength_line：KPL 层1 名称桥，未匹配
     fail-visible）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v15"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08b"   # 2026-11-08b：封板质量语料行
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "97c50fd9fccb"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08b"   # 2026-11-08b：封板质量语料行 + 题面 v16 判据
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "7cec6926166d"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
     # v14：+leader_rebound_popularity（事件驱动题，事件门在 operations 层）
@@ -123,7 +123,17 @@ def test_question_set_frozen_hash_and_versions():
     assert "n=112 续板率 21.4%" in cont, "锚必须是实测数字（程序直算可复算，非拍脑袋）"
     assert "先验底" in cont and "≥45%" in cont, "锚语义：无差异化证据的先验底 + 高档抬升需点名强证据"
     assert "必须先对齐的概率中枢" in cont, "v11 同桶中枢语义不得回潮"
-    assert "必须先对齐的概率中枢" in cont, "v11 同桶中枢语义不得回潮"
+    # v16（预登记 theme-leader-v16-seal-quality-preregistration-20261108，2026-11-08 用户裁决
+    # 「同步改题面判据」）：续板题⑦/空间题⑥ 把「封板质量」行写成显式可量化判据引用源
+    assert "⑦封板质量量化（v16）" in cont, "v16 续板题规则⑦必须在场"
+    assert "唯一可量化判据源" in cont and "单位待校验时，不得据此" in cont,         "⑦语义：封板质量行=唯一可量化源，不可考/单位待校验禁调档"
+    assert "规则⑤（今日未封板的断板反包候选）不适用本项" in cont, "⑦与断板分支互斥"
+    ins_space = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
+    assert "⑥封板质量量化（v16）" in ins_space, "v16 空间题规则⑥必须在场"
+    assert "锚外新证据的一类" in ins_space and "该行不可考时不得据此调档" in ins_space,         "⑥语义：封板质量属锚外新证据，不可考禁调档"
+    # criteria 文案不动（避免档位语义漂移）：v16 只加 instructions
+    assert "封单" not in "".join(A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["criteria"].values())
+    assert "封单" not in "".join(A.QUESTIONS_THEME_LEADER["leader_headroom"]["criteria"].values())
     tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
     # v12 修订：引用义务扩源（结构再点火）+ ending 方向约束；v11 保守条款改为板块级表述
     assert "引用义务（v12 修订）" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"

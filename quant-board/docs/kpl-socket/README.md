@@ -355,7 +355,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   代码常量 `DABAN_QUOTA_NAMES`。App 竞价页「实时涨幅」列下方的连板状态子标签
   （4连板/昨日首板/昨3连板…）= **quotas[10] state 列**（2026-10-27 与 App 同屏逐项核对）。
 - 数值/单位：涨停委买额/竞价净额/竞价成交额/实际流通等为**数值元**（1302937361.0=13.02 亿，
-  与 App 同屏一致）；解析层可转 float 的转 float，不可转的原样字符串保留（fail-visible，
+  与 App 同屏一致）；**quotas[14] 封单 / [18] 最大封单 单位待定（元 or 手）**——2026-11-08 起
+  被题材龙头题集（AMMO `2026-11-08b` / 题集 v16）个股级「封板质量」行消费，行内用「占实际流通比
+  落在 0.05%~50%」双假设自证，不成立只原样透出并标「单位待校验」；盘中实弹复核按
+  `GetStockPanKou.weituo.b1 价×量` 对齐（预登记
+  `docs/hotlist-jev/theme-leader-v16-seal-quality-preregistration-20261108.md` §3）；解析层可转 float 的转 float，不可转的原样字符串保留（fail-visible，
   不猜换算）；quotas[20] 无目录名只进 raw quotas（1~5 小整数，与连板高度/原因榜排名均不相关，
   未破译）；**quotas[21] 已破译（2026-11-07）= 涨停原因关联板块 PlateID（801xxx，与板块排行
   PlateID 同码制；11-06 收盘帧 31/33 命中 /sector-ranking）→ 具名 `plate_id`，涨停行情页

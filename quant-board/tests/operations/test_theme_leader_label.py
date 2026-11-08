@@ -204,9 +204,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
-    assert doc["questionSetVersion"] == "v15"
-    assert doc["questionSetHash"] == "97c50fd9fccb"   # v15 续板题基础率锚（v1-v14 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-08b"   # 2026-11-08b：封板质量语料行
+    assert doc["questionSetVersion"] == "v16"
+    assert doc["questionSetHash"] == "7cec6926166d"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-11-08b"   # 2026-11-08b：封板质量语料行 + 题面 v16
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -254,7 +254,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v15", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v16", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):

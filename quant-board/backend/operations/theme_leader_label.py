@@ -539,7 +539,7 @@ def _frame_hhmm(ts: Any) -> str | None:
 
 def seal_quality_entries_for_leaders(rows: list[dict],
                                      quality: dict[str, dict]) -> list[dict]:
-    """封板质量行条目（2026-11-08b）：**仅待判龙一自身**（与涨停原因行同口径）。
+    """封板质量行条目（2026-11-08b）：**仅待判龙一自身**（题集 v16 判据引用源口径）。
 
     `unsealed=True`（断板反包候选，题面续板⑤）= 该股今日未封板 → 行内明示本行不适用，
     不拿往期封单冒充当日封板质量；未在涨停池 → item=None（行内出「不在涨停池」）。
@@ -1130,7 +1130,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     lhb_facts = fetch_lhb_facts(date)
     # 涨停基因语料（AMMO 2026-11-08a）：一次取全日共用（个股级叙事行，板块级不消费）
     gene_corpus = fetch_gene_corpus(db, date)
-    # 封板质量（2026-11-08b）：同一日档 items 的量价字段，一次取全日共用
+    # 封板质量（2026-11-08b / 题集 v16）：同一日档 items 的量价字段，一次取全日共用
     pool_quality = fetch_pool_quality(db, date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
