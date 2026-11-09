@@ -159,7 +159,19 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
             # 2026-10-15：dragon_rows 增带 code，前端据此只渲染与本行 code 相同的那条龙序
             # （「领涨」列从「板块龙一二三全列」改为「本股身位」，非领涨股显示 '-'）
             from backend.operations.jev_label_jiuyan import jiuyan_board_dragons
+            from backend.operations.sector_nodes import ledger_leaders, reanchor_dragons
             dragons = jiuyan_board_dragons(db, date, allow_midday_fallback=True)
+            # 龙一重锚（2026-11-09 三链合一）：龙一槽位=板块节点空间龙一档（v5），
+            # 龙二/三 dragon_rows 补位；档缺失/非 v5 → 原 dragon_rows 口径不静默（
+            # boardJoinDegraded 同款注记由 ledgerMissing 旗标披露）
+            try:
+                ledger = ledger_leaders(db, date)
+            except Exception:
+                ledger = None   # 领涨列重锚容错：无节点集合→原 dragon_rows 口径
+            if ledger:
+                dragons = reanchor_dragons(dragons, ledger)
+            elif dragons:
+                result["ledgerMissing"] = True
             for stock in result.get("stocks") or []:
                 stock["boardDragons"] = dragons.get(
                     stock.get("boardName") or stock.get("board") or "") or []
@@ -190,6 +202,10 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
     - `sampleOrigin` 区分 live 前瞻 / backfill 回填（回填含语料未来信息，不得当结论）；
     - `leaderSuperseded=True`（单一龙头对账退位行，2026-10-24）默认**不返回**——同一
       (date, board) 只出现任推导龙一；退位数在 `supersededCount` 披露（审计直接查库）。
+    - 2026-11-09 用户裁决：**龙头清单行源单源=板块节点**（hotlist_jev_sector_nodes，
+      三链合一后全部有龙头的节点行都出，与打标范围一致）；label 打标档按 (date, code)
+      并入模型判定列，缺档行模型列显 '-'（nodeFilter.labelMissingRows 披露计数，打标
+      链停跑不阻断清单，fail-visible）。
     """
     # 无参 = 全量（relay_page 时间范围选「全部」时 start/end 均空）；根前端始终带 date。
     # date 与 start/end 同给时 date 优先（docstring 二选一契约）。
@@ -214,8 +230,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
             cursor = cursor.limit(500)
         docs = list(cursor)
         truncated = bool(not query) and len(docs) >= 500
-        if not docs:
-            return {"ok": True, "date": date, "no_data": True, "leaders": [], "count": 0}
+        # 行源=板块节点（2026-11-09 用户裁决）：sector_nodes 与 labels 双查后合成行，
+        # 两者皆空才 no_data——仅 labels 空时节点龙头行仍要出（打标链停跑不阻断清单）。
         # v12 A2 拆题：板块级 doc（docKind=sector）不单独出行，按 (date, board) 合入
         # 同板块龙头行的深度/延续字段（v12 龙头行这两题为 None；legacy 行保留自有值回退）
         sector_docs = {(str(d.get("tradingDate")), str(d.get("board"))): d
@@ -384,13 +400,95 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
         # 单一龙头对账（2026-10-24）：退位行（推导已不再指向的旧任龙头）默认不出——
         # 同 (date, board) 只出现任推导龙一；数量显式披露，审计直接查库
         superseded_count = sum(1 for d in docs if d.get("leaderSuperseded"))
-        rows = [r for r in rows if not r.get("_superseded")]
+        # 2026-11-09 行源改造：label 判定按 (date, code) 建索引，供节点行并入模型判定列。
+        label_by_key = {(str(r.get("tradingDate")), str(r.get("code"))): r
+                        for r in rows if not r.get("_superseded")}
+        label_dates = {str(r.get("tradingDate")) for r in rows if r.get("tradingDate")}
+
+        # 龙头清单行源单源=板块节点（2026-11-09 三链合一 v5.1）：全部有龙头的节点行
+        # 都出（不再按四节点过滤——口径统一后商业航天等 normal 档也必须与打标链
+        # 同步可见）；非四节点即隐藏会让台账与打标范围不一致，故出全量+节点分布披露。
+        node_docs = list(db["hotlist_jev_sector_nodes"].find(query).sort(
+            [("tradingDate", -1)]).limit(500))
+        node_docs_truncated = bool(not query) and len(node_docs) >= 500
+        node_dist: dict[str, int] = {}
+        sector_dates: set[str] = set()
+        candidates: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+        for nd in node_docs:
+            nd_date = str(nd.get("tradingDate"))
+            sector_dates.add(nd_date)
+            for sr in (nd.get("rows") or []):
+                node = str(sr.get("node") or "unknown")
+                node_dist[node] = node_dist.get(node, 0) + 1
+                leader = sr.get("leader") if isinstance(sr.get("leader"), dict) else None
+                if leader and leader.get("code"):
+                    candidates.append((nd_date, sr, leader))
+
+        merged: list[dict[str, Any]] = []
+        label_missing_n = 0
+        for nd_date, sr, leader in candidates:
+            lr = label_by_key.get((nd_date, str(leader.get("code"))))
+            if lr is not None:
+                row = dict(lr)
+                row["labelMissing"] = False
+            else:
+                label_missing_n += 1
+                # label 缺档（未跑打标链/旧档）：模型判定列全空，页显 '-'（fail-visible 计数披露）
+                row = {"labelMissing": True, "tradingDate": nd_date,
+                       "code": leader.get("code"), "name": leader.get("name"),
+                       # sampleOrigin=None：节点档行非打标产物，不冒充 live 样本
+                       # （代际分布 None 不计入，缺档量由 labelMissingRows 披露）
+                       "status": None, "sampleOrigin": None,
+                       "questionSetVersion": None, "ammoVersion": None,
+                       "gate": None, "evidenceMissing": False}
+            # 台账身份列以节点行单源（清单来自板块节点）；label 只供模型判定/结局/证据列。
+            row.update({
+                "tradingDate": nd_date,
+                "code": leader.get("code"),
+                "name": leader.get("name") or row.get("name"),
+                "board": sr.get("board"),
+                "streak": leader.get("streak"), "time": leader.get("time"),
+                "boardN": sr.get("count"), "prevBoardN": sr.get("prevCount"),
+                "node": sr.get("node"), "prevNode": sr.get("prevNode"),
+                "nodeBasis": sr.get("basis"), "nodeNotes": sr.get("notes"),
+                "leaderState": sr.get("leaderState"),
+                "rowSource": "sector_nodes",
+                "labelMatched": lr is not None,
+            })
+            merged.append(row)
+        # 双键稳定排序：日期新→旧，节点按 主升>发酵>冒头>弱转强>其余，同节点连板高度降序
+        node_order = {"mainline": 0, "fermenting": 1, "brewing": 2, "wzs": 3}
+        merged.sort(key=lambda r: (node_order.get(str(r.get("node")), 99),
+                                   -(r.get("streak") or 0)))
+        merged.sort(key=lambda r: str(r.get("tradingDate")), reverse=True)
+        rows = merged
+        for r in rows:
+            for k in ("questionSetVersion", "questionSetHash", "ammoVersion",
+                      "status", "sampleOrigin"):
+                r.setdefault(k, None)
+        node_filter = {
+            "nodeDist": node_dist,
+            "datesWithoutSectorNodes": sorted(label_dates - sector_dates, reverse=True),
+            "labelMissingRows": label_missing_n,
+            "labelOrphanRows": len(label_by_key) - sum(1 for r in rows if r.get("labelMatched")),
+            "nodeDocsTruncated": node_docs_truncated,   # 无参全量触顶 500 日（§4.0 不静默截断）
+        }
+        if not rows:
+            # 无数据极简契约（不编造代际分布）：与旧 no_data 形态一致
+            return {"ok": True, "date": date, "no_data": True, "leaders": [],
+                    "count": 0,
+                    "range": None if date else {"start": start, "end": end},
+                    "nodeFilter": node_filter}
         # 代际/来源分布（跨代混评是硬伤，前端要能一眼看出这天是不是混代）
         versions: dict[str, int] = {}
         origins: dict[str, int] = {}
         for r in rows:
-            versions[str(r["questionSetVersion"])] = versions.get(str(r["questionSetVersion"]), 0) + 1
-            origins[str(r["sampleOrigin"])] = origins.get(str(r["sampleOrigin"]), 0) + 1
+            # None（label 缺档行）不计入代际/来源分布——缺档量由 nodeFilter.labelMissingRows
+            # 单独披露，避免「None 桶」污染 mixedVersions 判定（P2-8 评审）
+            if r.get("questionSetVersion") is not None:
+                versions[str(r["questionSetVersion"])] = versions.get(str(r["questionSetVersion"]), 0) + 1
+            if r.get("sampleOrigin") is not None:
+                origins[str(r["sampleOrigin"])] = origins.get(str(r["sampleOrigin"]), 0) + 1
         dates = sorted({str(r.get("tradingDate")) for r in rows if r.get("tradingDate")},
                        reverse=True)
         return {
@@ -398,6 +496,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
             "range": None if date else {"start": start, "end": end},
             "dates": None if date else dates,
             "count": len(rows),
+            "no_data": not rows,
+            "nodeFilter": node_filter,
             "sectorCount": sector_count,
             "supersededCount": superseded_count,
             "truncated": truncated,   # 无参全量触顶 500（响应注记，§4.0 不静默截断）

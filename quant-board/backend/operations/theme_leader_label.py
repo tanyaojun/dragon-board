@@ -774,21 +774,69 @@ def baseline_rows_for(db: Any, date: str,
 
 def leaders_for(db: Any, date: str,
                 dataset_id: str = DEFAULT_DATASET_ID) -> tuple[list[dict] | None, dict]:
-    """当日各板块龙头结构事实行；None = 当日 THS 池缺失（不可二分，fail-visible）。
+    """当日各板块龙头结构事实行（v17 三链合一换源，2026-11-09 用户裁决）。
 
-    2026-10-27 空间龙一规则（用户裁决，预登记 §21.6）：space_mode=True，排序=
-    10日涨幅→连板高度→首封；基线/历史窗口仍走默认 streak 口径（样本人群不随规则
-    换代漂移）。
-    2026-11-01 用户裁决：早间 T+1 收紧由 v5 预登记裁决 4 取代——候选池严格回溯
-    3 个封板日（窗位 k=T−S−1，k∈{0,1,2}，k≥3 出池），与盯盘清单同窗（单一事实
-    源，龙一是同一批事实行）；height≥2 与未跌停条件保留（day_leader_rows 内过
-    滤）。断板反包候选=隔日弱转强的实质根因修复（首板混入/徽标措辞/窗外滞留）
-    均不受影响。
+    候选「谁」单源 = **当日板块节点档**（hotlist_jev_sector_nodes v5，空间龙一
+    main 轨折叠单龙）——龙一只算一次落一次库，本链不再自推。day_leader_rows(
+    space_mode) 同参重算仅用于**取结构事实行**（gain10/leaderSealedToday/prevPeers/
+    ladderShape 等打标语料必需字段），按 (board, code) 过滤只保留与节点档一致的行。
+
+    fail-visible（不回退自推导——回退等于两口径复活）：
+    - 节点档缺失/非 ok/非 v5 → (None, meta)，meta.reason 区分 sector_nodes_missing /
+      sector_nodes_not_ok / sector_nodes_version（调用方跳过当日并披露）。
+    - 节点档龙头无事实行（韭研盘后重采修正漂移）→ 该板块**跳过不打标**，
+      meta.driftBoards 披露（不伪造事实行）。
+    - 事实行多余板块/个股（推导与节点档不一致）→ 丢弃，meta.droppedBoards 披露。
+    - THS 池缺失（rows=None）原语义不变。
+
+    2026-11-01 用户裁决（窗位 k=T−S−1，近 3 封板日池）由 day_leader_rows 同参保留；
+    2026-10-27 空间龙一规则不变（历史基线窗口仍走默认 streak 口径，样本不漂移）。
     """
+    node_doc = db["hotlist_jev_sector_nodes"].find_one({"_id": f"{date}:SECTOR_NODES"})
+    if node_doc is None:
+        return None, {"reason": "sector_nodes_missing"}
+    if node_doc.get("status") != "ok":
+        return None, {"reason": "sector_nodes_not_ok", "status": node_doc.get("status")}
+    # 版本契约常量单点（P2-9 评审）：与 SECTOR_NODE_VERSION 同步升代，禁止旧代档冒充新口径
+    from backend.analysis.hotlist.sector_nodes import SECTOR_NODE_VERSION
+    if str(node_doc.get("version") or "") != SECTOR_NODE_VERSION:
+        return None, {"reason": "sector_nodes_version", "version": node_doc.get("version")}
+    node_leaders: dict[str, dict[str, Any]] = {}
+    for r in node_doc.get("rows") or []:
+        lead = r.get("leader") or {}
+        if not lead.get("code"):
+            continue
+        node_leaders[str(r.get("board"))] = {
+            "code": str(lead["code"]), "name": lead.get("name"),
+            "streak": lead.get("streak"), "time": lead.get("time")}
     prev_dates = trading_dates_before(db, date, 3, dataset_id)
-    return day_leader_rows(db, date, dataset_id,
-                           prev_date=prev_dates[-1] if prev_dates else None,
-                           space_mode=True, pool_dates=prev_dates)
+    rows, meta = day_leader_rows(db, date, dataset_id,
+                                 prev_date=prev_dates[-1] if prev_dates else None,
+                                 space_mode=True, pool_dates=prev_dates)
+    meta = dict(meta or {})
+    if rows is None:
+        return None, meta
+    out: list[dict] = []
+    matched: set[str] = set()
+    dropped: list[str] = []
+    for r in rows:
+        b = str(r.get("board") or "")
+        lead = node_leaders.get(b)
+        if lead is None:
+            dropped.append(f"{b}:{r.get('code')}")
+            continue
+        if str(r.get("code")) == lead["code"]:
+            out.append(r)
+            matched.add(b)
+        else:
+            # 同板块非节点龙一的推导行（含 growth 轨）丢弃——节点单龙为准，逐行留痕
+            dropped.append(f"{b}:{r.get('code')}!={lead['code']}")
+    drift = sorted(b for b in node_leaders if b not in matched)
+    if dropped:
+        meta["droppedBoards"] = dropped
+    if drift:
+        meta["driftBoards"] = drift
+    return out, meta
 
 
 def reconcile_superseded_leaders(db: Any, date: str, rows: list[dict] | None) -> dict:
@@ -1164,8 +1212,20 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     db = _db()
     rows, meta = leaders_for(db, date, dataset_id)
     if rows is None:
+        reason = str(meta.get("reason") or "")
+        if reason.startswith("sector_nodes"):
+            # v17 三链合一门控（2026-11-09 用户裁决）：节点档缺失/非 ok/非 v5 → 拦停，
+            # 不回退自推导（回退等于两口径复活）；scheduler 限次退避重试会补跑。
+            print(f"{date} 板块节点档不可用（{reason}: "
+                  f"{meta.get('status') or meta.get('version') or '文档缺失'}），"
+                  f"跳过打标（fail-visible，不回退自推导）")
+            return {"ok": False, "date": date,
+                    "error": {"code": reason, "detail": {k: v for k, v in meta.items() if k != "reason"}}}
         print(f"{date} 当日 THS 封板池缺失（无法做触板−炸板二分），跳过（fail-visible）")
         return {"ok": False, "date": date, "error": {"code": "ths_pool_missing"}}
+    for _k in ("driftBoards", "droppedBoards"):
+        if meta.get(_k):
+            print(f"{date} {_k}: {meta[_k]}（节点档为准，fail-visible 披露）")
     if not rows:
         print(f"{date} 当日无封板板块（韭研 final 文档缺或全炸板），跳过（披露）")
         return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders"}

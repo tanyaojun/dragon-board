@@ -830,6 +830,15 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5,
     failed_items, failed_found = _ths_failed_items(db, date, DEFAULT_DATASET_ID)
     zhaban_codes = set(failed_items) if failed_found else set()
     lines = ["题材梯队表："]
+    # 龙一重锚（2026-11-09 三链合一）：龙一槽位=板块节点空间龙一档，龙二/三 dragon_rows 补位；
+    # 档缺失/非 v5 → 回退 dragon_rows 原口径并在表头注记（fail-visible 不静默）
+    from backend.operations.sector_nodes import ledger_leaders, reanchor_dragons
+    ledger = ledger_leaders(db, date)
+    ledger_anchored = ledger is not None
+    if ledger is not None:
+        lines.append("·龙一=板块节点空间龙一档（v5）")
+    else:
+        lines.append("·龙一档缺失/非v5，龙序回退区间高度口径（fail-visible）")
     ranked_names = sorted(cur_b, key=lambda k: -len(cur_b[k]))
     # 主线板块强制纳入 top5（家数多≠主线；用户 2026-10-19 裁决口径）
     if mainline and mainline in cur_b and mainline not in ranked_names[:top]:
@@ -837,20 +846,35 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5,
     else:
         ranked_names = ranked_names[:top]
     for name in ranked_names:
-        # 龙序规则单源 dragon_rows（jev_label_jiuyan，与 limitup 读口「领涨」列同规）
+        # 龙序：龙一=空间龙一档（三链合一）；龙二/三=dragon_rows 补位；档缺失回退原口径
+        dragons_rows = dragon_rows(cur_b[name], streaks=streaks)
+        board_fallback_note = ""
+        if ledger_anchored:
+            if name in (ledger or {}):
+                dragons_rows = reanchor_dragons({name: dragons_rows}, ledger or {})[name]
+            else:
+                # 锚定日个别板块不在龙一台账（无龙头行/空间缺料跳过）：逐板块注记回退，
+                # 不吃掉表头的全局锚定声明（P2-11 评审）
+                board_fallback_note = "·龙一档缺该板块，龙序回退区间高度口径"
         dragons = []
-        for i, d in enumerate(dragon_rows(cur_b[name], streaks=streaks), 1):
+        for i, d in enumerate(dragons_rows, 1):
             code = d.get("code")
             st = d.get("streak")
-            if code in zhaban_codes:
-                st_txt = "·今日炸板"
-            elif isinstance(st, int):
-                st_txt = f"·连板{st}板"
-            elif d.get("boards"):
-                st_txt = "·连板不可算"
-            else:
+            if d.get("ledgerUnsealed"):
+                # 断板反包龙一（今日未封）：区间高度如实缺位，不伪装「首板」
+                height_txt = "断板反包·今日未封"
                 st_txt = ""
-            dragons.append(f"龙{'一二三'[i-1]} {d['name']}({_range_num_txt(d)} "
+            else:
+                height_txt = _range_num_txt(d)
+                if code in zhaban_codes:
+                    st_txt = "·今日炸板"
+                elif isinstance(st, int):
+                    st_txt = f"·连板{st}板"
+                elif d.get("boards"):
+                    st_txt = "·连板不可算"
+                else:
+                    st_txt = ""
+            dragons.append(f"{d.get('role') or '龙' + '一二三'[i-1]} {d['name']}({height_txt} "
                            f"{d['time'] or '?'}{st_txt})")
         inner = [str(s.get("code") or "")[-6:] for s in cur_b[name]]
         fresh = [label_docs[c].get("freshness") for c in inner if c in label_docs]
@@ -865,7 +889,8 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5,
         prev_n = len(prev_b.get(name) or [])
         tag = "（主线）" if mainline == name else ""
         lines.append(f"· {name}{tag}：{' / '.join(dragons)}｜{fresh_txt}"
-                     f"{('·' + drv_txt) if drv_txt else ''}｜昨日 {prev_n} 只")
+                     f"{('·' + drv_txt) if drv_txt else ''}｜昨日 {prev_n} 只"
+                     f"{board_fallback_note}")
     return lines
 
 

@@ -61,11 +61,46 @@ class _Cursor:
 
 
 class _Db:
+    """集合感知 mock（2026-11-09 三链合一读口改造）。
+
+    - `hotlist_jev_theme_leader_labels` → 夹具 docs；
+    - `hotlist_jev_sector_nodes` → 自动从 label docs 推导 v5 节点档（每 (date, board)
+      一行，leader=该板块首个 label doc 的 code/name/结构，测试锚定路径与 label
+      merge 的 code 全部对上）；无 label docs 的日期不造档（no_data 路径保持）；
+    - 其他集合 → 空 _Col（fail-visible 路径可测）。
+    """
+
     def __init__(self, docs):
-        self._col = _Col(docs)
+        self._label_col = _Col(docs)
+        sector_rows: dict[str, list[dict]] = {}
+        seen: set[tuple[str, str]] = set()
+        for d in docs:
+            if not d.get("code"):
+                continue   # sector 级/无 code 文档不作为龙头源（v12 板块 doc 等）
+            key = (str(d.get("tradingDate") or ""), str(d.get("board") or ""))
+            if key in seen or not key[0] or not key[1]:
+                continue
+            seen.add(key)
+            struct = d.get("structure") or {}
+            sector_rows.setdefault(key[0], []).append({
+                "board": key[1], "node": "mainline",
+                "leader": {"code": d.get("code"), "name": d.get("name"),
+                           "streak": struct.get("streak"), "time": struct.get("time"),
+                           "segment": "main"},
+                "count": struct.get("boardN"), "prevCount": struct.get("prevBoardN"),
+            })
+        self._sector_col = _Col([
+            {"_id": f"{dt}:SECTOR_NODES", "tradingDate": dt,
+             "version": "v5", "status": "ok", "rows": rows}
+            for dt, rows in sector_rows.items()])
+        self._empty_col = _Col([])
 
     def __getitem__(self, name):
-        return self._col
+        if name == "hotlist_jev_theme_leader_labels":
+            return self._label_col
+        if name == "hotlist_jev_sector_nodes":
+            return self._sector_col
+        return self._empty_col
 
 
 def _doc(code, board, **kw):
@@ -374,12 +409,16 @@ def test_range_query_closed_interval_and_boundary(monkeypatch):
 
 
 def test_unqualified_full_query_has_limit_and_truncation_note(monkeypatch):
-    """无参全量默认上限 500 + 截断显式回显（P2-6：60s 轮询不得无界拉取）。"""
+    """无参全量默认上限 + 截断显式回显（三链合一 v5.1：行源=节点档，同 (date, board)
+    单龙一行；labels 500 上限仅作事实源容量护栏，nodeDocs 500 日上限为行源护栏）。"""
     docs = [_doc(f"6{i:05d}", "AI应用", _id=f"2026-10-16:6{i:05d}",
                  tradingDate="2026-10-16") for i in range(520)]
     c = _client(monkeypatch, docs)
     body = c.get("/api/hotlist-jev/theme-leaders").json()
-    assert body["count"] == 500 and body["truncated"] is True
+    # 同 (date, board) 节点档折叠单龙 → 1 行；labels 触顶 500 如实回显；孤儿行=500−龙头
+    # 是否在 mock 截断窗内（_Cursor.sort 仅按首键逆序 → 生产升序截断为 499，mock 降序为 500）
+    assert body["count"] == 1 and body["truncated"] is True
+    assert body["nodeFilter"]["labelOrphanRows"] in (499, 500)
     body2 = c.get("/api/hotlist-jev/theme-leaders",
                   params={"date": "2026-10-16"}).json()
     assert body2["truncated"] is False   # 单日路径不受上限影响
@@ -430,16 +469,18 @@ def test_v12_sector_merge_segment_label_and_audit_fields(monkeypatch):
     client = _client(monkeypatch, [sector, v12_leader, v12_noseg, v9_old])
     r = client.get("/api/hotlist-jev/theme-leaders", params={"date": "2026-10-16"})
     assert r.status_code == 200
-    rows = {x["code"]: x for x in r.json()["leaders"]}
+    doc = r.json()
+    rows = {x["code"]: x for x in doc["leaders"]}
     lead = rows["603278"]
     # ① sector 合并
     assert lead["themeSpeculationDepth"] == "igniting"
     assert lead["themeContinuation"] == "strong_extend"
     assert lead["sectorDocId"] == "2026-10-16:board:机器人"
     assert lead["segmentLabel"] == "main" and lead["segment"] == "main"
-    # ② 数值版判：v12 缺 segment → legacy；v9 不误标
-    assert rows["605488"]["segmentLabel"] == "legacy"
-    assert rows["300001"]["segmentLabel"] is None
+    # ② legacy 版判（2026-10-20 P2-10 语义）：三链合一后同板块非节点龙一 label 行不再出行，
+    #    数值版判语义由 theme_leader_label 落库层保证（读口仅出节点档单龙）
+    assert "605488" not in rows and "300001" not in rows
+    assert doc["nodeFilter"]["labelOrphanRows"] == 2
     # ③④ 透传
     assert lead["answerReasons"] == {"leader_nextday_continue": "基线 34.3%（420）"}
     assert lead["auditFlag"] == "v12-case-review" and lead["auditNote"] == "文投复核"

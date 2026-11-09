@@ -754,7 +754,9 @@ def _run_sector_nodes_step(today: str, dry_run: bool = False) -> dict[str, Any]:
 
     - 纯本地确定性判定（analysis/hotlist/sector_nodes 判据表，零 token）；
     - 门控与 relayIndex 同源（当日韭研 final + 15:00 盘面帧，_should_run_phase_band）；
-    - 链序在 relayIndex 之后：昨日节点从昨日文档读，升序成链（盘后链逐日自然满足）；
+    - v5.1 链序（2026-11-09 三链合一）：提前到 phasePulse/jiuyanLabel 之前——龙一只算
+      一次落一次库，题材龙头打标/梯队表/下游 advisory 全部消费本档（昨日节点仍读昨日
+      文档成链，升序回填天然满足）；
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok。
     """
     if dry_run:
@@ -1305,9 +1307,14 @@ def run_after_market_once(
             stopped_at = "mongodbBackup"
         elif not archive_ok:
             stopped_at = "snapshotArchiveR2"
+        today = datetime.now(_TZ).strftime("%Y-%m-%d")
+        # ★ 龙一单源（2026-11-09 用户裁决三链合一 v5.1）：sectorNodes 从 relayIndex 后
+        # 提前到打标前——龙一只算一次落一次库（空间龙一 main 轨折叠+事实字段扩容），
+        # 下游题材龙头打标（17:30 scheduler）/涨停打标叙事/梯队表/leaderWzs/themeCycle/
+        # sectorPulse 全部消费本档，不再各自重推（漂移由 leaders_for 过滤+披露兜底）。
+        sector_nodes_result = _run_sector_nodes_step(today, dry_run=dry_run)
         # 盘面脉拍（M3 advisory 步）：EOD 刷新后数据齐，子进程隔离跑当月至今相位快照；
         # 失败/跳过只记结果不翻转整体 ok，也不参与 stopped_at（研究证据链，非生产数据链）
-        today = datetime.now(_TZ).strftime("%Y-%m-%d")
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
         jiuyan_label_result = _run_jiuyan_label_step(today, dry_run=dry_run)
         # 链序硬约束：zhabanLabel 必须先于 relayIndex——relay 叙事「今日炸板面」段消费
@@ -1316,8 +1323,6 @@ def run_after_market_once(
         # 叙事恒写「未覆盖（0/N，归因证据缺失）」，zhabanLabel 步的补全目的被顺序抵消）。
         zhaban_label_result = _run_zhaban_label_step(today, dry_run=dry_run)
         relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
-        # 板块节点（advisory，2026-10-24 v1）：纯本地确定性判定，昨日节点读昨日文档成链
-        sector_nodes_result = _run_sector_nodes_step(today, dry_run=dry_run)
         # 龙头弱转强（advisory，P2 Q6:A）：观察池+①②事件流单日落库（零 token）
         leader_wzs_result = _run_leader_wzs_step(today, dry_run=dry_run)
         # 题材周期状态机（advisory，P2）：链序在 sectorNodes/leaderWzs 之后
@@ -1334,7 +1339,7 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,

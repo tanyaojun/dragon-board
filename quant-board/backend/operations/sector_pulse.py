@@ -668,7 +668,23 @@ def get_watchlist(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID, *,
         if rows is None:
             leader_reason = f"昨日({prev_date}) THS 池缺失，龙一不可算（fail-visible）"
         else:
+            # v5.1 三链合一锚定（2026-11-09 用户裁决）：昨日节点档存在（v5）时龙一行按档
+            # 过滤；无档/历史回放保持原推导并披露未锚定
+            from backend.operations.sector_nodes import (
+                anchor_rows_to_ledger, ledger_leaders)
+            try:
+                _ledger = ledger_leaders(db, prev_date)
+            except Exception as exc:
+                _ledger = None   # advisory 锚定容错（mock/无节点集合）：未锚定，不阻断
+                leader_reason = f"龙一台账读取异常（{type(exc).__name__}），按未锚定处理"
+            rows, _anchor_info = anchor_rows_to_ledger(rows, _ledger)
             leader_rows = rows
+            # v5.1 锚定落痕（P1-3 评审）：锚定/未锚定/剔除/漂移全披露，不静默
+            if not _anchor_info.get("anchored"):
+                leader_reason = leader_reason or "昨日节点档缺失/非 v5，龙一行未锚定（原推导口径）"
+            elif _anchor_info.get("dropped") or _anchor_info.get("missing"):
+                leader_errors.append({"board": "_ledgerAnchor",
+                                      "reason": f"dropped={_anchor_info['dropped']} missing={_anchor_info['missing']}"})
             # space 模式「单板块 10 日涨幅全缺→板块跳过」的静默缺位如实透出
             # （meta["spaceErrors"] = {board: reason}，theme_leader_baseline 同源）
             for se_board, se_reason in ((meta or {}).get("spaceErrors") or {}).items():

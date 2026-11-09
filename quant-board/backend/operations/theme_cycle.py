@@ -129,6 +129,18 @@ def collect_day_inputs(db: Any, date: str, dataset_id: str,
         day_change_fetcher=covering_day_change_fetcher)
     if rows is None:
         rows = []
+    # v5.1 三链合一锚定（2026-11-09 用户裁决）：有当日节点档（v5）时龙一行按档过滤
+    # （单龙口径全站一致）；无档（深历史回填）保持原推导，anchored=False 如实随行
+    from backend.operations.sector_nodes import ledger_leaders, anchor_rows_to_ledger
+    _ledger_err = None
+    try:
+        _ledger = ledger_leaders(db, date)
+    except Exception as exc:
+        _ledger = None   # 深历史回填/mock 无节点集合：未锚定，不阻断（异常类型留痕）
+        _ledger_err = type(exc).__name__
+    rows, anchor_info = anchor_rows_to_ledger(rows, _ledger)
+    if _ledger_err:
+        anchor_info = {"anchored": False, "error": _ledger_err}
     high_codes = _gain10_new_high_codes(db, date, rows)
     leaders = [{"board": r["board"], "segment": r.get("segment") or "main",
                 "code": r["code"], "name": r.get("name"),
@@ -139,7 +151,8 @@ def collect_day_inputs(db: Any, date: str, dataset_id: str,
     return {"date": date, "nodes": nodes, "events": events,
             "leaders": leaders, "pool_boards": _pool_boards(wzs_doc),
             "reconcile_gaps": _reconcile_with_labels(db, date, rows)
-            if reconcile else []}
+            if reconcile else [],
+            "ledgerAnchor": anchor_info}
 
 
 def build_and_save_theme_cycle(db: Any, dates: list[str],

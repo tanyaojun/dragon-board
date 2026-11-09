@@ -276,16 +276,144 @@ def _static_rows_compute(db: Any, date: str, boards: list[str]) -> dict[str, dic
     return out
 
 
+def ledger_leaders(db: Any, date: str) -> dict[str, dict[str, Any]] | None:
+    """龙一台账读口（2026-11-09 三链合一 v5.1）：{板块: leader dict}。
+
+    - 文档缺失/非 ok/非 v5 → None（消费方 fail-visible，不回退其他口径）；
+    - leader dict 含扩容事实键（gain10/leaderSealedToday/segment/poolDay/histStreak）；
+    - 消费方：题材龙头打标候选（theme_leader_label.leaders_for）、relay 题材梯队表、
+      limitup 读口「领涨」列——龙一身份全站唯一。
+    """
+    doc = db[COLLECTION].find_one(
+        {"_id": f"{date}:SECTOR_NODES"},
+        {"version": 1, "status": 1, "rows.board": 1, "rows.leader": 1})
+    # 版本契约=SECTOR_NODE_VERSION 单点：升代后旧档按「档缺失」处理，消费方各自
+    # fail-visible 披露（逐代迁移时同步更新各消费方，禁止旧代档冒充新口径）
+    if doc is None or doc.get("status") != "ok" or str(doc.get("version") or "") != SECTOR_NODE_VERSION:
+        return None
+    out: dict[str, dict[str, Any]] = {}
+    for r in doc.get("rows") or []:
+        lead = r.get("leader") or {}
+        if lead.get("code"):
+            out[str(r.get("board"))] = lead
+    return out
+
+
+def reanchor_dragons(dragons: dict[str, list[dict[str, Any]]],
+                     ledger: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """龙一重锚（梯队表/领涨列消费）：龙一槽位=龙一台账档，龙二/三按 dragon_rows 补位。
+
+    - 节点档龙一在 dragon_rows 行内（今日封板）→ 原行复用（保住 boards/days 区间高度
+      展示），移到首位置并重编 role；
+    - 不在行内（断板反包候选，今日未封）→ 合成龙一行（boards/days=None 如实缺位，
+      streak/time 用档内值）；
+    - 节点档无该板块 → 原行原样（dragon_rows 口径），由调用方在叙事层注记降级。
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for b, rows in dragons.items():
+        lead = ledger.get(b)
+        if not lead:
+            out[b] = rows
+            continue
+        code_l = str(lead.get("code") or "")[-6:]
+        rest = [r for r in rows if (r.get("code") or "") != code_l]
+        same = next((r for r in rows if (r.get("code") or "") == code_l), None)
+        if same is not None and lead.get("leaderSealedToday") is False                 and not same.get("boards"):
+            # 节点档断板反包龙一在 final 异动名单内命中但无区间高度：与合成行同款披露，
+            # 不伪装「首板」（P2-5 评审）
+            same = dict(same)
+            same["ledgerUnsealed"] = True
+        if same is None:
+            same = {"role": "龙一", "code": code_l, "name": lead.get("name"),
+                    "boards": None, "days": None, "streak": lead.get("streak"),
+                    "time": lead.get("time"), "ledgerUnsealed": True}
+        anchored = [same] + rest[:2]
+        for i, r in enumerate(anchored):
+            r["role"] = f"龙{'一二三'[i]}"
+        out[b] = anchored
+    return out
+
+
+def anchor_rows_to_ledger(rows: list[dict[str, Any]] | None,
+                          ledger: dict[str, dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
+    """按龙一台账过滤事实行（2026-11-09 三链合一 v5.1 下游消费端共用）。
+
+    - ledger=None（档缺失/非 v5/历史回放日）→ 原样返回，info.anchored=False
+      （消费方自行披露「未锚定」；不强行造档）；
+    - 锚定：按 (board, code) 只保留节点档龙一行；多余推导行（含 growth 轨、同板块
+      code 与档不一致的行）全部进 info.dropped（带板块:code，逐行可审计）；
+      节点档龙头无事实行（重采漂移）→ info.missing 披露，不伪造。
+    """
+    if rows is None or ledger is None:
+        return rows, {"anchored": False}
+    matched: set[str] = set()
+    out: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for r in rows:
+        b = str(r.get("board") or "")
+        lead = ledger.get(b)
+        if lead is None:
+            dropped.append(f"{b}:{r.get('code')}")
+            continue
+        if str(r.get("code") or "") == str(lead.get("code") or ""):
+            out.append(r)
+            matched.add(b)
+        else:
+            # 同板块非节点龙一推导行（含 growth 轨）：逐行留痕，不静默
+            dropped.append(f"{b}:{r.get('code')}!={lead.get('code')}")
+    return out, {"anchored": True, "dropped": dropped,
+                 "missing": sorted(b for b in ledger if b not in matched)}
+
+
+def _collapse_segment_rows(
+        rows: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """v5 分轨折叠：space_mode 每板块可能出 main/growth 两行，节点表只出一只龙一。
+
+    主板轨优先（与涨停打标/题材龙头的「板块龙一」展示主轨同源）；无 main 行
+    （纯双创板块）取 growth 行。非分轨行（无 segment）原样保留。
+    """
+    if not rows:
+        return rows
+    by_board: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        b = str(r.get("board") or "")
+        cur = by_board.get(b)
+        if cur is None or (r.get("segment") == "main" and cur.get("segment") != "main"):
+            by_board[b] = r
+    return list(by_board.values())
+
+
 def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
-    """单日计算+落库（幂等覆盖）；昨日节点从昨日文档读（回填升序天然成链）。"""
-    prevs = trading_dates_before(db, date, 2, dataset_id=dataset_id)
+    """单日计算+落库（幂等覆盖）；昨日节点从昨日文档读（回填升序天然成链）。
+
+    2026-11-09 用户裁决（板块龙一口径统一，v5）：节点龙头改用**空间龙一**——与涨停
+    打标链/题材龙头链同参（space_mode=True + 近 3 封板日回溯池），三处龙一单源同一
+    只股（差异实证：商业航天节点=润贝航科(2板现役) vs 打标/题材=顺灏股份(空间龙一)）。
+    此前的 streak 口径是 2026-10-27 预登记 §21.6 的刻意保留（历史样本人群不漂移），
+    本次用户裁决覆盖之；节点判据的龙头续断随之按空间龙一判，节点档可能重判（如实
+    重算不掩饰）。v12 分轨每板块≤2 行（main/growth），节点表折叠为主板轨优先单龙
+    （_collapse_segment_rows）。
+    """
+    prevs = trading_dates_before(db, date, 3, dataset_id=dataset_id)
     prev_date = prevs[-1] if prevs else None
     prev2_date = prevs[-2] if len(prevs) >= 2 else None
+    prev_pools = (trading_dates_before(db, prev_date, 3, dataset_id=dataset_id)
+                  if prev_date else [])
+    prev2_pools = (trading_dates_before(db, prev2_date, 3, dataset_id=dataset_id)
+                   if prev2_date else [])
 
-    today_rows, meta_today = day_leader_rows(db, date, dataset_id, prev_date)
-    prev_rows, _pmeta = day_leader_rows(db, prev_date, dataset_id) if prev_date else (None, None)
-    prev2_rows, _p2meta = (day_leader_rows(db, prev2_date, dataset_id)
+    today_rows, meta_today = day_leader_rows(db, date, dataset_id, prev_date,
+                                             space_mode=True, pool_dates=prevs)
+    prev_rows, _pmeta = (day_leader_rows(db, prev_date, dataset_id,
+                                         space_mode=True, pool_dates=prev_pools)
+                         if prev_date else (None, None))
+    prev2_rows, _p2meta = (day_leader_rows(db, prev2_date, dataset_id,
+                                           space_mode=True, pool_dates=prev2_pools)
                            if prev2_date else (None, None))
+    today_rows = _collapse_segment_rows(today_rows)
+    prev_rows = _collapse_segment_rows(prev_rows)
+    prev2_rows = _collapse_segment_rows(prev2_rows)
 
     prom = _promotion_by_board(db, prev_date, date, dataset_id)
     leader_status = _leader_states(db, date, prev_rows, dataset_id)
@@ -348,7 +476,11 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                     "aggStaticVersion": AGG_STATIC_VERSION,
                     "staticMapped": static_mapped,
                     "staticUnmapped": len(static_by_board) - static_mapped,
-                    "streakSource": "jiuyan_streak_map"}}
+                    "streakSource": "jiuyan_streak_map",
+                    # v5.1 空间模式缺料披露（P1-4 评审）：TDX 10日涨幅整板块不可算等
+                    # 跳过行为必须落库可见（§4.0 部分失败打质量标记，不静默缺席）
+                    "spaceErrors": (meta_today or {}).get("spaceErrors") or {},
+                    "spaceTrackGaps": (meta_today or {}).get("spaceTrackGaps") or {}}}
     db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     dist: dict[str, int] = {}
     for r in built["rows"]:

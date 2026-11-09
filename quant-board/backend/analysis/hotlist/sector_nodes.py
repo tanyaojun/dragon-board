@@ -17,7 +17,7 @@ from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import percentile_fraction
 
-SECTOR_NODE_VERSION = "v4"   # v4=池外晋级并入 promN（V4 条款 1，用户批准进判据）+ 量能候选待批（sector-nodes-v4-criteria-preregistration）；v3=首板收紧（V2d 条款 3）
+SECTOR_NODE_VERSION = "v5"   # v5=板块龙一统一空间龙一口径（2026-11-09 用户裁决：与涨停打标/题材龙头链同参 space_mode+3日池，分轨折叠主板轨优先）；v4=池外晋级并入 promN（V4 条款 1，用户批准进判据）+ 量能候选待批（sector-nodes-v4-criteria-preregistration）；v3=首板收紧（V2d 条款 3）
 
 # 节点枚举与优先级（预登记 §三：从高到低，命中即定档；改动须新代际）
 NODE_ORDER = ("wzs", "collapse", "ice", "weakening",
@@ -243,10 +243,21 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
         hist_values = [n for _d, n in (count_hist or {}).get(b, [])]
         # day_leader_rows 行形状=平铺 code/name/streak/time（非嵌套 leader），此处组装成
         # leader dict 供展示与判定；code 缺失视为无龙头行
+        # v5.1 龙一台账行（2026-11-09 用户裁决三链合一）：leader dict 扩容携带空间龙一
+        # 完整事实字段（gain10/leaderSealedToday/segment/poolDay/histStreak）——龙一只
+        # 算一次落一次库，题材龙头打标/涨停打标叙事/梯队表/下游 advisory 全部消费本档，
+        # 不再各自重推（缺省键不伪造，消费方自行 fail-visible）。
+        _LEADER_LEDGER_KEYS = ("gain10", "leaderSealedToday", "segment",
+                               "poolDay")
+
         def _leader_of(row: dict[str, Any] | None) -> dict[str, Any] | None:
             if row and row.get("code"):
-                return {"code": str(row["code"]), "name": row.get("name"),
+                out = {"code": str(row["code"]), "name": row.get("name"),
                         "streak": row.get("streak"), "time": row.get("time")}
+                for _k in _LEADER_LEDGER_KEYS:
+                    if row.get(_k) is not None:
+                        out[_k] = row[_k]
+                return out
             return None
         leader = _leader_of(trow)
         prev_leader = _leader_of(prow)

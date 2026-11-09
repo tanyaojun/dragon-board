@@ -127,6 +127,19 @@ def collect_materials(db: Any, date: str, dataset_id: str,
         prev_date=pool_days[-1] if pool_days else None,
         space_mode=True, pool_dates=pool_days,
         gain_fetcher=gain_fetcher, day_change_fetcher=day_change_fetcher)
+    # v5.1 三链合一锚定（2026-11-09 用户裁决）：有当日节点档（v5）时龙一行按档过滤
+    # （单龙口径全站一致）；无档（深历史回填）保持原推导并如实披露未锚定
+    from backend.operations.sector_nodes import ledger_leaders, anchor_rows_to_ledger
+    try:
+        _ledger = ledger_leaders(db, date)
+    except Exception as exc:
+        _ledger = None   # 深历史回填/mock 无节点集合：未锚定，不阻断（异常类型留痕）
+        leader_meta = dict(leader_meta or {})
+        leader_meta["ledgerAnchor"] = {"anchored": False, "error": type(exc).__name__}
+    leader_rows, anchor_info = anchor_rows_to_ledger(leader_rows, _ledger)
+    # 无条件落痕（P2-7 评审）：anchored/未锚定/剔除/漂移全披露，与 theme_cycle 同语义
+    leader_meta = dict(leader_meta or {})
+    leader_meta["ledgerAnchor"] = anchor_info
     if gaps:
         leader_meta = dict(leader_meta or {})
         leader_meta.setdefault("dataGaps", [])

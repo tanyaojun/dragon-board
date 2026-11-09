@@ -21,7 +21,7 @@ def _lrow(board: str, codes: list[str]) -> dict:
 
 def _patch(monkeypatch, pools: dict[str, dict | None],
            dates: list[str], bars: dict[str, list[dict]]):
-    def fake_dlr(db, date, dataset_id=ops.DEFAULT_DATASET_ID, prev_date=None):
+    def fake_dlr(db, date, dataset_id=ops.DEFAULT_DATASET_ID, prev_date=None, *, space_mode=False, pool_dates=None):
         if date not in pools:
             return None, {}
         if pools[date] is None:

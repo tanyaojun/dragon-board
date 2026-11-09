@@ -240,7 +240,7 @@ def test_index_anchor_placeholder():
 
 
 def test_labels_and_version():
-    assert SECTOR_NODE_VERSION == "v4"   # V4 条款 1 池外晋级并入 promN；v3=首板收紧（V2d）
+    assert SECTOR_NODE_VERSION == "v5"   # v5=板块龙一统一空间龙一（2026-11-09 用户裁决）；v4=池外晋级并入 promN
     assert NODE_LABELS_CN["wzs"] == "弱转强" and NODE_LABELS_CN["collapse"] == "退潮"
 
 
@@ -427,7 +427,7 @@ def test_v2_defense_note_on_collapse_and_ice():
 
 def test_v2_version_frozen():
     """v2 判据延续（V2d 仅收紧首板分支，资金先手/防守注记不变）。"""
-    assert _V2 == "v4"
+    assert _V2 == "v5"
 
 
 # ── V2d（sector-nodes-v2d-preregistration） ────────────────────────────────

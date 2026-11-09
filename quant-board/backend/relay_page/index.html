@@ -2509,7 +2509,11 @@ function renderNodes(){
     const shTxt = sh ? `首 ${sh.first ?? 0} / 2板 ${sh.two ?? 0} / 3板+ ${sh.threePlus ?? 0}` : '—';
     const ld = r.leader;
     const ldTxt = ld ? esc(ld.name || ld.code || '?')
-      + (ld.streak != null ? ' ' + ld.streak + '板' : ' 板数?') : '—';
+      + (ld.streak != null ? ' ' + ld.streak + '板'
+        // v5.1 空间龙一：断板反包候选（今日未封）真连板如实不可考，显式披露不冒充「板数?」
+        : ld.leaderSealedToday === false
+          ? ' <span class="badge b-amber" title="空间龙一为断板反包候选：今日未封板，真连板数如实不可考">断板反包</span>'
+          : ' 板数?') : '—';
     const ls = r.leaderState
       ? (r.leaderState === 'broken' ? ' <span class="badge b-red">断板</span>'
         : r.leaderState === 'sealed' ? ' <span class="badge b-green" title="昨日龙一今日续板">续</span>'

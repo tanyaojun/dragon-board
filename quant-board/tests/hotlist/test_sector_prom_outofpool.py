@@ -90,7 +90,7 @@ def test_settle_meta_total_includes_unattributed(monkeypatch):
     monkeypatch.setattr(ops2, "_prev_nodes_of", lambda db, d: None)
     monkeypatch.setattr(ops2, "_agg_rows_compute", lambda db, d, ds: [])
     monkeypatch.setattr(ops2, "_static_rows_compute", lambda db, d, boards: {})
-    monkeypatch.setattr(ops2, "day_leader_rows", lambda db, date, dataset_id=None, prev_date=None: (None, {}))
+    monkeypatch.setattr(ops2, "day_leader_rows", lambda db, date, dataset_id=None, prev_date=None, *, space_mode=False, pool_dates=None: (None, {}))
     monkeypatch.setattr(ops2, "trading_dates_before", lambda db, date, n, dataset_id=None: [])
 
     class _Coll:
