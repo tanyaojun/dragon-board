@@ -2265,7 +2265,12 @@ const TL_HEAD_BADGE = { space_2plus: 'b-red', space_1: 'b-amber', peak: 'b-gray'
                         insufficient: 'b-gray' };
 const TL_ORIGIN_CN = { live: '前瞻', backfill: '回填' };
 
-function tlRows(){ return (STATE.tlData && STATE.tlData.rows) || []; }
+function tlRows(){
+  const all = (STATE.tlData && STATE.tlData.rows) || [];
+  // 未打标行不进表（2026-11-10 用户裁决）：行政桶/当日缺打标的行全列 '-'，无阅读价值；
+  // 数据不下架，数量仍由横幅按 nodeFilter.labelMissingRows 披露（fail-visible）
+  return all.filter(r => !r.labelMissing);
+}
 function tlKey(r){ return (r.tradingDate || '') + ':' + (r.code || ''); }
 // 续板概率=四档中值加权期望（与后端 continue_point_estimate / CONTINUE_BUCKET_MIDPOINTS 同口径）。
 // 旧口径「非 insufficient 质量和」语义失真：它=1−P(证据不足)，恒 85%~100%，与「档位=低25-45%」
@@ -2664,10 +2669,15 @@ function tlRenderBanner(){
   // 多代际警示已结项（用户 2026-10-22 裁决）：v1/v2/v3 历史档不回改是设计内常态，
   // 行级版本徽章已可见，长期挂黄牌无增量信息。样本来源警示横幅同步下线
   //（2026-10-26 用户裁决：来源语义在「来源」筛选与明细卡页脚已可考，横幅常驻属视觉噪音）。
+  // 未打标行已隐藏（tlRows 过滤），披露计数不静默（§4.0：缺失位置可见）
+  const missN = ((doc.nodeFilter || {}).labelMissingRows) || 0;
+  if (missN > 0){
+    el.innerHTML = '<div class="lf-warn">另有 ' + missN
+      + ' 只当日未打标龙头（行政桶/打标缺档）未显示</div>';
+    return;
+  }
   el.innerHTML = '';
 }
-
-// 板块分布 chips（.board-row .k + .chip；超 10 类折叠「其他 N 类」；同涨停复盘）
 function tlRenderBoards(){
   const el = $('tlBoardRow'); if (!el) return;
   const f = STATE.tlUi;
