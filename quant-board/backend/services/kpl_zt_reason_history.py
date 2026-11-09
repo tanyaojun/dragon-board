@@ -25,6 +25,7 @@ from typing import Any, Dict, List
 
 from backend.services.kpl_ranking_service import (
     _HOST_HISTORY,
+    _HOST_REALTIME,
     _UA_STOCKS,
     _check_errcode,
     _post_form,
@@ -72,6 +73,30 @@ def fetch_stock_zt_reason_raw(stock_id: str) -> Dict[str, Any]:
                       _UA_STOCKS)
     _check_errcode(data)
     _CACHE[stock_id] = {"ts": time.time(), "data": data}
+    return data
+
+
+def fetch_stock_zt_reason_realtime(stock_id: str) -> Dict[str, Any]:
+    """单股实时涨停原因全文（apphwhq StockLineData/GetKLineZhangTing，2026-11-09 实弹）。
+
+    与 GetDayZhangTing 同构（List 条目 Date/Reason/GNSM/Boom_ZS/SCLT/ZSCode + 顶层
+    Time），但**当日条目即时同步**（2026-11-09 实测：000530 当日涨停当日可取，
+    GetDayZhangTing 同股仅回 11-04）——当日语料回填用本端点，历史回看用档案链。
+    缓存键与档案链隔离（rt: 前缀）；pytest 护栏同款。
+    """
+    key = f"rt:{stock_id}"
+    cached = _CACHE.get(key)
+    if cached and time.time() - cached["ts"] < _CACHE_TTL_SECONDS:
+        return cached["data"]
+    _pytest_guard()
+    if len(_CACHE) >= _CACHE_MAX_KEYS:
+        _CACHE.clear()
+    data = _post_form(_HOST_REALTIME,
+                      {"a": "GetKLineZhangTing", "c": "StockLineData",
+                       "StockID": stock_id, **_global_params()},
+                      _UA_STOCKS)
+    _check_errcode(data)
+    _CACHE[key] = {"ts": time.time(), "data": data}
     return data
 
 

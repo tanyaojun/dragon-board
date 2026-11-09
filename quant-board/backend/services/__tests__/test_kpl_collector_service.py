@@ -990,3 +990,90 @@ class TestThemeHeat2013:
         assert off._queue_theme_new(["301697"]) == 0
         assert off._pending_theme == []
         assert off.get_theme_heat()["reason"] == "no_theme_snapshot"
+
+
+class TestAuthPhaseDelay:
+    """2026-11-09 会话抖动根因修复：auth 相位延迟对齐 adb 档（§3.4 单调实证）。"""
+
+    def test_human_pause_jitter_range(self):
+        svc = KplCollectorService(FakeCodec(), device_id="d", human_delay=True,
+                                  auth_phase_delay=5.0, auth_phase_jitter=3.0)
+        seen: list[float] = []
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr("backend.services.kpl_collector_service.time.sleep",
+                            lambda s: seen.append(s))
+        try:
+            for _ in range(50):
+                svc._human_pause(5.0, 3.0)
+                svc._human_pause(0.3, 0.15)
+        finally:
+            monkeypatch.undo()
+        auth = seen[0::2]
+        sub = seen[1::2]
+        assert all(5.0 <= v <= 8.0 for v in auth)          # adb 档 5-8s
+        assert max(auth) > min(auth)                       # 抖动非固定节拍
+        assert all(0.3 <= v <= 0.45 for v in sub)
+        assert any(v != 0.3 for v in sub)
+
+    def test_human_pause_off_in_pytest(self):
+        svc = KplCollectorService(FakeCodec(), device_id="d", human_delay=False)
+        seen: list[float] = []
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr("backend.services.kpl_collector_service.time.sleep",
+                            lambda s: seen.append(s))
+        try:
+            svc._human_pause(5.0, 3.0)
+        finally:
+            monkeypatch.undo()
+        assert seen == []   # pytest 零停顿（既有合同不变）
+
+    def test_auth_phase_uses_configured_delay(self, monkeypatch):
+        """_session 在发 610 前按 auth_phase_delay+jitter 停顿（替 _human_pause 观测）。"""
+        svc = KplCollectorService(
+            FakeCodec(), device_id="d", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=True,
+            auth_phase_delay=5.0, auth_phase_jitter=3.0)
+        pauses: list[float] = []
+        monkeypatch.setattr(svc, "_human_pause", lambda b, s=0.0: pauses.append((b, s)))
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, b"\xaa\x02\x03"),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        assert pauses[0] == (5.0, 3.0)                     # auth 相位=adb 档基数
+        sub_bases = [p for p in pauses[1:] if p[0] in (0.3, 0.6, 0.8)]
+        assert sub_bases, "订阅帧仍应保留拟人停顿（仅加抖动）"
+
+    def test_status_exposes_session_observability(self, svc):
+        svc._stats["last_setup_s"] = 7.3
+        svc._stats["last_session_s"] = 92.4
+        st = svc.status()
+        assert st["last_setup_s"] == 7.3 and st["last_session_s"] == 92.4
+        assert st["auth_phase_delay"] == 5.0               # 便于线上核对生效配置
+
+    def test_run_loop_records_session_duration(self, svc, monkeypatch):
+        """单会话异常（如 10054 ConnectionResetError）后仍透出会话时长（fail-visible 观测）。"""
+        import threading as _t
+        import time as _time
+
+        def _reset_after_delay():
+            _time.sleep(0.15)
+            raise ConnectionResetError(10054, "reset")
+
+        monkeypatch.setattr(svc, "_tls_connect", _reset_after_delay)
+        stop_evt = _t.Event()
+        monkeypatch.setattr(svc, "_stop", stop_evt)
+        timer = _t.Timer(0.3, stop_evt.set)   # 异常后 _run_loop 停在 wait(2.0)，此间置停
+        timer.start()
+        svc._run_loop()
+        timer.join()
+        assert svc._stats["sessions"] >= 1
+        assert svc._stats["last_session_s"] >= 0.1         # 会话时长已记录（非恒零）
+        assert "network" in (svc._last_error or "")

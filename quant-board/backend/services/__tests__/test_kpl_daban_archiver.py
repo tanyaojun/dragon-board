@@ -112,6 +112,17 @@ def _states(row: dict) -> dict[str, str]:
     return {m["stock_id"]: m.get("pool_state") for m in row["items"]}
 
 
+# 周日 11-08（非交易日）：周末会话推送上一交易日（周五 11-06）详情，既有口径保留
+_TEST_CLOCK = lambda: datetime(2026, 11, 8, 10, 0, tzinfo=TZ_SHANGHAI)
+
+
+def _patch_trading_calendar(monkeypatch) -> None:
+    """护栏交易日判定打桩（周一~五启发，不发真实 bridge HTTP；pytest 红线）。"""
+    from backend.services import kpl_daban_archiver as arch
+    monkeypatch.setattr(arch, "is_trading_day_cached",
+                         lambda d: (d.weekday() < 5, "test"))
+
+
 def test_merge_union_and_broken_marking():
     db = _FakeDb()
     # 帧1：A、B 在池
@@ -353,14 +364,15 @@ def test_archive_once_lane_isolation(monkeypatch):
                 raise OSError("conn refused")   # 炸板池 fetch 失败
             if url.endswith("pid_type=3"):
                 return _Resp({"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"})
-            return _Resp(_snap(100.0, ["000001"], date="2026-11-08") if url.endswith("pid_type=1")
-                         else _bid_snap(200.0, ["300001"], date="2026-11-08"))
+            return _Resp(_snap(100.0, ["000001"], date="2026-11-06") if url.endswith("pid_type=1")
+                         else _bid_snap(200.0, ["300001"], date="2026-11-06"))
 
     monkeypatch.setattr(arch.httpx, "AsyncClient", _FailClient)
+    _patch_trading_calendar(monkeypatch)
     db = _FakeDb()
     archiver = DabanPoolArchiver(
         settings=_S(), database_factory=lambda: db, interval_seconds=60,
-        gene_fetcher=_fake_gene)
+        gene_fetcher=_fake_gene, clock=_TEST_CLOCK)
     asyncio.run(archiver._archive_once())
     res = archiver.status()["lastResult"]
     # 涨停/竞价正常落库；炸板池 fetch 失败、跌停池 collector 降级：各自结构化透出，互不连带
@@ -369,7 +381,7 @@ def test_archive_once_lane_isolation(monkeypatch):
     assert res["dt"]["ok"] is False and res["dt"]["reason"].startswith("collector_degraded:")
     assert archiver.status()["lastError"]
     # db 里只有 pool/bid 两通道写了当日档
-    row = db._coll.rows["2026-11-08"]
+    row = db._coll.rows["2026-11-06"]
     assert "items" in row and "bid_items" in row and "zb_items" not in row and "dt_items" not in row
 
 
@@ -405,7 +417,7 @@ def test_archive_stage_failure_isolated(monkeypatch):
             pid = url.rsplit("=", 1)[-1]
             snaps = {"1": _snap, "8": _bid_snap, "2": _zb_snap, "3": _dt_snap}
             sid = "300001" if pid == "8" else "600001" if pid in ("2", "3") else "000001"
-            return _Resp(snaps[pid](100.0, [sid], date="2026-11-08"))
+            return _Resp(snaps[pid](100.0, [sid], date="2026-11-06"))
 
     monkeypatch.setattr(arch.httpx, "AsyncClient", _OkClient)
 
@@ -413,15 +425,17 @@ def test_archive_stage_failure_isolated(monkeypatch):
         raise OSError("mongo down")
 
     monkeypatch.setattr(arch, "archive_zb_snapshot", _boom_zb)
+    _patch_trading_calendar(monkeypatch)
     db = _FakeDb()
-    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db, interval_seconds=60)
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, clock=_TEST_CLOCK)
     asyncio.run(archiver._archive_once())
     res = archiver.status()["lastResult"]
     # 炸板池落库失败：只本通道结构化失败，其余三通道照常落库
     assert res["pool"]["ok"] is True and res["bid"]["ok"] is True and res["dt"]["ok"] is True
     assert res["zb"]["ok"] is False and res["zb"]["reason"].startswith("archive_failed:")
     assert "zb:archive_failed:" in archiver.status()["lastError"]
-    doc = db._coll.rows["2026-11-08"]
+    doc = db._coll.rows["2026-11-06"]
     assert "items" in doc and "bid_items" in doc and "dt_items" in doc and "zb_items" not in doc
 
 
@@ -560,6 +574,30 @@ def test_reason_corpus_refreshes_and_keeps_first_ts():
     it = db._coll.rows["2026-11-06"]["reason_items"][0]
     assert it["zt"] == "光伏（更正）" and it["ts"] == t2 and it["first_ts"] == t1
     assert it["theme"] == "光伏"        # 空字段不覆盖既有原料（不烘成空）
+
+
+def test_reason_corpus_source_override_http_backfill():
+    """来源标注参数（2026-11-09 HTTP 档案链回填）：doc 级 reason_source 跟随，
+    HTTP 原文字段（gns/boom_zs/sclt/zs_codes/matched_date/source）透传不丢。"""
+    from backend.services.kpl_daban_archiver import archive_reason_corpus
+    db = _FakeDb()
+    ts = datetime(2026, 11, 9, 15, 40, tzinfo=TZ_SHANGHAI).timestamp()
+    r = archive_reason_corpus(
+        db, _reason_snap("2026-11-06", {"301697": {
+            "zt": "光伏+储能全文", "gns": "概念解析", "boom_zs": "媒体催化",
+            "sclt": "日内梯队", "zs_codes": ["801464"], "matched_date": "2026-11-06",
+            "source": "http_GetDayZhangTing", "ts": ts}}),
+        source="http_GetDayZhangTing")
+    assert r["ok"] and r["merged_n"] == 1
+    row = db._coll.rows["2026-11-06"]
+    assert row["reason_source"] == "http_GetDayZhangTing"
+    it = row["reason_items"][0]
+    assert it["zt"] == "光伏+储能全文" and it["gns"] == "概念解析"
+    assert it["zs_codes"] == ["801464"] and it["source"] == "http_GetDayZhangTing"
+    # 默认不传 source 仍是 socket_2203（既有合同不变）
+    db2 = _FakeDb()
+    archive_reason_corpus(db2, _reason_snap("2026-11-06", {"301697": _reason_item("301697", ts)}))
+    assert db2._coll.rows["2026-11-06"]["reason_source"] == "socket_2203"
 
 
 def test_reason_corpus_stale_entries_skipped():
@@ -765,9 +803,11 @@ def test_archiver_gene_lane_round(monkeypatch):
                                                        "reason": "1020", "error": "白名单"}
 
     monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
+    _patch_trading_calendar(monkeypatch)
     db = _FakeDb()
     archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
-                                 interval_seconds=60, gene_fetcher=_fetch, gene_limit=2)
+                                 interval_seconds=60, gene_fetcher=_fetch, gene_limit=2,
+                                 clock=_TEST_CLOCK)
     asyncio.run(archiver._archive_once())
     res = archiver.status()["lastResult"]["gene"]
     assert calls == ["000001", "000002"]         # limit=2 控发数
@@ -902,3 +942,177 @@ def test_notice_corpus_lazy_targets_and_merge():
                                     "notices": [_notice_result("X", ok=False)]})
     assert r2["ok"] is False and r2["reason"] == "no_notice_fetched"
     assert load_notice_corpus(db, "2026-11-07")["reason"] == "no_archive"
+
+
+# ── 快照日期新鲜度护栏（2026-11-09 盘中错档事故固化）──────────────────────────
+# 事故：11-09（周一）盘前/早盘帧 date 滞留 2026-11-06（上游翻日滞留），当日 zb/dt/bid
+# 甚至 pool 帧被成员并集合并进 11-06 历史档，污染其收盘终态。
+
+def test_snapshot_date_freshness_pure_function():
+    """纯函数口径：交易日只收当日；非交易日只收最近交易日；非法日期不猜。"""
+    from backend.services.kpl_daban_archiver import snapshot_date_freshness_error
+    from backend.snapshot_collector.trading_calendar import is_trading_day_cached as _real
+
+    monday = datetime(2026, 11, 9, 10, 0, tzinfo=TZ_SHANGHAI)     # 交易日盘中
+    sunday = datetime(2026, 11, 8, 10, 0, tzinfo=TZ_SHANGHAI)     # 非交易日
+    assert snapshot_date_freshness_error("2026-11-09", monday) is None
+    assert snapshot_date_freshness_error("2026-11-06", monday) == "stale_snapshot_date"
+    assert snapshot_date_freshness_error("2026-11-06", sunday) is None   # 周末收上一交易日
+    assert snapshot_date_freshness_error("2026-11-05", sunday) == "stale_snapshot_date"
+    assert snapshot_date_freshness_error("", monday) == "invalid_snapshot_date"
+    assert snapshot_date_freshness_error("20261109", monday) == "invalid_snapshot_date"
+    # 注：不在此处调真实 is_trading_day_cached（含 bridge HTTP 探测，环境漂移）——
+    # 日历本身的断言属 trading_calendar 测试（评审 MINOR）
+
+
+def test_archive_once_precomputes_trading_context_once(monkeypatch):
+    """评审 R2-MAJOR 回归：交易日上下文每轮仅预计算一次（to_thread），非逐 lane 重复探测。"""
+    import asyncio
+    from backend.services import kpl_daban_archiver as arch
+
+    calls = []
+    # 上下文直接打桩（非交易日 + 最近交易日 11-06，与 _TEST_CLOCK 周日口径一致）
+    monkeypatch.setattr(arch, "_trading_day_context",
+                        lambda now: calls.append(now) or (False, "2026-11-06"))
+
+    class _Resp:
+        def __init__(self, content):
+            self._c = content
+
+        def json(self):
+            return self._c
+
+    class _OkClient:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            if url.endswith("pid_type=2"):
+                return _Resp(_bid_snap(200.0, ["300001"], date="2026-11-06"))
+            if url.endswith("pid_type=3"):
+                return _Resp(_snap(100.0, ["400001"], date="2026-11-06"))
+            if "/reasons" in url:
+                return _Resp({"ok": True, "date": "2026-11-06", "reasons": {}})
+            if "/themes" in url:
+                return _Resp({"ok": True, "date": "2026-11-06", "themes": {}})
+            return _Resp(_snap(100.0, ["000001"], date="2026-11-06"))
+
+    monkeypatch.setattr(arch.httpx, "AsyncClient", _OkClient)
+    db = _FakeDb()
+    archiver = DabanPoolArchiver(
+        database_factory=lambda: db, interval_seconds=60,
+        gene_fetcher=_fake_gene, clock=_TEST_CLOCK)
+    asyncio.run(archiver._archive_once())
+    assert len(calls) == 1   # 四通道 + reason/theme 共 6 次判定，上下文只探测一次
+    res = archiver.status()["lastResult"]
+    for lane in ("pool", "bid", "zb", "dt"):
+        assert res[lane]["ok"] is True
+
+
+def test_archive_once_stale_date_lane_skipped(monkeypatch):
+    """事故回归：交易日（周一）收到 date=上周五的帧 → 四通道逐通道 skip，零落库。"""
+    import asyncio
+    from backend.services import kpl_daban_archiver as arch
+
+    class _S:
+        storage_backend = "mongodb"
+
+    class _Resp:
+        def __init__(self, content):
+            self._c = content
+
+        def json(self):
+            return self._c
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            if url.endswith("/zt-reasons"):
+                return _Resp({"ok": True, "reasons": {}, "count": 0, "ts": 1.0})
+            if url.endswith("pid_type=1"):
+                return _Resp(_snap(100.0, ["000001"], date="2026-11-06"))
+            if url.endswith("pid_type=8"):
+                return _Resp(_bid_snap(200.0, ["300001"], date="2026-11-06"))
+            if url.endswith("pid_type=2"):
+                return _Resp(_zb_snap(300.0, ["600001"], date="2026-11-06"))
+            return _Resp(_dt_snap(400.0, ["000002"], date="2026-11-06"))
+
+    monday_clock = lambda: datetime(2026, 11, 9, 10, 0, tzinfo=TZ_SHANGHAI)
+    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
+    _patch_trading_calendar(monkeypatch)
+    db = _FakeDb()
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, gene_fetcher=_fake_gene,
+                                 clock=monday_clock)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]
+    for lane in ("pool", "bid", "zb", "dt"):
+        assert res[lane]["ok"] is False and res[lane]["reason"] == "stale_snapshot_date"
+        assert res[lane]["date"] == "2026-11-06"
+    # 零落库：错档写入不会发生（事故里这批帧会并进 2026-11-06 档）
+    assert db._coll.rows.get("2026-11-06") is None
+    # pool_date 未产出 → 语料/基因不猜日期
+    assert res["reason"]["reason"] == "no_pool_date"
+    assert res["theme"]["reason"] == "no_pool_date"
+    assert res["gene"]["reason"] in ("no_pool_date", "no_archive")
+
+
+def test_archive_once_fresh_date_still_archives(monkeypatch):
+    """交易日收到当日帧：护栏放行，照常落库（不因护栏误伤正常采集）。"""
+    import asyncio
+    from backend.services import kpl_daban_archiver as arch
+
+    class _S:
+        storage_backend = "mongodb"
+
+    class _Resp:
+        def __init__(self, content):
+            self._c = content
+
+        def json(self):
+            return self._c
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            pid = url.rsplit("=", 1)[-1] if "pid_type" in url else ""
+            snaps = {"1": _snap, "8": _bid_snap, "2": _zb_snap, "3": _dt_snap}
+            sid = "300001" if pid == "8" else "600001" if pid in ("2", "3") else "000001"
+            if not pid:
+                return _Resp({"ok": False, "degraded": True, "reason": "no_zt_reason_snapshot"})
+            return _Resp(snaps[pid](100.0, [sid], date="2026-11-09"))
+
+    monday_clock = lambda: datetime(2026, 11, 9, 10, 0, tzinfo=TZ_SHANGHAI)
+    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
+    _patch_trading_calendar(monkeypatch)
+    db = _FakeDb()
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, gene_fetcher=_fake_gene,
+                                 clock=monday_clock)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]
+    assert all(res[lane]["ok"] is True for lane in ("pool", "bid", "zb", "dt"))
+    row = db._coll.rows["2026-11-09"]
+    assert "items" in row and "bid_items" in row and "zb_items" in row and "dt_items" in row

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import queue
+import random
 from pathlib import Path
 import socket
 import ssl
@@ -226,6 +227,13 @@ class KplCollectorService:
         stock_ids: Optional[List[str]] = None,
         history: int = 200,
         human_delay: bool = True,
+        # auth 相位延迟（2026-11-09 会话抖动根因修复）：§3.4 实证会话时长与 auth 阶段
+        # 耗时单调相关——<1s → ~6s 即断（机器人检测）；~1-2s 拟人档 → 15-25s；
+        # adb 链路（signsvc 经模拟器逐帧往返）auth 5-8s → 75-160s。pc codec 太快，
+        # 原固定 1.2s 停在拟人档（实测 ~23s 会话），2203/2013 订阅爆发未完成即被断。
+        # 默认 5.0+U(0,3.0) 对齐 adb 档；env KPL_AUTH_PHASE_DELAY 可覆盖（0=关闭延迟）。
+        auth_phase_delay: float = 5.0,
+        auth_phase_jitter: float = 3.0,
         daban_subs: bool = True,
         daban_market_type: int = 1,
         daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1, 2, 3),
@@ -250,6 +258,8 @@ class KplCollectorService:
         self._api_version = api_version
         # 拟人延迟开关（服务器对 <1s 完成认证的连接 ~6s 即断连；pytest 置 False）
         self._human_delay = human_delay
+        self._auth_phase_delay = max(0.0, float(auth_phase_delay))
+        self._auth_phase_jitter = max(0.0, float(auth_phase_jitter))
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
         self._daban_market_type = daban_market_type
@@ -320,6 +330,7 @@ class KplCollectorService:
         self._last_error = ""
         self._session_no = 0
         self._stats = {"sessions": 0, "pushes": 0, "errors": 0, "started_at": 0.0,
+                       "last_setup_s": 0.0, "last_session_s": 0.0,
                        "anti_cheat_rounds": 0}
 
     # ---- 公共 API ----
@@ -666,6 +677,11 @@ class KplCollectorService:
             "zt_reasons_subscribed": len(self._zt_reason_subscribed),
             "corpus_persist": dict(self._corpus_persist_stats),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
+            # 会话寿命观测（2026-11-09 抖动根因修复验证）：setup=连接到订阅完成耗时，
+            # session=单会话存活时长；§3.4 时长档对照（拟人档 15-25s / adb 档 75-160s）
+            "last_setup_s": self._stats.get("last_setup_s", 0.0),
+            "last_session_s": self._stats.get("last_session_s", 0.0),
+            "auth_phase_delay": self._auth_phase_delay,
             "uptime_s": round(time.time() - self._stats["started_at"], 1)
             if self._stats["started_at"]
             else 0,
@@ -784,6 +800,8 @@ class KplCollectorService:
         while not self._stop.is_set():
             self._session_no += 1
             self._stats["sessions"] += 1
+            t_session = time.time()
+            backoff = 2.0
             try:
                 self._session()
             except (ssl.SSLError, OSError, socket.timeout) as exc:
@@ -791,21 +809,22 @@ class KplCollectorService:
             except SignSvcError as exc:
                 self._err(f"session#{self._session_no} signsvc: {exc}")
                 # signsvc 故障重试间隔拉长
-                self._stop.wait(5.0)
-                continue
+                backoff = 5.0
             except AntiCheatError as exc:
                 # 261 无法作答 → 不发假答案，直接断连重建（App 同款行为）；
                 # 退避拉长到 5s：若 261 周期性下发，2s 快速重连会刷屏（评审 R1-P2）
                 self._err(f"session#{self._session_no} anti_cheat: {exc}")
-                self._status = "reconnecting"
-                self._stop.wait(5.0)
-                continue
+                backoff = 5.0
             except Exception as exc:  # 未知异常也必须 fail-visible
                 self._err(f"session#{self._session_no} unexpected: {type(exc).__name__}: {exc}")
+            finally:
+                # 会话时长观测（2026-11-09 抖动根因验证）：在重连退避之前记录，否则
+                # backoff 会被算进会话时长污染 §3.4 时长档对照（评审 MINOR）
+                self._stats["last_session_s"] = round(time.time() - t_session, 1)
             if self._stop.is_set():
                 break
             self._status = "reconnecting"
-            self._stop.wait(2.0)
+            self._stop.wait(backoff)
         self._status = "stopped"
 
     def _dbg(self, direction: str, data: bytes) -> None:
@@ -814,8 +833,16 @@ class KplCollectorService:
         with open(os.environ["KPL_DEBUG"], "a") as f:
             f.write(f"{direction} {int(time.time())} {data.hex()}\n")
 
+    def _human_pause(self, base: float, spread: float = 0.0) -> None:
+        """拟人停顿：base+U(0,spread) 非均匀间隔（固定节拍是机器指纹）；
+        human_delay=False（pytest）零停顿。auth 相位用大基数，订阅帧用小抖动。"""
+        if not self._human_delay:
+            return
+        time.sleep(base + (random.uniform(0, spread) if spread > 0 else 0.0))
+
     def _session(self) -> None:
         self._status = "connecting"
+        t_setup = time.time()
         seq = [0]  # 会话内递增 seq（重复 seq 会被服务器 110/2000 拒绝并断连）
 
         def next_seq() -> int:
@@ -865,10 +892,11 @@ class KplCollectorService:
                 self._err("ENC failed for AuthReq")
                 return
             auth_frame = proto.build_frame(proto.CMD_AUTH, next_seq(), enc_body, d=2, encrypted=True)
-            # 拟人延迟：服务器对 <1s 完成认证+订阅的连接做机器人检测并 ~6s 即断连
-            # （实测 collector adb 链路 5-8s 完成 → 75-160s 会话；服务 <1s → 6s 会话）
-            if self._human_delay:
-                time.sleep(1.2)
+            # 拟人延迟（2026-11-09 会话抖动根因修复）：§3.4 实证 auth 阶段耗时与会话
+            # 时长单调相关（<1s→~6s 断；~1-2s 拟人档→15-25s；adb 链路 5-8s→75-160s）。
+            # pc codec 太快，原固定 1.2s 停在拟人档（实测 ~23s 会话，2203/2013 订阅
+            # 爆发未完成即被断）；默认 5.0+U(0,3.0) 对齐 adb 档。
+            self._human_pause(self._auth_phase_delay, self._auth_phase_jitter)
             self._dbg("C", auth_frame)
             sock.sendall(auth_frame)
             # 3) 610 ack（加密 AuthResp）
@@ -915,8 +943,7 @@ class KplCollectorService:
             enc_ls = self._codec.enc(ls_pb)
             ls_frame = proto.build_frame(proto.CMD_LOGIN_STATE, next_seq(), enc_ls or ls_pb, d=0,
                                          encrypted=bool(enc_ls))
-            if self._human_delay:
-                time.sleep(0.6)
+            self._human_pause(0.6, 0.3)
             self._dbg("C", ls_frame)
             sock.sendall(ls_frame)
             self._status = "subscribing"
@@ -927,8 +954,7 @@ class KplCollectorService:
             ext = bytes([0x02]) + struct.pack(">H", proto.CMD_PLATE_LIST)
             vr_frame = proto.build_frame(proto.CMD_PLATE_LIST, next_seq(), enc_vr or vr, d=1,
                                          encrypted=bool(enc_vr), pkg=proto.PKG_ROUTE, ext=ext)
-            if self._human_delay:
-                time.sleep(0.8)
+            self._human_pause(0.8, 0.4)
             self._dbg("C", vr_frame)
             sock.sendall(vr_frame)
             deadline = time.time() + 10
@@ -983,8 +1009,7 @@ class KplCollectorService:
                 enc_gq = self._codec.enc(gq)
                 gq_frame = proto.build_frame(proto.CMD_GROUP_QUOTAS, next_seq(), enc_gq or gq, d=0,
                                              encrypted=bool(enc_gq), pkg=proto.PKG_ROUTE, ext=ext3)
-                if self._human_delay:
-                    time.sleep(0.3)
+                self._human_pause(0.3, 0.15)
                 self._dbg("C", gq_frame)
                 sock.sendall(gq_frame)
             # 6b) 3006 个股行情订阅：HQStockIdListReq{f1 repeated stockIds}（个股实时价）。
@@ -1017,8 +1042,7 @@ class KplCollectorService:
                     ext_db = bytes([0x02]) + struct.pack(">H", sub_cmd)
                     db_frame = proto.build_frame(sub_cmd, next_seq(), enc_db or req_pb, d=0,
                                                  encrypted=bool(enc_db), pkg=proto.PKG_ROUTE, ext=ext_db)
-                    if self._human_delay:
-                        time.sleep(0.3)
+                    self._human_pause(0.3, 0.15)
                     self._dbg("C", db_frame)
                     sock.sendall(db_frame)
                 # 6d) 2103 打板个股列表订阅：每页签按 index 偏移逐页一帧（推送页固定 30 行，
@@ -1033,8 +1057,7 @@ class KplCollectorService:
                         db_frame = proto.build_frame(daban.CMD_DABAN_STOCK_LIST, next_seq(),
                                                      enc_db or req_pb, d=0, encrypted=bool(enc_db),
                                                      pkg=proto.PKG_ROUTE, ext=ext_db)
-                        if self._human_delay:
-                            time.sleep(0.3)
+                        self._human_pause(0.3, 0.15)
                         self._dbg("C", db_frame)
                         sock.sendall(db_frame)
             # 6e) 2112 会不会上龙虎榜预测订阅（2026-10-29 逆向）：0x40 通道同 daban 家族，
@@ -1047,8 +1070,7 @@ class KplCollectorService:
                 lhb_frame = proto.build_frame(daban.CMD_FORECAST_LHB, next_seq(),
                                               enc_lhb or req_lhb, d=0, encrypted=bool(enc_lhb),
                                               pkg=proto.PKG_ROUTE, ext=ext_lhb)
-                if self._human_delay:
-                    time.sleep(0.3)
+                self._human_pause(0.3, 0.15)
                 self._dbg("C", lhb_frame)
                 sock.sendall(lhb_frame)
             # 6f) 3004 RealtimeLHB 订阅 + 3101 当日区间单发（ServiceHqList 族，同 0x40 通道
@@ -1068,12 +1090,9 @@ class KplCollectorService:
                     rl_frame = proto.build_frame(lhb_cmd, next_seq(),
                                                  enc_rl or req_rl, d=0, encrypted=bool(enc_rl),
                                                  pkg=proto.PKG_ROUTE, ext=ext_rl)
-                    if self._human_delay:
-                        time.sleep(0.3)
+                    self._human_pause(0.3, 0.15)
                     self._dbg("C", rl_frame)
                     sock.sendall(rl_frame)
-            self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
-                                session=self._session_no))
             # 6g) 2203 涨停原因试点：每会话重建订阅——服务器 TTL≈60-90s，重连后原订阅面已失效，
             # 跨会话去重会让第二会话起一帧不发、推送静默停流（2026-11-08 评审 P0）：先清
             # 已订阅集合再全量补订；页帧到达后的新增成员由 _dispatch 自动入队，drain 在收流循环内
@@ -1087,6 +1106,11 @@ class KplCollectorService:
                     self._theme_subscribed.clear()
                     self._pending_theme.clear()
                 self._queue_theme_new(self._pool_stock_ids())
+            # setup 打点在 6g（2203/2013 订阅入队）之后：口径=「连接到订阅链全部完成」
+            # （评审 MINOR：原在 6g 前打点会系统性偏小 ~12.6s）
+            self._stats["last_setup_s"] = round(time.time() - t_setup, 1)
+            self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
+                                session=self._session_no))
             # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
             #    服务器 TTL 由重连机制兜底；610 重发每 8 tick 保留
             rot_chunks = []

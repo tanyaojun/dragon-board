@@ -82,6 +82,15 @@ QuantBoard 主后端 :8000
 ### 3.4 服务器会话时长规律（非固定 TTL）
 
 - **认证+订阅 <1s 完成 → 服务器 ~6s 即断**（机器人检测）；拟人延迟→15-25s；adb 链路 5-8s→75-160s；心跳频率不影响
+- **auth 相位延迟决定会话档位（2026-11-09 修复定性）**：会话时长与 auth 阶段耗时单调相关，
+  pc codec 太快，原固定 1.2s 预停顿只能停在拟人档（实测 ~23s/会话，ConnectionResetError
+  10054 重连循环，2203/2013 订阅爆发 42 帧×0.3s 未完成即被断）。修复：auth 相位改
+  5.0+U(0,3.0)s 抖动（`KplCollectorService` `auth_phase_delay/auth_phase_jitter`，env
+  `KPL_AUTH_PHASE_DELAY` 可覆盖，0=回退拟人档），订阅帧间隔 0.3/0.6/0.8s 同步加
+  U(0,spread) 抖动（固定节拍是机器指纹）；`/api/kpl/status` 新增 `last_setup_s` /
+  `last_session_s` / `auth_phase_delay` 供实弹验证（预期 last_session_s 进 75-160s 档）。
+  **验证状态：待重启 :8002 后实弹观测**；若仍未进长会话档，下一层排查用 KPL_DEBUG
+  帧级抓包对照 adb 模式逐帧时序（预置观测字段已就位）。
 - **重复 seq 被拒并断连**（110/2000）：keepalive 重发必须递增 seq（服务内置 `next_seq()` 计数器）
 - **会话到期拒绝信号（2026-11-06 盘中探针修订）**：TTL 到期时服务器对末次 keepalive 回
   `ErrResp {'code':1002,'msg':'连接错误：1002'}` 紧跟断连（此前为 1106）；重连链自愈、会话期
@@ -792,6 +801,33 @@ jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 
   fail-visible 已如实透出，盘中长会话/2203 到流后自动落库。
 - jev 侧纪律：本落库只提供**原料**；把语料接进题面/判据属方案变更，须走 hotlist-jev
   预登记（AGENTS §1.2-5/6），且语料 schema 单一事实源=本节。
+- **HTTP 补录路径（2026-11-09 事故回填固化）**：2203 socket 全天零到流时，语料可经
+  HTTP 端点按股补录（运维路径，`backend/operations/backfill_zt_reason_corpus.py`，
+  默认 dry-run，--apply 落库，经 `archive_reason_corpus` 既有合同写入，doc 级
+  `reason_source` + 逐条 `item.source` 标注来源）：
+  - `--mode rt`（默认）：apphwhq `c=StockLineData&a=GetKLineZhangTing`（涨停原因 tab·
+    实时，同构 List + 顶层 Time）——**当日条目即时同步**（实测 000530 当日涨停当日可取，
+    `GetDayZhangTing` 同股仅回 11-04）；仅覆盖收盘仍封住的成员，**炸板未回封股（broken）
+    实时条目为空 List**（2026-11-09 实测 17/77 全为 broken）；
+  - `--mode hist`：apphis `c=HisLimitResumption&a=GetDayZhangTing`——当日条目 T+1 滞后
+    （收盘当晚不可用），**次日可补齐 rt 缺的 broken 成员**；
+  - 字段映射：Reason 全文→`zt`（双源一致实测，同源映射非改写）；GNSM/Boom_ZS/SCLT/
+    ZSCode 经 `_REASON_FIELDS` 透传；空 Reason 条目保留（原料在、gns 等仍在）。
+  - 2026-11-09 实弹：rt 60/77 落库（17 broken 无实时条目待次日 hist 补），0 失败。
+- **快照日期新鲜度护栏（2026-11-09 盘中错档事故固化，`snapshot_date_freshness_error`）**：
+  上游 2103 帧 date 翻日滞留（11-09 盘前/早盘帧仍带 date=2026-11-06）会把当日成员并集
+  合并进上一交易日档，污染收盘终态（当日事故：pool/bid/zb/dt 全部中招，11-06 档
+  pool/bid/zb 被迫清除重建，取证归档 `data/backups/mongodump-kpl-daban-pool-20261109-
+  pre-repair`）。修复：`_archive_once` 四打板通道落库前逐通道校验——交易日只收当日、
+  非交易日只收最近交易日，stale 结构化 skip 不落库；`pool_date` 只从新鲜 payload 取
+  （语料/基因通道随之不再被旧 date 挂错档）。同日 2026-11-06 档修复记录见该档
+  `pollution_repair_20261109` 标记字段。
+- **已知遗留（2026-11-09）**：① 2203/2013 全天零到流根因=collector 会话抖动（平均
+  会话 ~23s，健康区间 75-160s，ConnectionResetError 10054 重连循环）——保活链已在
+  但未达 App 会话长度，需 KPL_DEBUG 帧级抓包对比排查；② 2013 题材热度 HTTP 无静态源
+  （探测固化），当日热度不可回补，只能 socket 到流；③ 尾盘 14:53:28 后无帧（四通道
+  ts 同点停滞），收盘前最后几分钟变动丢失（当日跌停 sealed 差 1 家 vs EM 收盘口径），
+  待判定是上游停推还是断流。
 - 测试（全 mock）：archiver 6 例（同档不覆打板字段/字段刷新+空值不覆盖+first_ts/跨日跳陈旧
   含周末反向保留/无交易日与空载荷/items list 形态/单轮 fetch 落涨停池交易日与全降级 no_pool_date）
   + 路由 3 例（透传/no_reason_corpus/日期校验与存储未启用）。

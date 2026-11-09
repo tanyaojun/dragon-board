@@ -92,3 +92,43 @@ class TestFetchCacheAndDegraded:
         assert out["ok"] is True and out["date"] == "2026-11-06"
         assert out["items"][0]["gns"].startswith("据2026年11月4日")
         svc._CACHE.clear()
+
+class TestFetchRealtimeZtReason:
+    """GetKLineZhangTing 实时端点（2026-11-09 当日语料回填路径）：缓存隔离 + 护栏 + 合同。"""
+
+    def test_realtime_fetch_uses_apphwhq_and_cache_key_isolated(self, monkeypatch):
+        monkeypatch.setattr(svc, "_CACHE", {})   # 隔离跨用例缓存污染
+        calls = []
+        monkeypatch.setattr(svc, "_post_form",
+                            lambda url, params, ua: calls.append((url, params["c"], params["a"]))
+                            or {"StockID": "000530",
+                                "List": [{"Date": "2026-11-09", "Reason": "乳雪业+储能",
+                                          "GNSM": "…", "SCLT": "日内龙一", "ZSCode": ["801434"]}],
+                                "Time": 1794209683, "errcode": 0})
+        r1 = svc.fetch_stock_zt_reason_realtime("000530")
+        r2 = svc.fetch_stock_zt_reason_realtime("000530")   # 缓存命中不重发
+        assert len(calls) == 1
+        url, c, a = calls[0]
+        assert url.startswith("https://apphwhq.longhuvip.com") and c == "StockLineData" \
+            and a == "GetKLineZhangTing"
+        assert r1 == r2 and r1["List"][0]["Date"] == "2026-11-09"
+        # 与档案链缓存键隔离：rt 命中不影响 hist 首发仍会发
+        hist_calls = []
+        monkeypatch.setattr(svc, "_post_form",
+                            lambda url, params, ua: hist_calls.append(url) or {"StockID": "x", "List": []})
+        svc.fetch_stock_zt_reason_realtime("000530")        # rt 缓存仍命中
+        svc.fetch_stock_zt_reason_raw("000530")             # hist 无缓存 → 发 1 次
+        assert len(hist_calls) == 1
+
+    def test_realtime_parse_with_shared_parser(self, monkeypatch):
+        monkeypatch.setattr(svc, "_CACHE", {})
+        monkeypatch.setattr(svc, "_post_form",
+                            lambda *a, **k: {"StockID": "000530",
+                                             "List": [{"Date": "2026-11-09", "Reason": "全文",
+                                                       "GNSM": "概念解析", "SCLT": "日内龙一",
+                                                       "Boom_ZS": "媒体催化", "ZSCode": ["801434"]}],
+                                             "Time": 1794209683, "errcode": 0})
+        out = svc.parse_zt_reason_history(svc.fetch_stock_zt_reason_realtime("000530"),
+                                          "2026-11-09")
+        assert out["ok"] and out["matched_date"] == "2026-11-09"
+        assert out["items"][0]["reason"] == "全文" and out["items"][0]["zs_codes"] == ["801434"]

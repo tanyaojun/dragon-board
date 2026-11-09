@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
@@ -59,7 +60,10 @@ from backend.core.settings import get_settings
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.services.kpl_stock_gene import get_zt_gene
 from backend.services.kpl_stock_notice import get_notice_count
-from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
+from backend.snapshot_collector.trading_calendar import (
+    TZ_SHANGHAI,
+    is_trading_day_cached,
+)
 
 _COLLECTION = "kpl_daban_pool"
 _UPSTREAM_POOL = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=1"
@@ -78,6 +82,82 @@ _LANES: dict[str, dict[str, Any]] = {
 # 读口降级 note 用的通道中文名（load_day 通用映射用）
 _LANE_LABELS: dict[str, str] = {"pool": "涨停池", "bid": "集合竞价",
                                "zb": "炸板池", "dt": "跌停池"}
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _trading_day_context(now: datetime) -> tuple[bool, Optional[str]]:
+    """交易日上下文探测（含 IO：bridge HTTP → 本地缓存 → 周一~五启发）。
+
+    返回 (trading_today, latest_trading_day_iso)；交易日时后者为 None。**含网络探测，
+    事件循环内直调会阻塞（bridge 宕机+非交易日最坏 15×2s）**——_archive_once 必须
+    经 asyncio.to_thread 每轮预计算一次并当轮复用（评审 R2-P：逐 lane 直调最坏
+    阻塞 ~2min 且重复探测）。
+    """
+    today = now.date()
+    trading_today, _source = is_trading_day_cached(today)
+    if trading_today:
+        return True, None
+    # 非交易日：向后找最近一个交易日（回溯上限 15 天，防日历异常长循环）
+    probe = today - timedelta(days=1)
+    for _ in range(15):
+        if is_trading_day_cached(probe)[0]:
+            return False, probe.isoformat()
+        probe -= timedelta(days=1)
+    return False, None
+
+
+def freshness_error_with_context(
+    snapshot_date: str,
+    today: Any,
+    trading_today: bool,
+    latest_trading_day: Optional[str],
+) -> Optional[str]:
+    """快照日期新鲜度纯判定（无 IO）：给定交易日上下文返回 None=可入库，否则 skip 原因。
+
+    - date=当日 → None；交易日 → stale_snapshot_date（只收当日）；
+    - 非交易日 → date=最近交易日 → None（周末推上一交易日收盘详情），否则 stale；
+    - 无已知最近交易日（日历异常）→ 保守 stale（不猜）。
+    """
+    date = str(snapshot_date or "").strip()
+    if not _DATE_RE.fullmatch(date):
+        return "invalid_snapshot_date"
+    if date == today.isoformat():
+        return None
+    if trading_today:
+        return "stale_snapshot_date"
+    if latest_trading_day and date == latest_trading_day:
+        return None
+    return "stale_snapshot_date"
+
+
+def snapshot_date_freshness_error(snapshot_date: str, now: datetime) -> Optional[str]:
+    """2103 四打板通道快照日期新鲜度护栏：返回 None=可入库，否则为结构化 skip 原因。
+
+    口径（2026-11-09 盘中错档事故固化）：快照 date 取自 2103 推送帧自带 date 字段
+    （kpl_collector_service.get_daban_list 透传），上游翻日可能滞留——事故复盘：11-09
+    盘前/早盘帧仍带 date=2026-11-06（KPL 服务端未翻日），当日成员被成员并集合并进
+    上一交易日档，污染其收盘终态（sealed/broken 重标、字段随当日帧刷新）。
+
+    - 交易日（含盘前）：只接受 date=当日。上一交易日档当日已在盘后落库定格，重推的
+      「上一交易日详情」并回旧档无增量价值，只有翻日滞留错档风险 → 一律 skip
+      （fail-visible 进 lastResult，不写、不伪装成功）。
+    - 非交易日：只接受最近一个交易日（周末推送的是上一交易日收盘详情，与 reason
+      通道「周末详情挂上一交易日」口径一致）。
+    - 日期缺失/非 YYYY-MM-DD：invalid_snapshot_date（不猜）。
+
+    交易日判定走 is_trading_day_cached（bridge → 本地缓存 → 周一~五启发）；**含 IO，
+    勿在事件循环内直调**——_archive_once 用 to_thread 预计算上下文后走纯函数
+    freshness_error_with_context；本同步封装仅供测试/脚本单次调用。仅约束
+    _archive_once 自动归档链，archive_*_snapshot 纯函数与手工 ingest/回填路径不受限。
+    """
+    date = str(snapshot_date or "").strip()
+    if not _DATE_RE.fullmatch(date):
+        return "invalid_snapshot_date"
+    if date == now.date().isoformat():
+        return None
+    trading_today, latest = _trading_day_context(now)
+    return freshness_error_with_context(date, now.date(), trading_today, latest)
 
 
 def archive_lane_snapshot(
@@ -265,11 +345,13 @@ def load_day(db: Any, date: str, *, lane: str = "pool") -> dict[str, Any]:
 
 
 # 2203 涨停原因语料保留字段（原文透传，不改写不拼接）：涨停原因/风险/减持/解禁/质押/
-# 梯队/主题/子主题/标签/关联板块/排名/Top/消息 id。组合口径（如 zt+plate）由消费方决定，
-# 落库只保证原料在且可追溯。
+# 梯队/主题/子主题/标签/关联板块/排名/Top/消息 id；HTTP 历史档案链补录字段（2026-11-09
+# 回填增补）：Reason 全文同源映射 zt（README 实测双源一致）+ GNSM/Boom_ZS/SCLT/ZSCode
+# 原文 + 源标注/匹配日，组合口径（如 zt+plate）由消费方决定，落库只保证原料在且可追溯。
 _REASON_FIELDS = ("zt", "fx", "jc", "jj", "pledge", "zt_group", "theme", "dd",
                   "child_theme", "label", "zt_tag", "rank", "rank_total", "rank_top",
-                  "plate", "tp", "msg_id")
+                  "plate", "tp", "msg_id",
+                  "gns", "boom_zs", "sclt", "zs_codes", "matched_date", "source")
 _REASON_LANE = "reason"
 _THEME_LANE = "theme"
 
@@ -302,8 +384,14 @@ def _reason_incoming(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def archive_reason_corpus(db: Any, snapshot: dict[str, Any], *,
-                          now: Optional[datetime] = None) -> dict[str, Any]:
+                          now: Optional[datetime] = None,
+                          source: str = "socket_2203") -> dict[str, Any]:
     """2203 涨停原因详情语料落库（2026-11-08 用户需求：作为 jev 语料投喂）。
+
+    source：语料来源标注（doc 级 reason_source + 逐条 item.source 由调用方在载荷内带）；
+    socket 推送=socket_2203（默认）；HTTP 历史档案链回填=http_GetDayZhangTing（2026-11-09
+    盘中 2203 因 collector 会话抖动全天零到流后的补录路径，zt←Reason 为 README 实测
+    同源映射，其余 HTTP 原文字段经 _REASON_FIELDS 透传）。
 
     写入 kpl_daban_pool 同日档的 reason_ 前缀字段（不另建数据集，与打板通道同步）：
     - reason_items：按 stock_id 并集，字段随最新帧刷新（留 first_ts 首次到流时间）；
@@ -351,7 +439,7 @@ def archive_reason_corpus(db: Any, snapshot: dict[str, Any], *,
                 "item_n": len(members), "skipped_stale": skipped_stale}
     doc = {
         "reason_date": date,
-        "reason_source": "socket_2203",
+        "reason_source": source,
         "reason_items": list(members.values()),
         "reason_count": len(members),
         "reason_ts": max((m.get("ts") or 0) for m in members.values()),
@@ -816,8 +904,10 @@ class DabanPoolArchiver:
         gene_limit: int = 6,
         notice_fetcher: Callable[[str], dict[str, Any]] = get_notice_count,
         notice_limit: int = 6,
+        clock: Optional[Callable[[], datetime]] = None,
     ) -> None:
         current = settings or get_settings()
+        self._clock = clock or (lambda: datetime.now(TZ_SHANGHAI))
         self.enabled = current.storage_backend == "mongodb"
         self.interval_seconds = max(30, int(interval_seconds))
         self._database_factory = database_factory
@@ -884,11 +974,17 @@ class DabanPoolArchiver:
         # 单写者约束：同通道写方仅本服务单实例；跨通道（含 gene 语料通道）各写各前缀字段
         # 且均为字段级 $set，互不覆盖；
         # 四通道 fetch/archive 均逐通道 try/except，任一通道失败不阻断其它通道（含 fetch 阶段）。
-        self._last_run_at = datetime.now(TZ_SHANGHAI).isoformat()
+        self._last_run_at = self._clock().isoformat()
         results: dict[str, Any] = {}
         # 渐进发布：本轮开始即挂上空 dict，逐通道写入，避免异常时出现
         # 「lastRunAt 新、lastResult 还是上一轮」的半失真态（评审 P1-1）
         self._last_result = results
+        # 交易日上下文每轮预计算一次（评审 R2-P）：is_trading_day_cached 含 bridge HTTP
+        # 探测，同步直调会阻塞事件循环且逐 lane 重复探测；to_thread 预计算 + 当轮复用。
+        _ctx_now = self._clock()
+        trading_today, latest_trading_day = await asyncio.to_thread(
+            _trading_day_context, _ctx_now)
+        stale_cutoff = (_ctx_now - timedelta(days=3)).date().isoformat()
         async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
             pool_date: str | None = None
             for key, url, fn in (
@@ -907,8 +1003,18 @@ class DabanPoolArchiver:
                     results[key] = {"ok": False,
                                     "reason": f"collector_degraded:{payload.get('reason') or 'unknown'}"}
                     continue
+                # 快照日期新鲜度护栏（2026-11-09 盘中错档事故）：date 滞留上一交易日时
+                # 结构化 skip，不落库、不污染历史档；pool_date 只从新鲜 payload 取，
+                # 语料通道（reason/theme/gene）随之不再被旧 date 挂错档。
+                lane_date = str(payload.get("date") or "")
+                freshness = freshness_error_with_context(
+                    lane_date, _ctx_now.date(), trading_today, latest_trading_day)
+                if freshness:
+                    results[key] = {"ok": False, "reason": freshness,
+                                    "date": lane_date or None}
+                    continue
                 if key == "pool":
-                    pool_date = str(payload.get("date") or "") or None
+                    pool_date = lane_date or None
                 try:
                     # 落库阶段同样逐通道隔离（评审 P1-1）：Mongo/库工厂/脏 payload 异常
                     # 只算本通道失败，不连带后续通道全部不落库
