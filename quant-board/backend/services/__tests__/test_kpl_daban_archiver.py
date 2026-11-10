@@ -1065,9 +1065,10 @@ def test_archive_once_stale_date_lane_skipped(monkeypatch):
         assert res[lane]["date"] == "2026-11-06"
     # 零落库：错档写入不会发生（事故里这批帧会并进 2026-11-06 档）
     assert db._coll.rows.get("2026-11-06") is None
-    # pool_date 未产出 → 语料/基因不猜日期
-    assert res["reason"]["reason"] == "no_pool_date"
-    assert res["theme"]["reason"] == "no_pool_date"
+    # pool_date 未产出 → 基因不猜日期；reason/theme 已迁移 collector 推送即落库
+    # （单写者，2026-11-10 裁决），本服务仅标注迁移态（不再产出 no_pool_date）
+    assert res["reason"].get("note") == "moved_to_collector_push_time"
+    assert res["theme"].get("note") == "moved_to_collector_push_time"
     assert res["gene"]["reason"] in ("no_pool_date", "no_archive")
 
 
