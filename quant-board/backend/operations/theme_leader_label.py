@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 import time
@@ -40,6 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.analysis.hotlist import theme_event_digest as digest
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
+
+logger = logging.getLogger(__name__)
 from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
 from backend.analysis.hotlist.theme_leader_ammo import (
     market_summary_line,
@@ -60,6 +63,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     kpl_live_line,
     lhb_line,
     plate_series_line,
+    rank_sentinel_warnings,
     structure_facts_line,
     limitup_reason_line,
     plate_strength_line,
@@ -690,7 +694,7 @@ def forward_date_axis_line(date: str, days: int = 2) -> str:
     try:
         cur = _dt.date.fromisoformat(str(date))
     except ValueError:
-        line = "交易日轴（前向）：不可算（日期非法，fail-visible）"
+        line = "交易日轴：不可算"
         _FWD_AXIS_CACHE[date] = line
         return line
     found: list[str] = []
@@ -709,15 +713,15 @@ def forward_date_axis_line(date: str, days: int = 2) -> str:
             if len(found) >= days:
                 break
     if found:
-        line = "交易日轴（前向）：" + " · ".join(found)
+        line = "交易日轴：" + " · ".join(found)
         if srcs - {"bridge"}:
             # 2026-10-24d review 处置：非 bridge 源结果**不缓存**——bridge 恢复后重算即升级，
             # 缓存会把 weekday 启发行固化整天；重算成本 ≤15 次缓存查表，不值得换质量损失
-            line += f"（日历源 {'/'.join(sorted(srcs))}，节假日顺延未经验证）"
+            line += "（节假日顺延未经验证）"
         else:
             _FWD_AXIS_CACHE[date] = line
     else:
-        line = "交易日轴（前向）：不可算（日历源异常，fail-visible）"
+        line = "交易日轴：不可算"
     return line
 # 字符→token 估算（中文叙事实测经验）。**护栏必须是真的上界**，故低/高界各有一组
 # 「固定开销 + 每字符」参数，任一组都不得低于观测值。
@@ -1364,6 +1368,11 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 # §9.7 缺口率：窗口交易日数（韭研日轴，与层1 连续段同日历）；
                 # review P1-1 修复：声明窗口首日，层2 先过滤再计数，不把展示切片数当窗口记录数
                 trading_days=len(days), window_first_date=days[0])
+            # 口径哨兵（§9.6 漂移监视）只进结构化日志，不进 jev 语料（AGENTS §1.2-8）
+            sentinel = rank_sentinel_warnings(rank_rows, zt_rows)
+            if sentinel:
+                logger.warning("kpl 层1 口径哨兵越界 date=%s board=%s: %s",
+                               date, kname, ";".join(sentinel))
         return series_cache.get(pid)
 
     for b in sorted(sector_todo_boards):

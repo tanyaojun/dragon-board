@@ -222,7 +222,7 @@ def daban_reasons(date: str = "") -> JSONResponse:
     """2203 涨停原因语料按日读口（2026-11-08，jev 投喂原料）。
 
     数据源=本地 MongoDB kpl_daban_pool 同日档的 reason_ 前缀字段（用户裁决：不另建
-    数据集），由 DabanPoolArchiver 每轮拉 :8002 /zt-reasons 落库；items = 2203 原文
+    数据集），2026-11-10 起由 collector（:8002）推送即落库（单写者）；items = 2203 原文
     字段（zt/fx/zt_group/theme/plate/tp/rank 等，不改写不拼接），日期跟随涨停池快照
     交易日（周末/盘前推送的是上一交易日详情）。无档 → no_archive；日档在但语料未
     落库 → no_reason_corpus（fail-visible，不伪装空语料）。

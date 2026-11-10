@@ -1718,12 +1718,11 @@ def test_theme_evidence_lines_top3_boards():
     })
     lines = relay.theme_evidence_lines(db, _D0)
     text = "\n".join(lines)
-    assert "题材证据（top3 板块" in lines[0], "2026-10-30g+：源名删"
-    assert "取数日 2026-09-30" in lines[0]
+    assert lines[0] == "题材证据（top3 板块）：", "取数日/语料计数管道注撤出叙事（AGENTS §1.2-8）"
     assert "板块级催化原文（「机器人」" in text, "2026-10-30f：来源名删（与 theme-leader 链同源）"
     assert "当日题材事件：" in text and "英伟达GTC大会" in text, "2026-10-30g：括号注删"
     # 公告=粗分桶（NOT_A_THEME）→ 未映射如实标注
-    assert "未映射" in text and "不代表无催化" in text
+    assert "未映射" in text and "不代表无催化" not in text
 
 
 def test_theme_evidence_lines_corpus_missing_fail_visible():
@@ -1733,7 +1732,7 @@ def test_theme_evidence_lines_corpus_missing_fail_visible():
         [_final_multi(_D0, {"机器人": [{"code": "600001", "name": "A"}]})])})
     lines = relay.theme_evidence_lines(db, _D0)
     assert len(lines) == 1
-    assert "语料未采集" in lines[0] and "无催化" in lines[0]
+    assert "语料未采集" in lines[0] and "无催化" not in lines[0]
     assert anchor_gaps_derived("\n".join(lines)) == ["题材证据"]
 
 

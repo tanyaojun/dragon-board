@@ -236,6 +236,7 @@ class KplCollectorService:
         lhb_realtime_count: int = 120,
         zt_reason_subs: bool = True,
         theme_subs: bool = True,
+        corpus_db_factory: Optional[Any] = None,
     ):
         self._codec = codec
         self._host = host
@@ -287,6 +288,14 @@ class KplCollectorService:
         self._theme_subscribed: set = set()
         self._pending_theme: List[str] = []
         self._theme_lock = threading.Lock()
+        # 推送即落库（2026-11-10 用户裁决，与直播文本同款时点）：2013/2203 推送解析成功
+        # 后立即写 kpl_daban_pool 日档（不再等 ：8000 archiver 盘后轮询拉快照）。
+        # corpus_db_factory 可注入（pytest 用假库）；默认 storage_backend=mongodb 时才
+        # 启用真实落库，其它后端结构化跳过（fail-visible，不静默）。
+        self._corpus_db_factory = corpus_db_factory
+        self._corpus_persist_stats: Dict[str, Any] = {
+            "theme_ok": 0, "theme_fail": 0, "reason_ok": 0, "reason_fail": 0,
+            "last_error": ""}
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
@@ -441,6 +450,67 @@ class KplCollectorService:
                 "ts": max(v.get("ts", 0) for v in snap.values()),
                 "subscribed": n_sub}
 
+    def _pool_date_for_corpus(self) -> str:
+        """推送落库用的交易日：涨停池（2103 pid=1）快照自带的 date 字段。
+
+        无快照/无日期 → ""（调用方跳过本次落库并结构化暴露，不猜日期不错挂）。
+        """
+        snap = self.get_daban_list(1)
+        return str(snap.get("date") or "") if snap.get("ok") else ""
+
+    def _corpus_db(self):
+        """落库连接（懒取）；不可用时返 None（fail-visible，不静默）。"""
+        if self._corpus_db_factory is not None:
+            return self._corpus_db_factory()
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return None   # pytest 进程内未注入假库 → 不落库（测试不碰真库）
+        from backend.core.settings import get_settings
+        from backend.data.repositories.repository_factory import (
+            get_runtime_mongodb_database,
+        )
+        if get_settings().storage_backend != "mongodb":
+            return None
+        return get_runtime_mongodb_database()
+
+    def _persist_corpus(self, lane: str, payload: Dict[str, Any]) -> None:
+        """单条推送即时落库（线程内同步写，单写者=本采集线程；失败不阻断收流）。
+
+        lane="theme" → archive_theme_corpus；lane="reason" → archive_reason_corpus。
+        跨日残留/无交易日/空 payload 由归档函数结构化拒绝（不猜不补）。
+        """
+        from backend.services.kpl_daban_archiver import (
+            archive_reason_corpus,
+            archive_theme_corpus,
+        )
+        try:
+            date = self._pool_date_for_corpus()
+            if not date:
+                raise RuntimeError("no_pool_date")
+            db = self._corpus_db()
+            if db is None:
+                raise RuntimeError("corpus_db_unavailable")
+            fn = archive_theme_corpus if lane == "theme" else archive_reason_corpus
+            result = fn(db, {"ok": True, "date": date, **payload})
+            if result.get("ok"):
+                self._corpus_persist_stats[f"{lane}_ok"] += 1
+            else:
+                self._corpus_persist_stats[f"{lane}_fail"] += 1
+                self._corpus_persist_stats["last_error"] = (
+                    f"{lane}:{result.get('reason')}")
+            self._emit(KplEvent(type=f"{lane}_heat_persist" if lane == "theme"
+                                else "zt_reasons_persist",
+                                ts=time.time(), date=date,
+                                ok=bool(result.get("ok")),
+                                reason=str(result.get("reason") or "")))
+        except Exception as exc:   # 落库失败绝不阻断收流（fail-visible 进 stats/事件）
+            self._corpus_persist_stats[f"{lane}_fail"] += 1
+            self._corpus_persist_stats["last_error"] = f"{lane}:{exc}"
+            self._err(f"{lane} push persist failed: {exc}")
+            self._emit(KplEvent(type=f"{lane}_heat_persist" if lane == "theme"
+                                else "zt_reasons_persist",
+                                ts=time.time(), ok=False,
+                                reason=f"persist failed: {type(exc).__name__}"))
+
     def _pool_stock_ids(self) -> List[str]:
         """涨停池（2103 pid=1）合并快照成员 id（跨页去重，保序）。"""
         out: List[str] = []
@@ -594,6 +664,7 @@ class KplCollectorService:
             "zt_reasons": len(self._zt_reason_snap),
             "theme_heat": len(self._theme_snap),
             "zt_reasons_subscribed": len(self._zt_reason_subscribed),
+            "corpus_persist": dict(self._corpus_persist_stats),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             "uptime_s": round(time.time() - self._stats["started_at"], 1)
             if self._stats["started_at"]
@@ -1206,6 +1277,9 @@ class KplCollectorService:
             sid = str(data.get("stock_id") or "").strip()
             if sid:
                 self._zt_reason_snap[sid] = {**data, "ts": time.time()}
+                # 推送即落库（AGENTS §1.2-8/2026-11-10 用户裁决）：不再等盘后轮询
+                self._persist_corpus("reason", {"reasons": {
+                    sid: {**data, "ts": time.time()}}})
             self._emit(KplEvent(type="zt_reasons", ts=time.time(), cmd=cmd,
                                 source="push" if fr.get("fmt") == "push" else "resp", **data))
             return
@@ -1229,6 +1303,9 @@ class KplCollectorService:
             sid = str(data.get("stock_id") or "").strip()
             if sid:
                 self._theme_snap[sid] = {**data, "ts": time.time()}
+                # 推送即落库（2026-11-10 用户裁决）：不再等盘后轮询
+                self._persist_corpus("theme", {"items": [
+                    {**data, "ts": time.time()}]})
             self._emit(KplEvent(type="theme_heat", ts=time.time(), cmd=cmd,
                                 source="push" if fr.get("fmt") == "push" else "resp",
                                 stock_id=sid, themes=data.get("themes") or []))

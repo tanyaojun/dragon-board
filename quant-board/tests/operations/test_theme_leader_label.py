@@ -468,7 +468,7 @@ def test_build_one_and_sector_wire_lhb_line():
     n = built["narrative"]
     assert "待判龙一 大业股份（603278）：主力净额 0.52亿" in n
     assert "相关个股 雪人股份（002639）：主力净额 --" in n
-    assert n.index("个股打标交叉") < n.index("龙虎榜：") < n.index("【题材证据")
+    assert n.index("龙虎榜：") < n.index("【题材证据")
     # 未传入（旧行为）→ 不出行
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
@@ -485,7 +485,7 @@ def test_build_one_and_sector_wire_lhb_line():
     built_f = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
                           market_line="涨停 46 家",
                           lhb_facts={"ok": False, "reason": "fetch_failed: x"})
-    assert "--，榜单拉取失败 x" in built_f["narrative"], "2026-10-30g+：工程词中文化"
+    assert "龙虎榜" not in built_f["narrative"], "缺数据整行缺席（AGENTS §1.2-8）"
 
 
 def test_build_one_wires_history_and_headroom_anchor():
@@ -512,8 +512,8 @@ def test_build_one_wires_history_and_headroom_anchor():
     assert "空间锚" in n and "总体 再走≥1板率" in n   # 2026-10-26a 每档基率化
     # 2026-10-24c 三行：前向轴紧跟盘面行、梯队/炸板面紧跟结构行；昨日口径=总数−仍封出断板
     # （2026-10-19 是周一；weekday 桩=周一~五交易日）
-    assert "交易日轴（前向）：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \
-        "（日历源 weekday，节假日顺延未经验证）" in n
+    assert "交易日轴：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \
+        "（节假日顺延未经验证）" in n and "日历源" not in n
     assert "昨日该板块封板 6 只，今日仍封 3 只" in n, "2026-10-30d：断板=差值可推导不复述"
     assert "板块梯队形态：首板 3 家 / 2板 1 家 / 3板+ 1 家；龙头 3 板，次高 2 板（领先 +1）" in n
     assert "板内炸板面：今日触板未封 2 家（昨日 1 家）" in n
@@ -563,10 +563,10 @@ def test_build_one_driver_cross_join_and_fail_visible():
     built2b = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
     assert built2b["driverCross"]["labelSlot"] == "final" \
         and "个股打标交叉（收盘槽）" in built2b["narrative"], "2026-10-30f：题集版本披露删，槽位区分保留"
-    # 无任何打标行 → fail-visible 缺席行（不伪装方向性结论）
+    # 无任何打标行 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）
     built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
-    assert "个股打标交叉：无当日个股打标记录" in built3["narrative"], "2026-10-30g+：注删"
+    assert "个股打标交叉" not in built3["narrative"]
     assert built3["driverCross"] == {"found": False, "labelSlot": None,
                                      "questionSetVersion": None}
 
@@ -592,7 +592,7 @@ def test_label_one_persists_expanded_structure_fields(env):
     # 打标交叉源审计（AMMO 2026-10-27b）：测试库无打标行 → found=False 如实落库
     assert doc["driverCross"] == {"found": False, "labelSlot": None,
                                   "questionSetVersion": None}
-    assert "个股打标交叉：无当日个股打标记录" in doc["narrative"]
+    assert "个股打标交叉" not in doc["narrative"], "无打标行 → 整行缺席（AGENTS §1.2-8）"
 
 
 def test_forward_date_axis_line_sources_and_fail_visible(monkeypatch):
@@ -607,19 +607,19 @@ def test_forward_date_axis_line_sources_and_fail_visible(monkeypatch):
     monkeypatch.setattr(tc, "is_trading_day_cached",
                         lambda d: (d.weekday() < 5, "bridge"))
     line = L.forward_date_axis_line("2026-10-23")
-    assert line == "交易日轴（前向）：下一交易日 2026-10-26（周一） · 下下交易日 2026-10-27（周二）"
+    assert line == "交易日轴：下一交易日 2026-10-26（周一） · 下下交易日 2026-10-27（周二）"
     # weekday 源 → 必须带未验证披露（fail-visible：长假会被启发误判）
     monkeypatch.setattr(tc, "is_trading_day_cached",
                         lambda d: (d.weekday() < 5, "weekday"))
     L._FWD_AXIS_CACHE.clear()
     line2 = L.forward_date_axis_line("2026-10-23")
     assert "2026-10-26（周一）" in line2
-    assert "（日历源 weekday，节假日顺延未经验证）" in line2
+    assert "（节假日顺延未经验证）" in line2 and "日历源" not in line2
     # 全 False（异常场景）→ 不可算
     monkeypatch.setattr(tc, "is_trading_day_cached", lambda d: (False, "bridge"))
     L._FWD_AXIS_CACHE.clear()
     assert L.forward_date_axis_line("2026-10-23") == \
-        "交易日轴（前向）：不可算（日历源异常，fail-visible）"
+        "交易日轴：不可算"
     # 非法日期 → 不可算，不抛
     L._FWD_AXIS_CACHE.clear()
     assert "不可算" in L.forward_date_axis_line("not-a-date")
@@ -1235,13 +1235,13 @@ def test_kpl_live_line_rendering():
     from backend.analysis.hotlist.theme_leader_ammo import kpl_live_line
     hit = kpl_live_line([{"time": "14:35", "comment": "AI硬件（光通信）持续异动"}],
                         board="AI硬件", total=60, window="09:15~15:00")
-    assert "KPL直播播报（窗口 09:15~15:00，全窗 60 条）" in hit
+    assert "直播播报（09:15~15:00）：" in hit and "全窗" not in hit
     assert "14:35 AI硬件（光通信）持续异动" in hit
     none = kpl_live_line([], board="AI影视", total=60, window="09:15~15:00")
     assert "当日无「AI影视」相关播报" in none and "无数据 ≠ 无催化" not in none, "2026-10-30d：重复自我解释删"
     un = kpl_live_line([], board="AI影视",
                        unavailable="实时流不可回放，历史日无直播归档")
-    assert "不可用，实时流不可回放，历史日无直播归档" in un, "2026-10-30g：降级不带括号"
+    assert un is None, "不可用 → 整行缺席（AGENTS §1.2-8）"
 
 
 # ── P1-2 直播日归档 / P1-1 序列 / P2-2 reason 透传（2026-10-28 用户裁决） ──
@@ -1327,8 +1327,8 @@ def test_series_line_wiring_sentinel_and_window_in_narrative(env, monkeypatch):
     out = L.run("2026-10-19", confirm_budget=True)
     assert out["ok"] == 4
     narrative = db[L.COLLECTION].docs["2026-10-19:603278"]["narrative"]
-    assert "口径哨兵告警：" in narrative
-    assert "净额>成交额 ×5" in narrative, "pct/amount 必须从强度行透传到哨兵（夹具 5 个交易日同一条越界行）"
+    assert "口径哨兵" not in narrative and "净额>成交额" not in narrative
+    assert "板块涨停家：" in narrative
     # 窗口 6 交易日（5 前日 + 当日），窗内仅 2 条记录；窗外 10-09 不得入行
     assert "板块涨停家：" in narrative, "2026-10-30g：窗口缺口注删（用户裁决）"
     assert "10-09" not in narrative, "窗外记录不得被算作窗口内在场（review P1-1）"
@@ -1399,23 +1399,23 @@ def test_market_summary_entry_and_narrative_placement(monkeypatch):
     assert L.market_summary_entry({"ok": True, "items": [
         {"ts": mk(10, 0), "time": "10:00", "plate_name": "机器人概念", "comment": "x"}]}, day) is None
     line = L.market_summary_line(entry)
-    assert line.startswith("盘面总结（KPL 15:00）：15:00三大指数低开低走")
+    assert line.startswith("盘面总结：15:00三大指数低开低走")
     assert L.market_summary_line(None) is None
     # 两级叙事：紧跟盘面事实行、在交易日轴前
     from backend.analysis.hotlist.theme_leader_ammo import build_leader_narrative, build_sector_narrative
-    n = build_leader_narrative(date=day, market_line="涨停 46 家", forward_axis="交易日轴（前向）：X",
+    n = build_leader_narrative(date=day, market_line="涨停 46 家", forward_axis="交易日轴：X",
                                market_summary=line, structure="结构行", baseline="基线行",
                                evidence_block="【题材证据】", leader_name="X", leader_code="1")
-    assert n.index("涨停 46 家") < n.index("盘面总结（KPL 15:00）") < n.index("交易日轴")
+    assert n.index("涨停 46 家") < n.index("盘面总结：") < n.index("交易日轴")
     n2 = build_leader_narrative(date=day, market_line="涨停 46 家", structure="结构行",
                                 baseline="基线行", evidence_block="【题材证据】",
                                 leader_name="X", leader_code="1")
     assert "盘面总结" not in n2, "缺席不出行"
     s = build_sector_narrative(date=day, board="冰雪经济", market_line="涨停 46 家",
-                               forward_axis="交易日轴（前向）：X",
+                               forward_axis="交易日轴：X",
                                market_summary=line, structure="结构行", baseline="基线行",
                                evidence_block="【题材证据】")
-    assert s.index("涨停 46 家") < s.index("盘面总结（KPL 15:00）") < s.index("交易日轴")
+    assert s.index("涨停 46 家") < s.index("盘面总结：") < s.index("交易日轴")
 
 
 # ---------- v14：新龙人气成色题事件门（P3 工作流 B，B1:A） ----------
@@ -1472,7 +1472,8 @@ def test_v14_event_gate_wires_rebound_question_only_for_event_stock(env, monkeyp
     assert "形式①人气股反包" in doc_hit["narrative"]
     assert "主升·第2轮" in doc_hit["narrative"], "周期背景只披露"
     # v15 P1 接线（review 2026-11-05）：run→build_one 的 cycle 透传被误删时此处先红
-    assert "结构事实（程序直读" in doc_hit["narrative"], "v15 事实行恒在（fail-visible）"
+    assert "结构事实：" in doc_hit["narrative"], "v15 事实行恒在（fail-visible）"
+    assert "供校准参考" not in doc_hit["narrative"], "行首标注已撤出（AGENTS §1.2-8）"
     assert "周期状态=主升" in doc_hit["narrative"], "cycle 文档透传到事实行"
     assert "周期状态=不可考" in doc_miss["narrative"], "无周期文档时显式不可考不伪造"
     # 非事件股：2 题判答（B1:A 零额外调用）
@@ -1566,8 +1567,8 @@ def test_build_one_wires_gene_line_before_reason_line():
                                                                 {"603278": GENE_ITEM}),
                         reason_entries=[("主板龙一 大业股份", "机器人")])
     n = built["narrative"]
-    assert "涨停基因（统计窗口上游未标注）：主板龙一 大业股份=涨停4次" in n
-    assert n.index("涨停基因（") < n.index("涨停原因：")
+    assert "涨停基因：主板龙一 大业股份=涨停4次" in n, "口径注不进叙事（AGENTS §1.2-8）"
+    assert n.index("涨停基因：") < n.index("涨停原因：")
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
     assert "涨停基因" not in built0["narrative"]
@@ -1586,7 +1587,7 @@ def test_run_feeds_gene_corpus_into_leader_docs(env, monkeypatch):
     col = db[L.COLLECTION]
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
     assert leader_docs, "至少一条个股级 doc"
-    assert any("涨停基因（统计窗口上游未标注）" in d["narrative"] for d in leader_docs)
+    assert any("涨停基因：" in d["narrative"] for d in leader_docs)
     sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
     assert sector_docs and all("涨停基因" not in d["narrative"] for d in sector_docs)
 
@@ -1669,7 +1670,7 @@ def test_build_one_wires_seal_quality_line_after_zhaban():
                         seal_quality_entries=L.seal_quality_entries_for_leaders(
                             [row], _quality([dict(QUALITY_ITEM, stock_id="603278")])))
     n = built["narrative"]
-    assert "封板质量（KPL 涨停池 14:35 采集帧，非收盘帧）：主板龙一 大业股份" in n
+    assert "封板质量（14:35，非收盘帧）：主板龙一 大业股份" in n
     assert n.index("板内炸板面：") < n.index("封板质量（")
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家")
@@ -1688,7 +1689,7 @@ def test_run_feeds_pool_quality_into_leader_docs(env, monkeypatch):
     L.run("2026-10-19", confirm_budget=True)
     col = db[L.COLLECTION]
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
-    assert leader_docs and all("封板质量（KPL 涨停池" in d["narrative"] for d in leader_docs)
+    assert leader_docs and all("封板质量（" in d["narrative"] and "KPL 涨停池" not in d["narrative"] for d in leader_docs)
     sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
     assert sector_docs and all("封板质量" not in d["narrative"] for d in sector_docs)
 
@@ -1705,8 +1706,8 @@ def test_run_pool_quality_degraded_marks_unknown_not_absent(env, monkeypatch):
     col = db[L.COLLECTION]
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
     assert leader_docs and all(
-        "涨停池语料不可考（涨停池日档缺失）" in d["narrative"] for d in leader_docs)
-    assert all("今日不在涨停池" not in d["narrative"] for d in leader_docs)
+        "封板质量" not in d["narrative"] and "涨停池语料不可考" not in d["narrative"]
+        for d in leader_docs), "缺档 → 整行缺席，不留占位（AGENTS §1.2-8）"
 
 
 # ---------- 2026-11-08d / 题材热度行（2013 订阅落库，题材龙头语料第 2 项） ----------
@@ -1743,7 +1744,7 @@ def test_theme_heat_entries_pool_missing_vs_absent():
 
 
 def test_run_theme_heat_degraded_marks_unknown_not_absent(env, monkeypatch):
-    """端到端：题材库语料未落库时个股叙事出「题材库语料不可考」，不伪装「不在涨停池」。
+    """端到端：题材库语料未落库时题材热度行整行缺席（AGENTS §1.2-8）。
 
     同时验证题材热度行装配位置（打标交叉行后、基因行前）。"""
     import backend.services.kpl_daban_archiver as arch
@@ -1754,14 +1755,8 @@ def test_run_theme_heat_degraded_marks_unknown_not_absent(env, monkeypatch):
     col = db[L.COLLECTION]
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
     assert leader_docs and all(
-        "题材库语料不可考（题材库语料未落库）" in d["narrative"] for d in leader_docs)
-    assert all("题材热度（KPL 题材库订阅）" in d["narrative"] for d in leader_docs)
-    for d in leader_docs:
-        lines = d["narrative"].splitlines()
-        theme_i = next(i for i, x in enumerate(lines) if x.startswith("题材热度"))
-        gene_i = next((i for i, x in enumerate(lines) if x.startswith("涨停基因")), None)
-        if gene_i is not None:
-            assert theme_i < gene_i
+        "题材热度" not in d["narrative"] and "题材库语料不可考" not in d["narrative"]
+        for d in leader_docs), "缺语料 → 整行缺席，不留占位（AGENTS §1.2-8）"
 
 
 # ---------- 2026-11-08e / 公告计数行（题材龙头语料第 3 项） ----------
@@ -1786,8 +1781,7 @@ def test_fetch_notice_corpus_shapes(env, monkeypatch):
 
 
 def test_run_notice_degraded_marks_unknown_not_absent(env, monkeypatch):
-    """端到端：公告计数语料未落库时出「公告计数语料不可考」，不伪装「不在涨停池」；
-    行装配位置 = 涨停原因行后、龙虎榜行前。"""
+    """端到端：公告计数语料未落库时公告计数行整行缺席（AGENTS §1.2-8）。"""
     import backend.services.kpl_daban_archiver as arch
     calls, db = env
     monkeypatch.setattr(arch, "load_notice_corpus",
@@ -1796,13 +1790,5 @@ def test_run_notice_degraded_marks_unknown_not_absent(env, monkeypatch):
     col = db[L.COLLECTION]
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
     assert leader_docs and all(
-        "公告计数语料不可考（公告计数语料未落库）" in d["narrative"] for d in leader_docs)
-    for d in leader_docs:
-        lines = d["narrative"].splitlines()
-        notice_i = next(i for i, x in enumerate(lines) if x.startswith("公告计数"))
-        reason_i = next((i for i, x in enumerate(lines) if x.startswith("涨停原因")), None)
-        lhb_i = next((i for i, x in enumerate(lines) if x.startswith("龙虎榜")), None)
-        if reason_i is not None:
-            assert reason_i < notice_i
-        if lhb_i is not None:
-            assert notice_i < lhb_i
+        "公告计数" not in d["narrative"] and "公告计数语料不可考" not in d["narrative"]
+        for d in leader_docs), "缺语料 → 整行缺席，不留占位（AGENTS §1.2-8）"

@@ -25,17 +25,16 @@
   fetched_date/same_day 时点标记）；**每轮限量 gene_limit 只**（服务端 _post_form
   全局 ≥2s 单发间隔），缺失优先、收盘后 ≥15:05 对盘中旧值刷一次终值；日期跟随涨停池
   快照交易日，全池覆盖度由 gene_pending_n 暴露（fail-visible）。
-- 题材库热度语料通道（socket 2013 StockRelatedThemeResp，theme_ 前缀字段；
-  2026-11-08 题材龙头语料第 2 项）：与 reason 通道同款合同——订阅面=涨停池成员自动跟随
-  （KPL_THEME_SUBS，默认开），按 stock_id 并集落库 theme_items（themes[{id,name,
-  number=题材热度 float}] 原样，不改写不拼接）；日期跟随涨停池快照交易日 + >3 天
-  新鲜度护栏，跨日残留条目跳过（不污染当日档）；读口 `load_theme_corpus`
-  / `GET /api/kpl/theme-heat`（:8002）。
-- 涨停原因语料通道（2203 推送，reason_ 前缀字段；2026-11-08 用户需求「作为 jev 语料
-  投喂」）：按 stock_id 并集落库 reason_items（zt/fx/jc/jj/pledge/zt_group/theme/
-  child_theme/label/plate/tp/rank 等原文，不改写不拼接——组合口径由消费方定）；
-  日期跟随涨停池快照交易日（周末/盘前推送的是上一交易日详情），推送 ts 早于该日
-  的跨日残留条目跳过不写（不污染当日档）。
+- 2013 题材库热度 / 2203 涨停原因语料通道（2026-11-10 用户裁决「推送即落库」）：
+  **写入方 = collector（:8002）**——推送解析成功后在采集线程内立即写同日档
+  theme_/reason_ 前缀字段（与直播文本同款时点，不等盘后轮询），本服务不再轮询这两
+  通道（单写者合同：一个通道一个写者）。archive_reason_corpus / archive_theme_corpus
+  归档函数保留在本模块供 collector 调用与测试。注意：非推送型语料（gene/notice 走
+  HTTP 懒取）的及时性依赖本服务盘中运行（main.py startup 启动）。
+- 涨停原因语料（2203 推送，reason_ 前缀字段；2026-11-08 用户需求「作为 jev 语料
+  投喂」）：2026-11-10 起写入方 = collector（推送即落库），落库合同同上条：按
+  stock_id 并集、字段随最新帧刷新（first_ts 首次到流）；日期跟随涨停池快照交易日，
+  推送 ts 早于该日的跨日残留条目跳过不写（不污染当日档）。
 
 各通道在同一次写里各改各的前缀字段（单写者顺序执行，无并发冲突），日档互不覆盖。
 供 GET /api/kpl/daban-pool（涨停池）、GET /api/kpl/daban-bidding（集合竞价）、
@@ -67,8 +66,6 @@ _UPSTREAM_POOL = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=1"
 _UPSTREAM_BID = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=8"
 _UPSTREAM_ZB = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=2"
 _UPSTREAM_DT = "http://127.0.0.1:8002/api/kpl/daban-list?pid_type=3"
-_UPSTREAM_REASONS = "http://127.0.0.1:8002/api/kpl/zt-reasons"   # 2203 涨停原因语料
-_UPSTREAM_THEME = "http://127.0.0.1:8002/api/kpl/theme-heat"      # 2013 题材库热度语料
 
 # 通道配置：prefix=日档字段前缀；mark_broken=掉出标注（涨停池/跌停池有掉出语义，
 # 炸板池成员即曾炸板全集、竞价无掉出语义，均不标）
@@ -796,20 +793,13 @@ def load_gene_corpus(db: Any, date: str) -> dict[str, Any]:
 
 
 class DabanPoolArchiver:
-    """周期拉取 :8002 涨停池/集合竞价/炸板池/跌停池快照 + 2203 涨停原因语料 + 涨停基因
-    语料，按日存档（main.py startup 启动，mongodb 模式专用；2026-11-08 增补炸板/跌停
-    通道与 reason_items 语料、gene_items 语料（HTTP 逐股懒取、每轮限量），
-    同一 kpl_daban_pool 日档各改各前缀/字段）。
+    """周期拉取 ：8002 涨停池/集合竞价/炸板池/跌停池快照 + 涨停基因/公告计数语料（HTTP
+    逐股懒取），按日存档（main.py startup 启动，mongodb 模式专用；同一 kpl_daban_pool
+    日档各改各前缀/字段）。
 
-    单任务循环内顺序处理四打板通道，再拉一次 2203 语料，最后拉本轮限量涨停基因：
-    任一通道失败不阻断其它通道（各自结构化记 lastResult）。
-    """
-    """周期拉取 :8002 涨停池/集合竞价/炸板池/跌停池快照 + 2203 涨停原因语料，按日存档
-    （main.py startup 启动，mongodb 模式专用；2026-11-08 增补炸板/跌停通道与
-    reason_items 语料，同一 kpl_daban_pool 日档各改各前缀/字段）。
-
-    单任务循环内顺序处理四打板通道，再拉一次 2203 语料：任一通道失败不阻断其它通道
-    （各自结构化记 lastResult）。
+    2026-11-10 起单任务循环内顺序处理四打板通道，再拉本轮限量涨停基因/公告计数；
+    2013 题材热度 / 2203 涨停原因语料改由 collector 推送即落库（单写者），本服务不再
+    轮询。任一通道失败不阻断其它通道（各自结构化记 lastResult）。
     """
 
     def __init__(
@@ -822,8 +812,6 @@ class DabanPoolArchiver:
         bid_upstream_url: str = _UPSTREAM_BID,
         zb_upstream_url: str = _UPSTREAM_ZB,
         dt_upstream_url: str = _UPSTREAM_DT,
-        reason_upstream_url: str = _UPSTREAM_REASONS,
-        theme_upstream_url: str = _UPSTREAM_THEME,
         gene_fetcher: Callable[[str], dict[str, Any]] = get_zt_gene,
         gene_limit: int = 6,
         notice_fetcher: Callable[[str], dict[str, Any]] = get_notice_count,
@@ -837,8 +825,6 @@ class DabanPoolArchiver:
         self._bid_upstream_url = bid_upstream_url
         self._zb_upstream_url = zb_upstream_url
         self._dt_upstream_url = dt_upstream_url
-        self._reason_upstream_url = reason_upstream_url
-        self._theme_upstream_url = theme_upstream_url
         # 涨停基因语料（HTTP 单股粒度、协议层 ≥2s 限频）→ 每轮限量懒取，未拉满的成员
         # 留 gene_pending_n（fail-visible），供 jev 语料消费方判断覆盖度
         self._gene_fetcher = gene_fetcher
@@ -929,50 +915,10 @@ class DabanPoolArchiver:
                     results[key] = await asyncio.to_thread(fn, self._database_factory(), payload)
                 except Exception as error:
                     results[key] = {"ok": False, "reason": f"archive_failed:{error}"}
-            # 2203 涨停原因语料（2026-11-08，jev 投喂原料）：日期跟随涨停池快照交易日
-            # （周末/盘前推送的是上一交易日详情）；无交易日时不写（不猜、不错挂日期）。
-            try:
-                rsn = await self._fetch(client, self._reason_upstream_url)
-            except Exception as error:
-                results["reason"] = {"ok": False, "reason": f"fetch_failed:{error}"}
-            else:
-                if not rsn.get("ok"):
-                    results["reason"] = {"ok": False,
-                                         "reason": f"collector_degraded:{rsn.get('reason') or 'unknown'}"}
-                elif not pool_date:
-                    results["reason"] = {"ok": False, "reason": "no_pool_date"}
-                elif pool_date < (datetime.now(TZ_SHANGHAI) - timedelta(days=3)).date().isoformat():
-                    # 新鲜度护栏（评审 R2-P2）：涨停池快照日期过旧（>3 天）说明 2103 已停推而
-                    # 缓存滞留，2203 若仍在流会把当日详情挂进旧交易日档 —— 结构化 skip 不落库
-                    results["reason"] = {"ok": False, "reason": "stale_pool_date", "date": pool_date}
-                else:
-                    try:
-                        results["reason"] = await asyncio.to_thread(
-                            archive_reason_corpus, self._database_factory(),
-                            {**rsn, "date": pool_date})
-                    except Exception as error:
-                        results["reason"] = {"ok": False, "reason": f"archive_failed:{error}"}
-            # 2013 题材库热度语料（2026-11-08 题材龙头语料第 2 项，jev 投喂原料）：
-            # 日期/新鲜度护栏与 2203 reason 通道同款（跟随涨停池快照交易日 + >3 天 skip）。
-            try:
-                thm = await self._fetch(client, self._theme_upstream_url)
-            except Exception as error:
-                results["theme"] = {"ok": False, "reason": f"fetch_failed:{error}"}
-            else:
-                if not thm.get("ok"):
-                    results["theme"] = {"ok": False,
-                                        "reason": f"collector_degraded:{thm.get('reason') or 'unknown'}"}
-                elif not pool_date:
-                    results["theme"] = {"ok": False, "reason": "no_pool_date"}
-                elif pool_date < (datetime.now(TZ_SHANGHAI) - timedelta(days=3)).date().isoformat():
-                    results["theme"] = {"ok": False, "reason": "stale_pool_date", "date": pool_date}
-                else:
-                    try:
-                        results["theme"] = await asyncio.to_thread(
-                            archive_theme_corpus, self._database_factory(),
-                            {**thm, "date": pool_date})
-                    except Exception as error:
-                        results["theme"] = {"ok": False, "reason": f"archive_failed:{error}"}
+            # 2013 题材库热度 / 2203 涨停原因语料（2026-11-10 裁决）：改由 collector
+            # 推送即落库（单写者），本服务不再轮询这两通道；本轮结果仅标注迁移态。
+            results["reason"] = {"ok": True, "note": "moved_to_collector_push_time"}
+            results["theme"] = {"ok": True, "note": "moved_to_collector_push_time"}
             # 涨停基因语料（2026-11-08，题材龙头语料投喂 jev）：HTTP 单股逐发（协议层
             # _post_form 全局 ≥2s 限频），每轮限量 gene_limit 只，缺失优先、收盘后刷终值。
             # 日期来源：①当轮涨停池快照交易日 ②快照缺失（采集器未运行/周末重启）时回退

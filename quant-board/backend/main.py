@@ -246,11 +246,12 @@ async def on_startup() -> None:
     # 题材日频因子盘后补算（2026-09-27 Task1）：仅 mongodb 后端启用，
     # 每日 18:30 补算缺因子行的交易日，幂等覆盖写 theme_daily_factors。
     theme_daily_factors_scheduler.start()
-    # 2103 打板四页签 + 2203 涨停原因语料按日存档（2026-11-07/08 历史回放 + jev 语料数据源）：
-    # 仅 mongodb 后端启用，每 60s 拉本机 :8002 合并快照（pidType=1/8/2/3）与 /zt-reasons，
+    # 2103 打板四页签 + 涨停基因/公告计数语料按日存档（2026-11-07/08 历史回放 + jev 语料数据源）：
+    # 仅 mongodb 后端启用，每 60s 拉本机 :8002 合并快照（pidType=1/8/2/3），
     # 合并进 kpl_daban_pool 同日档（_id=交易日；涨停池=成员并集+收盘态标注 sealed/broken；
-    # 集合竞价=bid_、炸板池=zb_、跌停池=dt_ 前缀字段；涨停原因详情=reason_items 语料，
-    # 日期跟随涨停池快照交易日）。best-effort：失败不阻断启动。
+    # 集合竞价=bid_、炸板池=zb_、跌停池=dt_ 前缀字段；涨停基因/公告计数=HTTP 懒取语料，
+    # 日期跟随涨停池快照交易日）。2013/2203 推送型语料由 collector（:8002）推送即落库。
+    # best-effort：失败不阻断启动。
     if get_settings().storage_backend == "mongodb":
         try:
             from backend.services.kpl_daban_archiver import get_daban_pool_archiver

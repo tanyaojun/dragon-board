@@ -600,73 +600,6 @@ def test_reason_corpus_accepts_items_list_shape():
     assert r["ok"] is True and r["item_n"] == 1
 
 
-def test_archive_once_fetches_reason_corpus_with_pool_date(monkeypatch):
-    """单轮额外拉 :8002 /zt-reasons 并落到涨停池快照交易日（周末详情挂上一交易日）。"""
-    import asyncio
-    from backend.services import kpl_daban_archiver as arch
-
-    class _S:
-        storage_backend = "mongodb"
-
-    class _Resp:
-        def __init__(self, content):
-            self._c = content
-
-        def json(self):
-            return self._c
-
-    class _Client:
-        def __init__(self, **kw):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def get(self, url, timeout=None):
-            if url.endswith("/zt-reasons"):
-                ts = datetime(2026, 11, 8, 12, 28, tzinfo=TZ_SHANGHAI).timestamp()
-                return _Resp({"ok": True, "reasons": {"301697": _reason_item("301697", ts)},
-                              "count": 1, "ts": ts})
-            if url.endswith("pid_type=1"):
-                return _Resp(_snap(100.0, ["000001"], date="2026-11-06"))
-            if url.endswith("pid_type=8"):
-                return _Resp(_bid_snap(200.0, ["300001"], date="2026-11-06"))
-            return _Resp({"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"})
-
-    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
-    db = _FakeDb()
-    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
-                                 interval_seconds=60, gene_fetcher=_fake_gene)
-    asyncio.run(archiver._archive_once())
-    res = archiver.status()["lastResult"]
-    assert res["pool"]["ok"] is True and res["reason"]["ok"] is True
-    assert res["reason"]["date"] == "2026-11-06"      # 跟随涨停池交易日，不挂周日
-    row = db._coll.rows["2026-11-06"]
-    assert row["reason_items"][0]["stock_id"] == "301697"
-    assert row["items"][0]["stock_id"] == "000001"     # 打板通道同档共存
-    assert "reason:" not in (archiver.status()["lastError"] or "")   # 语料通道不报错
-
-    # 无涨停池交易日（如 collector 全降级）→ 不猜日期、不写语料
-    class _Degraded(_Client):
-        async def get(self, url, timeout=None):
-            if url.endswith("pid_type=1"):
-                return _Resp({"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"})
-            return await super().get(url, timeout)
-
-    monkeypatch.setattr(arch.httpx, "AsyncClient", _Degraded)
-    db2 = _FakeDb()
-    archiver2 = DabanPoolArchiver(settings=_S(), database_factory=lambda: db2,
-                                  interval_seconds=60, gene_fetcher=_fake_gene)
-    asyncio.run(archiver2._archive_once())
-    assert archiver2.status()["lastResult"]["reason"]["reason"] == "no_pool_date"
-    # 竞价通道仍可独立落库；语料字段不写（日期不明不猜）
-    assert all("reason_items" not in r for r in db2._coll.rows.values())
-
-
-
 def test_gene_corpus_fields_survive_lane_writes():
     """评审 R2-P1：字段级 $set 并发合同 —— 模拟 gene 语料先写，lane 整通道写不得回写冲掉。"""
     db = _FakeDb()
@@ -679,48 +612,6 @@ def test_gene_corpus_fields_survive_lane_writes():
     # 反向：lane 先写，gene $set 只加字段也不冲 lane
     db._coll.update_one({"_id": "2026-11-06"}, {"$set": {"gene_count": 1}}, upsert=True)
     assert db._coll.rows["2026-11-06"]["items"][0]["stock_id"] == "000001"
-
-
-def test_reason_corpus_stale_pool_date_skipped(monkeypatch):
-    """评审 R2-P2：涨停池快照日期过旧（>3 天）→ stale_pool_date 不落库（不把当日详情挂进旧档）。"""
-    import asyncio
-    from backend.services import kpl_daban_archiver as arch
-
-    class _S:
-        storage_backend = "mongodb"
-
-    class _Resp:
-        def __init__(self, content):
-            self._c = content
-
-        def json(self):
-            return self._c
-
-    class _Client:
-        def __init__(self, **kw):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def get(self, url, timeout=None):
-            if url.endswith("/zt-reasons"):
-                return _Resp({"ok": True, "reasons": {}, "count": 0, "ts": 1.0})
-            if url.endswith("pid_type=1"):
-                return _Resp(_snap(100.0, ["000001"], date="2026-10-01"))   # 一多月前
-            return _Resp({"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"})
-
-    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
-    db = _FakeDb()
-    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db, interval_seconds=60)
-    asyncio.run(archiver._archive_once())
-    res = archiver.status()["lastResult"]
-    assert res["reason"]["ok"] is False and res["reason"]["reason"] == "stale_pool_date"
-    # pool 通道照常落自己的档（那是它的事实）；语料字段不得挂进旧交易日档
-    assert "reason_items" not in db._coll.rows.get("2026-10-01", {})
 
 
 # ── 涨停基因语料通道（2026-11-08，题材龙头语料投喂 jev；前端不上）───────────────

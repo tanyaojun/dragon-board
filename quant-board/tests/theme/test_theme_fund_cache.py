@@ -157,74 +157,8 @@ def test_non_trading_day_reads_latest_last_good_without_final_flag() -> None:
     assert latest["000001"]["sessionDate"] == "2026-07-24"
 
 
-def test_put_many_batch_writes_with_monotonic_versions() -> None:
-    redis = FakeRedis()
-    cache = ThemeFundCache(redis, prefix="test")
-
-    saved, failures = cache.put_many(
-        [
-            row("000001", "2026-07-24", 12.5, source="akshare_ths_individual"),
-            row("000002", "2026-07-24", 8.0, source="akshare_ths_individual"),
-            row("000003", "2026-07-24", 9.5, source="akshare_ths_individual"),
-        ]
-    )
-
-    assert failures == []
-    assert [item["version"] for item in saved] == [1, 2, 3]
-    assert cache.current_version() == 3
-    # put_many 写 akshare 题材源独立 hash（2026-08-14），读 get_akshare_latest
-    latest = cache.get_akshare_latest(["000001", "000002", "000003"])
-    assert latest["000001"]["zlje"] == 12.5
-    assert latest["000003"]["zlje"] == 9.5
 
 
-def test_put_many_preserves_older_rows_and_increments_after_existing_versions() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put_many([row("000001", "2026-07-24", 12.5, source_ts=20, source="akshare_ths_individual")])
-
-    saved, failures = cache.put_many(
-        [
-            row("000001", "2026-07-24", 88.0, source_ts=10, source="akshare_ths_individual"),  # 旧 sourceTs → 保留既有行
-            row("000002", "2026-07-24", 8.0, source="akshare_ths_individual"),
-        ]
-    )
-
-    assert failures == []
-    assert saved[0]["zlje"] == 12.5
-    assert saved[0]["version"] == 1
-    assert saved[1]["zlje"] == 8.0
-    assert saved[1]["version"] == 2
-    assert cache.get_akshare_latest(["000001"])["000001"]["zlje"] == 12.5
-
-
-def test_put_many_isolates_invalid_rows_and_saves_valid_ones() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    invalid = {"code": "bad", "zlje": "not-a-number", "source": "akshare_ths_individual", "sessionDate": "2026-07-24"}
-
-    saved, failures = cache.put_many(
-        [row("000001", "2026-07-24", 12.5, source="akshare_ths_individual"), invalid]
-    )
-
-    assert len(saved) == 1
-    assert failures == [{"code": "bad", "reason": "invalid fund row"}]
-    assert cache.get_akshare_latest(["000001"])["000001"]["zlje"] == 12.5
-
-
-def test_put_many_falls_back_to_memory_when_redis_fails() -> None:
-    cache = ThemeFundCache(FakeRedis(fail=True), prefix="test")
-
-    saved, failures = cache.put_many(
-        [
-            row("000001", "2026-07-24", 12.5, source="akshare_ths_individual"),
-            row("000002", "2026-07-24", 8.0, source="akshare_ths_individual"),
-        ]
-    )
-
-    assert failures == []
-    assert [item["version"] for item in saved] == [1, 2]
-    latest = cache.get_akshare_latest(["000001", "000002"])
-    assert latest["000001"]["zlje"] == 12.5
-    assert latest["000002"]["zlje"] == 8.0
 
 
 def test_invalid_or_missing_value_never_overwrites_last_good() -> None:
@@ -360,59 +294,7 @@ def test_redis_ttl_controls_cross_instance_cold_read() -> None:
     assert cold.get_latest(["000001"])["000001"]["zlje"] == 12.5
 
 
-def test_put_many_accepts_akshare_ths_individual_source() -> None:
-    # 2026-08-14：akshare 题材源独立 hash——用 put_many 写入、get_akshare_latest 读取
-    redis = FakeRedis()
-    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
-    akshare_row = {
-        "code": "000001",
-        "zlje": 12.5,
-        "source": "akshare_ths_individual",
-        "moneyFlowSource": "akshare_ths_individual",
-        "sessionDate": "2026-07-24",
-        "sourceTs": 1,
-    }
 
-    saved, _failures = cache.put_many([akshare_row])
-
-    assert saved[0]["source"] == "akshare_ths_individual"
-    assert cache.get_akshare_latest(["000001"])["000001"]["source"] == "akshare_ths_individual"
-
-
-def test_put_many_prunes_stale_trading_session_rows() -> None:
-    # 2026-08-14：put_many 写 akshare 独立 hash，旧交易日清理针对 akshare hash
-    redis = FakeRedis()
-    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
-    cache.put_many(
-        [
-            row("000001", "2026-07-24", 1.0, source="akshare_ths_individual"),
-            row("000002", "2026-07-24", 2.0, source="akshare_ths_individual"),
-        ]
-    )
-
-    saved, failures = cache.put_many(
-        [
-            row("000001", "2026-07-25", 3.0, source="akshare_ths_individual"),
-            row("000003", "2026-07-25", 4.0, source="akshare_ths_individual"),
-        ]
-    )
-
-    assert failures == []
-    assert len(saved) == 2
-    # 旧交易日行（000002 07-24，未在本批写入）从内存与 akshare hash 一并清除
-    assert "000002" not in cache._akshare
-    assert "000002" not in redis.hashes["test:theme-fund:v3:akshare"]
-    # 本批写入的行保留
-    assert "000001" in redis.hashes["test:theme-fund:v3:akshare"]
-    assert "000003" in redis.hashes["test:theme-fund:v3:akshare"]
-
-
-def test_put_many_version_gets_ttl() -> None:
-    redis = FakeRedis()
-    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
-    cache.put_many([row("000001", "2026-07-24", 1.0, source="akshare_ths_individual")])
-
-    assert redis.expires["test:theme-fund:v3:version"] == 900
 
 
 def test_put_many_rejects_ths_main_monitor() -> None:
@@ -460,27 +342,92 @@ def test_put_many_accepts_eastmoney_main_source() -> None:
     assert stored["zlje"] == -9876543.21
 
 
-def test_eastmoney_row_overwrites_same_day_akshare_row_by_rank() -> None:
-    # 同一 sessionDate 下 rank：eastmoney(2) > akshare(1)——切换东财后同日残留
-    # akshare 行被东财行自动覆盖；反向（akshare 覆盖东财）被拒绝
+
+def test_put_many_eastmoney_batch_writes_with_monotonic_versions() -> None:
+    """2026-11-10 平移自过期 akshare 版：批量写入版本号单调递增（现役源 eastmoney_main）。"""
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test")
+    saved, failures = cache.put_many([
+        row("000001", "2026-07-24", 12.5, source="eastmoney_main"),
+        row("000002", "2026-07-24", 8.0, source="eastmoney_main"),
+        row("000003", "2026-07-24", 9.5, source="eastmoney_main"),
+    ])
+    assert failures == []
+    assert [item["version"] for item in saved] == [1, 2, 3]
+    assert cache.current_version() == 3
+    latest = cache.get_akshare_latest(["000001", "000002", "000003"])
+    assert latest["000001"]["zlje"] == 12.5
+    assert latest["000003"]["zlje"] == 9.5
+
+
+def test_put_many_eastmoney_preserves_older_rows_and_increments_versions() -> None:
+    """2026-11-10 平移自过期 akshare 版：旧 sourceTs 保留既有行、版本号接续递增。"""
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put_many([row("000001", "2026-07-24", 12.5, source_ts=20,
+                        source="eastmoney_main")])
+    saved, failures = cache.put_many([
+        row("000001", "2026-07-24", 88.0, source_ts=10, source="eastmoney_main"),
+        row("000002", "2026-07-24", 8.0, source="eastmoney_main"),
+    ])
+    assert failures == []
+    assert saved[0]["zlje"] == 12.5
+    assert saved[0]["version"] == 1
+    assert saved[1]["zlje"] == 8.0
+    assert saved[1]["version"] == 2
+
+
+def test_put_many_eastmoney_isolates_invalid_rows_and_saves_valid_ones() -> None:
+    """2026-11-10 平移自过期 akshare 版：非法行进 failures，不阻断合法行（§4.0）。"""
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    invalid = {"code": "bad", "zlje": "not-a-number",
+               "source": "eastmoney_main", "sessionDate": "2026-07-24"}
+    saved, failures = cache.put_many([
+        row("000001", "2026-07-24", 12.5, source="eastmoney_main"), invalid])
+    assert len(saved) == 1
+    assert failures == [{"code": "bad", "reason": "invalid fund row"}]
+    assert cache.get_akshare_latest(["000001"])["000001"]["zlje"] == 12.5
+
+
+def test_put_many_eastmoney_falls_back_to_memory_when_redis_fails() -> None:
+    """2026-11-10 平移自过期 akshare 版：Redis 写失败 → 进程内 last-good 仍在。"""
+    cache = ThemeFundCache(FakeRedis(fail=True), prefix="test")
+    saved, failures = cache.put_many([
+        row("000001", "2026-07-24", 12.5, source="eastmoney_main"),
+        row("000002", "2026-07-24", 8.0, source="eastmoney_main"),
+    ])
+    assert failures == []
+    assert [item["version"] for item in saved] == [1, 2]
+    latest = cache.get_akshare_latest(["000001", "000002"])
+    assert latest["000001"]["zlje"] == 12.5
+    assert latest["000002"]["zlje"] == 8.0
+
+
+def test_put_many_eastmoney_prunes_stale_trading_session_rows() -> None:
+    """2026-11-10 平移自过期 akshare 版：跨日写入清旧交易日行（内存 + Redis hash）。"""
     redis = FakeRedis()
     cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
-    cache.put_many([row("600000", "2026-07-30", 1.0, source="akshare_ths_individual", source_ts=200)])
+    cache.put_many([
+        row("000001", "2026-07-24", 1.0, source="eastmoney_main"),
+        row("000002", "2026-07-24", 2.0, source="eastmoney_main"),
+    ])
+    saved, failures = cache.put_many([
+        row("000001", "2026-07-25", 3.0, source="eastmoney_main"),
+        row("000003", "2026-07-25", 4.0, source="eastmoney_main"),
+    ])
+    assert failures == []
+    assert len(saved) == 2
+    assert "000002" not in cache._akshare
+    assert "000002" not in redis.hashes["test:theme-fund:v3:akshare"]
+    assert "000001" in redis.hashes["test:theme-fund:v3:akshare"]
+    assert "000003" in redis.hashes["test:theme-fund:v3:akshare"]
 
-    saved, _failures = cache.put_many(
-        [row("600000", "2026-07-30", 2.0, source="eastmoney_main", source_ts=100)]
-    )
 
-    assert saved[0]["source"] == "eastmoney_main"
-    assert saved[0]["zlje"] == 2.0
-
-    rejected, _failures = cache.put_many(
-        [row("600000", "2026-07-30", 3.0, source="akshare_ths_individual", source_ts=999)]
-    )
-
-    # akshare 行 rank 低 + sourceTs 虽新：同日 rank 高者权威，akshare 不能覆盖东财
-    assert rejected[0]["source"] == "eastmoney_main"
-    assert cache.get_akshare_latest(["600000"])["600000"]["zlje"] == 2.0
+def test_put_many_eastmoney_version_gets_ttl() -> None:
+    """2026-11-10 平移自过期 akshare 版：题材 hash 版本 key 带 TTL（兜底过期）。"""
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put_many([row("000001", "2026-07-24", 1.0, source="eastmoney_main")])
+    assert redis.expires["test:theme-fund:v3:version"] == 900
 
 
 def test_eastmoney_memory_rows_exported_for_redis_restore() -> None:

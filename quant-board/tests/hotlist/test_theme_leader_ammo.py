@@ -158,7 +158,8 @@ def test_structure_facts_line_v15_p1():
                                 {"state": "mainrise", "stateCn": "主升"})
     assert "周期状态=主升" in ln and "今日已封板=是" in ln
     assert "真连板高度=3 板" in ln and "板内梯队=11 家" in ln
-    assert "供校准参考 · 不作判据" in ln, "Q8:A 边界：行首必须标注不仲裁"
+    assert ln.startswith("结构事实："), "行首标注已撤出（语料卫生红线 AGENTS §1.2-8）"
+    assert "供校准参考" not in ln and "不作判据" not in ln
     # 缺字段 fail-visible：不可考显式、不伪造
     ln0 = A.structure_facts_line({"leaderSealedToday": False}, None)
     assert "不可考" in ln0 and "断板反包候选" in ln0
@@ -172,7 +173,7 @@ def test_structure_facts_line_v15_p1():
                                  facts_line=A.structure_facts_line(
                                      {"streak": 3, "leaderSealedToday": True},
                                      {"state": "mainrise"}))
-    assert n.index("结构基线") < n.index("结构事实（") < n.index("空间锚行")
+    assert n.index("结构基线") < n.index("结构事实：") < n.index("空间锚")
     n0 = A.build_leader_narrative(**common)
     assert "结构事实（" not in n0, "facts_line=None 旧行为不变"
 
@@ -420,7 +421,7 @@ def test_headroom_anchor_line_fallbacks_and_disclosure():
     line = A.headroom_anchor_line(_cycle_rows(), row, min_combo_n=2)
     assert line.startswith("空间锚："), \
         "2026-10-30d：再走≥1板率定义在题面已给，叙事侧不重复"
-    assert "剔右删失样本 5 个" in line and "总体 再走≥1板率 33.3%" in line
+    assert "总体 再走≥1板率 33.3%" in line and "剔右删失" not in line, "删失注撤出叙事"
     # 同桶（streak4+|n>=8|early）内 A10-15 与 E10-14 两样本（剩余均 0）→ 组合桶成立出锚
     assert ("同桶[streak4+|n>=8|early<=10:00] 再走≥1板率 0.0% · ≥2板率 0.0% · "
             "中位再走 0.0 板（均值 0.0，2 样本）") in line
@@ -439,8 +440,8 @@ def test_headroom_anchor_line_fallbacks_and_disclosure():
 
 def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
     ev = ("【题材证据】\n"
-          "题材语料未采集（无数据 ≠ 无催化）。\n"
-          "板块级催化：未映射（不代表无催化）")
+          "题材语料未采集。\n"
+          "板块级催化：产业树未映射（「X」）")
     text = A.build_leader_narrative(
         date="2026-10-19", market_line="涨停 46 家", structure="板块「X」今日封板 2 家",
         baseline="结构基线：总体 32.6%", evidence_block=ev,
@@ -451,7 +452,7 @@ def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
     assert lines[2] == "板块「X」今日封板 2 家" and lines[3] == "结构基线：总体 32.6%"
     assert lines[4].startswith("【题材证据"), "证据块紧跟结构行（2026-10-24a 起无 corpus_line 头行）"
     assert text.endswith(ev), "证据块必须原样嵌在末尾，不得被 runner 二次改写"
-    assert "未映射（不代表无催化）" in text and "未采集" in text
+    assert "产业树未映射（「X」）" in text and "未采集" in text
 
 
 def test_narrative_order_with_2026_10_24c_lines():
@@ -526,7 +527,7 @@ def test_driver_cross_line_variants():
     assert line.startswith("个股打标交叉（午盘槽）："), \
         "2026-10-30d：工程注记删，版本+槽位保留"
     assert "另一条打标链" not in line
-    assert "驱动类别=资金接力43%/政策42%（近并列）" in line, "近并列必须显式披露（判定不稳=信息）"
+    assert "驱动类别=资金接力43%/政策42%" in line and "近并列" not in line, "近并列注撤出叙事（AGENTS §1.2-8）"
     assert "信息不足" not in line, "逃生桶不进 top-2 排名"
     assert "催化深度=核心主业" in line and "新鲜度=新催化（≤2 交易日）" in line
     assert "买盘逻辑=高位卡位/情绪接力97%" in line
@@ -538,11 +539,11 @@ def test_driver_cross_line_variants():
     carried = A.driver_cross_line({**doc, "carriedFrom": "2026-10-26",
                                    "carriedQuestionKeys": ["driver_type", "catalyst_depth",
                                                            "catalyst_freshness"]})
-    assert "驱动类别/催化深度/新鲜度=承接 2026-10-26 判定（非当日重问）" in carried
+    assert "驱动类别/催化深度/新鲜度=承接 2026-10-26" in carried and "判定" not in carried
+    assert "非当日重问" not in carried
     assert "买盘逻辑" not in carried.split("·")[-1], "未承接的轴不进承接披露"
-    # 缺席 = fail-visible 固定行，不带任何方向性语义
-    assert A.driver_cross_line(None) == A.DRIVER_CROSS_NONE_LINE
-    assert A.DRIVER_CROSS_NONE_LINE == "个股打标交叉：无当日个股打标记录", "2026-10-30g+：注删"
+    # 缺席 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）
+    assert A.driver_cross_line(None) is None
     # 概率全缺 → 回落已选枚举值中文；全缺+槽位缺失 → 不可考如实
     bare = A.driver_cross_line({"label": "policy", "labelSlot": "final",
                                 "questionSetVersion": "v3.1", "freshness": "continuing",
@@ -748,11 +749,9 @@ def test_limitup_reason_line_fail_visible():
     assert line.startswith("涨停原因："), "2026-10-30d：工程注记删"
     assert "韭研板内解析" not in line
     assert "主板龙一 菲林格尔=PCB设备+木地板" in line
-    assert "斯迪克=不可考" in line, "2026-10-30g：工程行话删"
-    assert "斯迪克=不可考" in line and "（" not in line.split("；")[-1], "2026-10-30g：尾部注删"
-    # 全缺 → 全部不可考
-    all_missing = A.limitup_reason_line([("文投控股", None)])
-    assert "全部不可考" in all_missing or "不可考" in all_missing
+    assert "斯迪克" not in line, "缺原因整段缺席（AGENTS §1.2-8：缺数据不投喂占位）"
+    # 全缺 → 整行缺席
+    assert A.limitup_reason_line([("文投控股", None)]) is None
     # 空条目 → None 不出行
     assert A.limitup_reason_line([]) is None
 
@@ -763,10 +762,8 @@ def test_plate_strength_line_matches_and_fail_visible():
                                 "name": "AI硬件", "strength": 890.1, "pct": 5.2})
     assert "排名 #12/240" in ok and "强度 890.1" in ok and "板块涨幅 5.2%" in ok
     unmatched = A.plate_strength_line({"ok": False, "reason": "unmatched"})
-    assert "不可用，未匹配到 KPL 板块" in unmatched and "不冒充" not in unmatched, \
-        "2026-10-30d：工程行话删"
     fetch_fail = A.plate_strength_line({"ok": False, "reason": "fetch_failed: timeout"})
-    assert "接口异常 timeout" in fetch_fail, "2026-10-30g：工程词中文化，括号删"
+    assert unmatched is None and fetch_fail is None, "未匹配/异常 → 整行缺席（AGENTS §1.2-8）"
 
 
 def test_evidence_gate_subset_keys_for_a2_split():
@@ -834,13 +831,13 @@ def test_plate_series_line_recent_record_day_not_today_p1_3():
                 "lz_info": "603528,多伦科技,4连板"}]
     line = A.plate_series_line([{"date": "2026-10-28", "strength": 100}],
                                zt_rows, plate_name="X", label_date="2026-10-28")
-    assert "10-27 最近记录日 梯队串" in line, "2026-10-30g：括号删"
-    assert "当日梯队串" not in line
+    assert "10-27 梯队" in line and "最近记录日" not in line
+    assert "当日梯队：" not in line
     zt_rows2 = [{"date": "2026-10-28", "zt_num": 24,
                  "lz_info": "603278,大业股份,2连板"}]
     line2 = A.plate_series_line([{"date": "2026-10-28", "strength": 100}],
                                 zt_rows2, plate_name="X", label_date="2026-10-28")
-    assert "当日梯队串" in line2
+    assert "当日梯队：" in line2
 
 
 def test_leader_narrative_places_reason_and_strength_lines():
@@ -873,7 +870,7 @@ def test_plate_series_line_two_segment_disclosure():
     assert "10-28 强度31837 净额-482.2亿" in line and "10-24 强度7252 净额?" in line
     assert "板块涨停家：" in line, "2026-10-30g：括号注释全删（用户裁决）"
     assert "10-23 家44" in line and "10-28 家24" in line
-    assert "大业股份(2连板)" in line and "梯队串：" in line and "不替换自算" not in line
+    assert "大业股份(2连板)" in line and "梯队：" in line and "不替换自算" not in line
     # 双空 → None（匹配状态由强度行披露，不重复）
     assert A.plate_series_line([], [], plate_name="x", label_date="2026-10-28") is None
 
@@ -895,7 +892,7 @@ def test_plate_series_line_zt_fetch_error_p2_11():
     """P2-11（review）：层2 拉取失败且层1 亦空 → 显式失败行，不得静默 None。"""
     line = A.plate_series_line([], [], plate_name="X", label_date="2026-10-28",
                                zt_fetch_error="http 502")
-    assert line is not None and "层2 涨停梯队历史拉取失败：http 502" in line
+    assert line == "板块序列 X：强度无记录；涨停家不可考"
     assert A.plate_series_line([], [], plate_name="X", label_date="2026-10-28") is None
 
 
@@ -945,8 +942,8 @@ def test_plate_series_line_sentinel_appended():
                   "main_net": -48221868016, "pct": 1.0, "amount": 1e9}]
     line = A.plate_series_line(rank_rows, None, plate_name="机器人概念",
                                label_date="2026-10-28")
-    assert "口径哨兵告警：" in line and "raw[8]" not in line, "2026-10-30g：工程行话删"
-    assert "净额>成交额 ×1" in line and "强度31837" in line
+    assert "口径哨兵" not in line and "净额-482.2亿" in line, "哨兵告警撤出叙事（AGENTS §1.2-8）"
+    assert "净额>成交额" not in line and "强度31837" in line, "哨兵告警只进结构化审计"
 
 
 def test_plate_series_line_gap_rate_quantified():
@@ -979,10 +976,11 @@ LHB_FACTS = {
 
 
 def test_lhb_line_fetch_failure_fail_visible():
+    """缺数据（取数失败/榜单未生成）→ 整行缺席（AGENTS §1.2-8）。"""
     line = A.lhb_line({"ok": False, "reason": "lhb_list_fetch_failed: boom"},
                       codes=["603278"])
-    assert line.startswith("龙虎榜："), "2026-10-30g：口径头删（用户裁决）"
-    assert "--，榜单拉取失败 boom" in line, "2026-10-30g+：工程词中文化"
+    assert line is None, "缺数据整行缺席（AGENTS §1.2-8）"
+    assert "boom" not in str(line), "上游异常详情不透出"
     assert A.lhb_line(None, codes=["603278"]) == \
         A.lhb_line({"ok": False, "reason": "no_data"}, codes=["603278"])
 
@@ -990,8 +988,7 @@ def test_lhb_line_fetch_failure_fail_visible():
 def test_lhb_line_empty_structured_discloses_ordersign():
     line = A.lhb_line({"ok": False, "empty_structured": True, "order_sign_count": 3,
                        "stocks": []}, codes=["603278"])
-    assert "--，当日分组榜单未生成，缺当日事实≠无上榜" in line, "2026-10-30g+：orderSign 注删"
-    assert "缺当日事实≠无上榜" in line, "不把未生成伪装成无上榜"
+    assert line is None, "榜单未生成 → 整行缺席（AGENTS §1.2-8）"
 
 
 def test_lhb_line_matches_leader_first_and_roles():
@@ -1013,7 +1010,8 @@ def test_lhb_line_missing_numbers_and_reason_are_dash_not_zero():
 
 def test_lhb_line_zero_relevant_is_fact_not_direction():
     line = A.lhb_line(LHB_FACTS, codes=["300001", "300002"])
-    assert "当日全市场上榜 3 只，本叙事相关个股 0 只上榜（事实披露，非方向信号）" in line
+    assert "当日全市场上榜 3 只，本叙事相关个股 0 只上榜" in line
+    assert "非方向信号" not in line
 
 
 def test_lhb_line_seat_and_agency_segments():
@@ -1055,7 +1053,7 @@ def test_lhb_line_cap_discloses_overflow():
     facts = {"ok": True, "stocks": stocks}
     codes = [s["code"] for s in stocks]
     line = A.lhb_line(facts, codes=codes)
-    assert line.count("相关个股") == 6 and "另 2 只相关上榜略" in line
+    assert line.count("相关个股") == 6 and "略" not in line
 
 
 def test_narrative_lhb_line_placement_after_reason_line():
@@ -1096,7 +1094,7 @@ def test_v14_rebound_popularity_line_builder():
         board_n=4, cycle={"state": "mainrise", "cycleRound": 1})
     assert "形式①人气股反包" in ln and "窗位 k=1" in ln
     assert "2026-10-28 -3.20%" in ln, "窗内逐日表现逐日披露"
-    assert "当日板内上板 4 家" in ln and ">=2 有跟随" in ln
+    assert "当日板内上板 4 家（含龙头自身）" in ln
     assert "主升·第2轮" in ln, "周期背景只披露（P3 工作流 A 落痕）"
     ln2 = A.rebound_popularity_line(
         {"type": "benchmarkAdvance", "streak": 5, "prevStreak": 4},
@@ -1136,23 +1134,24 @@ def test_zt_gene_line_six_fields_units_and_no_fake_zero():
                            {"label": "双创龙一 301697", "item": None}])
     assert line.startswith("涨停基因")
     assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、首板被板0%、连板33.3%" in line
-    assert "双创龙一 301697=不可考" in line
+    assert "301697" not in line, "缺该股语料整段缺席（AGENTS §1.2-8）"
     assert A.zt_gene_line([]) is None
 
 
 def test_zt_gene_line_window_note_and_backfill_marker():
     """统计窗口上游未标注必须带出（禁写成近 N 日）；回填条目标注抓取日。"""
     line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM}])
-    assert "统计窗口上游未标注" in line and "近" not in line.replace("溢价5%", "")
+    assert "统计窗口" not in line and "未标注" not in line, "口径注不进叙事（AGENTS §1.2-8）"
+    assert "近" not in line.replace("溢价5%", "")
     backfill = dict(GENE_ITEM, same_day=False, fetched_date="2026-11-08")
     line2 = A.zt_gene_line([{"label": "主板龙一 000525", "item": backfill}])
-    assert "2026-11-08 抓取含此后信息" in line2
-    assert "抓取" not in line              # 同日抓取（same_day=True）不标注
+    assert "数据时点 2026-11-08，晚于交易日" in line2
+    assert "抓取" not in line and "数据时点" not in line   # 同日取值不标注
     # 多抓取日 → 逐股点名（不能聚合成一条，否则分不清哪只股是哪天的值）
     backfill2 = dict(GENE_ITEM, stock_id="301697", same_day=False, fetched_date="2026-11-07")
     line3 = A.zt_gene_line([{"label": "主板龙一 000525", "item": backfill},
                             {"label": "双创龙一 301697", "item": backfill2}])
-    assert "000525 抓取于 2026-11-08" in line3 and "301697 抓取于 2026-11-07" in line3
+    assert "000525 数据时点 2026-11-08" in line3 and "301697 数据时点 2026-11-07" in line3
 
 
 def test_zt_gene_line_partial_gene_marks_missing_field():
@@ -1191,7 +1190,7 @@ def test_seal_quality_line_metrics_and_frame_disclosure():
     采集帧早于收盘 → 标「非收盘帧」（封单仍在变动，防当收盘值读）。"""
     line = A.seal_quality_line([{"label": "主板龙一 红太阳", "item": SEAL_ITEM,
                                  "frameAt": "14:35"}])
-    assert line.startswith("封板质量（KPL 涨停池 14:35 采集帧，非收盘帧）：")
+    assert line.startswith("封板质量（14:35，非收盘帧）：")
     assert "封单 0.77亿=实际流通 1.7%" in line
     assert "首板 09:41" in line and "回封" not in line, "时点段：首板带出、无回封不带"
     assert "峰值封单 4.08亿（现为峰值 19%）" in line
@@ -1200,7 +1199,7 @@ def test_seal_quality_line_metrics_and_frame_disclosure():
     # 收盘后帧不再加「非收盘帧」
     line2 = A.seal_quality_line([{"label": "主板龙一 红太阳", "item": SEAL_ITEM,
                                   "frameAt": "15:00"}])
-    assert "非收盘帧" not in line2 and "15:00 采集帧" in line2
+    assert "非收盘帧" not in line2 and "15:00" in line2 and "采集帧" not in line2
 
 
 def test_seal_quality_line_missing_fields_never_fake_zero():
@@ -1208,12 +1207,12 @@ def test_seal_quality_line_missing_fields_never_fake_zero():
     no_float = dict(SEAL_ITEM, real_float=None, max_zt_tur=None)
     line = A.seal_quality_line([{"label": "龙一 X", "item": no_float, "frameAt": "15:00"}])
     assert "=实际流通" not in line and "峰值封单" not in line
-    assert "单位待校验（缺实际流通无法自证）" in line, "无分母无法自证单位 → 原样透出并标注"
+    assert "单位待校验（缺实际流通）" in line
     no_amount = dict(SEAL_ITEM, amount=None)
     line2 = A.seal_quality_line([{"label": "龙一 X", "item": no_amount, "frameAt": "15:00"}])
     assert "=成交额" not in line2 and "主力净额 +1.48亿" in line2
     empty = A.seal_quality_line([{"label": "龙一 X", "item": {}, "frameAt": "15:00"}])
-    assert empty == "封板质量（KPL 涨停池 15:00 采集帧）：龙一 X：封单不可考；首板时点不可考"
+    assert empty is None, "无可读量价整行缺席（AGENTS §1.2-8）"
     assert A.seal_quality_line([]) is None, "entries 空 → 不出行"
 
 
@@ -1237,15 +1236,15 @@ def test_seal_quality_line_broken_and_unsealed_branches():
     """炸板未回封 → 标最后封住帧（防当下值误读）；未封板龙一（题面续板⑤）→ 本行不适用。"""
     broken = dict(SEAL_ITEM, pool_state="broken")
     line = A.seal_quality_line([{"label": "主板龙一 X", "item": broken, "frameAt": "10:20"}])
-    assert "〔最后封住帧 10:20，其后炸板未回封〕" in line
+    assert "〔最后封住 10:20，其后炸板未回封〕" in line
     line2 = A.seal_quality_line([{"label": "主板龙一 Y", "item": {}, "frameAt": None,
                                   "unsealed": True}])
-    assert line2.endswith("主板龙一 Y=今日未封板（无当日封单，本行不适用）")
+    assert line2.endswith("主板龙一 Y=今日未封板（无当日封单）")
     line3 = A.seal_quality_line([{"label": "主板龙一 Z", "item": broken,
                                   "frameAt": "10:20", "unsealed": True}])
-    assert "=今日曾封后炸板未回封（最后封住帧 10:20）：" in line3
+    assert "=今日曾封后炸板未回封（最后封住 10:20）：" in line3
     line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None}])
-    assert line4.endswith("主板龙一 W=不可考（今日不在涨停池）")
+    assert line4 is None, "缺档/不在池整段缺席（AGENTS §1.2-8）"
 
 
 def test_theme_heat_line_variants():
@@ -1256,18 +1255,17 @@ def test_theme_heat_line_variants():
               {"id": "80004", "name": "化工", "number": 3.2}]
     line = A.theme_heat_line([{"label": "主板龙一 X", "themes": themes, "poolMissing": None}])
     # number 降序在前，非数值条目排后且「原样」带出不丢
-    assert "主板龙一 X：光伏 96.5；有机硅 71；化工 3.2；次新 原样 None" in line
+    assert "主板龙一 X：光伏 96.5；有机硅 71；化工 3.2；次新 原始值 None" in line
     # 截断披露：>6 个题材出「共 X 个」
     many = [{"id": f"8{i:04d}", "name": f"T{i}", "number": float(i)} for i in range(9)]
     line2 = A.theme_heat_line([{"label": "龙一 X", "themes": many, "poolMissing": None}])
-    assert "前 6 按热度，共 9 个" in line2 and "T8" in line2 and "T6" not in line2.split("（")[0]
-    # None vs 空 vs 降级 三分（评审 P1 同款归因纪律）
+    assert "（前 6 按热度，共 9 个）" in line2 and "T8 8" in line2 and "T2 2" not in line2
+    # None/空/降级 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）
     line3 = A.theme_heat_line([
         {"label": "主板龙一 Y", "themes": None, "poolMissing": "no_theme_corpus"},
         {"label": "主板龙一 Z", "themes": None, "poolMissing": None},
         {"label": "主板龙一 W", "themes": []}])
-    assert "题材库语料不可考（题材库语料未落库）" in line3
-    assert "不可考（今日不在涨停池）" in line3 and "题材库为空" in line3
+    assert line3 is None
     # entries 空 → None 不出行
     assert A.theme_heat_line([]) is None
 
@@ -1280,12 +1278,16 @@ def test_notice_count_line_variants():
     line = A.notice_count_line([{"label": "主板龙一 X", "item": item, "poolMissing": None}])
     # 真 0 是真实计数照常带出；缺位逐项「不可考」不补 0；window_note 随行头带出
     assert "主板龙一 X：公告 2/研报 0/新闻不可考/数据日期 20261108" in line
-    assert wn in line
+    assert wn not in line and "统计窗口" not in line, "口径注不进叙事，只留结构化字段"
+    # 取不到/无信息量（全 0 或仅新闻计数）→ 整行缺席（AGENTS §1.2-8）
     line2 = A.notice_count_line([
         {"label": "主板龙一 Y", "item": None, "poolMissing": "no_notice_corpus"},
         {"label": "主板龙一 Z", "item": None, "poolMissing": None}])
-    assert "公告计数语料不可考（公告计数语料未落库）" in line2
-    assert "不可考（今日不在涨停池）" in line2
+    assert line2 is None
+    line3 = A.notice_count_line([{"label": "主板龙一 W", "item": {
+        "counts": {"announcement": 0, "report": 0, "news": 1},
+        "upstream_date": "20261109"}}])
+    assert line3 is None, "公告/研报均 0 → 无判读信息量，整行缺席"
     assert A.notice_count_line([]) is None
 
 
@@ -1320,7 +1322,7 @@ def test_hhmm_from_ts_out_of_range_degrades():
     assert A._hhmm_from_ts(float("inf")) is None
     huge = dict(SEAL_ITEM, zt_time=1.7e12, last_zt_time=1.7e12)
     line = A.seal_quality_line([{"label": "龙一 X", "item": huge, "frameAt": "15:00"}])
-    assert "首板时点不可考" in line   # 结构化降级，不崩
+    assert line is not None and "首板时点不可考" not in line, "不可考段缺席，不崩"
 
 
 def test_heat_num_fmt_non_finite():
@@ -1344,29 +1346,28 @@ def test_seal_quality_line_seal_time_variants():
     line3 = A.seal_quality_line([{"label": "龙一 X",
                                   "item": dict(SEAL_ITEM, zt_time=None, last_zt_time=None),
                                   "frameAt": "15:00"}])
-    assert "首板时点不可考" in line3
+    assert "首板时点不可考" not in line3, "时点缺位段缺席（AGENTS §1.2-8）"
     # 异常：最后涨停早于首板 → 显式标注 + 原样带出，不猜
     bad = dict(SEAL_ITEM, zt_time=1793929260.0, last_zt_time=1793929000.0)
     line4 = A.seal_quality_line([{"label": "龙一 X", "item": bad, "frameAt": "15:00"}])
-    assert "首板 09:41（时点异常：最后涨停早于首板，原样" in line4
+    assert "首板 09:41（时点异常：最后涨停早于首板，原始值" in line4
 
 
 def test_seal_quality_line_pool_missing_vs_absent():
     """评审 P1：语料降级（日档缺失/读口异常）≠ 不在涨停池——归因分开表述，禁捏造事实。"""
     line = A.seal_quality_line([{"label": "主板龙一 X", "item": None, "frameAt": None,
                                  "poolMissing": "no_archive"}])
-    assert line.endswith("主板龙一 X=涨停池语料不可考（涨停池日档缺失）")
+    assert line is None, "缺档整段缺席（AGENTS §1.2-8）"
     line2 = A.seal_quality_line([{"label": "主板龙一 Y", "item": None, "frameAt": None,
                                   "poolMissing": "load_error"}])
-    assert "涨停池语料不可考（涨停池读口异常）" in line2
+    assert line2 is None
     line3 = A.seal_quality_line([{"label": "主板龙一 Z", "item": None, "frameAt": None,
                                   "poolMissing": None}])
-    assert line3.endswith("主板龙一 Z=不可考（今日不在涨停池）"), (
-        "语料在场且查无此股才允许「不在涨停池」归因")
+    assert line3 is None
     # 未封板优先级高于降级：断板候选的「本行不适用」语义不受日档缺失影响
     line4 = A.seal_quality_line([{"label": "主板龙一 W", "item": None, "frameAt": None,
                                   "unsealed": True, "poolMissing": "no_archive"}])
-    assert line4.endswith("主板龙一 W=今日未封板（无当日封单，本行不适用）")
+    assert line4.endswith("主板龙一 W=今日未封板（无当日封单）")
 
 
 def test_seal_quality_line_rejects_low_side_hand_trap():
@@ -1386,7 +1387,7 @@ def test_seal_quality_line_unsealed_sealed_conflict_disclosed():
     """评审 P2：推导侧未封板但池档仍 sealed → 显式披露两源口径差，不静默吞。"""
     line = A.seal_quality_line([{"label": "主板龙一 X", "item": dict(SEAL_ITEM),
                                  "frameAt": "14:35", "unsealed": True}])
-    assert "涨停池仍标 sealed，两源口径差" in line
+    assert "池档仍标封住" in line and "两源口径差" not in line
 
 
 def test_seal_quality_line_small_amount_uses_wan_unit():
@@ -1402,7 +1403,7 @@ def test_seal_quality_line_peak_ratio_sanity_gate():
     """评审 P2：峰值占实际流通超出 (0,100%] → 口径自证未过，不出读数。"""
     bad_peak = dict(SEAL_ITEM, max_zt_tur=1e11)   # 峰值占流通 ≈ 2261%，物理不可能
     line = A.seal_quality_line([{"label": "龙一 X", "item": bad_peak, "frameAt": "15:00"}])
-    assert "峰值封单不可考（口径自证未过）" in line
+    assert "峰值封单" not in line and "封单 0.77亿" in line, "峰值异常段缺席"
     assert "封单 0.77亿" in line, "当前封单不受峰值异常影响"
 
 

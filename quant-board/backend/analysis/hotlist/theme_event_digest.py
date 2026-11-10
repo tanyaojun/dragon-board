@@ -258,7 +258,7 @@ def _anchor_hit(base: str, keys: list[str], text: str,
 
 def _clip(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
-    return text if len(text) <= limit else text[:limit] + f"…[截断，原文 {len(text)} 字]"
+    return text if len(text) <= limit else text[:limit] + "…"
 
 
 def _days_between(a: str | None, b: str | None) -> int | None:
@@ -514,24 +514,17 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
 
     lines = [BLOCK_HEADER]
     if not state.get("ok"):
-        lines.append("题材语料未采集。无数据 ≠ 无催化，"
-                     "请勿据此判断催化有无。")
-    else:
-        stale = "" if not state.get("stale") else f"（注意：语料最近采集日 {state.get('latestFetchDate')}，非当日）"
-        # 2026-10-30d 语料精简：产业树节点总数对判题无信息量，不出
-        lines.append(f"取数日 {date}，语料："
-                     f"题材事件 {state.get('topic')} · 新闻 {state.get('news')} · "
-                     f"日历 {state.get('calendar')} 条{stale}")
+        lines.append("题材语料未采集。")
+    # 语料已采集时的「取数日/语料条数/采集日」管道计数行已随语料卫生红线撤出叙事
+    # （AGENTS §1.2-8）：条数/新鲜度属开发诊断，新鲜度已由各条目的日期字段承载。
 
     node = match.get("node")
     if not state.get("ok"):
         pass                                   # 未采集行已在前面给出，不再伪造 L3 明细
     elif not match.get("matched"):
-        coarse = ""   # 2026-10-30g：粗分桶口径注删（用户指示，括号注释清理）
-        lines.append(f"板块级催化：未映射{coarse}（「{board_name}」在产业树无同名/包含节点；"
-                     f"不代表无催化）")
+        lines.append(f"板块级催化：产业树未映射（「{board_name}」）")
     elif not (node or {}).get("content"):
-        lines.append(f"板块级催化：产业树节点「{node.get('name')}」无催化正文（原文为空，如实标注）")
+        lines.append(f"板块级催化：产业树节点「{node.get('name')}」无催化正文")
     else:
         chg = node.get("contentChangedDate") or "未知"
         gap = _days_between(chg, date)
@@ -542,14 +535,13 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         elif isinstance(gap, int) and gap > 0:
             gap_txt = f"{gap} 天前"
         elif isinstance(gap, int) and gap < 0:
-            gap_txt = f"晚于取数日 {-gap} 天（回放含未来信息，仅作对照，不得当离线重放结论）"
+            gap_txt = f"晚于取数日 {-gap} 天"
         else:
             gap_txt = "未知"
-        # 2026-10-30d 语料精简：匹配方式 exact 为常态不出，非 exact（弱关联）仍如实标注
-        _m = str(match.get('method') or '')
-        _m_txt = f"，匹配方式 {_m}" if _m and _m != "exact" else ""
+        # 语料卫生红线（AGENTS §1.2-8）：匹配方式（exact/contains/…）不进叙事，
+        # 只留 match 结构化字段
         lines.append(
-            f"板块级催化原文（「{node.get('name')}」{_m_txt}，"
+            f"板块级催化原文（「{node.get('name')}」，"
             f"热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
             f"{_clip(node.get('content'), content_chars)}")
 
@@ -570,8 +562,8 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             gap2_txt = ("当日" if gap2 == 0 else f"{gap2} 天前"
                         if isinstance(gap2, int) and gap2 > 0 else "未知")
             lines.append(
-                f"驱动标签补充映射（龙头标签「{leader_tag_line}」中词「{term}」经 "
-                f"{m2.get('method')} 命中产业树「{n2.get('name')}」，热度 {n2.get('hot')}，"
+                f"产业树补充映射（龙头标签词「{term}」关联「{n2.get('name')}」，"
+                f"热度 {n2.get('hot')}，"
                 f"正文更新 {chg2}={gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
             break
 
@@ -580,11 +572,10 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             if (include_l2 and state.get("ok")) else None)
     if heat is not None:
         if heat.get("any"):
-            lines.append(f"题材热度序列（近 {HEAT_WINDOW_DAYS} 日新闻/事件按日聚合；"
-                         f"看新增密度是否断流/见顶）：{_heat_line(heat)}")
+            lines.append(f"题材热度序列（近 {HEAT_WINDOW_DAYS} 日）："
+                         f"{_heat_line(heat)}")
         else:
-            lines.append(f"题材热度序列：近 {HEAT_WINDOW_DAYS} 日无该题材的新闻/事件痕迹"
-                         f"（不代表无催化；若板块当日仍涨停，则纯资金/情绪驱动特征明显）")
+            lines.append(f"题材热度序列：近 {HEAT_WINDOW_DAYS} 日无该题材的新闻/事件痕迹")
     if state.get("ok"):
         if not ev_hits:
             lines.append("当日题材事件：无匹配")
@@ -593,11 +584,11 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             for ev in ev_hits:
                 src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
                 hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
-                # 降级标注（同批用户裁决）：标题未命中、仅正文/共享子串级关联的事件
-                # 显式标「弱匹配」，防模型把泛科技通稿当强板块催化
-                weak = "" if ev.get("titleHit") else "；弱匹配（标题未命中，仅正文级关联）"
+                # 语料卫生红线：匹配方式/弱匹配标注不进叙事（AGENTS §1.2-8），
+                # 匹配质量只留结构化字段（matchHow/titleHit）
+                parens = (src + hot).lstrip("，")
                 lines.append(f"- {ev.get('day')} {ev.get('title')}"
-                             f"（{ev.get('matchHow')}{src}{hot}）{weak}")
+                             + (f"（{parens}）" if parens else ""))
 
     # 近两日题材新闻（开盘啦 ThemeNews）+ 前瞻日历（开盘啦 Type=3）。
     # 2026-10-24a：两节均无匹配时合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话，
@@ -618,14 +609,14 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                     stocks = it.get("stocks") or []
                     top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
                     # KPL Rate 本身就是百分数值（-1.74 = 当日 -1.74%），不再 ×100
-                    st_txt = "，关联股 " + "、".join(
+                    st_txt = "关联股 " + "、".join(
                         f"{s.get('name')}{s.get('rate'):+.2f}%"
                         if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
                         for s in top) if top else ""
-                    # 正文锚命中 = 标题未命中（仅正文级关联），显式标弱匹配（同事件通道语义）
-                    weak = "" if it.get("titleHit", True) else "；弱匹配（标题未命中，仅正文级关联）"
+                    # 语料卫生红线：匹配方式/弱匹配标注不进叙事（AGENTS §1.2-8）
+                    parens = f"（{st_txt}）" if st_txt else ""
                     lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
-                                 f"（{it.get('matchHow')}{st_txt}）{weak}")
+                                 f"{parens}")
         if cal_section:
             if cal_no_match:
                 lines.append(f"未来 {window_days} 日既定事件：无匹配")
@@ -635,7 +626,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                     fd = _days_between(date, ev.get("date"))
                     when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
                     tag = f" [{ev.get('tagName')}]" if ev.get("tagName") else ""
-                    lines.append(f"- {when}{tag} {ev.get('brief')}（{ev.get('matchHow')}）")
+                    lines.append(f"- {when}{tag} {ev.get('brief')}")
 
     # ── L2 板内解析（韭研异动库：板块分组 + 逐股 expound；v3 起纳入证据）──
     # include_l2=False（relay 兼容形状）：整节不渲染。
@@ -661,14 +652,12 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         lead_label = "龙头" if str(leader_code or "") else "板内成员（非龙一）"
         if lead is not None and exp:
             board_resolved = True
-            caliber = ""   # 2026-10-30g：口径注删
-            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{caliber}）："
+            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
                          f"解析摘录：{_clip(body or exp, content_chars)}")
         elif lead is not None:
-            caliber = ""   # 2026-10-30g：口径注删
-            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{caliber}）："
-                         f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析（如实标注）")
+            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只）："
+                         f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析")
         peer_tags = []
         for p in [s for s in stocks if s is not lead][:5]:
             pe = str(p.get("expound") or "")

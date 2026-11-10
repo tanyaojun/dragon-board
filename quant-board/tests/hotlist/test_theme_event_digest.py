@@ -178,13 +178,13 @@ def test_block_contains_industry_and_kpl_sections():
     out = D.build_theme_evidence_block(_db(), board_name="机器人", date="2026-10-22")
     text = out["text"]
     assert text.startswith(D.BLOCK_HEADER)
-    assert "板块级催化原文（「国产机器人」，匹配方式 contains" in text
+    assert "板块级催化原文（「国产机器人」" in text and "匹配方式" not in text
     # 开盘啦题材事件：仅标题+热度+日期（2026-10-28 用户裁决，正文不出）；
     # GTC 为正文级命中（标题未含机器人）→ 弱匹配降级标注
     assert "当日题材事件：" in text, "2026-10-30g：括号注删"
     assert "- 2026-10-21 英伟达GTC大会来了！黃仁勋重磅演讲" in text
     assert "黄仁勋将在21日发表主题演讲" not in text, "事件正文不再进叙事（仅标题+热度+日期）"
-    assert "弱匹配（标题未命中，仅正文级关联）" in text
+    assert "弱匹配" not in text, "弱匹配标注撤出叙事（AGENTS §1.2-8）"
     # 前瞻日历（开盘啦）
     assert "未来 3 日既定事件：" in text
     assert "国产机器人产业大会" in text
@@ -202,10 +202,10 @@ def test_news_kword_tag_takes_priority():
     # 新闻流：Kword 标签命中 + 关联股披露
     assert "近两日题材新闻：" in text, "2026-10-30g：括号注删"
     assert "- 2026-10-22 [俄乌重建] 泽连斯基表态推动和平协议预期" in text
-    assert "南矿集团" in text and "matchHow" not in text
+    assert "南矿集团" in text and "matchHow" not in text and "关联股" in text
     assert out["kwordTags"] == ["俄乌重建"]
     # 产业树无俄乌重建节点，但 L2 板内解析在 → 不判缺失
-    assert "板块级催化：未映射" in text
+    assert "产业树未映射" in text
     assert "板内解析（「俄乌重建」" in text
     assert "俄罗斯市场" in text
     assert out["boardResolved"] is True
@@ -220,21 +220,24 @@ def test_topic_event_shared_anchor_disclosure():
                "detailFetched": True, "lastFetchDate": "2026-10-22"}]
     out = D.build_theme_evidence_block(_db(topic=events, news=[], calendar=[]),
                                        board_name="俄乌重建", date="2026-10-22")
-    assert "- 2026-10-22 俄乌和平：泽连斯基表示乌方愿达成和平协议（共享子串「俄乌」" in out["text"]
+    assert "- 2026-10-22 俄乌和平：泽连斯基表示乌方愿达成和平协议" in out["text"]
+    assert "共享子串" not in out["text"], "匹配方式注撤出叙事"
+    assert "来源 央视新闻，热度 100" in out["text"]
     assert out["events"][0]["matchHow"] == "共享子串「俄乌」"
 
 
 def test_block_fail_visible_paths():
     # 1) 语料未采集（全空，且无 L2）
     empty = D.build_theme_evidence_block(FakeDb(), board_name="机器人", date="2026-10-22")
-    assert "未采集" in empty["text"] and "无数据 ≠ 无催化" in empty["text"]
+    assert "题材语料未采集。" in empty["text"], "判据注撤出叙事（AGENTS §1.2-8）"
+    assert "无数据 ≠ 无催化" not in empty["text"]
     assert empty["evidenceMissing"] is True
     assert empty["evidenceMissingReason"] == "corpus_not_collected"
 
     # 2) 板块未映射且无事件/新闻/L2 → 才判缺失
     db = _db(news=[], calendar=[])
     out = D.build_theme_evidence_block(db, board_name="培育钻石", date="2026-10-22")
-    assert "未映射" in out["text"] and "不代表无催化" in out["text"]
+    assert "未映射" in out["text"] and "不代表无催化" not in out["text"]
     assert out["industry"] is None
     assert out["evidenceMissingReason"] == "industry_tree_unmapped"
 
@@ -243,7 +246,7 @@ def test_block_fail_visible_paths():
                          "content": "", "lastFetchDate": "2026-10-22"}],
               news=[], calendar=[])
     out3 = D.build_theme_evidence_block(db3, board_name="存储", date="2026-10-22")
-    assert "无催化正文" in out3["text"] and "原文为空" in out3["text"]
+    assert "无催化正文" in out3["text"]
     assert out3["evidenceMissingReason"] == "no_content_no_event"
 
     # 4) 无匹配事件 ≠ 无催化（产业树正文在 → 有可用证据）
@@ -262,7 +265,7 @@ def test_block_marks_stale_corpus():
     db = _db(industry=[{**NODES[0], "lastFetchDate": "2026-10-17"}],
              topic=stale_top, news=[], calendar=[])
     out = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22")
-    assert "非当日" in out["text"] and out["state"]["stale"] is True
+    assert out["state"]["stale"] is True and "非当日" not in out["text"], "采集日注撤出叙事"
 
 
 def test_block_respects_char_budget():
@@ -275,7 +278,7 @@ def test_block_respects_char_budget():
              news=[], calendar=[])
     out = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22",
                                        content_chars=100, max_events=1)
-    assert "…[截断，原文 800 字]" in out["text"]
+    assert "…" in out["text"] and "截断" not in out["text"]
     assert len(out["text"]) < 1500
 
 
@@ -298,7 +301,8 @@ def test_heat_series_daily_aggregation_and_trend_line():
     out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
                                        leader_code="001360")
     text = out["text"]
-    assert f"题材热度序列（近 {D.HEAT_WINDOW_DAYS} 日新闻/事件按日聚合；看新增密度是否断流/见顶）：" in text
+    assert f"题材热度序列（近 {D.HEAT_WINDOW_DAYS} 日）：" in text
+    assert "断流/见顶" not in text
     # 10-22 有 Kword=俄乌重建 的新闻 1 条
     assert "10-22 新闻1·事件0" in text
     # 无痕迹的日如实写 0（不断流伪装成有数据）
@@ -310,7 +314,7 @@ def test_heat_series_empty_is_explicit_not_silent():
     db = _db(news=[], topic=[])
     out = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22")
     assert (f"题材热度序列：近 {D.HEAT_WINDOW_DAYS} 日无该题材的新闻/事件痕迹"
-            f"（不代表无催化") in out["text"]
+            ) in out["text"] and "不代表无催化" not in out["text"]
     assert out["heatSeries"]["any"] is False
 
 
@@ -321,7 +325,7 @@ def test_heat_window_widened_to_ten_days():
     out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
                                        leader_code="001360")
     # 序列覆盖 10 个日槽（无痕迹日如实写 0）
-    seg = out["text"].split("断流/见顶）：", 1)[1].split("\n", 1)[0]
+    seg = out["text"].split("题材热度序列（近 10 日）：", 1)[1].split("\n", 1)[0]
     days = [d.split()[0] for d in seg.split("；")]
     assert len(days) == 10 and days[0] == "10-13" and days[-1] == "10-22"
 
@@ -414,8 +418,8 @@ def test_driver_tag_channel_supplements_mismatched_first_match():
                                        leader_code="603733")
     text = out["text"]
     assert "板块级催化原文（「半导体」" in text, "首通道保留不替换（2026-10-30d：exact 常态不标注）"
-    assert "驱动标签补充映射" in text
-    assert "词「存储芯片」" in text and "命中产业树「存储芯片」" in text
+    assert "产业树补充映射" in text
+    assert "「存储芯片」关联「存储芯片」" in text
     assert "现货价续涨" in text, "补的是对口催化正文"
 
 
@@ -439,12 +443,12 @@ def test_driver_tag_channel_skips_same_node_and_respects_include_l2():
     text = out["text"]
     # 切词 [人形机器人, 商业航天]：「人形机器人」经别名命中「国产机器人」=首通道节点 → 跳过；
     # 「商业航天」exact 命中不同节点 → 补充
-    assert "驱动标签补充映射" in text and "命中产业树「商业航天」" in text
+    assert "产业树补充映射" in text and "关联「商业航天」" in text
     assert text.count("板块级催化原文") == 1 and "「国产机器人」" in text
     # relay 兼容形状：无 L2 → 无板内解析、无补充映射
     out2 = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22",
                                         leader_code="603278", include_l2=False)
-    assert "驱动标签补充映射" not in out2["text"]
+    assert "产业树补充映射" not in out2["text"]
 
 
 def test_tag_terms_split_is_deterministic():
@@ -567,10 +571,14 @@ def test_news_line_renders_weak_match_badge_for_content_anchor():
     ]
     out = D.build_theme_evidence_block(_db(news=news, calendar=[]),
                                        board_name="商业航天", date="2026-10-22")
-    weak_lines = [ln for ln in out["text"].splitlines() if "弱匹配（标题未命中，仅正文级关联）" in ln]
-    assert len(weak_lines) == 1, weak_lines
-    assert "马斯克重磅预测" in weak_lines[0] and "正文锚" in weak_lines[0]
-    assert "商业航天发射计划公布（包含）" in out["text"]
+    # 语料卫生红线：弱匹配/匹配方式标注撤出叙事，正文锚条目与标题命中条目同样平铺
+    news_lines = [ln for ln in out["text"].splitlines() if ln.startswith("- ")]
+    assert len(news_lines) == 2, news_lines
+    assert any("马斯克重磅预测" in ln for ln in news_lines)
+    assert any("商业航天发射计划公布" in ln for ln in news_lines)
+    assert "弱匹配" not in out["text"] and "正文锚" not in out["text"]
+    weak = [h for h in D.match_kpl_news(news, "商业航天") if h.get("titleHit") is False]
+    assert len(weak) == 1, "正文锚命中仍由结构化 titleHit 承载"
 
 
 def test_match_kpl_news_content_only_shared_substring_hits():

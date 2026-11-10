@@ -780,7 +780,7 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
     """
     from statistics import median
 
-    kept, censored = _leader_cycles(rows)
+    kept, _censored = _leader_cycles(rows)   # 删失数只供结构化审计，叙事已不披露
     if not kept:
         return None
 
@@ -802,10 +802,10 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
     streak_pairs = [p for p in kept if streak_bucket(p[0].get("streak")) == sk]
     if len(streak_pairs) >= min_combo_n:
         parts.append(f"按连板高度[{sk}] {_stat(streak_pairs)}")
-    cen = (f"；剔右删失样本 {censored} 个" if censored else "")
+    # 右删失样本数只进结构化审计，不进叙事（AGENTS §1.2-8）
     # 2026-10-30d 语料精简：再走≥1板率定义在题面 ③ 已给，叙事侧不重复
     return ("空间锚："
-            + "；".join(parts) + f"；总体 {_stat(kept)}{cen}")
+            + "；".join(parts) + f"；总体 {_stat(kept)}")
 
 
 def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
@@ -959,7 +959,7 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
                       zt_fetch_error: str | None = None,
                       trading_days: int | None = None,
                       window_first_date: str | None = None) -> str | None:
-    """板块序列行（P1-1，G2/G3）：KPL 801xxx 稳定 ID 锚，双段口径各自如实标注。
+    """板块序列行（P1-1，G2/G3）：双段强度/涨停家数据，各自如实标注。
 
     - **层 1 连续段**：近 N 个交易日（韭研日轴）排名/强度/主力净额（raw[8]，**推断口径
       待 App 同屏核对**，行内显式标注）——连续无缺口；
@@ -989,8 +989,7 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
         return None
     if not rank_rows and not zt_rows and not window_declared:
         # P2-11（review）：层2 拉取失败不得静默缺席（§4.0）——失败行显式披露
-        return (f"板块序列 {plate_name}："
-                f"层1/层2 均无记录；层2 涨停梯队历史拉取失败：{zt_fetch_error}")
+        return f"板块序列 {plate_name}：强度无记录；涨停家不可考"
     head = f"板块序列 {plate_name}："
     parts: list[str] = []
     if rank_rows:
@@ -1005,10 +1004,7 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
                 seg += " 净额?"
             segs.append(seg)
         parts.append(f"近{len(segs)}交易日强度/净额：" + "；".join(segs))
-        sentinel = rank_sentinel_warnings(rank_rows, zt_rows)
-        if sentinel:
-            # §9.6 处置：raw[8] 口径哨兵越界 → 行内显式告警（fail-visible），不静默
-            parts.append("口径哨兵告警：" + "；".join(sentinel))
+        # 口径哨兵（rank_sentinel_warnings）只进结构化审计，不进叙事（AGENTS §1.2-8）
     if zt_rows or window_declared:
         segs = [f"{str(r['date'])[5:]} 家{r['zt_num'] if r.get('zt_num') is not None else '?'}"
                 for r in zt_rows]
@@ -1025,8 +1021,8 @@ def plate_series_line(rank_rows: list[dict] | None, zt_rows: list[dict] | None, 
             # P1-3（review）：层2 仅记录有涨停家日，最新记录日≠标注日常见——
             # 不得把昨日/更早的梯队串标成「当日」
             day_txt = ("当日" if str(last.get("date")) == str(label_date)
-                       else f"{str(last.get('date'))[5:]} 最近记录日 ")
-            parts.append(f"{day_txt}梯队串：{lz}")
+                       else f"{str(last.get('date'))[5:]} ")
+            parts.append(f"{day_txt}梯队：{lz}")
     return head + "；".join(parts)
 
 
@@ -1041,23 +1037,21 @@ def kpl_live_line(entries: list[dict] | None, *, board: str, total: int = 0,
     大模型自动生成尾注由调用方剥离；本行只渲染，不做匹配（匹配在 operations 层，
     复用 digest 关键词口径）。
     """
-    head = f"KPL直播播报（"
+    head = f"直播播报（"
     if window:
-        head += f"窗口 {window}"
-    head += f"{'，' if window else ''}全窗 {total} 条）"
+        head += f"{window}"
+    head += "）"
     if unavailable:
-        return f"KPL直播播报：不可用，{unavailable}"
+        return None
     if not entries:
         return f"{head}：当日无「{board}」相关播报"
     parts = []
     for e in entries[:max_items]:
         c = re.sub(r"\s+", " ", str(e.get("comment") or "")).strip()
         if len(c) > clip_chars:
-            c = c[:clip_chars] + f"…[截断，原文 {len(c)} 字]"
+            c = c[:clip_chars] + "…"
         parts.append(f"{e.get('time') or '时间不可考'} {c}")
-    more = len(entries) - max_items
-    tail = f"（另 {more} 条略）" if more > 0 else ""
-    return head + "：" + "；".join(parts) + tail
+    return head + "：" + "；".join(parts)
 
 
 def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladder: int,
@@ -1173,7 +1167,6 @@ DRIVER_BUYSIDE_CN = {
     "high_board_relay": "高位卡位/情绪接力", "pure_sentiment": "纯情绪修复",
     "insufficient": "信息不足",
 }
-DRIVER_CROSS_NONE_LINE = "个股打标交叉：无当日个股打标记录"
 # 承接披露映射（打标链 carriedQuestionKeys 题键 → 交叉行轴名）：
 # 解析正文与前一日逐字相同时打标链不重问（carriedFrom=前一日），交叉行必须如实标注
 # 「承接判定」——新鲜度等轴是昨日判断，不是当日重问（防模型把承接值当当日新鲜证据）。
@@ -1185,8 +1178,8 @@ DRIVER_CARRY_AXIS_CN = {
 
 def _top2(probabilities: Any, cn: dict[str, str]) -> str:
     """top-2 枚举短名+整数百分比并列；逃生桶（insufficient 系）不进排名，为空返回空串
-    （调用方兜底用已选枚举值，全缺「不可考」，不编 0）。两档比值 ≥0.9 标「近并列」——
-    近并列本身是信息（判定不稳），必须披露。"""
+    （调用方兜底用已选枚举值，全缺「不可考」，不编 0）。两档比值 ≥0.9 的近并列信息
+    由百分比自身承载，不加注（AGENTS §1.2-8）。"""
     if not isinstance(probabilities, dict):
         return ""
     items = [(cn.get(str(k), str(k)), float(v)) for k, v in probabilities.items()
@@ -1195,9 +1188,7 @@ def _top2(probabilities: Any, cn: dict[str, str]) -> str:
     items = items[:2]
     if not items:
         return ""
-    tie = len(items) == 2 and items[0][1] > 0 and items[1][1] / items[0][1] >= 0.9
-    seg = "/".join(f"{name}{v:.0%}" for name, v in items)
-    return f"{seg}（近并列）" if tie else seg
+    return "/".join(f"{name}{v:.0%}" for name, v in items)
 
 
 def _enum_cn(value: Any, cn: dict[str, str]) -> str:
@@ -1206,20 +1197,18 @@ def _enum_cn(value: Any, cn: dict[str, str]) -> str:
     return cn.get(str(value), str(value))
 
 
-def driver_cross_line(label_doc: dict | None) -> str:
+def driver_cross_line(label_doc: dict | None) -> str | None:
     """个股打标交叉行（AMMO 2026-10-27b）：join 打标链当日该股判定，零调用纯原料。
 
     行内自描述口径（模型每次都是第一次见「打标交叉」这个词）：另一条打标链对该公司
     当日涨停的机器判定，供交叉参考；四轴=驱动类别 top-2/催化深度/新鲜度/买盘逻辑，
-    枚举译名+概率并列。槽位显式（final=收盘槽、midday=午盘槽）；打标链题集版本一并
-    披露（v3.1/v4.0 校准代际不同）。label_doc=None → fail-visible 缺席行（不伪装成
-    「无催化」等任何方向性结论）。
+    枚举译名+概率并列。槽位显式（final=收盘槽、midday=午盘槽）。label_doc=None →
+    **整行缺席**（AGENTS §1.2-8：缺数据不投喂占位；缺席状态只留打标链落库文档）。
     """
     if not label_doc:
-        return DRIVER_CROSS_NONE_LINE
+        return None
     slot = str(label_doc.get("labelSlot") or "")
     slot_cn = {"final": "收盘槽", "midday": "午盘槽"}.get(slot, slot or "槽位不可考")
-    qs = str(label_doc.get("questionSetVersion") or "版本不可考")
     head = f"个股打标交叉（{slot_cn}）："
     # 驱动类别概率真身=driverProbabilities（labelProbabilities 为 API 层旧别名，兜底旧档）
     label_seg = _top2(label_doc.get("driverProbabilities")
@@ -1241,7 +1230,7 @@ def driver_cross_line(label_doc: dict | None) -> str:
     carried = [a for a in ("驱动类别", "催化深度", "新鲜度", "买盘逻辑") if a in carried_set]
     if carried:
         frm = label_doc.get("carriedFrom")
-        tail = f" · {'/'.join(carried)}=承接 {frm or '上一交易日'} 判定（非当日重问）"
+        tail = f" · {'/'.join(carried)}=承接 {frm or '上一交易日'}"
     return head + " · ".join(parts) + tail
 
 
@@ -1253,13 +1242,15 @@ def limitup_reason_line(entries: list[tuple[str, str | None]]) -> str | None:
     `entries` = [(标签, reason|None), ...]，标签如「主板龙一 菲林格尔」；板块成员原因
     **不列**（2026-10-28 用户裁决：只需龙头自己的；板内同伴由既有板内解析行承载）。
     单一事实源 = `jev_label_jiuyan.expound_reason()`（与打标链读口同源，禁第二套解析）。
-    entries 空 → None（调用方不出行）；缺失 → fail-visible「不可考」，不伪装成无催化。
+    entries 空 → None（调用方不出行）；原因缺失的条目**整段缺席**（AGENTS §1.2-8：
+    缺数据不投喂「不可考」占位）；全部缺原因 → None（整行不出）。缺失状态只留
+    结构化落库字段。
     """
     if not entries:
         return None
-    parts = [f"{label}={reason}" if str(reason or '').strip()
-             else f"{label}=不可考" for label, reason in entries]
-    return "涨停原因：" + "；".join(parts)
+    parts = [f"{label}={reason}" for label, reason in entries
+             if str(reason or '').strip()]
+    return "涨停原因：" + "；".join(parts) if parts else None
 
 
 def _gene_num(v: Any) -> str:
@@ -1290,10 +1281,6 @@ GENE_CN = (
 
 
 _THEME_HEAT_TOP_N = 6   # 个股题材库条目可能 10+，叙事行只取热度前 6（余量披露总数）
-_THEME_MISSING_CN = {"no_archive": "涨停池日档缺失", "no_theme_corpus": "题材库语料未落库",
-                     "load_error": "题材库读口异常"}
-
-
 def _heat_num_fmt(v: Any) -> str:
     """题材热度数值格式化：整数值去小数点（96.0→96），带小数一位（96.5）；其余原样。
 
@@ -1315,9 +1302,8 @@ def theme_heat_line(entries: list[dict]) -> str | None:
     口径纪律：
     - 只列热度前 6 个题材（余量「共 X 个」披露），number 降序；number 缺失/非数值的
       条目按原序排后并「原样」带出，不丢不猜；
-    - themes=None（不在池/语料缺该股）与 themes=[]（题材库为空）严格分开；
-    - poolMissing（题材库语料整体未落库）→ 「题材库语料不可考（原因）」，**不**伪装成
-      「今日不在涨停池」（与封板质量行同款评审口径，2026-11-08 P1）；
+    - themes 缺失（不在池/语料缺该股/题材库为空）→ 该股**整段缺席**（AGENTS §1.2-8：
+      缺数据不投喂占位）；全部缺席 → None（整行不出）；
     - 板块级叙事不消费本行（单股画像，与基因/封板质量同口径）。
     entries 空 → None（调用方不出行）。
     """
@@ -1327,14 +1313,8 @@ def theme_heat_line(entries: list[dict]) -> str | None:
     for entry in entries:
         label = str(entry.get("label") or "").strip() or "该股"
         themes = entry.get("themes")
-        pool_missing = str(entry.get("poolMissing") or "").strip()
-        if not isinstance(themes, list):
-            if pool_missing:
-                txt = (f"题材库语料不可考"
-                       f"（{_THEME_MISSING_CN.get(pool_missing, pool_missing)}）")
-            else:
-                txt = "不可考（今日不在涨停池）"
-            parts.append(f"{label}={txt}")
+        # 信息量门槛：无题材条目（缺语料/不在池/题材库为空）→ 该股缺席，不占行
+        if not isinstance(themes, list) or not themes:
             continue
 
         def _key(t: Any) -> float:
@@ -1350,17 +1330,16 @@ def theme_heat_line(entries: list[dict]) -> str | None:
                     or str((t or {}).get("id") or "").strip() or "?")
             n = (t or {}).get("number")
             num = _heat_num_fmt(n) if isinstance(n, (int, float)) and not isinstance(n, bool) \
-                else f"原样 {n}"
+                else f"原始值 {n}"
             segs.append(f"{name} {num}")
         txt = "；".join(segs) if segs else "题材库为空"
         if len(ordered) > _THEME_HEAT_TOP_N:
             txt += f"（前 {_THEME_HEAT_TOP_N} 按热度，共 {len(ordered)} 个）"
         parts.append(f"{label}：{txt}")
-    return "题材热度（KPL 题材库订阅）：" + "；".join(parts)
-
-
-_NOTICE_MISSING_CN = {"no_archive": "涨停池日档缺失", "no_notice_corpus": "公告计数语料未落库",
-                      "load_error": "公告计数读口异常"}
+    if not parts:
+        # 全员无题材条目 → 整行缺席，不留空头（AGENTS §1.2-8）
+        return None
+    return "题材热度：" + "；".join(parts)
 
 
 def notice_count_line(entries: list[dict]) -> str | None:
@@ -1371,29 +1350,28 @@ def notice_count_line(entries: list[dict]) -> str | None:
     counts = {announcement, report, news}（GetCompanyCount 三计数）。
 
     口径纪律：
-    - 计数统计窗口上游未标注 → window_note 随行带出（当日/累计不可判，不自算不反推）；
+    - **信息量门槛**：公告或研报任一 ≥1 才有判读价值；后端取不到、全 0、或仅有新闻
+      计数（上游噪声）→ **整行缺席**（AGENTS §1.2-8：缺数据/无信息量不投喂，
+      不留一个字）；
     - **公告标题/正文不进叙事**（只出计数与上游数据日期；内容消费另行裁决）；
-    - 计数为 0 是真实计数照常带出（字段在场≠缺失，不混淆 AGENTS §4.0）；
     - 部分计数缺位 → 缺位项「不可考」逐项带出（partial，不补 0）；
-    - poolMissing → 「公告计数语料不可考（原因）」，不伪装「今日不在涨停池」。
+    - 计数统计窗口上游未标注：口径注只留 notice_items.window_note 结构化字段。
     entries 空 → None（调用方不出行）。
     """
     if not entries:
         return None
     label_cn = {"announcement": "公告", "report": "研报", "news": "新闻"}
     parts: list[str] = []
-    window_notes: list[str] = []
     for entry in entries:
         label = str(entry.get("label") or "").strip() or "该股"
         item = entry.get("item")
-        pool_missing = str(entry.get("poolMissing") or "").strip()
+        # 信息量门槛：取不到/公告与研报均 <1 → 该股缺席，不占行（AGENTS §1.2-8）
         if not isinstance(item, dict):
-            if pool_missing:
-                txt = (f"公告计数语料不可考"
-                       f"（{_NOTICE_MISSING_CN.get(pool_missing, pool_missing)}）")
-            else:
-                txt = "不可考（今日不在涨停池）"
-            parts.append(f"{label}={txt}")
+            continue
+        counts = item.get("counts") or {}
+        core = [counts.get(k) for k in ("announcement", "report")]
+        if not any(isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 1
+                   for v in core):
             continue
         counts = item.get("counts") or {}
         segs: list[str] = []
@@ -1406,12 +1384,10 @@ def notice_count_line(entries: list[dict]) -> str | None:
         if date_txt:
             segs.append(f"数据日期 {date_txt}")
         parts.append(f"{label}：{'/'.join(segs)}")
-        wn = str(item.get("window_note") or "").strip()
-        if wn and wn not in window_notes:
-            window_notes.append(wn)
-    head = "公告计数（KPL 公告/研报/新闻）"
-    if window_notes:
-        head += "（" + window_notes[0] + "）"
+    head = "公告计数"
+    if not parts:
+        # 全员缺数据/无信息量 → 整行缺席，不留空头（AGENTS §1.2-8）
+        return None
     return head + "：" + "；".join(parts)
 
 
@@ -1421,10 +1397,10 @@ def zt_gene_line(entries: list[dict]) -> str | None:
     `entries` = [{"label": "主板龙一 000525", "item": gene_item | None}, ...]；item 取自
     `kpl_daban_pool.gene_items`（`load_gene_corpus` 读口，单一事实源）：
     {stock_id, gene{六字段}, raw, window_note, fetched_date, same_day}。
-    - 上游未标注统计窗口 → 口径注原样带出（**不得**写成「近 N 日」）；
-    - 回填条目（same_day=False，抓取日晚于日档交易日 → 值含此后信息）逐条标注抓取日，
-      防被当「该日盘后已知信息」；
-    - 缺位/无该股语料 → 「不可考」，不补 0 不猜。
+    - 回填条目（same_day=False，取值日晚于日档交易日 → 值含此后信息）作为数据事实
+      最简带出；
+    - 缺位/无该股语料/六字段全缺 → 该股**整段缺席**（AGENTS §1.2-8：缺数据不投喂
+      「不可考」占位）；全部缺 → None（整行不出）。缺席状态只留 gene_items 落库字段。
     entries 空 → None（调用方不出行）。
     """
     if not entries:
@@ -1437,23 +1413,27 @@ def zt_gene_line(entries: list[dict]) -> str | None:
         label = str(entry.get("label") or "").strip()
         item = entry.get("item") or {}
         gene = item.get("gene") or {}
-        if not gene:
-            parts.append(f"{label}=不可考" if label else "不可考")
+        # 信息量门槛：六字段全缺/无该股语料 → 该股缺席，不占行（AGENTS §1.2-8）
+        if not any(isinstance(v, (int, float)) and not isinstance(v, bool)
+                   for v in gene.values()):
             continue
         seg = "、".join(f"{cn}{_gene_num(gene.get(k))}{unit}"
                         for k, cn, unit in GENE_CN)
         parts.append(f"{label}={seg}" if label else seg)
-        if str(item.get("window_note") or "").strip():
-            notes.append("统计窗口上游未标注")
+        # 语料卫生红线（AGENTS §1.2-8）：口径注（统计窗口上游未标注等）不进叙事，
+        # 只留在 gene_items.window_note 结构化字段；回填时点作为数据事实最简带出。
         if item.get("same_day") is False and str(item.get("fetched_date") or "").strip():
             backfill_dates.append(str(item["fetched_date"]).strip())
             backfill_codes.append(str(item.get("stock_id") or "").strip() or "该股")
-    # 回填披露（值含抓取日之后的信息）：同一抓取日聚合一条，多日逐股点名（防误当该日盘后已知）
+    # 回填披露（值晚于交易日）：同一日期聚合一条，多日逐股点名（防误当该日盘后已知）
     if len(set(backfill_dates)) == 1:
-        notes.append(f"{backfill_dates[0]} 抓取含此后信息")
+        notes.append(f"数据时点 {backfill_dates[0]}，晚于交易日")
     elif backfill_dates:
-        notes.extend(f"{code} 抓取于 {d}" for d, code in zip(backfill_dates, backfill_codes))
+        notes.extend(f"{code} 数据时点 {d}" for d, code in zip(backfill_dates, backfill_codes))
     head = "涨停基因（" + "、".join(dict.fromkeys(notes)) + "）" if notes else "涨停基因"
+    if not parts:
+        # 全员缺语料/全缺 → 整行缺席，不留空头（AGENTS §1.2-8）
+        return None
     return head + "：" + "；".join(parts)
 
 
@@ -1507,18 +1487,12 @@ def _seal_time_seg(item: dict) -> str:
     if last is None:
         return f"首板 {first}"
     if last < first:
-        return f"首板 {first}（时点异常：最后涨停早于首板，原样 {last}）"
+        return f"首板 {first}（时点异常：最后涨停早于首板，原始值 {last}）"
     if last > first:
         return f"首板 {first}（回封 {last}）"
     return f"首板 {first}"        # 早于此刻的采集帧不是收盘帧，封单仍在变动
-# 涨停池语料整体缺失的降级原因 → 行内中文化（评审 2026-11-08 P1：读不到 ≠ 不在池，
-# 禁止把「档案缺失」伪装成「今日不在涨停池」这个具体事实）
-_POOL_MISSING_CN = {
-    "no_archive": "涨停池日档缺失",
-    "pool_empty": "涨停池当日为空",
-    "load_error": "涨停池读口异常",
-    "invalid_lane": "涨停池通道非法",
-}
+# 涨停池语料整体缺失的降级原因 code（评审 2026-11-08 P1：读不到 ≠ 不在池，禁止伪装）
+# 只随结构化返回透出，中文化映射已随语料卫生红线撤出叙事。
 
 
 def _fmt_amount_yuan(val: float) -> str:
@@ -1607,13 +1581,13 @@ def seal_quality_line(entries: list[dict]) -> str | None:
     frames = list(dict.fromkeys(str(e.get("frameAt") or "").strip()
                                 for e in entries if str(e.get("frameAt") or "").strip()))
     if not frames:
-        head = "封板质量（KPL 涨停池采集帧不可考"
+        head = "封板质量（时点不可考"
     elif len(frames) == 1:
-        head = f"封板质量（KPL 涨停池 {frames[0]} 采集帧"
+        head = f"封板质量（{frames[0]}"
         if frames[0] < _SEAL_CLOSE_FRAME:
             head += "，非收盘帧"
     else:
-        head = "封板质量（KPL 涨停池采集帧各异"
+        head = "封板质量（各股时点不同"
     head += "）"
 
     parts: list[str] = []
@@ -1622,23 +1596,18 @@ def seal_quality_line(entries: list[dict]) -> str | None:
         item = entry.get("item")
         unsealed = bool(entry.get("unsealed"))
         frame = str(entry.get("frameAt") or "").strip()
-        pool_missing = str(entry.get("poolMissing") or "").strip()
+        # poolMissing（缺档/不在池归因）只随结构化落库载荷透出，不进叙事（AGENTS §1.2-8）
         if not isinstance(item, dict):
             if unsealed:
-                txt = "今日未封板（无当日封单，本行不适用）"
-            elif pool_missing:
-                txt = (f"涨停池语料不可考"
-                       f"（{_POOL_MISSING_CN.get(pool_missing, pool_missing)}）")
-            else:
-                txt = "不可考（今日不在涨停池）"
-            parts.append(f"{label}={txt}")
+                # 今日未封板是判读事实（题面续板⑤），保留；缺档/不在池 → 整段缺席
+                parts.append(f"{label}=今日未封板（无当日封单）")
             continue
         broken = str(item.get("pool_state") or "").strip() == "broken"
         if unsealed and not broken:
             # 评审 P2：推导侧（leaderSealedToday=False）与池档 sealed 矛盾时显式披露，不静默吞
             conflict = str(item.get("pool_state") or "").strip() == "sealed"
-            txt = ("今日未封板（无当日封单，本行不适用"
-                   + ("；涨停池仍标 sealed，两源口径差）" if conflict else "）"))
+            txt = ("今日未封板（无当日封单）" if not conflict
+                   else "今日未封板（无当日封单；池档仍标封住）")
             parts.append(f"{label}={txt}")
             continue
 
@@ -1646,9 +1615,8 @@ def seal_quality_line(entries: list[dict]) -> str | None:
         basis, mult = _seal_unit(item)
         zt = _qnum(item.get("zt_tur"))
         rf = _qnum(item.get("real_float"))
-        if basis == "missing":
-            segs.append("封单不可考")
-        elif basis in ("yuan", "hand"):
+        # 信息量门槛（AGENTS §1.2-8）：不可考占位段不投喂，缺位项直接缺席
+        if basis in ("yuan", "hand"):
             val = zt * mult
             seg = f"封单 {_fmt_amount_yuan(val)}"
             if rf is not None and rf > 0:
@@ -1657,17 +1625,18 @@ def seal_quality_line(entries: list[dict]) -> str | None:
             mx = _qnum(item.get("max_zt_tur"))
             if mx is not None and mx > 0:
                 mxv = mx * mult
-                # 峰值复用同一 mult（同属封单族 quotas 列），但独立做量级校验：
-                # 峰值占实际流通超出 (0, 100%] 物理不可能 → 口径自证未过，不出读数
-                if rf is not None and rf > 0 and not (0 < mxv / rf <= 1.0):
-                    segs.append("峰值封单不可考（口径自证未过）")
-                else:
+                # 峰值复用同一 mult（同属封单族 quotas 列）；占实际流通超出 (0, 100%]
+                # 物理不可能 → 口径自证未过，该段缺席不出读数
+                if rf is None or rf <= 0 or (0 < mxv / rf <= 1.0):
                     segs.append(f"峰值封单 {_fmt_amount_yuan(mxv)}"
                                 f"（现为峰值 {val / mxv * 100:.0f}%）")
-        else:
-            tag = "单位待校验" if basis == "unknown" else "单位待校验（缺实际流通无法自证）"
+        elif basis == "unknown" or basis == "unverified":
+            # 「单位待校验」为题面 v16 判据引用的固定字样，不改写；缺实际流通为数据事实
+            tag = "单位待校验" if basis == "unknown" else "单位待校验（缺实际流通）"
             segs.append(f"封单 {_raw_num(zt)}（{tag}）")
-        segs.append(_seal_time_seg(item))
+        time_seg = _seal_time_seg(item)
+        if not str(time_seg).startswith("首板时点不可考"):
+            segs.append(time_seg)
         rt = _qnum(item.get("real_turnover"))
         if rt is not None:
             segs.append(f"实际换手 {rt:.1f}%")
@@ -1679,39 +1648,37 @@ def seal_quality_line(entries: list[dict]) -> str | None:
                 seg += f"=成交额 {mn / amt * 100:+.1f}%"
             segs.append(seg)
 
-        body = "；".join(segs) if segs else "不可考"
+        body = "；".join(segs)
         if unsealed and broken:
-            frame_txt = f"（最后封住帧 {frame}）" if frame else ""
-            parts.append(f"{label}=今日曾封后炸板未回封{frame_txt}：{body}")
+            frame_txt = f"（最后封住 {frame}）" if frame else ""
+            parts.append(f"{label}=今日曾封后炸板未回封{frame_txt}"
+                         + (f"：{body}" if body else ""))
+            continue
+        if not segs:
+            # 无任何可读量价 → 该股缺席，不占行（AGENTS §1.2-8）
             continue
         if broken:
-            frame_txt = f"最后封住帧 {frame}，" if frame else ""
+            frame_txt = f"最后封住 {frame}，" if frame else ""
             body = f"〔{frame_txt}其后炸板未回封〕{body}"
         if len(frames) > 1 and frame:
-            body += f"〔帧 {frame}〕"
+            body += f"〔{frame}〕"
         parts.append(f"{label}：{body}" if label else body)
+    if not parts:
+        # 全员无信息量 → 整行缺席，不留空头（AGENTS §1.2-8）
+        return None
     return head + "：" + "；".join(parts)
 
 
-def plate_strength_line(match: dict) -> str:
+def plate_strength_line(match: dict) -> str | None:
     """板块强度行（v12 G2）：KPL 层1 RealRankingInfo（`get_sector_ranking`，按日查史口径）。
 
     `match` 由调用方组装（取数/匹配一次，全板块共用）：
     - {ok: True, rank, total, name, strength, pct} → 当日排名/强度/涨幅；
-    - {ok: False, reason: "unmatched"} → 名称桥未匹配（fail-visible，不猜近似）；
-    - {ok: False, reason: "fetch_failed: ..."} → 接口异常；
-    - 缺字段行如实「不可考」，不掩盖。v1 为当日单点（序列扩展另行立项，预登记 §9）。
+    - {ok: False, ...} → **整行缺席**（AGENTS §1.2-8：缺数据不投喂占位，未匹配/异常
+      状态只留结构化落库字段）。v1 为当日单点（序列扩展另行立项，预登记 §9）。
     """
     if not isinstance(match, dict) or not match.get("ok"):
-        reason = str((match or {}).get("reason") or "unknown")
-        # 2026-10-30g：工程词中文化（unmatched/fetch_failed），降级原因不带括号
-        if reason == "unmatched":
-            reason = "未匹配到 KPL 板块"
-        elif reason.startswith("fetch_failed"):
-            reason = "接口异常 " + reason.split(":", 1)[-1].strip()
-        elif reason.startswith("payload_not_ok"):
-            reason = "上游返回异常 " + reason.split(":", 1)[-1].strip()
-        return f"板块强度：不可用，{reason}"
+        return None
     rank, total = match.get("rank"), match.get("total")
     rank_txt = (f"#{rank}/{total}" if isinstance(rank, int) and isinstance(total, int)
                 else "排名不可考")
@@ -1737,11 +1704,11 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     待判龙一 + 板内封板成员；板块级=双龙一 + 板内封板成员；可带交易所前缀，取后 6 位）；
     `roles` = code(后 6 位) → 身位（如「待判龙一」「主板龙一」），缺省「相关个股」。
 
-    四种结构化状态全 fail-visible（§4.0，不伪装、不插值、不给方向结论）：
-    - 取数失败/双端点均不可用 → 「--（reason）」；
-    - 当日分组榜单未生成（榜约盘后生成；挂链 17:30（2026-10-30 改时）晚于生成时点，
-      日常可得，上游延迟未生成时才出本状态）→ 显式披露 orderSign；
-    - 榜单已生成但相关个股 0 只上榜 → 显式披露 0 只（事实陈述，非方向信号）；
+    四种结构化状态（§4.0，不伪装、不插值、不给方向结论）：
+    - 取数失败/双端点均不可用/当日分组榜单未生成 → **整行缺席**（AGENTS §1.2-8：
+      缺数据不投喂占位；缺席状态只留 collect_lhb_facts 的结构化降级载荷）；
+    - 榜单已生成且全市场无上榜 → 「当日全市场无上榜个股」（验证后的缺席，一行事实）；
+    - 榜单已生成但相关个股 0 只上榜 → 显式披露 0 只（事实陈述）；
     - 有相关上榜 → 按传入 codes 顺序（龙一优先）列主力净额/买/卖（元→亿）与上榜原因。
     席位/机构扩维（2026-10-30c）：相关个股若在 GetStockList 营业部个股榜/GetAgencyListV2
     机构榜（同 facts 归一层，逐端点 fail-visible），追加「席位买入 X亿」「机构净买 X亿
@@ -1754,18 +1721,10 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     head = "龙虎榜："
     stocks = [s for s in (facts or {}).get("stocks") or [] if isinstance(s, dict)]
     if not stocks:
-        if (facts or {}).get("empty_structured"):
-            return head + "--，当日分组榜单未生成，缺当日事实≠无上榜"
-        reason = str((facts or {}).get("reason")
-                     or ("当日无上榜个股行" if (facts or {}).get("ok") else "无数据"))
-        # 2026-10-30g+：工程词中文化（用户裁决），降级原因不带括号
-        if reason == "no_data":
-            reason = "无数据"
-        elif reason.startswith("lhb_list_fetch_failed"):
-            reason = "榜单拉取失败 " + reason.split(":", 1)[-1].strip()
-        elif reason.startswith("fetch_failed"):
-            reason = "榜单拉取失败 " + reason.split(":", 1)[-1].strip()
-        return f"{head}--，{reason}"
+        # 缺数据（取数失败/榜单未生成）→ 整行缺席；确认全市场无上榜才留一行事实
+        if (facts or {}).get("ok") and not (facts or {}).get("empty_structured"):
+            return head + "当日全市场无上榜个股"
+        return None
     by_code = {str(s.get("code") or "")[-6:]: s for s in stocks if str(s.get("code") or "")[-6:]}
     ordered: list[str] = []
     for c in (codes or []):
@@ -1774,7 +1733,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
             ordered.append(k)
     if not ordered:
         return (head + f"当日全市场上榜 {len(stocks)} 只，"
-                "本叙事相关个股 0 只上榜（事实披露，非方向信号）")
+                "本叙事相关个股 0 只上榜")
 
     def _seg(k: str) -> str:
         s = by_code[k]
@@ -1796,9 +1755,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
         return seg
 
     parts = [_seg(k) for k in ordered[:max_items]]
-    more = len(ordered) - max_items
-    tail = f"（另 {more} 只相关上榜略）" if more > 0 else ""
-    return head + "；".join(parts) + tail
+    return head + "；".join(parts)
 
 
 def market_summary_line(entry: dict | None) -> str | None:
@@ -1811,8 +1768,8 @@ def market_summary_line(entry: dict | None) -> str | None:
         return None
     comment = str(entry.get("comment") or "").strip()
     if len(comment) > 600:
-        comment = comment[:600] + f"…[截断，原文 {len(comment)} 字]"
-    return f"盘面总结（KPL 15:00）：{comment}"
+        comment = comment[:600] + "…"
+    return f"盘面总结：{comment}"
 
 
 def rebound_popularity_line(event: dict | None, pool_row: dict | None,
@@ -1859,10 +1816,9 @@ def rebound_popularity_line(event: dict | None, pool_row: dict | None,
             for d in wc)
         lines.append(f"窗内逐日表现（逆势观察，断板日起）：{seg}")
     else:
-        lines.append("窗内逐日表现：缺失（日线不可考，fail-visible）")
+        lines.append("窗内逐日表现：缺失")
     if isinstance(board_n, int):
-        lines.append(f"板内跟随：当日板内上板 {board_n} 家（含龙头自身；"
-                     f"{'>=2 有跟随' if board_n >= 2 else '仅龙头 1 家无跟随'}）")
+        lines.append(f"板内跟随：当日板内上板 {board_n} 家（含龙头自身）")
     else:
         lines.append("板内跟随：当日板内上板家数不可考")
     if cycle:
@@ -1871,10 +1827,9 @@ def rebound_popularity_line(event: dict | None, pool_row: dict | None,
                                           str(cycle.get("state")))
         rnd = cycle.get("cycleRound")
         lines.append("周期背景：" + (st_cn or "不可考")
-                     + (f"·第{int(rnd) + 1}轮" if isinstance(rnd, int) and rnd >= 1 else "")
-                     + "（状态机事实，只披露）")
+                     + (f"·第{int(rnd) + 1}轮" if isinstance(rnd, int) and rnd >= 1 else ""))
     else:
-        lines.append("周期背景：不可考（无当日状态机行）")
+        lines.append("周期背景：不可考")
     return "\n".join(lines)
 
 
@@ -1887,14 +1842,16 @@ def structure_facts_line(row: dict, cycle: dict | None = None) -> str:
     """v15 P1（预登记 theme-leader-v15-seal-calibration-preregistration-20261104）：
     结构事实行——程序直读的强校准变量并列披露，随龙头叙事投喂。
 
-    Q8:A 边界：行首显式标注「供校准参考 · 不作判据」，题面判据不引用本行，不仲裁档位。
+    Q8:A 边界：行首「供校准参考 · 不作判据」标注已随语料卫生红线（AGENTS §1.2-8）
+    撤出叙事——题面判据仍不引用本行、不仲裁档位，该约束由题面与结构化记录承载。
+    （原行首标注进语料属开发注释，浪费 token 且每次构建叙事都会重新堆积。）
     四字段（归因文档 §2 分判度排序头部）：周期状态（theme_cycle 当态，join 于 operations 层）/
     当日封板（False=断板反包候选，v12/v13 语义）/ 真连板高度 / 板内梯队家数。
     缺失字段显式「不可考」，不伪造不缺行（§4.0：fail-visible，行恒在）。
     """
     cycle = cycle or {}
     st_cn = cycle.get("stateCn") or CYCLE_STATE_CN.get(cycle.get("state"))
-    parts = ["周期状态=" + (str(st_cn) if st_cn else "不可考（周期未回填）")]
+    parts = ["周期状态=" + (str(st_cn) if st_cn else "不可考")]
     sealed = row.get("leaderSealedToday")
     if sealed is True:
         parts.append("今日已封板=是")
@@ -1906,7 +1863,11 @@ def structure_facts_line(row: dict, cycle: dict | None = None) -> str:
     parts.append("真连板高度=" + (f"{streak} 板" if streak is not None else "不可考"))
     ladder = row.get("ladderFollowers")
     parts.append("板内梯队=" + (f"{ladder} 家" if ladder is not None else "不可考"))
-    return "结构事实（程序直读 · 供校准参考 · 不作判据）：" + "｜".join(parts)
+    # 全字段不可考 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）；行恒在仅对
+    # 「有任一字段在场」成立，全缺时不留一行字
+    if all("不可考" in p for p in parts):
+        return None
+    return "结构事实：" + "｜".join(parts)
 
 
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,

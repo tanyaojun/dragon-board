@@ -716,14 +716,11 @@ def theme_evidence_lines(db: Any, date: str, top: int = 3) -> list[str]:
         return ["题材证据：韭研 final 缺失"]
     state = corpus_state(db, date=date)
     if not state.get("ok"):
-        return ["题材证据：语料未采集，无数据 ≠ 无催化"]
-    stale_txt = (f"，语料最近采集日 {state.get('latestFetchDate')}，非当日"
-                 if state.get("stale") else "")
-    # v4 换源（2026-10-23）：事件层唯一权威源=开盘啦；题材证据行为派生锚（非主锚），
-    # 来源标签随换源更新，已登记不重放（theme-corpus-extra-sources-survey-20261023.md §8）。
-    lines = [f"题材证据（top3 板块；取数日 {date}，"
-             f"产业树 {state.get('industry')} 节点 / 事件 {state.get('topic')} · "
-             f"新闻 {state.get('news')} · 日历 {state.get('calendar')} 条{stale_txt}）："]
+        # 语料卫生红线（AGENTS §1.2-8）：判据注「无数据 ≠ 无催化」不进叙事
+        return ["题材证据：语料未采集"]
+    # 语料卫生红线（AGENTS §1.2-8）：取数日/语料条数/采集日属开发诊断，不进叙事；
+    # 新鲜度已由各条目的日期字段承载。
+    lines = ["题材证据（top3 板块）："]
     names = sorted(cur_b, key=lambda k: -len(cur_b[k]))[:top]
     for name in names:
         block = build_theme_evidence_block(db, board_name=name, date=date,
@@ -731,8 +728,6 @@ def theme_evidence_lines(db: Any, date: str, top: int = 3) -> list[str]:
         body = block["text"].splitlines()
         if body and body[0].startswith(BLOCK_HEADER):
             body = body[1:]
-            if body and body[0].startswith("取数日"):
-                body = body[1:]  # 已上提段头
         lines.append(f"· {name}｜" + "\n  ".join(body))
     return lines
 
@@ -836,9 +831,9 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5,
     ledger = ledger_leaders(db, date)
     ledger_anchored = ledger is not None
     if ledger is not None:
-        lines.append("·龙一=板块节点空间龙一档（v5）")
+        lines.append("·龙一=板块节点空间龙一档")
     else:
-        lines.append("·龙一档缺失/非v5，龙序回退区间高度口径（fail-visible）")
+        lines.append("·龙一档缺失，龙序按区间高度")
     ranked_names = sorted(cur_b, key=lambda k: -len(cur_b[k]))
     # 主线板块强制纳入 top5（家数多≠主线；用户 2026-10-19 裁决口径）
     if mainline and mainline in cur_b and mainline not in ranked_names[:top]:
