@@ -180,6 +180,22 @@ def daban_pool(date: str = "") -> JSONResponse:
     return _load_daban_lane_day(date, lane="pool")
 
 
+@router.get("/daban-lead")
+def daban_lead(date: str = "") -> JSONResponse:
+    """板块身位（龙头三合一）按日存档读口（2026-11-10 用户需求「当日实时身位 + 落库」）。
+
+    数据源=本地 MongoDB kpl_daban_pool lead_ 前缀字段（DabanPoolArchiver 每轮在涨停池
+    通道后计算落库：候选池=当日封板池∪近3交易日封板池，按 plate_id 分组，龙一=三合一
+    空间龙一（rank_board_stocks_seal 单源），龙二..N=dragon_rows 口径补位；断板候选
+    sealed_today=False、跌停剔除/缺日/缺 gain 全部结构化披露）。背景：KPL 官方当日
+    身位无上游面（层3 ZhiShuStockList_W8 当日盘中 1020 实测四形态；3001 quotas 无
+    身位列；GetSection SectionID 属文章卡 id 空间），旧 live-stocks-meta 盘中回退
+    上一交易日=混日误读，板块行情页领涨列改读本口。
+    无档返回结构化 no_lead_corpus（fail-visible，不回退别日冒充）。
+    """
+    return _load_daban_lane_day(date, lane="lead")
+
+
 @router.get("/daban-bidding")
 def daban_bidding(date: str = "") -> JSONResponse:
     """集合竞价（2103 pidType=8）按日存档读口（2026-11-08 历史回放）。

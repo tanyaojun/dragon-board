@@ -299,6 +299,9 @@ def load_day(db: Any, date: str, *, lane: str = "pool") -> dict[str, Any]:
     """
     if lane == "theme":
         return load_theme_corpus(db, date)
+    if lane == "lead":
+        from backend.services.kpl_lead_service import load_lead_corpus
+        return load_lead_corpus(db, date)
     if lane == "notice":
         return load_notice_corpus(db, date)
     if lane == "reason":
@@ -1025,6 +1028,18 @@ class DabanPoolArchiver:
             # 推送即落库（单写者），本服务不再轮询这两通道；本轮结果仅标注迁移态。
             results["reason"] = {"ok": True, "note": "moved_to_collector_push_time"}
             results["theme"] = {"ok": True, "note": "moved_to_collector_push_time"}
+            # 板块身位通道（2026-11-10 用户需求「当日实时身位 + 落库」，龙头三合一口径）：
+            # 依赖当日池档（streak/断板候选回溯），故在 pool 通道归档成功后执行；
+            # TDX 日线取数在进程内缓存（首拉冻结，与三合一链同哲学），同步计算走 to_thread。
+            try:
+                if pool_date:
+                    from backend.services.kpl_lead_service import compute_and_archive_lead
+                    results["lead"] = await asyncio.to_thread(
+                        compute_and_archive_lead, self._database_factory(), pool_date)
+                else:
+                    results["lead"] = {"ok": False, "reason": "no_pool_date"}
+            except Exception as error:
+                results["lead"] = {"ok": False, "reason": f"archive_failed:{error}"}
             # 涨停基因语料（2026-11-08，题材龙头语料投喂 jev）：HTTP 单股逐发（协议层
             # _post_form 全局 ≥2s 限频），每轮限量 gene_limit 只，缺失优先、收盘后刷终值。
             # 日期来源：①当轮涨停池快照交易日 ②快照缺失（采集器未运行/周末重启）时回退

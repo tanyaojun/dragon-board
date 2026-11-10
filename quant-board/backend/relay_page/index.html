@@ -5523,6 +5523,7 @@ const KPL = {
   // stockBatch=已加载缓冲（多批累加），stockBatchHasMore=服务端是否还有下一批；
   // stockResolvedKey/stockEffDate=有效日期解析缓存
   stockViewPage: 0, stockBatch: [], stockBatchHasMore: true, stockSeq: 0,
+  stockSort: {key: 'lead', dir: 1},       // 成分股表头排序；默认领涨升序（切板块/切日期重置）
   stockEnsureP: null,   // 取批串行化在飞链（2026-11 review：防并发双拼）
   stockResolvedKey: '', stockEffDate: null, stockResolving: false,
   universeIds: [],      // 引导出的板块订阅宇宙（成分股代码并入订阅时必须带上）
@@ -5554,6 +5555,10 @@ const KPL = {
   ztReasons: {at: 0, loading: false, byId: null, note: ''},   // 2203 涨停原因推送快照（试点：涨停池页 tooltip 详情；stock_id → 详情）
   ztReasonsArch: {byKey: {}, queue: [], pumping: false, note: '', bgCount: 0},   // 涨停原因全文·历史档案懒取（key=date|stock_id）
   ztAggSort: {key: 'n', dir: -1},                        // 涨停行情左表排序（默认按涨停家数；键=组对象字段名 a.n，2026-11-08 修复）
+  // 板块身位（龙头三合一，2026-11-10）：/daban-lead 日档，plate_id → {code: 行}
+  // 背景：KPL 官方当日身位无上游面（层3 当日盘中 1020；3001 quotas 无身位列），
+  // 旧 live-stocks-meta 盘中回退昨日=「昨日身位+今日行情」混日误读，板块行情页弃用。
+  lead: {map: {}, date: '', at: 0, failedAt: null, note: ''},
   bidAggSort: {key: 'n', dir: -1},                       // 集合竞价左表排序（默认按家数，板块行情同款）
   poolAggSort: {kplzb: {key: 'n', dir: -1}, kpldt: {key: 'n', dir: -1}},   // 炸板池/跌停池左表排序（参照涨停行情，默认按家数）
   // 龙虎榜（2112/3004 快照 + HisBeOnTheLHB 历史，2026-10-29 三期）：读口 fail-visible
@@ -5572,7 +5577,10 @@ const KPL = {
 };
 // quotas 语义索引：[2]涨幅% [3]成交额 [7]/[8]/[9]主力买/卖/净（东财独立源核实）；
 // [56]=板块强度（2026-10-27 双源对账：80 板块 55 个与 HTTP 排行强度误差<0.1%，其余为取数时差）
-const KQ = {PRICE: 1, PCT: 2, AMOUNT: 3, VR: 4, MAIN_BUY: 7, MAIN_SELL: 8, MAIN_NET: 9, STRENGTH: 56};
+// q[18] 连板状态串 / q[19] 换手率%：2026-11-10 盘中实弹四股同屏交叉核对（wzslinker 参考值
+// 逐股一致，换手缓变时间差 <0.2pp）；量比无匹配列（q[4]/[16]/[24] 均不符，不猜不映射）。
+const KQ = {PRICE: 1, PCT: 2, AMOUNT: 3, VR: 4, MAIN_BUY: 7, MAIN_SELL: 8, MAIN_NET: 9, STRENGTH: 56,
+            BOARD_STATE: 18, TURNOVER: 19};
 const KPL_WS_URL = 'ws://127.0.0.1:8000/api/kpl/ws/kpl-quotes';
 const KPL_API = 'http://127.0.0.1:8000/api/kpl';   // KPL 取数直连 :8000（CORS 已放开）——绕开 :8008 代理的事件循环阻塞（2026-10-27 用户指路）
 const isKplSector = id => /^8\d{5}$/.test(String(id));
@@ -6024,6 +6032,7 @@ const KPL_STOCK_FETCH_SIZE = 100;   // 服务端一批 100 只（一页=一次�
 const KPL_STOCK_VIEW_SIZE = 20;    // 表格每页显示 20 行（2026-11 用户需求：原一批 100 直接全量展示 → 20 行/页）；一批=5 个显示页
 async function kplLoadStocks(){
   KPL.stockViewPage = 0;           // 点选/切日期：回第 1 显示页
+  KPL.stockSort = {key: 'lead', dir: 1};   // 默认领涨升序
   KPL.stockBatch = []; KPL.stockBatchHasMore = true;   // 已加载缓冲区（服务端一批 100 只累加）
   KPL.stockSeq = (KPL.stockSeq || 0) + 1;   // 竞态序号只在换板块/日期时递增——
   await kplStockEnsureView();      // 翻页递增会把进行中的日期解析作废造成死锁（2026-10-27 实测）
@@ -6117,8 +6126,73 @@ function kplSyncStockSubscription(codes){
   jpost(KPL_API + '/subscriptions', {stock_ids: full, priority_ids: KPL.universeIds})
     .catch(e => { KPL.lastSubSig = ''; kplBanner('成分股实时订阅失败：' + (e.message || e)); });
 }
+// 表头排序（2026-11-10）：键序即列序；默认领涨升序（龙一在前，无身位/缺位恒垫后）。
+// 排序作用于当前已加载缓冲区（懒加载分批，翻页按需续取）；列值与渲染共用
+// kplStockVals 同口径，排序随 WS/身位档刷新重排（实时排序语义）。
+const KPL_STOCK_SORTS = {code: '代码', name: '名称', lead: '领涨', price: '现价', pct: '涨幅%',
+  turnover: '换手%', board: '连板', mnet: '主力净', mbuy: '主力买', msell: '主力卖',
+  vr: '量比', amount: '成交额', concept: '概念'};
+
+// 行展示值统一出口（渲染与排序共用）：WS 实时覆盖列（现价/涨幅/成交额/主力三列/
+// 连板 q[18]/换手 q[19]）在此合并，未到流回退层3 快照（当日层3 1020 回退昨日见 stockEffDate 提示）
+function kplStockVals(r){
+  const it = KPL.mode === 'live' ? KPL.items.get(r.code) : null;
+  const q = it && it.quotas && it.quotas.length ? it.quotas : null;
+  const leadPlate = (KPL.lead.map || {})[String(KPL.selected || '')] || null;
+  const ld = leadPlate ? leadPlate[r.code] : null;
+  const turRaw = q ? q[KQ.TURNOVER] : null;
+  const bs = q ? (q[KQ.BOARD_STATE] || r.board_status || '') : (r.board_status || '');
+  return {code: r.code || '', name: r.name || '', leadRank: ld ? ld.rank : null, live: !!q,
+    price: q ? kq({quotas: q}, KQ.PRICE) : r.price,
+    pct: q ? kq({quotas: q}, KQ.PCT) : r.pct,
+    turnover: (turRaw != null && turRaw !== '' && !isNaN(+turRaw)) ? +turRaw : r.turnover,
+    boardStr: bs, boardBoards: kplBoardBoards(bs),
+    mnet: q ? kq({quotas: q}, KQ.MAIN_NET) : r.main_net,
+    mbuy: q ? kq({quotas: q}, KQ.MAIN_BUY) : r.main_buy,
+    msell: q ? kq({quotas: q}, KQ.MAIN_SELL) : r.main_sell,
+    vr: r.volume_ratio,
+    amount: q ? kq({quotas: q}, KQ.AMOUNT) : r.amount,
+    concept: r.concept || ''};
+}
+
+// 连板串 → 区间板数（仅 UI 排序用，与后端 kpl_lead_service.state_boards 同构；断板态 → 0 垫后）
+function kplBoardBoards(s){
+  const m = /^(?:(\d+)天(\d+)板|(\d+)连板)$/.exec(String(s || ''));
+  if (m) return m[2] != null ? +m[2] : +m[3];
+  return String(s || '') === '首板' ? 1 : 0;
+}
+
+function kplStockSort(key){
+  const s = KPL.stockSort;
+  if (s.key === key) s.dir = -s.dir;
+  else { s.key = key; s.dir = 1; }
+  KPL.stockViewPage = 0;             // 重排回第 1 显示页
+  kplRenderStocks();
+}
+
+// 缺位恒垫后（与方向无关，fail-visible：缺位不冒充 0/最值）；同序保持层3 原始次序（稳定排序）
+function kplSortStockBatch(batch){
+  const {key, dir} = KPL.stockSort;
+  const keyOf = v => ({code: v.code, name: v.name, lead: v.leadRank, price: v.price,
+    pct: v.pct, turnover: v.turnover, board: v.boardBoards, mnet: v.mnet, mbuy: v.mbuy,
+    msell: v.msell, vr: v.vr, amount: v.amount, concept: v.concept})[key];
+  const rows = batch.map(r => ({r, v: kplStockVals(r)}));
+  rows.sort((ea, eb) => {
+    const a = keyOf(ea.v), b = keyOf(eb.v);
+    const missA = a == null || a === '', missB = b == null || b === '';
+    if (missA && missB) return 0;
+    if (missA) return 1;
+    if (missB) return -1;
+    const r = (typeof a === 'string' || typeof b === 'string')
+      ? String(a).localeCompare(String(b), 'zh') : (a - b);
+    return r * dir;
+  });
+  return rows.map(e => e.r);
+}
+
 function kplRenderStocks(){
-  const batch = KPL.stockBatch || [];
+  kplEnsureLead();                                   // 身位（龙头三合一）：惰性拉取 + 45s 节流，历史模式随 KPL.date
+  const batch = kplSortStockBatch(KPL.stockBatch || []);
   const totalViewPages = Math.max(1, Math.ceil(batch.length / KPL_STOCK_VIEW_SIZE));
   if (KPL.stockViewPage >= totalViewPages) KPL.stockViewPage = totalViewPages - 1;   // 越界回缩
   if (KPL.stockViewPage < 0) KPL.stockViewPage = 0;
@@ -6134,36 +6208,71 @@ function kplRenderStocks(){
       + (KPL.selected ? '该板块暂无成分股返回（盘中可能尚未生成，稍后刷新或回看历史日）' : '左侧点选板块查看成分股') + '</td></tr></tbody>';
     return;
   }
-  let html = '<thead><tr><th>代码</th><th>名称</th><th>领涨</th><th>现价</th><th>涨幅%</th>'
-    + '<th>换手%</th><th>连板</th><th>主力净</th><th>主力买</th><th>主力卖</th>'
-    + '<th>量比</th><th>成交额</th><th>概念</th></tr></thead><tbody>';
-  const live = KPL.mode === 'live';
+  const s = KPL.stockSort;
+  const th = k => `<th class="sortable" onclick="kplStockSort('${k}')" title="点击排序">${esc(KPL_STOCK_SORTS[k])}${s.key === k ? (s.dir === 1 ? ' ▲' : ' ▼') : ''}</th>`;
+  let html = '<thead><tr>' + Object.keys(KPL_STOCK_SORTS).map(th).join('') + '</tr></thead><tbody>';
+  const leadPlate = (KPL.lead.map || {})[String(KPL.selected || '')] || null;
   for (const r of rows){
-    // 盘中实时覆盖：个股已并入 socket 订阅时，行情列以 WS quotas 为准（快照兜未覆盖列）
-    const it = live ? KPL.items.get(r.code) : null;
-    const q = it && it.quotas && it.quotas.length ? it.quotas : null;
-    const price = q ? kq({quotas: q}, KQ.PRICE) : r.price;
-    const pct = q ? kq({quotas: q}, KQ.PCT) : r.pct;
-    const amount = q ? kq({quotas: q}, KQ.AMOUNT) : r.amount;
-    const mbuy = q ? kq({quotas: q}, KQ.MAIN_BUY) : r.main_buy;
-    const msell = q ? kq({quotas: q}, KQ.MAIN_SELL) : r.main_sell;
-    const mnet = q ? kq({quotas: q}, KQ.MAIN_NET) : r.main_net;
-    const liveMark = q ? ' title="WS 实时覆盖"' : '';
+    // 展示值与排序共用 kplStockVals（WS 实时覆盖列同口径合并；回退/缺位注记见 kplStockVals 注释）
+    const v = kplStockVals(r);
+    const price = v.price, pct = v.pct, amount = v.amount;
+    const mbuy = v.mbuy, msell = v.msell, mnet = v.mnet;
+    const turnover = v.turnover, boardStatus = v.boardStr;
+    const liveMark = v.live ? ' title="WS 实时覆盖"' : '';
+    // 领涨=龙头三合一身位（kpl_daban_pool lead 通道，当日实时；2026-11-10 用户裁决：
+    // 口径=自家三合一最权威，不做 KPL 官方对照）。候选池=当日封板∪近3日封板，
+    // 非封板系成员无身位 → 如实 '--'（不冒充层3 [24] 的全成员身位）。
+    const ld = leadPlate ? leadPlate[r.code] : null;
+    const leadTitle = ld
+      ? `龙头三合一身位 ${ld.label}（龙一=空间龙一锚 ${ld.leader_basis === 'space_main' ? '主轨' : ld.leader_basis === 'space_growth' ? '双创轨' : '—'}；` +
+        `height=${ld.height ?? '?'} gain10=${ld.gain10 == null ? '不可考' : ld.gain10 + '%'}${ld.sealed_today ? '' : '；断板反包候选（今日未封）'}）`
+      : (KPL.lead.note === 'no_lead_corpus' ? '该日无身位档（lead 通道 2026-11-10 起落库，历史日不回填）'
+        : KPL.lead.failedAt ? '身位档读取失败（' + (KPL.lead.note || '') + '）'
+        : (KPL.lead.date && KPL.lead.date !== (KPL.date || KPL.today) ? '' : '非龙头三合一候选（当日封板∪近3日封板），无身位'));
     html += `<tr><td class="kpl-uni">${esc(r.code)}</td><td>${esc(r.name)}</td>`
-      + `<td><span class="badge b-purple">${esc(r.rank_title || '--')}</span></td>`
+      + `<td><span class="badge b-purple"${leadTitle ? ` title="${esc(leadTitle)}"` : ''}>${esc(ld ? ld.label : '--')}</span></td>`
       + `<td class="kpl-uni"${liveMark}>${kfmtNum(price)}</td>`
       + `<td class="kpl-uni ${kcls(pct)}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
-      + `<td class="kpl-uni">${kfmtNum(r.turnover, 1)}</td>`
-      + `<td>${esc(r.board_status || '--')}</td>`
+      + `<td class="kpl-uni">${kfmtNum(turnover, 1)}</td>`
+      + `<td>${esc(boardStatus || '--')}</td>`
       + `<td class="kpl-uni ${kcls(mnet)}">${kfmtAmt(mnet)}</td>`
       + `<td class="kpl-uni ${kcls(mbuy)}">${kfmtAmt(mbuy)}</td>`
       + `<td class="kpl-uni ${kcls(msell)}">${kfmtAmt(msell)}</td>`
-      + `<td class="kpl-uni" title="量比：推断语义">${kfmtNum(r.volume_ratio)}</td>`
+      + `<td class="kpl-uni" title="量比：推断语义">${kfmtNum(v.vr)}</td>`
       + `<td class="kpl-uni">${kfmtAmt(amount)}</td>`
-      + `<td class="kpl-sub">${esc((r.concept || '').slice(0, 24))}</td></tr>`;
+      + `<td class="kpl-sub">${esc(v.concept.slice(0, 24))}</td></tr>`;
   }
   html += '</tbody>';
   $('kplStockTable').innerHTML = html;
+}
+
+// 板块身位（龙头三合一）惰性拉取（2026-11-10）：GET /daban-lead?date=（archiver 每轮
+// 落库，live 模式 60s 粒度新鲜；历史模式随 KPL.date 读档）。无档（no_lead_corpus）
+// → map 清空 + note 透出，badge 全 '--'（不回退别日冒充）；45s 节流 + 日期签名。
+function kplEnsureLead(){
+  const d = KPL.date || KPL.today;
+  if (!d) return;
+  const m = KPL.lead;
+  const now = Date.now();
+  if (m.date === d && now - m.at < 45000) return;
+  if (m.date === d && m.failedAt && now - m.failedAt < 45000) return;   // 失败退避
+  m.date = d; m.at = now; m.failedAt = null;
+  jget(KPL_API + '/daban-lead?date=' + encodeURIComponent(d))
+    .then(r => {
+      if (!r || r.ok === false){
+        m.map = {}; m.note = r && r.reason || 'no_lead_corpus'; m.failedAt = Date.now();
+      } else {
+        const map = {};
+        for (const [pid, b] of Object.entries(r.lead_boards || {})){
+          const byCode = {};
+          for (const it of (b.items || [])) byCode[it.code] = it;
+          map[pid] = byCode;
+        }
+        m.map = map; m.note = '';
+      }
+      kplRenderStocks();
+    })
+    .catch(() => { m.failedAt = Date.now(); m.note = '请求失败'; });
 }
 
 // ---- 直播（2026-10-28）：双流——解说（App 直播页同源 ZhiBoContent，默认）+ 雷达（个股异动 Radar）----

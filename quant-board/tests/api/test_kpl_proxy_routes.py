@@ -709,3 +709,22 @@ def test_daban_genes_route_no_gene_corpus_and_validation(client, monkeypatch):
     assert r.json()["failures"][0]["reason"] == "1020"
     r = client.get("/api/kpl/daban-genes")
     assert r.status_code == 400 and r.json()["degraded"] is True
+
+
+def test_daban_lead_route(client, monkeypatch):
+    """/daban-lead：板块身位读口（2026-11-10），lane=lead 委托 load_day，同款护栏。"""
+    def payload(lane, date):
+        assert lane == "lead"
+        return {"ok": True, "source": "local_archive", "lane": "lead", "date": date,
+                "lead_source": "leader_trinity_v1",
+                "lead_boards": {"801159": {"items": [
+                    {"rank": 1, "label": "龙一", "code": "000001", "sealed_today": True,
+                     "leader_basis": "space_main"}], "n": 1, "gain_unavailable": False}}}
+    _mock_pool_lane(monkeypatch, payload)
+    r = client.get("/api/kpl/daban-lead", params={"date": "2026-11-10"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["lane"] == "lead"
+    assert body["lead_boards"]["801159"]["items"][0]["label"] == "龙一"
+    r2 = client.get("/api/kpl/daban-lead", params={"date": ""})
+    assert r2.status_code == 400        # 日期校验护栏同款

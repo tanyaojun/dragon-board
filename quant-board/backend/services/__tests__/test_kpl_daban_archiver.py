@@ -1117,3 +1117,96 @@ def test_archive_once_fresh_date_still_archives(monkeypatch):
     assert all(res[lane]["ok"] is True for lane in ("pool", "bid", "zb", "dt"))
     row = db._coll.rows["2026-11-09"]
     assert "items" in row and "bid_items" in row and "zb_items" in row and "dt_items" in row
+
+
+# ── 板块身位通道（2026-11-10 用户需求「当日实时身位 + 落库」，龙头三合一） ──────
+
+class _FramesColl:
+    def __init__(self, dates):
+        self._dates = dates
+
+    def find(self, query, projection=None):
+        lo = query.get("tradingDate", {}).get("$lt", "9999")
+        return [{"tradingDate": d} for d in self._dates if d < lo]
+
+
+class _ProjTolerantCollection(_FakeCollection):
+    """lead 通道 find_one 带 projection 实参（生产 Mongo 语义）；假库忽略投影返回整行。"""
+
+    def find_one(self, q, projection=None, sort=None):
+        if set(q) == {"_id"} and isinstance(q.get("_id"), str):
+            row = self.rows.get(q["_id"])
+            return dict(row) if row else None
+        return super().find_one(q, sort)
+
+
+class _LeadAwareDb(_FakeDb):
+    """带 snapshot_frames 的假库（lead 通道 trading_dates_before 交易日轴用）。"""
+
+    def __init__(self, frame_dates):
+        super().__init__()
+        self._coll = _ProjTolerantCollection()
+        self._frame_dates = frame_dates
+
+    def __getitem__(self, name):
+        if name == "snapshot_frames":
+            return _FramesColl(self._frame_dates)
+        return self._coll
+
+
+def test_archive_once_lead_channel(monkeypatch):
+    """lead 通道：pool 归档成功后计算身位落库（lead_ 前缀），fetcher 全桩零真实 TDX。"""
+    import asyncio
+    from backend.services import kpl_daban_archiver as arch
+    from backend.services import kpl_lead_service as lead
+
+    class _S:
+        storage_backend = "mongodb"
+
+    class _Resp:
+        def __init__(self, content):
+            self._c = content
+
+        def json(self):
+            return self._c
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, timeout=None):
+            return _Resp(_snap(100.0, ["000001"], date="2026-11-06")
+                         if url.endswith("pid_type=1") else
+                         {"ok": False, "degraded": True, "reason": "no_daban_list_snapshot"})
+
+    monkeypatch.setattr(arch.httpx, "AsyncClient", _Client)
+    _patch_trading_calendar(monkeypatch)
+    # 红线 7：TDX/涨跌幅取数全桩（默认实现替换，pytest 零真实外部调用）
+    monkeypatch.setattr(lead, "_default_gains_fetcher", lambda c, d: {x: 20.0 for x in c})
+    monkeypatch.setattr(lead, "_default_day_change_fetcher", lambda c, d: {x: -1.0 for x in c})
+    db = _LeadAwareDb(frame_dates=["2026-11-05", "2026-11-04"])
+    archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
+                                 interval_seconds=60, gene_fetcher=_fake_gene,
+                                 clock=_TEST_CLOCK)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]
+    assert res["pool"]["ok"] is True and res["lead"]["ok"] is True
+    assert res["lead"]["boards_n"] == 1
+    row = db._coll.rows["2026-11-06"]
+    lad = row["lead_boards"]["801464"]["items"]
+    assert lad[0]["code"] == "000001" and lad[0]["label"] == "龙一"
+    assert row["lead_source"] == "leader_trinity_v1"
+    assert sorted(row["lead_missing_pool_dates"]) == ["2026-11-04", "2026-11-05"]   # 缺日披露
+    # 历史日缺档：lead 结构化失败不伪装（其它通道不受影响）
+    db2 = _FakeDb()
+    archiver2 = DabanPoolArchiver(settings=_S(), database_factory=lambda: db2,
+                                  interval_seconds=60, gene_fetcher=_fake_gene,
+                                  clock=lambda: datetime(2026, 11, 9, 10, 0, tzinfo=TZ_SHANGHAI))
+    asyncio.run(archiver2._archive_once())
+    assert archiver2.status()["lastResult"]["lead"]["ok"] is False
