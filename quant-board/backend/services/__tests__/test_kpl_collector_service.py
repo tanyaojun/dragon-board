@@ -25,6 +25,7 @@ from backend.services.kpl_collector_service import (  # noqa: E402
     SignSvcAdbCodec,
     SignSvcError,
 )
+from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI  # noqa: E402
 
 NUL2 = b"\x00\x00"  # extlen=0 / status=0 占位
 
@@ -147,6 +148,35 @@ def svc() -> KplCollectorService:
 
 
 class TestSessionStateMachine:
+    def test_loop_send_grace_suppresses_loop_phase_sends(self, monkeypatch):
+        """2026-11-10 假说判别实验：宽限期内读循环零发送（保活/drain 全延后），
+        行情推送照常 dispatch；杀连时刻落在宽限期内→setup 打标定时处决，
+        落在宽限期结束时→循环期发送触发。"""
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+            _echo(6, 3001, 0x01, _quotes_payload()),
+            _push(3001, b"hqList|1:20030/3001-0/", _quotes_payload()),
+        ]
+        svc = KplCollectorService(
+            FakeCodec(), device_id="test-dev", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            loop_send_grace_s=1000,
+        )
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        # 内联订阅链照发（7 帧）；循环期（会话在宽限期内被服务器关连而结束）零发送
+        assert len(fake.sent) == 7
+        assert len(svc._pending_setup_frames) == 49          # daban 队列原封不动
+        assert "grace_end_pending" not in svc._stats         # 宽限期未结束，无打点
+
     def test_full_session_emits_auth_and_quotes(self, svc, monkeypatch):
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
         vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
@@ -166,9 +196,10 @@ class TestSessionStateMachine:
 
         assert len(svc._codec.wbe_calls) == 1
         assert svc._codec.wbe_calls[0][0] == "2db64e49ca378ac2a21331deca1a7425"
-        # 7 基础帧（610/602/2301/2303/2304/3001/3006）+ 7 打板/情绪帧（含 2100 打板头）
-        # + 42 帧 2103（6 页签 8/0/6/1/2/3×7 页；2026-11-07 增补涨停、2026-11-08 增补炸板/跌停页签）
-        assert len(fake.sent) == 56
+        # 2026-11-10 重排：内联仅 7 基础帧（610/602/2301/2303/2304/3001/3006），
+        # daban 家族（7+42 帧）入 _pending_setup_frames 由读循环限流续发；
+        # 剩余响应（echo3001+push3001）供两轮 drain 各发 8 帧，余量留队（本会话丢失自愈）
+        assert len(fake.sent) == 7 + 16
         assert fake.sent[0][7:9] == (610).to_bytes(2, "big")
         assert fake.sent[1][7:9] == (602).to_bytes(2, "big")
         assert fake.sent[2][7:9] == (2301).to_bytes(2, "big")
@@ -176,23 +207,22 @@ class TestSessionStateMachine:
         assert fake.sent[4][7:9] == (2304).to_bytes(2, "big")
         assert fake.sent[5][7:9] == (3001).to_bytes(2, "big")
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
-        # 6c) 打板/情绪订阅帧：2114/2115/2116/2119/2120/2126（ext 路由头 02 <cmdBE>）
-        daban_cmds_sent = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
-        assert daban_cmds_sent == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 42
-        # 2103 分页订阅：6 页签（8/0/6/1/2/3）×7 页，body=0xAA+req → pidType=f1、index=f4、count=f5=30
         from backend.services import kpl_daban_protocol as daban
-        pages = []
-        for f in fake.sent[14:]:
-            req = daban.parse_pb_f32(f[16:])   # 去掉 0xAA 前缀
-            pages.append((daban.pb_first(req, 1, -1), daban.pb_first(req, 4, -1),
-                          daban.pb_first(req, 5, -1)))
-        assert pages == ([(8, i * 30, 30) for i in range(7)]
-                         + [(0, i * 30, 30) for i in range(7)]
+        # 已发 16 帧（2 tick×8）：7 个 21xx cmd + 前 9 页 2103；队列剩余 33 页
+        sent_cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
+        assert sent_cmds == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 9
+        # 队列余量：body=0xAA+req → pidType=f1、index=f4、count=f5=30（从 (0,60) 续起）
+        pages = [(daban.pb_first(daban.parse_pb_f32(it["req"]), 1, -1),
+                  daban.pb_first(daban.parse_pb_f32(it["req"]), 4, -1),
+                  daban.pb_first(daban.parse_pb_f32(it["req"]), 5, -1))
+                 for it in svc._pending_setup_frames]
+        assert len(pages) == 33
+        assert pages == ([(0, i * 30, 30) for i in range(2, 7)]
                          + [(6, i * 30, 30) for i in range(7)]
                          + [(1, i * 30, 30) for i in range(7)]
                          + [(2, i * 30, 30) for i in range(7)]
                          + [(3, i * 30, 30) for i in range(7)])
-        for f, c in zip(fake.sent[7:14], daban_cmds_sent[:7]):
+        for f, c in zip(fake.sent[7:14], sent_cmds[:7]):
             assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
     def test_events_broadcast_to_subscribers(self, svc, monkeypatch):
@@ -504,12 +534,16 @@ class TestForecastLHB2112:
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
-        cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent]
-        # daban_subs=False 时其余 21xx 不发，仅 2112 一帧
-        assert 2112 in cmds and not any(c in (2114, 2115, 2103) for c in cmds)
-        # body = 0xAA + ForecastLHBReq 基线（sortType=1/count=30）
-        f2112 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 2112)
-        assert f2112[16:] == daban.build_forecast_lhb_req_pb()  # FakeCodec.enc 的 0xAA 前缀在 [15]
+        sent_cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent]
+        q_cmds = [it["cmd"] for it in svc._pending_setup_frames]
+        # daban_subs=False 时其余 21xx 不入队，仅 2112 一帧（读循环续发；本例无剩余响应，
+        # 读循环立即退出，2112 留队未发——下一会话重建）
+        assert 2112 in q_cmds and not any(c in (2114, 2115, 2103) for c in q_cmds)
+        assert not any(c in (2114, 2115, 2103, 2112) for c in sent_cmds)
+        # body = ForecastLHBReq 基线（sortType=1/count=30）
+        it2112 = next(it for it in svc._pending_setup_frames if it["cmd"] == 2112)
+        assert it2112["req"] == daban.build_forecast_lhb_req_pb()
+        assert it2112["ext"] == b"\x02" + (2112).to_bytes(2, "big")
 
     def test_2112_push_emits_lhb_forecast(self, svc):
         from backend.services import kpl_daban_protocol as daban
@@ -551,17 +585,19 @@ class TestRealtimeLHB3004:
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
-        cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent]
-        # daban_subs=False 时 21xx 不发，仅 3004 订阅 + 3101 单发两帧
-        assert 3004 in cmds and 3101 in cmds
-        assert not any(c in (2114, 2115, 2103, 2112) for c in cmds)
-        # body = FakeCodec.enc 前缀 0xAA + Req（f2 sortType=1, f4 limitType=4,
+        sent_cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent]
+        q_cmds = [it["cmd"] for it in svc._pending_setup_frames]
+        # daban_subs=False 时 21xx 不入队，仅 3004 订阅 + 3101 单发两帧（读循环续发）
+        assert 3004 in q_cmds and 3101 in q_cmds
+        assert not any(c in (2114, 2115, 2103, 2112) for c in q_cmds)
+        assert not any(c in (2114, 2115, 2103, 2112, 3004, 3101) for c in sent_cmds)
+        # body = Req（f2 sortType=1, f4 limitType=4,
         # f9 bjsType=1, f21 count=120 采集放宽 2026-10-30；零值省略）
-        f3004 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3004)
-        assert f3004[16:] == lhb.build_realtime_lhb_req_pb(count=120)
+        it3004 = next(it for it in svc._pending_setup_frames if it["cmd"] == 3004)
+        assert it3004["req"] == lhb.build_realtime_lhb_req_pb(count=120)
         # 3101 带当日区间 0925→1035（end_time 由 strftime 决定，已固定）+ 同 count
-        f3101 = next(f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3101)
-        assert f3101[16:] == lhb.build_realtime_lhb_req_pb(count=120, start_time=925, end_time=1035)
+        it3101 = next(it for it in svc._pending_setup_frames if it["cmd"] == 3101)
+        assert it3101["req"] == lhb.build_realtime_lhb_req_pb(count=120, start_time=925, end_time=1035)
 
     def test_3004_push_emits_realtime_lhb(self, svc):
         from backend.services import kpl_lhb_protocol as lhb
@@ -757,6 +793,9 @@ class TestZtReasons2203:
             _echo(3, 2301, 0x09, vr_payload),
             _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
             _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+            # 填充响应：2026-11-10 重排后 daban 家族入队由读循环 drain，49 帧≈7 tick；
+            # 需 ≥7 个响应驱动循环，setup 队列清空后 2203 才让位发出
+            *[_echo(6 + i, 3001, 0x01, _quotes_payload()) for i in range(8)],
         ]
         svc = KplCollectorService(
             FakeCodec(), device_id="test-dev", user_id="0", token="",
@@ -991,6 +1030,173 @@ class TestThemeHeat2013:
         assert off._pending_theme == []
         assert off.get_theme_heat()["reason"] == "no_theme_snapshot"
 
+    def test_drain_rate_limited_per_tick(self, svc):
+        """2026-11-10 修复 10054 循环：drain 每 tick 限量 _DRAIN_TICK_FRAMES 帧，
+        余量回队头保序，下一 tick 续发（爆发=机器指纹，§3.4 机制）。"""
+        ids = [f"6000{i:02d}" for i in range(20)]
+        svc._queue_zt_reason_new(ids)
+        sock = FakeSocket([])
+        seq = iter(range(100, 400))
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        assert len(sock.sent) == svc._DRAIN_TICK_FRAMES                 # 第一 tick 只发限量
+        assert svc._pending_zt_reason == ids[svc._DRAIN_TICK_FRAMES:]   # 余量回队头保序
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        assert len(sock.sent) == 2 * svc._DRAIN_TICK_FRAMES
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        assert len(sock.sent) == 20 and svc._pending_zt_reason == []    # 全部发完
+        # 帧号/路由头不变（与限量前同构）：cmd=2203 在 [7:9]
+        assert sock.sent[0][7:9] == proto.CMD_HQ_REASONS.to_bytes(2, "big")
+
+    def test_drain_send_failure_gates_and_emits(self, svc):
+        """sendall 失败：置 _sock_dead 本会话静默，余量丢失（下一会话 6g 自愈），
+        结构化事件 subscribe_send_dropped 带 sent/dropped/lane。"""
+        class DeadSocket(FakeSocket):
+            def __init__(self):
+                super().__init__([])
+                self.n = 0
+
+            def sendall(self, data):
+                self.n += 1
+                if self.n > 2:
+                    raise OSError("[WinError 10054] 远程主机强迫关闭了一个现有的连接")
+                self.sent.append(data)
+
+        ids = [f"6000{i:02d}" for i in range(20)]
+        svc._queue_zt_reason_new(ids)
+        q = svc.subscribe()
+        sock = DeadSocket()
+        seq = iter(range(100, 400))
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        assert svc._sock_dead is True
+        assert len(sock.sent) == 2                                      # 前 2 帧成功后第 3 帧死
+        evs = _drain_q(q)
+        ev = next(e for e in evs if e["type"] == "subscribe_send_dropped")
+        assert ev["lane"] == "zt_reason" and ev["sent"] == 2 and ev["dropped"] == 18
+        assert "10054" in ev["error"]
+        assert svc._stats["zt_reason_send_drops"] == 18
+        # 门禁：后续 drain（含 2013 通道）本会话静默跳过，不再刷错误
+        svc._queue_theme_new(ids)
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        svc._drain_theme_subs(sock, lambda: next(seq))
+        assert len(sock.sent) == 2
+        assert not any(e["type"] == "subscribe_send_dropped" for e in _drain_q(q))
+
+    def test_setup_drain_fifo_and_zt_interleave(self, svc):
+        """2026-11-10 时序竞争修复：三队列每 tick 交错各发 8 帧，语料订阅不再让路
+        daban 页队列（生产实测：让路导致 2203/2013 实际发出已是会话 ~35-46s，
+        响应未回会话即死）。daban 帧 FIFO 8 帧/tick 语义不变。"""
+        from backend.services import kpl_daban_protocol as daban
+        svc._pending_setup_frames.append({
+            "cmd": daban.CMD_DABAN_STOCK_LIST,
+            "req": daban.build_daban_stock_list_req_pb(8, index=0, count=30),
+            "ext": b"\x02" + (2103).to_bytes(2, "big"),
+        })
+        svc._queue_zt_reason_new(["301697", "002614"])
+        sock = FakeSocket([])
+        seq = iter(range(100, 300))
+        # 同一 tick 内：zt 先发（不再看 setup 队列），daban 队列照常 FIFO
+        svc._drain_zt_reason_subs(sock, lambda: next(seq))
+        svc._drain_setup_subs(sock, lambda: next(seq))
+        cmds = [int.from_bytes(f[7:9], "big") for f in sock.sent]
+        assert cmds[0] == proto.CMD_HQ_REASONS and len(sock.sent) == 3
+        assert svc._pending_zt_reason == [] and svc._pending_setup_frames == []
+        # pkg=0x40 订阅路由（2026-11-10 根因修复断言：daban 族帧不得走默认 0x30）
+        assert sock.sent[1][0] == proto.PKG_ROUTE
+
+
+class TestTradingHoursGate:
+    """2026-11-11 交易时段门控：非交易时段不建连（防风控打标累积），时段内自动恢复。"""
+
+    # 2026-11-11 周三 / 2026-11-14 周六
+    @staticmethod
+    def _ts(**kw):
+        """构造 Asia/Shanghai 本地墙钟对应的 UTC epoch（实现用 TZ_SHANGHAI，
+        与宿主机时区无关——评审 P1 验证口径）。2026-11-11 周三 / 11-14 周六。"""
+        import datetime as _dt
+        d = {"year": 2026, "month": 11, "day": 11}
+        d.update(kw)
+        dt = _dt.datetime(d["year"], d["month"], d["day"], d.get("hour", 0),
+                          d.get("min", 0), tzinfo=TZ_SHANGHAI)
+        return dt.timestamp()
+
+    def test_timezone_independent(self, svc):
+        """门控不依赖宿主机时区：同一 UTC 时刻无论宿主机在哪都必须同一判定
+        （评审 P1：用 UTC+14 与 UTC-11 两个极端墙钟构造同一时刻验证）。"""
+        import datetime as _dt
+        utc_moment = _dt.datetime(2026, 11, 11, 3, 0, tzinfo=_dt.timezone.utc).timestamp()
+        assert svc._in_trading_session(utc_moment)          # 上海 11:00 开市中
+        assert not svc._in_trading_session(utc_moment + 8 * 3600 + 60)   # 上海 19:01 已收市
+
+    def test_session_boundaries(self, svc):
+        f = svc._in_trading_session
+        assert not f(self._ts(hour=9, min=14))       # 竞价前
+        assert f(self._ts(hour=9, min=15))           # 集合竞价开始
+        assert f(self._ts(hour=11, min=29))
+        assert not f(self._ts(hour=11, min=30))      # 午间休市
+        assert not f(self._ts(hour=12, min=59))
+        assert f(self._ts(hour=13, min=0))
+        assert f(self._ts(hour=15, min=30))          # 下午收盘 15:30（交易所新规则）
+        assert f(self._ts(hour=15, min=34))          # 收盘后缓冲
+        assert not f(self._ts(hour=15, min=35))
+        assert not f(self._ts(hour=23, min=0))       # 夜间
+        assert not f(self._ts(year=2026, month=11, day=14, hour=10))   # 周六
+
+    def test_run_loop_idles_offhours(self, svc, monkeypatch):
+        """非交易时段 _run_loop 挂起：不建连、状态 idle_offhours、事件可感知。"""
+        monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: False)
+
+        def _fail_connect(*a, **kw):
+            raise AssertionError("off-hours must not connect")
+
+        monkeypatch.setattr(svc, "_tls_connect", _fail_connect)
+        waits = []
+        runtime_status = []
+
+        def _wait(s):
+            waits.append(s)
+            runtime_status.append(svc._status)
+            if len(waits) >= 2:
+                svc._stop.set()
+                return True
+            return False
+
+        monkeypatch.setattr(svc, "_stop", type(svc._stop)())
+        monkeypatch.setattr(svc._stop, "wait", _wait)
+        svc._run_loop()
+        assert svc._stats["sessions"] == 0
+        assert waits == [60.0, 60.0]                 # 每分钟复查，非空转重连
+        assert runtime_status == ["idle_offhours", "idle_offhours"]
+        assert any(e.get("type") == "status" and e.get("status") == "idle_offhours"
+                   for e in svc._history)
+
+    def test_run_loop_resumes_in_session(self, svc, monkeypatch):
+        """idle_offhours → 时段内：发 trading_session_start 事件并正常建连。"""
+        flags = {"in_session": False}
+
+        def _gate(ts=None):
+            return flags["in_session"]
+
+        monkeypatch.setattr(svc, "_in_trading_session", _gate)
+
+        def _wait(s):
+            if s == 60.0:                            # off-hours 复查等待：唤醒后进时段
+                flags["in_session"] = True
+                return False
+            svc._stop.set()                          # 会话后 backoff 等待：结束测试
+            return True
+
+        monkeypatch.setattr(svc, "_stop", type(svc._stop)())
+        monkeypatch.setattr(svc._stop, "wait", _wait)
+
+        def _fail_connect(*a, **kw):
+            raise RuntimeError("probe")
+
+        monkeypatch.setattr(svc, "_tls_connect", _fail_connect)
+        svc._run_loop()
+        assert svc._stats["sessions"] == 1
+        assert any(e.get("type") == "status" and e.get("status") == "trading_session_start"
+                   for e in svc._history)
+
 
 class TestAuthPhaseDelay:
     """2026-11-09 会话抖动根因修复：auth 相位延迟对齐 adb 档（§3.4 单调实证）。"""
@@ -1062,6 +1268,8 @@ class TestAuthPhaseDelay:
         """单会话异常（如 10054 ConnectionResetError）后仍透出会话时长（fail-visible 观测）。"""
         import threading as _t
         import time as _time
+
+        monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)  # 门控不拦（测试任意时刻可跑）
 
         def _reset_after_delay():
             _time.sleep(0.15)

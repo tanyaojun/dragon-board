@@ -29,9 +29,12 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
+import datetime
+
 from backend.services import kpl_daban_protocol as daban
 from backend.services import kpl_lhb_protocol as lhb
 from backend.services import kpl_socket_protocol as proto
+from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 # 与 .tmp_review/kpl_collector.py 一致的连接参数（实测有效组合）
 DEFAULT_HOST = "124.71.0.49"
@@ -245,6 +248,20 @@ class KplCollectorService:
         zt_reason_subs: bool = True,
         theme_subs: bool = True,
         corpus_db_factory: Optional[Any] = None,
+        # 2026-11-10 假说判别实验：读循环开始后前 N 秒纯读不发（保活/drain 全部延后），
+        # 看杀连时刻落在宽限期内（=setup 打标定时处决）还是宽限期结束时（=循环期发送
+        # 触发）。生产经 serve_kpl_socket env KPL_LOOP_SEND_GRACE 传 5；测试传 0。
+        loop_send_grace_s: float = 0.0,
+        # 2026-11-10 实弹定性（探针 E1-E4）：0x40 通道订阅帧（daban 族/2203/2013）
+        # 只允许在 setup 订阅窗口内发送；窗口一关闭，任何后续 0x40 帧 → 服务器回
+        # ErrResp 1002 并断连（抓包实锤，WinError 10053/10054 只是 send 撞上关闭）。
+        # True = 全部订阅内联回 setup（含 2203/2013 全量），读循环期不再发任何 0x40 帧
+        # （会话内新入池成员等下一会话 6g 重建，与既有合同一致）。
+        setup_inline_subs: bool = False,
+        # 交易时段门控（2026-11-11 防患设备风控累积）：非交易时段不建连，_run_loop
+        # 进入 idle_offhours 每分钟复查，下一时段自动恢复。夜间 7×24 TTL 重连的
+        # 纯空转连接是风控打标的累积来源，砍掉后日常连接数降一个数量级。
+        enforce_trading_hours: bool = True,
     ):
         self._codec = codec
         self._host = host
@@ -260,6 +277,14 @@ class KplCollectorService:
         self._human_delay = human_delay
         self._auth_phase_delay = max(0.0, float(auth_phase_delay))
         self._auth_phase_jitter = max(0.0, float(auth_phase_jitter))
+        self._loop_send_grace_s = max(0.0, float(loop_send_grace_s))
+        # drain 帧间停顿（实验旋钮：降速到 App 逐股节奏时调大）；610 重发开关
+        # （App 每连接仅认证一次，重发认证帧是异常指纹候选，实验判别用）
+        self._drain_pause = (0.3, 0.15)
+        self._ka_610 = True
+        self._setup_inline_subs = bool(setup_inline_subs)
+        self._short_session_streak = 0   # 重连螺旋防线：连续短命会话连击数（<60s 计连击）
+        self._enforce_trading_hours = bool(enforce_trading_hours)
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
         self._daban_market_type = daban_market_type
@@ -289,6 +314,10 @@ class KplCollectorService:
         self._zt_reason_snap: Dict[str, Dict[str, Any]] = {}   # stock_id → 推送解析 + ts
         self._zt_reason_subscribed: set = set()
         self._pending_zt_reason: List[str] = []
+        self._sock_dead = False   # 会话内 drain 失败门禁（_session 每会话复位）
+        # 2026-11-10 重排：daban 家族（21xx/2103/2112/3004/3101）不再在 setup 内联发送，
+        # 改为入队由读循环限流续发（_drain_setup_subs）——见 _session 6c 注释
+        self._pending_setup_frames: List[Dict[str, Any]] = []
         self._zt_reason_lock = threading.Lock()
         # 2013 个股题材库热度推送（2026-11-08 题材龙头语料第 2 项）：与 2203 完全同款
         # 模式——订阅面=涨停池（2103 pid=1）成员自动跟随、无退订、每会话重建订阅
@@ -550,30 +579,126 @@ class KplCollectorService:
                                 stock_ids=new_ids))
         return len(new_ids)
 
+    # drain 每 tick 最多发送帧数（2026-11-10 修复 10054 循环）：6g 一次性入队全池成员
+    # ×2 通道 ≈170 帧，原实现零停顿一次性全发——爆发=机器指纹（§3.4 机制），服务器
+    # 在 setup 刚结束时即 RST，drain sendall 撞死 socket → WinError 10054 每会话循环。
+    # 限量+帧间拟人停顿对齐 setup 订阅链已验证安全节奏（0.3+U(0,0.15)s/帧）；余量
+    # 回队头由下一收流 tick 续发（保活/读流不被长时间阻塞）。
+    _DRAIN_TICK_FRAMES = 8
+
+    def _flush_pending_inline(self, sock: Any, next_seq: Any, lane: str) -> None:
+        """2026-11-10 setup_inline_subs 模式：把待发订阅帧在 setup 窗口内一次性
+        内联发完（0x40 帧窗口关闭后发送→ErrResp 1002 断连，探针 E1-E4 实锤）。
+        逐帧拟人停顿（同款节奏）；OSError 直接上抛交给 _run_loop 重连链（此时
+        连接已死，继续 setup 无意义，fail-visible 由 network 错误日志承载）。"""
+        if lane == "setup":
+            items = list(self._pending_setup_frames)
+            self._pending_setup_frames = []
+            for it in items:
+                enc = self._codec.enc(it["req"])
+                # pkg=0x40 订阅路由（2026-11-10 根因修复：daban 族帧此前漏传 pkg，
+                # build_frame 默认 0x30 鉴权通道 + ext 路由头=非法帧，服务器杀连）
+                frame = proto.build_frame(it["cmd"], next_seq(), enc or it["req"], d=0,
+                                          encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=it["ext"])
+                self._human_pause(*self._drain_pause)
+                self._dbg("C", frame)
+                sock.sendall(frame)
+            return
+        lock, pending_ref = ((self._zt_reason_lock, self._pending_zt_reason) if lane == "zt_reason"
+                             else (self._theme_lock, self._pending_theme))
+        with lock:
+            batch = list(pending_ref)
+            pending_ref.clear()
+        ext = bytes([0x02]) + struct.pack(
+            ">H", proto.CMD_HQ_REASONS if lane == "zt_reason" else proto.CMD_STOCK_RELATED_THEME)
+        for sid in batch:
+            req = proto.build_hq_req_pb(sid)
+            enc = self._codec.enc(req)
+            cmd = proto.CMD_HQ_REASONS if lane == "zt_reason" else proto.CMD_STOCK_RELATED_THEME
+            frame = proto.build_frame(cmd, next_seq(), enc or req, d=0,
+                                      encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
+            self._human_pause(*self._drain_pause)
+            self._dbg("C", frame)
+            sock.sendall(frame)
+
+    def _drain_setup_subs(self, sock: Any, next_seq: Any) -> None:
+        """发送待发 setup 订阅帧（daban 家族 21xx/2103/2112/3004/3101，2026-11-10 重排）。
+
+        原 setup 内联串行发完 ~32s 才进读循环，会话在 setup 结束后 ~1s 即被上游
+        RST（last_setup_s=31.9 / last_session_s=32.8），3001 推送窗口≈0.9s → 个股
+        行情全过期。重排后 daban 家族由读循环限流续发（同款 8 帧/tick + 0.3s
+        拟人节奏）；sendall 失败置 _sock_dead（同 2203/2013 门禁），未发帧本会话
+        丢失，下一会话重建。"""
+        if self._sock_dead or self._setup_inline_subs or not self._pending_setup_frames:
+            return   # setup_inline_subs 模式循环期永久静默（0x40 帧窗口外发送=1002 断连）
+        batch = self._pending_setup_frames[:self._DRAIN_TICK_FRAMES]
+        self._pending_setup_frames = self._pending_setup_frames[self._DRAIN_TICK_FRAMES:]
+        sent = 0
+        for item in batch:
+            enc = self._codec.enc(item["req"])
+            frame = proto.build_frame(item["cmd"], next_seq(), enc or item["req"], d=0,
+                                      encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=item["ext"])
+            self._dbg("C", frame)
+            try:
+                if sent:
+                    self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
+                sock.sendall(frame)
+            except OSError as exc:
+                self._sock_dead = True
+                dropped = len(batch) - sent + len(self._pending_setup_frames)
+                self._stats["setup_send_drops"] = self._stats.get("setup_send_drops", 0) + dropped
+                self._err(f"setup subscribe send failed (cmd={item['cmd']}): {exc} "
+                          f"(sent={sent} dropped={dropped}, next-session rebuild)")
+                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                    lane="setup", cmd=item["cmd"],
+                                    sent=sent, dropped=dropped, session=self._session_no,
+                                    error=str(exc)))
+                return
+            sent += 1
+        # 队深观测随 drain 递减（评审 P2：否则 status 读到的是会话初队深非当前队深）
+        self._stats["queued_setup_subs"] = len(self._pending_setup_frames)
+
     def _drain_zt_reason_subs(self, sock: Any, next_seq: Any) -> None:
         """发送待订阅 2203 帧（仅会话线程调用；异常 fail-visible 不杀会话）。
 
-        边界：sendall 失败时剩余 pending 不重入队（本会话丢失），下一会话
-        6g 全量补订自愈（2026-11-08 评审 P2，随 P0 每会话重建订阅修复）。"""
-        if not self._zt_reason_subs:
-            return
+        2026-11-10 修复：限流+拟人停顿（见 _DRAIN_TICK_FRAMES 注释）；sendall 失败
+        → 置 _sock_dead 本会话后续 drain 静默跳过（死 socket 重试只会刷错误），
+        未发帧本会话丢失，下一会话 6g 全量补订自愈（2026-11-08 评审 P2 不变）。"""
+        if not self._zt_reason_subs or self._sock_dead or self._setup_inline_subs:
+            return   # 2026-11-10 时序竞争修复：不再让路 daban 页队列（2203 优先，见读循环注释）
         with self._zt_reason_lock:
             pending = list(self._pending_zt_reason)
             self._pending_zt_reason = []
         if not pending:
             return
+        batch, rest = pending[:self._DRAIN_TICK_FRAMES], pending[self._DRAIN_TICK_FRAMES:]
+        if rest:
+            with self._zt_reason_lock:
+                self._pending_zt_reason[:0] = rest   # 回队头保序，下一 tick 续发
         ext = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_REASONS)
-        for sid in pending:
+        sent = 0
+        for sid in batch:
             req = proto.build_hq_req_pb(sid)
             enc = self._codec.enc(req)
             frame = proto.build_frame(proto.CMD_HQ_REASONS, next_seq(), enc or req,
                                       d=0, encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
             self._dbg("C", frame)
             try:
+                if sent:
+                    self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
                 sock.sendall(frame)
             except OSError as exc:
-                self._err(f"2203 subscribe send failed ({sid}): {exc}")
+                self._sock_dead = True
+                dropped = len(batch) - sent + len(rest)
+                self._stats["zt_reason_send_drops"] = self._stats.get("zt_reason_send_drops", 0) + dropped
+                self._err(f"2203 subscribe send failed ({sid}): {exc} "
+                          f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
+                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                    lane="zt_reason", cmd=proto.CMD_HQ_REASONS,
+                                    sent=sent, dropped=dropped, session=self._session_no,
+                                    error=str(exc)))
                 return
+            sent += 1
 
     def _queue_theme_new(self, stock_ids: List[str]) -> int:
         """新入池成员入队 2013 订阅（与 2203 同款去重；会话线程 drain 发送）。"""
@@ -594,27 +719,43 @@ class KplCollectorService:
         return len(new_ids)
 
     def _drain_theme_subs(self, sock: Any, next_seq: Any) -> None:
-        """发送待订阅 2013 帧（与 _drain_zt_reason_subs 同款边界：send 失败不重入队，
-        下一会话 6g 全量补订自愈）。"""
-        if not self._theme_subs:
-            return
+        """发送待订阅 2013 帧（与 _drain_zt_reason_subs 同款限流/拟人/失败门禁：
+        send 失败置 _sock_dead 静默，未发帧下一会话 6g 全量补订自愈）。"""
+        if not self._theme_subs or self._sock_dead or self._setup_inline_subs:
+            return   # 同 2203：不再让路 daban 页队列（2013 优先）
         with self._theme_lock:
             pending = list(self._pending_theme)
             self._pending_theme = []
         if not pending:
             return
+        batch, rest = pending[:self._DRAIN_TICK_FRAMES], pending[self._DRAIN_TICK_FRAMES:]
+        if rest:
+            with self._theme_lock:
+                self._pending_theme[:0] = rest
         ext = bytes([0x02]) + struct.pack(">H", proto.CMD_STOCK_RELATED_THEME)
-        for sid in pending:
+        sent = 0
+        for sid in batch:
             req = proto.build_hq_req_pb(sid)
             enc = self._codec.enc(req)
             frame = proto.build_frame(proto.CMD_STOCK_RELATED_THEME, next_seq(), enc or req,
                                       d=0, encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
             self._dbg("C", frame)
             try:
+                if sent:
+                    self._human_pause(0.3, 0.15)
                 sock.sendall(frame)
             except OSError as exc:
-                self._err(f"2013 subscribe send failed ({sid}): {exc}")
+                self._sock_dead = True
+                dropped = len(batch) - sent + len(rest)
+                self._stats["theme_send_drops"] = self._stats.get("theme_send_drops", 0) + dropped
+                self._err(f"2013 subscribe send failed ({sid}): {exc} "
+                          f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
+                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                    lane="theme", cmd=proto.CMD_STOCK_RELATED_THEME,
+                                    sent=sent, dropped=dropped, session=self._session_no,
+                                    error=str(exc)))
                 return
+            sent += 1
 
     def get_lhb_realtime(self) -> Dict[str, Any]:
         """3004/3101 RealtimeLHB 快照读口（task-4）：空帧抑制后最新非空帧。
@@ -682,6 +823,14 @@ class KplCollectorService:
             "last_setup_s": self._stats.get("last_setup_s", 0.0),
             "last_session_s": self._stats.get("last_session_s", 0.0),
             "auth_phase_delay": self._auth_phase_delay,
+            "loop_send_grace_s": self._loop_send_grace_s,
+            # 重连螺旋防线观测（2026-11-10）：连续短命会话退避秒数 + 当前连击数
+            "reconnect_backoff_s": self._stats.get("reconnect_backoff_s"),
+            "short_session_streak": self._short_session_streak,
+            # 交易时段门控观测（2026-11-11）：当前是否在交易窗口 + 是否启用门控
+            "trading_session": (self._in_trading_session()
+                                if self._enforce_trading_hours else True),
+            "enforce_trading_hours": self._enforce_trading_hours,
             "uptime_s": round(time.time() - self._stats["started_at"], 1)
             if self._stats["started_at"]
             else 0,
@@ -796,8 +945,37 @@ class KplCollectorService:
                 continue
         return "timeout"
 
+    def _in_trading_session(self, ts: Optional[float] = None) -> bool:
+        """A 股交易时段判断（2026-11-11 交易时段门控）。
+
+        窗口：09:15（含集合竞价）-11:30、13:00-15:35（下午收盘 15:30——交易所规则
+        调整，用户口径 2026-11-11；收盘后 5min 缓冲收尾盘推送）。
+        周末不采集；法定节假日不识别（节假日会空转重连——与旧行为一致，不倒退；
+        如需节假日静默由上层手动 stop）。ts 参数仅供测试注入（UTC epoch）。
+        时区用 Asia/Shanghai（评审 P1：不依赖宿主机 localtime，与
+        trading_calendar.TZ_SHANGHAI 同源——:8002 宿主机非 CST 时窗口不错位）。"""
+        dt = datetime.datetime.fromtimestamp(ts if ts is not None else time.time(),
+                                             tz=TZ_SHANGHAI)
+        if dt.weekday() >= 5:   # 周六/周日
+            return False
+        hm = dt.hour * 60 + dt.minute
+        return (9 * 60 + 15 <= hm < 11 * 60 + 30) or (13 * 60 <= hm < 15 * 60 + 35)
+
     def _run_loop(self) -> None:
         while not self._stop.is_set():
+            # 交易时段门控：非交易时段不建连（idle_offhours，每分钟复查；
+            # 状态与事件均 fail-visible，页面/日志可感知挂起与恢复）
+            if self._enforce_trading_hours and not self._in_trading_session():
+                if self._status != "idle_offhours":
+                    self._status = "idle_offhours"
+                    self._emit(KplEvent(type="status", ts=time.time(), status="idle_offhours",
+                                        note="非交易时段，采集挂起（不建连；09:15/13:00 自动恢复）"))
+                if self._stop.wait(60.0):
+                    break
+                continue
+            if self._status == "idle_offhours":
+                self._emit(KplEvent(type="status", ts=time.time(), status="trading_session_start",
+                                    note="进入交易时段，采集恢复"))
             self._session_no += 1
             self._stats["sessions"] += 1
             t_session = time.time()
@@ -821,6 +999,17 @@ class KplCollectorService:
                 # 会话时长观测（2026-11-09 抖动根因验证）：在重连退避之前记录，否则
                 # backoff 会被算进会话时长污染 §3.4 时长档对照（评审 MINOR）
                 self._stats["last_session_s"] = round(time.time() - t_session, 1)
+            # 重连螺旋防线（2026-11-10 根因复盘）：连续短命会话说明设备已被风控打标
+            # 或本端异常，固定 2s 高频重连只会把风险分越拉越高（实弹验证：冷却 3min
+            # 后单会话寿命 6s→67.6s）。阈值 60s（健康 TTL 档 75-160s，<60 均视为
+            # 不健康——生产实测 50s 会话期若不退避，风控打标停在 ~50s 平台期不衰减）。
+            # 指数退避封顶 120s；长命会话归零。
+            if self._stats["last_session_s"] < 60.0:
+                self._short_session_streak += 1
+                backoff = max(backoff, min(2.0 * (2 ** min(self._short_session_streak, 6)), 120.0))
+            else:
+                self._short_session_streak = 0
+            self._stats["reconnect_backoff_s"] = backoff
             if self._stop.is_set():
                 break
             self._status = "reconnecting"
@@ -851,6 +1040,8 @@ class KplCollectorService:
 
         sock = self._tls_connect()
         self._rx = bytearray()   # 新会话新流：残帧缓冲必须清零
+        self._sock_dead = False  # 新会话新 socket：drain 失败门禁复位
+        self._pending_setup_frames = []   # 新会话重建订阅面：上会话残留待发帧作废
         try:
             sock.settimeout(2)
             # 1) 260 challenge
@@ -1016,16 +1207,27 @@ class KplCollectorService:
             #     与 3001 同款分块（单请求 id 超 ~241 会被 1106 拒绝；2026-10-27 实测：
             #     精选板块引导后 id≈500 单帧全发即触发 server error 1106）
             ext6 = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_ID_LIST)
-            for chunk in self._chunks(list(self._stock_ids)):
+            # 2026-11-10 实弹定性（§3.4 铁律：会话寿命=setup 末帧+~0.9s，三组 regime 一致）：
+            # 3006 分块是全 setup 唯一零停顿背靠背连发处（d94c0c83 引入；首发单帧无此问题），
+            # 瞬时 3 连发=App 不可能有的指纹，服务器打标后 ~1s 处决（drain 帧/读循环只是
+            # 处决时刻后的第一波受害者）。补上与 3001 同款帧间拟人停顿。
+            for ci, chunk in enumerate(self._chunks(list(self._stock_ids))):
                 hq = b"".join(proto.pb_bytes(1, sid.encode()) for sid in chunk)
                 enc_hq = self._codec.enc(hq)
                 hq_frame = proto.build_frame(proto.CMD_HQ_ID_LIST, next_seq(), enc_hq or hq, d=0,
                                              encrypted=bool(enc_hq), pkg=proto.PKG_ROUTE, ext=ext6)
+                self._human_pause(0.3, 0.15)
                 self._dbg("C", hq_frame)
                 sock.sendall(hq_frame)
             # 6c) 打板/情绪订阅（service_hq_daban.proto，2026-10-27 逆向）：
-            #     2114/2115/2118/2119 发 QxMarketEnergyReq{type}；2116/2126 空 Req；
+            #     2114/2115/2118/2119/2116/2126/2120/2121 发 QxMarketEnergyReq{type}；2116/2126 空 Req；
             #     2120/2121 发 QxZtSituationStockReq{bsType}。逐 cmd 一帧，同 0x40 通道与 ext 路由头。
+            #     2026-11-10 重排：不再内联发送，入 _pending_setup_frames 由读循环限流续发。
+            #     实弹定性（§3.4）：setup 全串行发完 ~32s 才进读循环，而会话在 setup 结束后
+            #     ~1s 即被上游 RST（last_setup_s=31.9 / last_session_s=32.8，推送窗口≈0.9s），
+            #     3001 推送根本没时间到流（个股列表过期数据的直接原因）。重排后行情订阅
+            #     （3001/3006，有 ack 顺序依赖必须内联）最先就绪，daban 家族由读循环以
+            #     setup 同款 0.3s 拟人节奏续发；2203/2013 让路（_drain_zt_reason_subs/_drain_theme_subs）。
             if self._daban_subs:
                 for sub_cmd in daban.DABAN_SUB_CMDS:
                     if sub_cmd in (daban.CMD_ZD_STAT, daban.CMD_MARKET_OVERVIEW,
@@ -1038,13 +1240,10 @@ class KplCollectorService:
                         req_pb = daban.build_zt_situation_stock_req_pb(bs_type=bs, order_type=4)
                     else:  # 2116/2126 空 Req
                         req_pb = daban.build_empty_req_pb()
-                    enc_db = self._codec.enc(req_pb)
-                    ext_db = bytes([0x02]) + struct.pack(">H", sub_cmd)
-                    db_frame = proto.build_frame(sub_cmd, next_seq(), enc_db or req_pb, d=0,
-                                                 encrypted=bool(enc_db), pkg=proto.PKG_ROUTE, ext=ext_db)
-                    self._human_pause(0.3, 0.15)
-                    self._dbg("C", db_frame)
-                    sock.sendall(db_frame)
+                    self._pending_setup_frames.append({
+                        "cmd": sub_cmd, "req": req_pb,
+                        "ext": bytes([0x02]) + struct.pack(">H", sub_cmd),
+                    })
                 # 6d) 2103 打板个股列表订阅：每页签按 index 偏移逐页一帧（推送页固定 30 行，
                 #     count=200 实测无效——见 __init__ 注释）；Resp.pidType+index 回带区分页归属
                 for pid in self._daban_list_pids:
@@ -1052,27 +1251,18 @@ class KplCollectorService:
                         req_pb = daban.build_daban_stock_list_req_pb(
                             pid, index=page * self._daban_list_page_size,
                             count=self._daban_list_page_size)
-                        enc_db = self._codec.enc(req_pb)
-                        ext_db = bytes([0x02]) + struct.pack(">H", daban.CMD_DABAN_STOCK_LIST)
-                        db_frame = proto.build_frame(daban.CMD_DABAN_STOCK_LIST, next_seq(),
-                                                     enc_db or req_pb, d=0, encrypted=bool(enc_db),
-                                                     pkg=proto.PKG_ROUTE, ext=ext_db)
-                        self._human_pause(0.3, 0.15)
-                        self._dbg("C", db_frame)
-                        sock.sendall(db_frame)
+                        self._pending_setup_frames.append({
+                            "cmd": daban.CMD_DABAN_STOCK_LIST, "req": req_pb,
+                            "ext": bytes([0x02]) + struct.pack(">H", daban.CMD_DABAN_STOCK_LIST),
+                        })
             # 6e) 2112 会不会上龙虎榜预测订阅（2026-10-29 逆向）：0x40 通道同 daban 家族，
             #     ForecastLHBReq 基线 count=30/sortType=1/quotaType=0（LhbWillStockModel.k(2112)）；
             #     开关独立于 daban_subs（与打板/情绪订阅解耦）
             if self._daban_lhb:
-                req_lhb = daban.build_forecast_lhb_req_pb()
-                enc_lhb = self._codec.enc(req_lhb)
-                ext_lhb = bytes([0x02]) + struct.pack(">H", daban.CMD_FORECAST_LHB)
-                lhb_frame = proto.build_frame(daban.CMD_FORECAST_LHB, next_seq(),
-                                              enc_lhb or req_lhb, d=0, encrypted=bool(enc_lhb),
-                                              pkg=proto.PKG_ROUTE, ext=ext_lhb)
-                self._human_pause(0.3, 0.15)
-                self._dbg("C", lhb_frame)
-                sock.sendall(lhb_frame)
+                self._pending_setup_frames.append({
+                    "cmd": daban.CMD_FORECAST_LHB, "req": daban.build_forecast_lhb_req_pb(),
+                    "ext": bytes([0x02]) + struct.pack(">H", daban.CMD_FORECAST_LHB),
+                })
             # 6f) 3004 RealtimeLHB 订阅 + 3101 当日区间单发（ServiceHqList 族，同 0x40 通道
             #     ext 路由头；Req 基线见 kpl_lhb_protocol.REALTIME_LHB_BASELINE，App 原 UI
             #     count=1，采集放宽 30；3101 无区间实测零应答（2026-10-29 开火），改带
@@ -1085,29 +1275,40 @@ class KplCollectorService:
                                  count=self._lhb_realtime_count,
                                  start_time=925, end_time=int(time.strftime("%H%M"))))]
                 for lhb_cmd, req_rl in reqs_lhb:
-                    enc_rl = self._codec.enc(req_rl)
-                    ext_rl = bytes([0x02]) + struct.pack(">H", lhb_cmd)
-                    rl_frame = proto.build_frame(lhb_cmd, next_seq(),
-                                                 enc_rl or req_rl, d=0, encrypted=bool(enc_rl),
-                                                 pkg=proto.PKG_ROUTE, ext=ext_rl)
-                    self._human_pause(0.3, 0.15)
-                    self._dbg("C", rl_frame)
-                    sock.sendall(rl_frame)
+                    self._pending_setup_frames.append({
+                        "cmd": lhb_cmd, "req": req_rl,
+                        "ext": bytes([0x02]) + struct.pack(">H", lhb_cmd),
+                    })
+            # 6g-pre) 2026-11-10 探针实锤：0x40 帧只许在 setup 窗口内发送，内联模式下
+            # daban 家族先发（池数据+页面优先于语料订阅），再 2203/2013
+            if self._setup_inline_subs and self._pending_setup_frames:
+                self._flush_pending_inline(sock, next_seq, "setup")
+                self._pending_setup_frames = []
+                self._stats["queued_setup_subs"] = 0
+            else:
+                self._stats["queued_setup_subs"] = len(self._pending_setup_frames)
             # 6g) 2203 涨停原因试点：每会话重建订阅——服务器 TTL≈60-90s，重连后原订阅面已失效，
             # 跨会话去重会让第二会话起一帧不发、推送静默停流（2026-11-08 评审 P0）：先清
             # 已订阅集合再全量补订；页帧到达后的新增成员由 _dispatch 自动入队，drain 在收流循环内
+            # 2026-11-10 补充：setup_inline_subs=True 时 2203/2013 改为 setup 窗口内内联发送
+            # （探针实锤：窗口关闭后任何 0x40 帧→ErrResp 1002 断连），循环期仅限新入队不发送。
             if self._zt_reason_subs:
                 with self._zt_reason_lock:
                     self._zt_reason_subscribed.clear()
                     self._pending_zt_reason.clear()
                 self._queue_zt_reason_new(self._pool_stock_ids())
+                if self._setup_inline_subs:
+                    self._flush_pending_inline(sock, next_seq, "zt_reason")
             if self._theme_subs:
                 with self._theme_lock:
                     self._theme_subscribed.clear()
                     self._pending_theme.clear()
                 self._queue_theme_new(self._pool_stock_ids())
-            # setup 打点在 6g（2203/2013 订阅入队）之后：口径=「连接到订阅链全部完成」
-            # （评审 MINOR：原在 6g 前打点会系统性偏小 ~12.6s）
+                if self._setup_inline_subs:
+                    self._flush_pending_inline(sock, next_seq, "theme")
+            # setup 打点在 6g（2203/2013 订阅入队）之后：口径=「连接到内联订阅链
+            # （3001/3006）全部完成」；daban 家族已重排为读循环续发，不占此口径
+            # （实弹口径见 _drain_setup_subs 注释）
             self._stats["last_setup_s"] = round(time.time() - t_setup, 1)
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
@@ -1122,17 +1323,41 @@ class KplCollectorService:
             last_keepalive = time.time()
             auth_frame_cache = [None]
             hb_flip = [0]
+            # 宽限期（2026-11-10 假说判别）：期首只读不发；结束时结构化打点（fail-visible）
+            t_loop = time.time()
+            grace_end_fired = [False]
             while not self._stop.is_set():
                 try:
                     fr = self._read_frame(sock)
                 except socket.timeout:
                     fr = "timeout"  # 哨兵：本轮无数据，不是断连；保活块仍然执行
+                if fr is None:
+                    # 服务器断开 → 先于保活/drain 返回触发重连（关死 socket 上多发
+                    # 只会撞 10054，2026-11-10 重排后 drain 前置门禁）
+                    self._err(f"session#{self._session_no} closed by server")
+                    return
                 now = time.time()
+                in_grace = (now - t_loop) < self._loop_send_grace_s
+                if not in_grace and not grace_end_fired[0] and self._loop_send_grace_s > 0:
+                    grace_end_fired[0] = True
+                    self._stats["grace_end_pending"] = [len(self._pending_setup_frames),
+                                                        len(self._pending_zt_reason),
+                                                        len(self._pending_theme)]
+                    self._emit(KplEvent(type="status", ts=time.time(), status="loop_grace_end",
+                                        session=self._session_no,
+                                        pending=[len(self._pending_setup_frames),
+                                                 len(self._pending_zt_reason),
+                                                 len(self._pending_theme)]))
+                if in_grace:
+                    if fr == "timeout":
+                        continue
+                    self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
+                    continue
                 if now - last_keepalive > 1:
                     # 保活交替: 每 8 tick 一次 610 AuthReq 原样重发（签名绑定初始
                     # challenge/curTime）/ 其余 tick 3001 分块轮询（下一块）
                     hb_flip[0] += 1
-                    if hb_flip[0] % 8 == 1:
+                    if hb_flip[0] % 8 == 1 and self._ka_610:
                         if hb_flip[0] == 1:
                             auth2 = proto.build_auth_req_pb(
                                 device_id=self._device_id,
@@ -1169,15 +1394,16 @@ class KplCollectorService:
                             self._dbg("C", ka_frame)
                             sock.sendall(ka_frame)
                     last_keepalive = now
-                # 2203/2013 待订阅帧 drain（新入池成员数秒内补订，不占保活节奏）
+                # 2203/2013 待订阅帧 drain（新入池成员数秒内补订，不占保活节奏）。
+                # 2026-11-10 时序竞争修复（生产实测：会话 ~50s 被 TTL/风控杀，daban 页
+                # 42 帧排前导致 2203/2013 实际发出已是会话 ~35-46s，服务器响应未回会话
+                # 即死，语料快照恒 0）：语料订阅排最前，三队列每 tick 各发 8 帧交错——
+                # zt(30)=4 tick、theme(22)=3 tick、daban 页(42)=6 tick，全部 ~6 tick 完成
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)
+                self._drain_setup_subs(sock, next_seq)
                 if fr == "timeout":
                     continue
-                if fr is None:
-                    # 服务器断开 → 返回触发重连
-                    self._err(f"session#{self._session_no} closed by server")
-                    return
                 self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
         finally:
             try:

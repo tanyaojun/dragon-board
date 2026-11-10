@@ -91,7 +91,11 @@ _service = KplCollectorService(
     daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME,
     lhb_realtime_count=_LHB_REALTIME_COUNT,
     zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS,
-    auth_phase_delay=_AUTH_PHASE_DELAY)
+    auth_phase_delay=_AUTH_PHASE_DELAY,
+    loop_send_grace_s=float(os.environ.get("KPL_LOOP_SEND_GRACE", "5")),
+    # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；
+    # 显式关闭 KPL_ENFORCE_TRADING_HOURS=0（切换需重启进程）
+    enforce_trading_hours=_env_flag("KPL_ENFORCE_TRADING_HOURS"))
 
 
 def _get_service() -> KplCollectorService:

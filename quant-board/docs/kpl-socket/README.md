@@ -91,6 +91,79 @@ QuantBoard 主后端 :8000
   `last_session_s` / `auth_phase_delay` 供实弹验证（预期 last_session_s 进 75-160s 档）。
   **验证状态：待重启 :8002 后实弹观测**；若仍未进长会话档，下一层排查用 KPL_DEBUG
   帧级抓包对照 adb 模式逐帧时序（预置观测字段已就位）。
+- **2203/2013 drain 爆发→10054 循环修复（2026-11-10，实弹定性）**：板块行情页状态栏
+  周期性报 `2203/2013 subscribe send failed: WinError 10054`，一直未修。实弹 ：8002
+  status 佐证：sessions=26/errors=51/last_session_s=28.5（setup 占 28.2s），会话仍在
+  ~28s 短命档（auth 相位 5s 修复未达 75-160s 预期档，见上条「待实弹观测」）；直接
+  缺陷是 **drain 路径零停顿**：6g 每会话一次性入队全池成员×2 通道 ≈170 帧，收流循环
+  第一个 tick 全部零间隔发出——爆发=机器指纹（§3.4 同机制），服务器在 setup 刚结束时
+  RST，drain sendall 撞死 socket → 每会话循环报错。修复（`kpl_collector_service.py`）：
+  ① drain 每 tick 限量 `_DRAIN_TICK_FRAMES=8` 帧，余量回队头保序下一 tick 续发
+  （保活/读流不被长阻塞）；② 帧间 `_human_pause(0.3, 0.15)` 对齐 setup 已验证节奏
+  （tick 首帧不重停）；③ sendall 失败置 `_sock_dead` 本会话后续 drain（含另一通道）
+  静默门禁（死 socket 重试只刷错误），结构化事件 `subscribe_send_dropped`
+  （lane/sent/dropped/error）+ stats `zt_reason_send_drops`/`theme_send_drops`，
+  未发帧本会话丢失、下一会话 6g 全量补订自愈（P2 合同不变）。测试：
+  `test_drain_rate_limited_per_tick`/`test_drain_send_failure_gates_and_emits`
+  （+58 既有全过）。验证状态：待重启 :8002 实弹观测——预期 drain 10054 消失/大幅
+  降频；若会话寿命仍在 ~28s 档，属上游风控独立问题（已知未解，另行跟踪）。
+- **setup 重排：daban 家族移入读循环限流续发（2026-11-10 第二轮实弹定性）**：
+  第一轮限流后实弹 ：8002 仍 `last_setup_s=31.9 / last_session_s=32.8`（两代实现
+  均 session≈setup+~1s，推送窗口≈0.9s，pushes=43/会话≈4），个股列表行情全过期。
+  定性：**setup 串行发完 ~32s 才进读循环，会话寿命被 setup 吃光**——3001 推送
+  根本没时间到流，10054 只是 drain 撞死 socket 的表象。重排（
+  `kpl_collector_service.py`）：① setup 内联只留有 ack 顺序依赖的链路
+  （260/610/602/2301/2303/2304/3001/3006，~14s）；② daban 家族
+  （21xx/2103×42/2112/3004/3101 ≈53 帧）入 `_pending_setup_frames` 由读循环
+  `_drain_setup_subs` 续发（同款 8 帧/tick + 0.3s 拟人，失败置 _sock_dead 门禁）；
+  ③ 2203/2013 drain 在 setup 队列清空前让路（daban 家族优先）；④ 读循环 `fr is
+  None`（服务器关连）检查提前到保活/drain 之前（关死 socket 上多发只会撞 10054）。
+  预期：行情订阅 ~14s 就绪、流式窗口从 ~0.9s 增至 ~15s+/会话，个股列表新鲜；
+  daban 页与 2203/2013 在会话剩余窗口续发，未发帧下会话重建（fail-visible：
+  stats `queued_setup_subs`/`setup_send_drops`、事件 `subscribe_send_dropped`
+  lane=setup）。测试：`test_setup_drain_fifo_and_zt_deferred` + 会话级三测改造
+  （55 passed）。**假说判别（重启后观测）**：若会话延长到 setup 队列清空之后才死
+  → 触发器与 2203/2013 帧内容相关（App 用户逐股查看，批量订阅=异常指纹）；若仍在
+  ~30s 固定档死 → 纯 TTL，与 drain 无关，下一层走 KPL_DEBUG 帧级对照 adb。
+- **★ 根因实锤：daban 族帧漏传 pkg=0x40（2026-11-10 探针定案）**：前期多轮
+  「限流/重排/宽限期」均为表象治疗。（本条目内提及的螺旋退避阈值 30s 系当日初版，
+  后经生产实弹修正为 60s，见下一条目。）真相：`bb5985a3`（2026-10-27 打板订阅链）起，
+  daban 族（21xx/2103/2112/3004/3101）全部经 `build_frame(...)` 发送且**从未传
+  `pkg=`**——build_frame 默认 `pkg=PKG_AUTH(0x30)`，导致这些帧带着 ext 路由头
+  走在 0x30 鉴权通道上（KPL_DEBUG 实测：`cmd=2114 pkg=0x30 ext=0003 0208 42`，
+  同会话健康帧 `cmd=3001 pkg=0x40`）。服务器对非法帧回 ErrResp 1002 后杀连；
+  固定 2s 重连→高频重连→设备被打标→会话越杀越快（静默处决）→**重连死亡螺旋**，
+  这解释了「刚上线没问题（无 daban 帧）、后来一直报错」的全部时间线。探针矩阵
+  （同 device_id 受控对照，KPL_DEBUG 帧级抓包）：E2 纯读 44.6s 正常 TTL；E3 仅
+  保活 50s+ 零错误；E4/E5/C2 含 0x30-malformed 帧的会话 6-12s 全灭；**冷却
+  180s 后 C1 存活 67.6s/pushes=87**（螺旋实锤）；**pkg 修复后 C3（生产同款配置）
+  会话 87.3s（正常 TTL 档）、pushes=269/150s、zt_reasons=45/theme_heat=40
+  首次到流**。修复：① `_flush_pending_inline`/`_drain_setup_subs` 补
+  `pkg=proto.PKG_ROUTE`（全部 build_frame 发送点已逐一核查）；② 重连螺旋防线：
+  连续短命会话（<30s）指数退避 2^n 封顶 120s（`_short_session_streak`，
+  stats `reconnect_backoff_s`），长命会话归零；③ 保留宽限期（`loop_send_grace_s`
+  默认 5s）与 drain 限流（8 帧/tick+0.3s 拟人），`setup_inline_subs` 开关保留
+  默认关（内联/ drain 两架构均可，C3 验证 drain 架构 + 修复后语料正常到流）。
+- **交易时段门控（2026-11-11，防设备风控累积）**：非交易时段不建连——夜间 7×24
+  TTL 重连的纯空转连接（~1500 次/日）是风控打标的累积来源，砍掉后日常连接数降
+  一个数量级。窗口 09:15（含集合竞价）-11:30、13:00-15:35（下午收盘 15:30
+  ——交易所规则调整 2026-11-11 用户口径；收盘后 5min 缓冲），周末不采集；法定节假日不识别（空转重连与旧行为一致，需节假日静默由上层手动
+  stop）。_run_loop 进入 `idle_offhours` 每分钟复查，时段开始自动恢复并发
+  `trading_session_start` 事件；status() 暴露 `trading_session`/
+  `enforce_trading_hours`；env `KPL_ENFORCE_TRADING_HOURS=0` 可关（需重启）。
+  测试 `TestTradingHoursGate`（边界/挂起不建连/自动恢复，298 passed）。
+- **生产实弹后续修正（2026-11-10 13:44 重启后观测）**：会话稳定 ~50s 被杀
+  （不再是秒杀），但 zt/theme 快照恒 0——时序竞争：daban 页 42 帧排前导致
+  2203/2013 实际发出已是会话 ~35-46s，服务器响应未回会话即死（C3 能到流是因
+  为探针会话 87s）。修正：① 读循环三队列改为每 tick 交错各发 8 帧
+  （zt → theme → daban，语料订阅不再让路，全队列 ~6 tick 完成）；② 螺旋防线
+  阈值 30s→60s（健康 TTL 档 75-160s，<60 均触发指数退避——50s 会话若不退避，
+  风控打标停在 ~50s 平台期不衰减）；③ status() 暴露
+  `reconnect_backoff_s`/`short_session_streak`。测试
+  `test_setup_drain_fifo_and_zt_interleave`（含 daban 帧 pkg=0x40 断言）。
+  **已知设计取舍（评审 P2 登记）**：三队列全满时单 tick 发送停顿最长 ≈3×8×0.45s
+  ≈10s，期间个股行情列消费滞后同量级；全队列 ~6 tick 清空后恢复。清空进度看
+  `queued_setup_subs`（随 drain 递减）与 `grace_end_pending`。
 - **重复 seq 被拒并断连**（110/2000）：keepalive 重发必须递增 seq（服务内置 `next_seq()` 计数器）
 - **会话到期拒绝信号（2026-11-06 盘中探针修订）**：TTL 到期时服务器对末次 keepalive 回
   `ErrResp {'code':1002,'msg':'连接错误：1002'}` 紧跟断连（此前为 1106）；重连链自愈、会话期
@@ -831,6 +904,61 @@ jev 投喂口径：消费方按 `stock_id` 与涨停池成员 join，把 `gene` 
 - 测试（全 mock）：archiver 6 例（同档不覆打板字段/字段刷新+空值不覆盖+first_ts/跨日跳陈旧
   含周末反向保留/无交易日与空载荷/items list 形态/单轮 fetch 落涨停池交易日与全降级 no_pool_date）
   + 路由 3 例（透传/no_reason_corpus/日期校验与存储未启用）。
+
+### 11.11 板块身位通道（龙头三合一，2026-11-10 用户需求「当日实时身位 + 落库」）
+
+**上游探测结论（当日全形态实弹，2026-11-10 盘中）**：KPL 官方「当日实时全梯队身位」无
+可消费面——① 层3 `ZhiShuStockList_W8` 带 Date 当日盘中 1020（apphis/apphwhq 双域）；
+② 无 Date 形态（App 实时态口径，反编译 `j00.F0`：Date 仅非空才 put；`ox0.b3`：实时态走
+`ApiConfig.API_HQ=apphq.longhuvip.com`）实测 apphwhq/apphq 双域全 1020，极简参数白名单
+同样 1020；③ socket 3001 混合流 quotas 68 列盘中实帧全列扫描无身位串/身位列
+（[18]=连板状态串、[59]=某动态小整数 4 样本与龙序不相关，语义不可定）；④
+`Section/GetSection`（`ModuleStockAdapter`：propertyTag 1/2/3=龙一/二/三 badge，99=无标签）
+域=applhb（px0.k0 实证，旧注 apphq 有误）errcode=0 但 SectionID 属文章卡 id 空间，
+801159/801044 打入空表；⑤ `XianHuoData/AllXianHuo` 通但为商品现货目录非题材卡。
+层3 历史日仍可用（11-09 errcode=0 实证，[24] 地位与官方写法逐位一致：龙一..龙十、
+十一..无「龙」字）。
+
+**裁决**：身位口径=自家龙头三合一（涨停打标/板块节点/题材龙头，v12 空间龙一排序），
+不做 KPL 官方对照列（用户 2026-11-10：我们自己的最权威）；旧 live-stocks-meta 盘中
+回退上一交易日构建（fb 只在概念列 tooltip 透出）=「昨日身位+今日行情」混日误读，
+板块行情页领涨列弃用改读本通道。
+
+**落库合同**（`kpl_daban_pool` 日档 `lead_` 前缀字段，字段级 $set，单写者=
+DabanPoolArchiver 循环在涨停池通道后执行，与 gene/notice 同款并发合同）：
+- 候选池 = 当日封板池（`items` 成员 `pool_state='sealed'`；broken=今日曾封后炸不算封板，
+  与韭研「触板−炸板二分」同哲学）∪ 近 3 交易日封板池（断板反包覆盖；交易日轴=
+  `trading_dates_before` snapshot_frames）；按 `plate_id`（2103 quotas[21]）分组，
+  跨板块各排各的；plate_id 缺失成员 → `lead_missing_plate` 披露，不进板块榜；
+- 身位序列 = 龙一锚（主轨空间龙一：`rank_board_stocks_seal` 单源复用 + `segment_of`
+  main 轨首位，纯双创板块取 growth 轨首位）+ 龙二..N（其余按 `dragon_rows` 排序键：
+  区间板数 M 降序 → 首封时间升序，M/state 串解析、缺失垫后）；标签写法与官方一致
+  （1~10「龙X」、11+ 无「龙」字）；断板候选 `sealed_today=False`、龙一行
+  `leader_basis='space_main'|'space_growth'`；
+- height = 当日 streak（连续封板交易日数自算）与近 3 日历史高度取大；gain10 =
+  `fetch_gains10`（TDX，当日 bar 首拉冻结与三合一链同哲学）；断板不反包且今日跌停
+  剔除走 `limit_rules.is_limit_down_pct`（公共权威源，非硬编码；容差 0.2pp 与题材链
+  硬编码 -9.9/-19.9 略有差异，以公共函数为准；涨跌幅不可考保留不猜）；
+- fail-visible：当日无池档 `no_pool_today` 不写；池日档缺日 `lead_missing_pool_dates`；
+  gain 全缺板块 `gain_unavailable=true`（不整板块跳过，展示可计算部分，与 upstream
+  spaceErrors 跳过裁决的差异已登记）；跌停剔除 `lead_limit_down_excluded` 逐只披露；
+- 读口 `GET /api/kpl/daban-lead?date=`（:8000，`load_day lane='lead'` 委托
+  `load_lead_corpus`；无档 `no_lead_corpus` 结构化降级不回退别日）；前端板块行情页
+  领涨 badge 改读本口（45s 节流 + 日期签名，历史模式随选日读档；该日无档如实
+  「该日无身位档」不冒充）；直播页/个股行情页仍走 live-stocks-meta（各自既有合同，
+  领涨口径差异已在本节登记，后续迁移待裁决）；
+- 前端表头排序（2026-11-10 增补）：成分股列表 13 列表头点击排序，默认领涨升序
+  （龙一在前，无身位/缺位恒垫后不随方向翻转）；展示与排序共用 kplStockVals 统一
+  出口（WS 实时覆盖列同口径合并）；连板列排序按区间板数解析（与后端
+  `state_boards` 同构，仅 UI 排序用）；同序保持层3 原始次序（稳定排序）；排序
+  作用于当前已加载缓冲区（懒加载分批语义不变）；
+- 3001 个股行 quotas 列语义增补（2026-11-10 同屏交叉核对，wzslinker 四股参考值
+  逐股一致）：[18]=连板状态串（「N天M板/M连板」，与 2103 [10] 同语义）、
+  [19]=换手率%（缓变时间差 <0.2pp）；量比无匹配列（[4]/[16]/[24] 均不符，
+  不猜不映射）；
+- 测试：`test_kpl_lead_service.py` 11 用例 + `test_kpl_daban_archiver.py` lead 通道
+  （fetcher 全桩零真实 TDX）+ `tests/api/test_kpl_proxy_routes.py` /daban-lead——
+  三文件合计 109+47 passed（全 mock，红线 7）。
 
 ## 十二、总览页大盘走势（2026-10-28 增补，复刻 APP 直播页分时图）
 
