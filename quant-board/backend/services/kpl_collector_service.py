@@ -969,6 +969,14 @@ class KplCollectorService:
             "zt_reasons": len(self._zt_reason_snap),
             "theme_heat": len(self._theme_snap),
             "zt_reasons_subscribed": len(self._zt_reason_subscribed),
+            # 开关位观测（2026-11-11 ④）：详情四通道订阅是否开启 + 各 lane 待发/已订计数
+            "stock_detail_subs": self._stock_detail_subs,
+            "stock_detail_pending": {lane: len(self._pending_detail[lane])
+                                     for lane in self._detail_lane_cmds},
+            "stock_detail_subscribed": {lane: len(self._detail_subscribed[lane])
+                                        for lane in self._detail_lane_cmds},
+            "stock_detail_snaps": {lane: len(self._detail_snaps[lane])
+                                   for lane in self._detail_snaps},
             "corpus_persist": dict(self._corpus_persist_stats),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             # 会话寿命观测（2026-11-09 抖动根因修复验证）：setup=连接到订阅完成耗时，
