@@ -456,6 +456,30 @@ def _maybe_num(v: str) -> Any:
     return f if math.isfinite(f) else v
 
 
+def _decode_packed_varints(blob: bytes) -> List[int]:
+    """packed repeated varint 解码：length-delimited blob → varint 序列。
+
+    2026-11-11：2103 f21 indexes（pidType=0/8 即将涨停/集合竞价页）服务端用 packed
+    编码，parse_pb_f32 宽容解析返回原始 bytes，直接透传会让读口 JSONResponse
+    序列化炸 TypeError(bytes not serializable) → :8000 代理降级 kpl_upstream_unavailable、
+    前端「即将涨停」页空。pidType=1/2/3 页是非 packed 编码（已是 int）所以未爆。"""
+    out: List[int] = []
+    i, n = 0, len(blob)
+    while i < n:
+        v, sh = 0, 0
+        while i < n:
+            b = blob[i]
+            i += 1
+            v |= (b & 0x7F) << sh
+            sh += 7
+            if not (b & 0x80):
+                break
+        else:
+            break   # 截断 blob：已解出的部分保留（宽容/fail-visible）
+        out.append(v)
+    return out
+
+
 def parse_daban_stock_list(payload: bytes) -> Dict[str, Any]:
     """2103 DaBanStockListResp：打板个股列表（竞价 pidType=8 / 即将涨停 pidType=0）。
 
@@ -493,7 +517,10 @@ def parse_daban_stock_list(payload: bytes) -> Dict[str, Any]:
         "index": pb_first(pb, 4, 0),
         "count": pb_first(pb, 5, 0),
         "items": items,
-        "indexes": list(pb.get(21, [])),
+        "indexes": [v
+                    for raw in pb.get(21, [])
+                    for v in (_decode_packed_varints(raw)
+                              if isinstance(raw, (bytes, bytearray)) else [raw])],
         "max_size": pb_first(pb, 22, 0),
         "date": _s(pb_first(pb, 23, b"")),
         "raw_len": len(payload),

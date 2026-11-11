@@ -1596,3 +1596,54 @@ class TestDetailBlockSend20261111:
         svc = KplCollectorService(FakeCodec(), human_delay=False,
                                   stock_detail_max_stocks=7)
         assert svc.status()["stock_detail_cap"] == 7
+
+
+class TestDabanIndexesJson20261111:
+    """2103 f21 indexes packed 编码致读口 500 的修复钉（2026-11-11 午后线上事故）。
+
+    线上链路：pidType=0/8（即将涨停/集合竞价）页服务端用 packed repeated f21 →
+    parse_pb_f32 宽容解析返回原始 bytes → get_daban_list 原样透传 → JSONResponse
+    TypeError(bytes not serializable) 500 → :8000 代理降级 kpl_upstream_unavailable
+    → 前端「即将涨停」页空。pidType=1/2/3 页非 packed 所以未爆。
+    """
+
+    @staticmethod
+    def _varint(v: int) -> bytes:
+        out = bytearray()
+        while True:
+            b = v & 0x7F
+            v >>= 7
+            out.append(b | (0x80 if v else 0))
+            if not v:
+                return bytes(out)
+
+    def test_packed_indexes_decode_to_ints(self):
+        """f21 packed varint blob → indexes 全 int（可 JSON 序列化）。"""
+        from backend.services import kpl_daban_protocol as daban
+        blob = b"".join(self._varint(v) for v in (3, 7, 42))
+        body = (daban.pb_varint_field(1, 0)          # pidType=0 即将涨停
+                + bytes([0xAA, 0x01]) + self._varint(len(blob)) + blob)  # f21 wire2: tag=170=AA 01
+        data = daban.parse_daban_stock_list(body)
+        assert data["indexes"] == [3, 7, 42], f"packed indexes 解码失败: {data['indexes']}"
+        import json as _json
+        _json.dumps(data)   # 不抛
+
+    def test_nonpacked_indexes_unchanged(self):
+        """非 packed（pidType=1/2/3 页形态）f21 varint → 原值 int 保留。"""
+        from backend.services import kpl_daban_protocol as daban
+        body = (daban.pb_varint_field(1, 1) + daban.pb_varint_field(21, 5)
+                + daban.pb_varint_field(21, 9))
+        data = daban.parse_daban_stock_list(body)
+        assert data["indexes"] == [5, 9]
+
+    def test_get_daban_list_bytes_never_500(self):
+        """读口兜底：页快照混入 bytes 也能 JSON 序列化（fail-visible 不炸 500）。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False)
+        svc._daban_lists[0] = {0: {"items": [{"stock_id": "600001", "x": b""}],
+                                   "index": 0, "count": 1, "max_size": 1,
+                                   "date": "2026-11-11", "raw_len": 10, "ts": 1.0,
+                                   "indexes": [b""]}}
+        out = svc.get_daban_list(0)
+        import json as _json
+        s = _json.dumps(out)   # 修复前：TypeError bytes not serializable
+        assert b"" not in s.encode() and "600001" in s

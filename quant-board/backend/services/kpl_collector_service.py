@@ -442,6 +442,22 @@ class KplCollectorService:
         self._plate_tree = {"version": self._plate_version, "plates": tree}
         return {"ok": True, "version": self._plate_version, "tree": self._plate_tree}
 
+    @staticmethod
+    def _jsonable(obj: Any) -> Any:
+        """递归净化为 JSON 可序列化载荷（读口兑底防线，2026-11-11）。
+
+        bytes → utf-8 解码（失败 errors='replace'）；其余原样。背景：2103 f21
+        packed indexes 原始 bytes 透传曾致读口 500 → :8000 代理降级
+        kpl_upstream_unavailable、前端「即将涨停」页空。解析器层已修
+        （_decode_packed_varints），此兑底保证任何未来漏网 bytes 不再 500。"""
+        if isinstance(obj, (bytes, bytearray)):
+            return bytes(obj).decode("utf-8", "replace")
+        if isinstance(obj, dict):
+            return {k: KplCollectorService._jsonable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [KplCollectorService._jsonable(v) for v in obj]
+        return obj
+
     def get_daban_list(self, pid_type: int) -> Dict[str, Any]:
         """2103 打板个股列表快照读口：按 index 合并已收到的推送页（跨页拼接成全量）。
 
@@ -474,14 +490,14 @@ class KplCollectorService:
                                     "indexes", "max_size", "date", "raw_len", "ts")}
             for p in ordered
         ]
-        return {
+        return self._jsonable({
             "ok": True, "pid_type": key, "items": items,
             "max_size": max_size, "date": ordered[-1].get("date", ""),
             "pages": len(pages), "pages_expected": expected_pages,
             "pages_missing": sorted(set(range(expected_pages)) - present),
             "pages_meta": pages_meta,
             "ts": latest, "raw_len": sum(p.get("raw_len", 0) for p in ordered),
-        }
+        })
 
     def get_lhb_forecast(self) -> Dict[str, Any]:
         """2112 会不会上龙虎榜预测快照读口（task-4）。
@@ -1593,9 +1609,14 @@ class KplCollectorService:
                 # 42 帧排前导致 2203/2013 实际发出已是会话 ~35-46s，服务器响应未回会话
                 # 即死，语料快照恒 0）：语料订阅排最前，三队列每 tick 各发 8 帧交错——
                 # zt(30)=4 tick、theme(22)=3 tick、daban 页(42)=6 tick，全部 ~6 tick 完成
+                # 2026-11-11 再修：detail 块（静默期 flush 合同，60 帧×0.375s≈22s）排
+                # 首位——排在 zt/theme 后时块尾已是会话 ~55-65s，与 60-67s 会话寿命
+                # 贴线竞争（13:10 生产 79.8s 会话才落地）；提前后块尾 ~25-30s，flush
+                # 批回落在会话中段。代价：本 tick 内 zt/theme/setup 延后一个块长（
+                # 与原顺序下块在会话中段 stall 同量级，无新增风控面）。
+                self._drain_detail_subs(sock, next_seq)
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)
-                self._drain_detail_subs(sock, next_seq)
                 self._drain_setup_subs(sock, next_seq)
                 if fr == "timeout":
                     continue

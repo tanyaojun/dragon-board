@@ -207,6 +207,14 @@ QuantBoard 主后端 :8000
   bf_ok=32、abn_ok=15、reason_ok=66 且持续增长，全程 0 fail、0 backoff。
   2030（bdo）float 缩放与 2014 时间编码仍待实弹值比对校准（后续任务）。
 
+  **午后两修（2026-11-11 14:0x）**：① 2103 f21 `indexes`（pidType=0/8 页）服务端
+  packed 编码 → parse_pb_f32 宽容解析返回原始 bytes → `get_daban_list` 原样透传
+  JSON 500 → :8000 代理降级 `kpl_upstream_unavailable` → 前端「即将涨停」页空
+  （pidType=1/2/3 页非 packed 故未爆）。修：`_decode_packed_varints` 解码 + 读口
+  `_jsonable` 兜底净化（bytes 永不再 500）。② detail 块排 drain 首位：原顺序下
+  块尾在会话 ~55-65s，与 60-67s 会话寿命贴线竞争（13:10 是 79.8s 会话才落地）；
+  提前后块尾 ~25-30s，flush 批回落在会话中段。
+
 ## 四、数据语义与已知限制
 
 - **价格是 ×10000 整数缩放**：113000=11.30 元、8900980=890.098（板块点位）。展示层需自行除以 10000 或标注口径。
