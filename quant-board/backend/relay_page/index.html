@@ -355,6 +355,13 @@
   #kplLhbStockTable tbody tr.on td{background:var(--blue-bg)}
   #kplLhbStockTable tbody tr.on td:first-child{box-shadow:inset 3px 0 0 var(--cf-blue)}
   .kpl-wrap{max-height:640px;overflow:auto;border:1px solid var(--border);border-radius:8px}
+  /* 题材龙头表横向滚动容器（2026-11-12 列表缩紧配套）：宽视口恰好放下不显滚动条，
+     窄视口卡内滚动，页面本身不再被撑出横向溢出；滚动条取页面 slate 色板 */
+  .tl-wrap{overflow-x:auto}
+  .tl-wrap::-webkit-scrollbar{height:8px}
+  .tl-wrap::-webkit-scrollbar-track{background:transparent}
+  .tl-wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+  .tl-wrap::-webkit-scrollbar-thumb:hover{background:#94a3b8}
   .kpl-wrap table{margin:0}
   .kpl-wrap th{position:sticky;top:0;background:#fff;z-index:2;box-shadow:0 1px 0 var(--border)}
   /* 连板行情右栏三页签 + 板块行情双卡（2026-11）：表格高度与浏览器页面底对齐——
@@ -588,7 +595,7 @@
         <div id="tlBanner"></div>
         <div class="board-row" id="tlBoardRow"></div>
         <div class="lf-bar" id="tlFilterBar" style="margin-top:2px"></div>
-        <table id="tlTable"></table>
+        <div class="tl-wrap"><table id="tlTable"></table></div>
       </div>
     </div>
 
@@ -994,7 +1001,7 @@ const fmtPctChg = v => { const n = numOr(v, null); return n == null ? '--' : (n 
 const pctColor = v => { const n = numOr(v, null); return n == null ? 'var(--text)' : n > 0 ? 'var(--red)' : n < 0 ? 'var(--green)' : 'var(--text)'; };
 const moneyColor = v => { const n = numOr(v, null); return n == null ? 'var(--muted)' : n > 0 ? 'var(--red)' : n < 0 ? 'var(--green)' : 'var(--muted)'; };
 
-const badge = (txt, cls) => txt ? `<span class="badge ${cls}">${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
+const badge = (txt, cls, tip) => txt ? `<span class="badge ${cls}"${tip ? ` title="${esc(tip)}"` : ''}>${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
 // 缺位徽标（F2，2026-10-18 分层）：**只标主锚整根不可用**（琥珀）——例外标记；
 // 子项级缺位（断板钱效/炸板面个股级…）落到展开详情，不入日期格（否则 67/108 行常驻，噪声）
 const gapBadge = r => {
@@ -2232,8 +2239,11 @@ function labRerun(key){
 //   · 页头 KPI = 共用 `#relayKpi`（点行 = relayRow(date) 选中该日，KPI 跟随）；
 //   · 左侧三角 = 展开 jev 调用日志卡（lg-card 范式，懒拉 narrative）；
 //   · 展示硬约束：落库口径为准（模型原答仅保留在展开的调用日志卡里供审计）/ 结局 null=待结算（2026-10-27 用户确认：原「未封」与确认负「未续」、连板列「未封板」共用词根易误读）/ 回填样本标橙。
-const TL_CHOICE_CN = { high_ge65: '高 ≥65%', mid_45_65: '中 45-65%', low_25_45: '低 25-45%',
-                       verylow_lt25: '很低 <25%', insufficient: '证据不足' };
+// 2026-11-12 用户截图需求：档位列只显高/中/低/极低（列表缩紧），概率区间迁 tooltip/详情卡
+const TL_CHOICE_CN = { high_ge65: '高', mid_45_65: '中', low_25_45: '低',
+                       verylow_lt25: '极低', insufficient: '证据不足' };
+const TL_CHOICE_RANGE = { high_ge65: '≥65%', mid_45_65: '45-65%', low_25_45: '25-45%',
+                          verylow_lt25: '<25%' };
 const TL_GATE_CN = { board_unmapped: '板块未映射', industry_tree_unmapped: '产业树未映射',
                      corpus_not_collected: '语料未采集', no_content_no_event: '无正文且无事件',
                      not_a_theme_bucket: '非题材桶' };
@@ -2297,20 +2307,22 @@ function tlProb(row){
   const est = parts.reduce((a, kv) => a + kv[0] * kv[1], 0) / total;
   return { text: Math.round(est * 100) + '%' };
 }
-// 四题置信芯片（2026-10-24 用户需求）：被证据门强制覆盖的题（gate.forcedKeys）confidence=1.0
-// 是程序写的，显「门」标记而非 P100（程序覆盖不得冒充模型置信）；未过门走通用 confChip
-// （旧文档缺 confidence → 空串，行样式不变，fail-visible）。
-function tlConfChip(r, key){
+// 置信度入徽章 tooltip（2026-11-12 用户截图需求：列表缩紧，P 值不再行内常驻；
+// 语义沿用原三级判读：≥P60 正常 / P35-60 存疑 / P<35 两可勿当结论）。
+// 被证据门强制覆盖的题（gate.forcedKeys）confidence=1.0 是程序写的，tooltip 显「门」语义
+// 而非 P100（程序覆盖不得冒充模型置信）；旧文档缺 confidence → 空串（fail-visible 缺省即不显示）。
+function tlConfTip(r, key){
   if (r.gate && r.gate.applied && (r.gate.forcedKeys || []).includes(key))
-    return ' <span title="证据门强制 insufficient（程序覆盖，非模型置信）"'
-      + ' style="font-size:11px;font-weight:400;color:var(--muted2)">门</span>';
+    return '证据门强制 insufficient（程序覆盖，非模型置信）';
   const a = { leader_nextday_continue: r.choiceConfidence,
               theme_speculation_depth: r.themeSpeculationDepthConfidence,
               theme_continuation: r.themeContinuationConfidence,
               leader_headroom: r.leaderHeadroomConfidence,
               leader_catalyst_hardness: r.leaderCatalystHardnessConfidence,
               leader_seat_durability: r.leaderSeatDurabilityConfidence }[key];
-  return confChip(a);
+  if (a == null || typeof a !== 'number' || !isFinite(a)) return '';
+  const p = Math.round(a * 100);
+  return '模型置信度 P' + p + (a < 0.35 ? '（两可，勿当结论）' : a < 0.6 ? '（存疑）' : '');
 }
 function tlOutcomeKey(row){
   if (row.outcomeSealedNextDay === null || row.outcomeSealedNextDay === undefined) return 'pending';
@@ -2336,8 +2348,7 @@ function tlSorted(list){
   const st = STATE.tlSort;
   const kv = { date: r => r.tradingDate || '', code: r => r.code || '', name: r => r.name || '',
     board: r => r.board || '', streak: r => r.streak == null ? -1 : r.streak,
-    time: r => r.time || '', boardN: r => r.boardN == null ? -1 : r.boardN,
-    day2: r => { const v = (r.outcomeDay2 || {}).closePct; return v == null ? -999 : v; } };
+    time: r => r.time || '', boardN: r => r.boardN == null ? -1 : r.boardN };
   if (!kv[st.key]) return list;
   return list.slice().sort((a, b) => { const va = kv[st.key](a), vb = kv[st.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * st.dir; });
@@ -2769,9 +2780,9 @@ function tlRenderRows(){
     + th('板块', 'board') + '<th>周期</th>' + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
     + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th>'
     + '<th>催化</th><th>身位</th><th>事件</th>'
-    + '<th>结局</th>' + th('溢价', 'day2') + '</tr>'
+    + '<th>结局</th></tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
-      : '<tr><td class="empty" colspan="18">无匹配龙头（调整区间或筛选条件）</td></tr>');
+      : '<tr><td class="empty" colspan="17">无匹配龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('tlPagerHost'); if (ph) ph.innerHTML = tlPager(pg.page, pg.total);
 }
 function tlPager(page, total){
@@ -2843,29 +2854,28 @@ function tlRowHtml(r, f){
   const outcome = (outKey === 'pending'
     ? badge('待结算', 'b-gray')
     : (outKey === 'sealed' ? badge('续板', 'b-green') : badge('未续', 'b-red')));
-  const choice = (badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
+  // 2026-11-12 缩紧：置信度 P 值与档位概率区间一律入徽章 tooltip，行内只留短徽章
+  const choiceTip = [TL_CHOICE_RANGE[r.choice] ? '续板概率区间 ' + TL_CHOICE_RANGE[r.choice] : '',
+    tlConfTip(r, 'leader_nextday_continue')].filter(Boolean).join('；');
+  const choice = badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
     r.choice === 'high_ge65' ? 'b-red' : r.choice === 'mid_45_65' ? 'b-amber'
-      : r.choice === 'insufficient' ? 'b-gray' : 'b-blue'))
-    + tlConfChip(r, 'leader_nextday_continue');
-  const stage = (r.themeSpeculationDepth
-    ? badge(TL_DEPTH_CN[r.themeSpeculationDepth] || r.themeSpeculationDepth,
-        TL_DEPTH_BADGE[r.themeSpeculationDepth] || 'b-gray')
-    : badge(TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-', 'b-gray'))
-    + tlConfChip(r, 'theme_speculation_depth');
+      : r.choice === 'insufficient' ? 'b-gray' : 'b-blue', choiceTip);
+  const stage = badge(r.themeSpeculationDepth
+      ? (TL_DEPTH_CN[r.themeSpeculationDepth] || r.themeSpeculationDepth)
+      : (TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-'),
+    r.themeSpeculationDepth ? (TL_DEPTH_BADGE[r.themeSpeculationDepth] || 'b-gray') : 'b-gray',
+    tlConfTip(r, 'theme_speculation_depth'));
   const contCell = badge(TL_CONT_CN[r.themeContinuation] || r.themeContinuation || '-',
-      TL_CONT_BADGE[r.themeContinuation] || 'b-gray')
-    + tlConfChip(r, 'theme_continuation');
+      TL_CONT_BADGE[r.themeContinuation] || 'b-gray', tlConfTip(r, 'theme_continuation'));
   const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-',
-      TL_HEAD_BADGE[r.leaderHeadroom] || 'b-gray')
-    + tlConfChip(r, 'leader_headroom');
-  // v17 两新题列（旧代档无判答显 '-'，不伪造；被门覆盖走 tlConfChip 「门」标记）
+      TL_HEAD_BADGE[r.leaderHeadroom] || 'b-gray', tlConfTip(r, 'leader_headroom'));
+  // v17 两新题列（旧代档无判答显 '-'，不伪造；被门覆盖走 tlConfTip 「门」语义）
   const hardCell = badge(TL_HARD_CN[r.leaderCatalystHardness] || r.leaderCatalystHardness || '-',
-      TL_HARD_BADGE[r.leaderCatalystHardness] || 'b-gray')
-    + tlConfChip(r, 'leader_catalyst_hardness');
+      TL_HARD_BADGE[r.leaderCatalystHardness] || 'b-gray', tlConfTip(r, 'leader_catalyst_hardness'));
   const seatCell = badge(TL_SEAT_CN[r.leaderSeatDurability] || r.leaderSeatDurability || '-',
-      TL_SEAT_BADGE[r.leaderSeatDurability] || 'b-gray')
-    + tlConfChip(r, 'leader_seat_durability');
-  // 题材证据分层（v3）：板内解析 / 缺失原因
+      TL_SEAT_BADGE[r.leaderSeatDurability] || 'b-gray', tlConfTip(r, 'leader_seat_durability'));
+  // 题材证据分层（v3）：事件/新闻/题材窄徽章 / 缺失原因
+  // 2026-11-12 用户裁决：板内 L2 解析徽章下线（列表缩紧），摘要迁详情卡 meta 常显
   // 2026-10-27 用户裁决（两轮纠偏定稿）：事件列**只出窄徽章、题材名称一律不显示**
   //（名称与「板块」列重复，占宽）；完整题材驱动事件文字描述进 tooltip。
   const evTitles = r.evidenceEventTitles || [];
@@ -2884,36 +2894,13 @@ function tlRowHtml(r, f){
     ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length
       + '</span>'
     : '';
-  // 板内解析徽章 tooltip = 叙事原文中的板内解析节（龙头驱动标签+解析摘录+同伴驱动全文，
-  // 读口 evidenceBoardDigest）；旧档无摘要时显式说明（不伪造内容）。
-  const l2Digest = r.evidenceBoardDigest || '';
-  const l2Tag = r.evidenceBoardResolved
-    ? ' <span class="tl-ev" title="' + esc(l2Digest
-      || '板内解析在场但摘要未存档（旧档无叙事原文，展开行可查看投喂语料）') + '">+板内解析</span>'
-    : '';
   const evid = r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
-      ? (evTitleBadge + evNewsBadge + evTagBadge + l2Tag
+      ? (evTitleBadge + evNewsBadge + evTagBadge
         || '<span class="badge b-gray" title="产业树已映射但无事件/新闻/标签证据">-</span>')
       : (r.evidenceMissingReason
         ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
         : '<span class="badge b-gray">-</span>');
-  // 溢价列（2026-10-26 用户需求）：结局=续板（T+1 封板=打板入场成立）→ 显示后日 T+2
-  // 溢价率（T+2 收盘 vs T+1 收盘，settle_day2 挂链回填）；未续=无入场不显示溢价，
-  // 未封/后日未到='-'；续板但溢价未回填=「待回填」（fail-visible，挂链自愈）。
-  const d2 = (r.outcomeDay2 && typeof r.outcomeDay2 === 'object') ? r.outcomeDay2 : {};
-  let premHtml = '<span style="color:var(--muted2)">-</span>';
-  if (outKey === 'sealed'){
-    if (d2.closePct != null){
-      const v = Number(d2.closePct);
-      const opTip = d2.openPct != null
-        ? '；开盘 ' + (d2.openPct > 0 ? '+' : '') + d2.openPct + '%' : '';
-      premHtml = '<b style="color:' + (v > 0 ? '#dc2626' : v < 0 ? '#16a34a' : 'var(--muted2)')
-        + '" title="T+2（' + esc(String(d2.date || '')) + '）收盘 vs T+1 收盘' + esc(opTip)
-        + '">' + (v > 0 ? '+' : '') + v.toFixed(2) + '%</b>';
-    } else {
-      premHtml = '<span style="color:var(--muted2)" title="后一交易日未到，收盘后自动补上">待回填</span>';
-    }
-  }
+  // 溢价列已删（2026-11-12 用户截图需求：列表缩紧）；T+2 溢价保留在详情卡 meta（fail-visible 出口）
   const dkey = js(r.tradingDate || '');
   return '<tr class="lg-row' + (open ? ' open' : '')
       + (STATE.relayFocus === r.tradingDate ? ' focus' : '')
@@ -2925,18 +2912,21 @@ function tlRowHtml(r, f){
     + '<td>' + esc(r.name || '') + '</td>'
     + '<td>' + esc(r.board || '-') + tlSegBadge(r) + '</td>'
     + '<td>' + tlCycleBadge(r) + '</td>'
-    + '<td class="num">' + (r.leaderSealedToday === false
-        ? '<span class="tl-ev" title="龙一排序规则：有 2 板以上候选时优先高度、同高度取 10 日涨幅最高；全是首板时按当日首封时间最早。未封板=断板反包候选（须此前连板高度≥2 且当日未跌停），仍按 10 日涨幅参与排序；10日涨幅 '
-          + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '">未封板</span>'
-        : (r.streak == null ? '-' : esc(String(r.streak)))) + '</td>'
+    // 连板列：未封板留空（2026-11-12 用户裁决，不再显「未封板」三字）；
+    // 排序规则与 10 日涨幅身位保留在该格 tooltip（hover 可考，不占列宽）
+    + '<td class="num"' + (r.leaderSealedToday === false
+        ? ' title="当日未封板（断板反包候选）：真连板数不可考，留空。龙一排序规则：有 2 板以上候选时优先高度、同高度取 10 日涨幅最高；全是首板时按当日首封时间最早。断板反包候选须此前连板高度≥2 且当日未跌停，仍按 10 日涨幅参与排序；10日涨幅 '
+          + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '"'
+        : '') + '>' + (r.leaderSealedToday === false
+        ? '' : (r.streak == null ? '-' : esc(String(r.streak)))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
     + '<td class="num">' + (r.boardN == null ? '-' : esc(String(r.boardN))) + '</td>'
     + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td>'
     + '<td>' + stage + '</td><td>' + contCell + '</td><td>' + headCell + '</td>'
     + '<td>' + hardCell + '</td><td>' + seatCell + '</td>'
-    + '<td>' + evid + '</td><td>' + outcome + '</td><td class="num">' + premHtml + '</td></tr>'
-    + (open ? '<tr class="lg-detail"><td colspan="18">' + tlDetailHtml(r) + '</td></tr>' : '');
+    + '<td>' + evid + '</td><td>' + outcome + '</td></tr>'
+    + (open ? '<tr class="lg-detail"><td colspan="17">' + tlDetailHtml(r) + '</td></tr>' : '');
 }
 
 // ── 明细卡：jev 调用日志卡（lg-card 范式，与连板情绪同构） ──
@@ -3050,8 +3040,9 @@ function tlDetailHtml(r){
     + esc(st) + '</div></div>'
     + '<div><div class="k">版本</div><div class="v" title="本次判定使用的题目集版本；不同版本判据不同，结果不宜直接对比">'
     + esc(r.questionSetVersion || '旧代') + '</div></div>'
-    + '<div><div class="k">续板档位</div><div class="v">'
-    + esc(TL_CHOICE_CN[r.choice] || r.choice || '-') + '</div></div>'
+    + '<div><div class="k">续板档位</div><div class="v" title="列表只显高/中/低/极低；概率区间在此披露">'
+    + esc(TL_CHOICE_CN[r.choice] || r.choice || '-')
+    + (TL_CHOICE_RANGE[r.choice] ? '（' + TL_CHOICE_RANGE[r.choice] + '）' : '') + '</div></div>'
     // v17 两新题 + 板块判答注入状态（旧代档无字段时不出项，不伪造）
     + (r.leaderCatalystHardness
       ? '<div><div class="k">催化硬度</div><div class="v" title="v17 新题：驱动涨停的催化可证实性（硬事实/板块叙事/软催化）">'
@@ -3073,6 +3064,13 @@ function tlDetailHtml(r){
         + (((r.outcomeDay2 || {}).closePct != null)
           ? (r.outcomeDay2.closePct > 0 ? '+' : '') + r.outcomeDay2.closePct + '%'
           : '待回填') + '</div></div>'
+      : '')
+    // 板内解析摘要（2026-11-12 自列表徽章迁卡常显）：叙事原文板内解析节（龙头驱动标签+
+    // 解析摘录+同伴驱动全文，读口 evidenceBoardDigest）；旧档无摘要显式说明（不伪造内容）
+    + (r.evidenceBoardResolved
+      ? '<div><div class="k">板内解析</div><div class="v" style="white-space:pre-wrap;font-size:13px;font-weight:400">'
+        + esc(r.evidenceBoardDigest
+          || '板内解析在场但摘要未存档（旧档无叙事原文，原始 JSON 可查看投喂语料）') + '</div></div>'
       : '')
     + (gated ? '<div><div class="k">证据门</div><div class="v" style="color:#a16207">'
         + esc(TL_GATE_CN[(r.gate || {}).reason] || (r.gate || {}).reason || '-')

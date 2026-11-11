@@ -148,7 +148,7 @@ def test_gated_row_shows_model_answer_and_reason(html: str) -> None:
     row = _fn(html, "tlRowHtml")
     assert "r.modelChoice" not in row, "表格行不得再拼模型原答单元格"
     assert "r.baselineKey" not in row, "表格行不得再拼同桶基线单元格"
-    assert "colspan=\"18\"" in row, "展开明细行跨列数须跟表头（18，v17 新增催化/身位列）"
+    assert "colspan=\"17\"" in row, "展开明细行跨列数须跟表头（17，2026-11-12 删溢价列）"
     # 门/排除原因仍可见（档位/证据列）+ 展开卡里保留原答审计
     assert "TL_GATE_CN" in html
     assert "r.modelChoice" in _fn(html, "tlEntryResp")
@@ -341,23 +341,23 @@ def test_silent_background_refresh(html: str) -> None:
 
 # ── 回归（2026-10-23 截图实测列错位）：行拼装丢 contCell → 表头 13 列/行 12 格 ──
 def test_header_and_row_column_counts_match(html: str) -> None:
-    """表头加「催化/身位」（v17 两新题）列后，tlRowHtml 必须同步发出 18 格——少一格后续列
-    整体左移（证据/结局错位一格）。"""
+    """表头加「催化/身位」（v17 两新题）、2026-11-12 删溢价列后，tlRowHtml 必须同步
+    发出 17 格——少一格后续列整体左移（证据/结局错位一格）。"""
     # 表头块限定在 tlRenderRows 函数体内（避免匹配到页面其他表的「结局」列）
     block = _fn(html, "tlRenderRows")
     import re as _re
     n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z0-9]+'\)", block)) + block.count("<th>")
     row = _fn(html, "tlRowHtml")
-    # 展开明细行的 colspan 单独算：数据行 18 格（含周期/空间/催化/身位/溢价列）+ 明细跨 18 列
+    # 展开明细行的 colspan 单独算：数据行 17 格（2026-11-12 删溢价列）+ 明细跨 17 列
     n_td = row.count("<td") - row.count("<td colspan")
-    assert n_th == 18, f"表头应 18 列，实为 {n_th}"
-    assert n_td == 18, f"数据行应 18 格，实为 {n_td}（丢格 → 列错位）"
-    assert 'colspan="18"' in row, "展开明细行必须跨 18 列（跟表头同步）"
+    assert n_th == 17, f"表头应 17 列，实为 {n_th}"
+    assert n_td == 17, f"数据行应 17 格，实为 {n_td}（丢格 → 列错位）"
+    assert 'colspan="17"' in row, "展开明细行必须跨 17 列（跟表头同步）"
     assert "+ contCell +" in row or "+ contCell" in row, "延续性单元格必须拼进行"
     assert "+ headCell +" in row, "空间列（leaderHeadroom）必须拼进行——v5/v6 核心产出不得只在明细 JSON 里可见"
     assert "+ hardCell +" in row and "+ seatCell +" in row, \
         "v17 催化硬度/身位稳固度列必须拼进行（红线 §1.2-5 展示同轮同步）"
-    assert "+ premHtml +" in row, "溢价单元格必须拼进行（2026-10-26 用户需求）"
+    assert "premHtml" not in row, "溢价列已删（2026-11-12 用户截图需求），死变量不得残留"
 
 
 # ── 2026-10-26 表格四项优化（用户截图需求） ─────────────────────────────
@@ -393,46 +393,53 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
         "题材标签徽章必须带 tooltip 全文"
     assert "esc(r.evidenceIndustry)" not in row, \
         "题材名称不得以文本渲染进事件列（只许徽章）"
-    assert "r.evidenceBoardDigest" in row, \
-        "板内解析徽章 tooltip 必须接读口摘要（完整题材驱动内容，非「在场」占位话）"
+    assert "+板内解析" not in row and "l2Tag" not in row, \
+        "板内解析徽章已删（2026-11-12 用户截图需求），迁详情卡常显"
+    assert "r.evidenceBoardDigest" in _fn(html, "tlDetailHtml"), \
+        "板内解析摘要迁详情卡必须接读口摘要（完整题材驱动内容，非「在场」占位话）"
     assert "见投喂语料抽屉" not in row, "旧静态占位 tooltip 不得残留"
     assert "tl-evtxt" not in row and "tl-evtags" not in html, \
         "首版铺文截断样式必须删除（防溢出回潮）"
 
 
-def test_premium_column_day2(html: str) -> None:
-    """③溢价列：结局=续板（打板入场成立）→ 显示 T+2 溢价率（outcomeDay2.closePct，
-    settle_day2 挂链回填）；未续=无入场不显溢价；未回填显「待回填」不编造；可排序。"""
+def test_premium_column_removed_to_detail_card(html: str) -> None:
+    """③溢价列下线（2026-11-12 用户截图需求：列表缩紧）：表头/行/排序键三处同删；
+    T+2 溢价保留在详情卡 meta（fail-visible 出口；读口 outcomeDay2 合同不变）。"""
     rows_fn = _fn(html, "tlRenderRows")
-    assert "th('溢价', 'day2')" in rows_fn, "溢价列必须可排序"
+    assert "th('溢价'" not in rows_fn and "溢价" not in rows_fn, "溢价表头必须删除"
     row = _fn(html, "tlRowHtml")
-    assert "outcomeDay2" in row and "closePct" in row, "溢价读 outcomeDay2.closePct"
-    assert "待回填" in row, "续板但溢价未回填必须显式（fail-visible）"
-    assert "outKey === 'sealed'" in row, "只给结局=续板的行显示溢价"
+    assert "premHtml" not in row and "outcomeDay2" not in row, "溢价单元格/死变量不得残留"
+    detail = _fn(html, "tlDetailHtml")
+    assert "T+2 溢价" in detail and "outcomeDay2" in detail, "详情卡必须保留 T+2 溢价（fail-visible）"
+    assert "待回填" in detail, "续板但溢价未回填必须显式（fail-visible）"
     kv = _fn(html, "tlSorted")
-    assert "day2" in kv, "排序键必须接线"
+    assert "day2" not in kv, "溢价排序键随列删除"
 
 
-# ── 2026-10-24：四题置信芯片 + 续板概率改中值加权期望 ─────────────────────
+# ── 2026-10-24 置信可视化（2026-11-12 迁 tooltip）+ 续板概率中值加权 ─────────
 
-def test_four_judgement_fields_carry_confidence_chips(html: str) -> None:
-    """四字段（档位/题材深度/延续性/空间）必须带模型置信芯片（用户裁决「置信度必须可视化」）。
+def test_judgement_fields_confidence_in_badge_tooltip(html: str) -> None:
+    """置信度入徽章 tooltip（2026-11-12 用户截图需求：列表缩紧，P 值不再行内常驻；
+    2026-10-24「置信度必须可视化」语义保留为 hover 可考）。
 
-    被证据门强制覆盖的题 confidence=1.0 是程序写的——必须显「门」标记，
+    被证据门强制覆盖的题 confidence=1.0 是程序写的——tooltip 必须显「门」语义，
     不得拿程序覆盖冒充模型置信（P100）。
     """
     row = _fn(html, "tlRowHtml")
     for key in ("leader_nextday_continue", "theme_speculation_depth",
-                "theme_continuation", "leader_headroom"):
-        assert f"tlConfChip(r, '{key}')" in row, f"{key} 徽章必须带置信芯片"
-    chip = _fn(html, "tlConfChip")
-    assert "forcedKeys" in chip and "gate.applied" in chip, "门强制覆盖必须先于 confChip 判定"
-    assert "门" in chip, "门覆盖题显「门」标记而非 P100"
-    assert "confChip(" in chip, "未过门复用全局三级色芯片（灰≥60/琥珀35-60/红<35）"
-    # 数据链完整性：出参四键必须被消费（API 字段 ↔ 前端字段一一对上）
+                "theme_continuation", "leader_headroom",
+                "leader_catalyst_hardness", "leader_seat_durability"):
+        assert f"tlConfTip(r, '{key}')" in row, f"{key} 徽章 tooltip 必须接置信度"
+    assert "confChip(" not in row, "行内置信芯片不得残留（列表缩紧）"
+    tip = _fn(html, "tlConfTip")
+    assert "forcedKeys" in tip and "gate.applied" in tip, "门强制覆盖必须先于置信判定"
+    assert "程序覆盖，非模型置信" in tip, "门覆盖题 tooltip 显「门」语义而非 P100"
+    assert "两可，勿当结论" in tip, "P<35 两可警示语义保留进 tooltip"
+    # 数据链完整性：出参六键必须被消费（API 字段 ↔ 前端字段一一对上）
     for field in ("choiceConfidence", "themeSpeculationDepthConfidence",
-                  "themeContinuationConfidence", "leaderHeadroomConfidence"):
-        assert field in chip, f"出参 {field} 必须接到芯片"
+                  "themeContinuationConfidence", "leaderHeadroomConfidence",
+                  "leaderCatalystHardnessConfidence", "leaderSeatDurabilityConfidence"):
+        assert field in tip, f"出参 {field} 必须接到 tooltip"
     # 图例 hint 已随 2026-10-27 用户裁决删除（P=模型置信度说明不再常驻页面；
     # 概率口径说明保留在单元格 tooltip 与守卫测试文本中）
     assert "P=模型置信度" not in _fn(html, "tlRenderRows")
@@ -457,26 +464,27 @@ def test_continue_probability_is_midpoint_weighted_expectation(html: str) -> Non
     assert "四档概率按中值" in row
 
 
-def test_evidence_cell_shows_l2_resolution_badge_even_when_industry_mapped(html: str) -> None:
-    """「+板内解析」徽章：有产业树映射时板内解析在场也必须显（2026-10-26 用户裁决）。
-
-    上海九百观感缺口：映射节点名与板块同名（大消费→大消费）时整列只剩板块名，
-    S3 补充映射与板内解析证据在场却不可见。未映射分支维持「板内解析+题材N」蓝徽章不变。
-    2026-10-27 追加：徽章 title 必须接读口 evidenceBoardDigest（完整驱动内容）。
-    """
+def test_l2_digest_moved_to_detail_card(html: str) -> None:
+    """板内 L2 解析徽章下线（2026-11-12 用户截图需求：列表缩紧）：事件列只留
+    事件/新闻/题材窄徽章；摘要迁详情卡 meta 常显（evidenceBoardResolved 消费不变，
+    旧档无摘要显式说明不伪造——原 2026-10-26/27 裁决的 fail-visible 语义保留）。"""
     row = _fn(html, "tlRowHtml")
-    assert "evidenceBoardResolved" in row, "徽章判定必须消费 evidenceBoardResolved 出参"
-    l2_block = row[row.index("const l2Tag"): row.index("const evid")]
-    assert "title=" in l2_block and "+板内解析" in l2_block, \
-        "板内解析徽章必须带 title（完整驱动内容 tooltip）"
+    assert "+板内解析" not in row and "l2Tag" not in row and "l2Digest" not in row, \
+        "列表徽章/死变量不得残留"
+    assert "evidenceBoardResolved" in row, "事件列兜底判定仍消费 evidenceBoardResolved 出参"
+    detail = _fn(html, "tlDetailHtml")
+    assert "evidenceBoardResolved" in detail and "r.evidenceBoardDigest" in detail, \
+        "详情卡必须常显板内解析摘要（完整驱动内容）"
+    assert "摘要未存档" in detail, "旧档无摘要显式说明（不伪造内容）"
 
 
-def test_unsealed_leader_badge_in_streak_cell(html: str) -> None:
-    """空间龙一规则（2026-10-27）：断板反包候选行连板列显「未封板」徽章（title 带 10日涨幅
-    身位），不显示成哑谜「-」；封板行维持数字。"""
+def test_unsealed_leader_streak_cell_blank(html: str) -> None:
+    """连板列留空（2026-11-12 用户截图需求：未封板不再显三字徽章，缩紧列宽）；
+    排序规则与 10 日涨幅身位保留在该格 tooltip（hover 可考）；封板行维持数字。"""
     row = _fn(html, "tlRowHtml")
     assert "leaderSealedToday === false" in row, "未封板判定必须消费路由新字段"
-    assert "未封板" in row and "gain10" in row, "徽章带 10日涨幅身位"
+    assert ">未封板</span>" not in row, "「未封板」三字不得再行内显示"
+    assert "gain10" in row, "10日涨幅身位保留在 tooltip"
 
 
 def test_segment_badge_and_seal_tooltip_audit_display_removed(html: str) -> None:
@@ -587,7 +595,7 @@ def test_v17_new_question_maps_and_conf_chips(html: str) -> None:
         assert m, f"{map_name} 分档配色表缺失"
         assert hot in m.group(1) and cool in m.group(1)
     assert "TL_HARD_CN" in html and "TL_SEAT_CN" in html
-    chip = _fn(html, "tlConfChip")
+    chip = _fn(html, "tlConfTip")
     assert "leader_catalyst_hardness: r.leaderCatalystHardnessConfidence" in chip
     assert "leader_seat_durability: r.leaderSeatDurabilityConfidence" in chip
     row = _fn(html, "tlRowHtml")
