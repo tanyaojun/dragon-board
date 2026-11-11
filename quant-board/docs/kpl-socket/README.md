@@ -201,6 +201,12 @@ QuantBoard 主后端 :8000
   服务实弹验证 I2：块发后四通道 snaps 全部落地（各 15 只）、会话 69.5s 正常档。
   测试 `TestDetailBlockSend20261111`（6 用例）；status 新增 `stock_detail_cap`。
 
+  **生产实弹复验（同日 13:10 开火，`KPL_STOCK_DETAIL_SUBS=1`）**：午休衰减后
+  streak 归零、会话回 70-80s 健康 TTL 档；块发语义下**四通道首次全量打通**——
+  snaps rplate/bdo/bf/abn 各 15 只落地，persist rplate_ok=80、bdo_ok=68、
+  bf_ok=32、abn_ok=15、reason_ok=66 且持续增长，全程 0 fail、0 backoff。
+  2030（bdo）float 缩放与 2014 时间编码仍待实弹值比对校准（后续任务）。
+
 ## 四、数据语义与已知限制
 
 - **价格是 ×10000 整数缩放**：113000=11.30 元、8900980=890.098（板块点位）。展示层需自行除以 10000 或标注口径。
