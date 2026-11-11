@@ -238,7 +238,14 @@ QuantBoard 主后端 :8000
 - **工作台消费端已上线（2026-10-27；2026-10-28 更名「板块行情」+ 精选/行业页签）**：JEV 叙事
   工作台（:8008）侧栏「KPL 行情 › 板块行情」——「精选」页签=强度排行（含服务端
   list_son 二级板块，序号 n / n.k），「行业」页签=881xxx 行业板块（2301 树 flag='4'，
-  104 个并入订阅，App「行业」同款，仅实时模式）——当日走本链 WS（经 :8000 中继，
+  104 个并入订阅，App「行业」同款，仅实时模式；2026-11-11 空态修复：引导依赖引导时刻
+  plate-tree 可用，collector 重启窗口期会「引导成功但漏行业」，旧看门狗只看 items≥20
+  到流后永不复查，叠加多页签订阅替换语义可抹掉行业 → 空态永久化。修复=看门狗复查 881
+  覆盖：有流缺流 30s 节流 merge 补引导封顶 3 次后结构化透出「上游未推」；无流（非交易
+  时段/重连中）空态显式标注引导数与原因，并提供手动「重新引导」；`POST
+  /api/kpl/subscriptions` 增 `merge=true` 求并合同（不抹别页已订个股），:8002 `GET
+  /api/kpl/status` 增 `subscriptions` 构成观测（count/priority/hy/sectors/stocks/chunks，
+  采集进程重启后生效））——当日走本链 WS（经 :8000 中继，
   :8002 新增 `POST /api/kpl/subscriptions` 动态订
   阅），历史走 HTTP 直连（`kpl_ranking_service.py` + `GET /api/kpl/sector-ranking|
   sector-stocks`，凭据走 `mapping_refresh` 公共出口）；quotas[2]/[3]/[7]/[8]/[9] 列

@@ -371,6 +371,33 @@ class TestSetSubscriptions:
         assert r["ok"] is True
         assert svc._stock_ids == ["801001"]
 
+    def test_merge_unions_without_dropping_existing(self, svc):
+        """2026-11-11 行业补引导合同：merge 求并保序去重，不抹别页已订个股。"""
+        svc.set_subscriptions(["801001", "600000"], priority_ids=["801001"])
+        r = svc.set_subscriptions(["881001", "801001", "600519"],
+                                  priority_ids=["881001", "801001"], merge=True)
+        assert r["ok"] is True
+        assert svc._stock_ids == ["801001", "600000", "881001", "600519"]
+        assert svc._sub_prio_all == ["801001", "881001"]
+        assert r["count"] == 4
+
+    def test_replace_semantics_unchanged_by_default(self, svc):
+        svc.set_subscriptions(["801001", "600000"])
+        svc.set_subscriptions(["881001"])
+        assert svc._stock_ids == ["881001"]   # 默认仍替换（旧合同不变）
+
+    def test_status_exposes_subscription_composition(self, svc):
+        """订阅构成观测（行业页签空态排查）：hy/sectors/stocks/chunks 一眼可核。"""
+        svc.set_subscriptions(["801001", "881001", "881002", "600000"],
+                              priority_ids=["801001", "881001", "881002"])
+        sub = svc.status()["subscriptions"]
+        assert sub["count"] == 4
+        assert sub["hy"] == 2
+        assert sub["sectors"] == 1
+        assert sub["stocks"] == 1
+        assert sub["priority"] == 3
+        assert sub["chunks"] == len(svc._sub_prio) + len(svc._sub_rest)
+
 
 class TestSignSvcCodecErrors:
     def test_signsvc_error_is_typed(self, monkeypatch):

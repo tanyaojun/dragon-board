@@ -184,7 +184,7 @@ def daban_list(pid_type: int = 8) -> JSONResponse:
 async def subscriptions(request: Request) -> JSONResponse:
     """更新 3001/3006 订阅清单（body: {"stock_ids": [...], "priority_ids": [...]}，
     priority_ids=优先块成员（轮询更频）；单请求 id 超 ~241 会被服务器 1106 拒绝，
-    采集器内部自动分块轮询。
+    采集器内部自动分块轮询。merge=true 时与现有清单求并（补引导不抹别页订阅）。
 
     下一个 3001 轮询即生效（~2s）；空清单拒绝并结构化返回（fail-visible）。
     """
@@ -194,7 +194,8 @@ async def subscriptions(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     result = svc.set_subscriptions((body or {}).get("stock_ids") or [],
-                                   (body or {}).get("priority_ids") or [])
+                                   (body or {}).get("priority_ids") or [],
+                                   merge=bool((body or {}).get("merge")))
     status_code = 200 if result.get("ok") else 400
     return JSONResponse(content={"ok": result.pop("ok", False), "subscriptions": result,
                                  **svc.status()}, status_code=status_code)

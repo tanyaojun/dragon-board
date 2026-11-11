@@ -4990,7 +4990,7 @@ async function kplFetchPlateTree(){
   try {
     const r = await jget(KPL_API + '/plate-tree');
     if (r.ok && r.tree && r.tree.plates){ KPL.plateTree = r.tree.plates; kplRenderSectors(); }
-  } catch (e){ /* 树读口不可用：平铺渲染，不阻断 */ }
+  } catch (e){ /* 树读口不可用：平铺渲染，不阻断；树=null 时缓存不生效，调用方即重试 */ }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -5527,6 +5527,9 @@ const KPL = {
   stockEnsureP: null,   // 取批串行化在飞链（2026-11 review：防并发双拼）
   stockResolvedKey: '', stockEffDate: null, stockResolving: false,
   universeIds: [],      // 引导出的板块订阅宇宙（成分股代码并入订阅时必须带上）
+  universeHy: 0,        // 引导宇宙中 881 行业板块数（0=引导时板块树未就绪/未引导）
+  lastQuotesTs: 0,      // 最近一条 quotes 事件的服务端 ts（流健康判定；回放旧 ts 不算当下到流）
+  hyRepairAt: 0, hyRepairN: 0, hyNote: '',   // 行业补引导节流/次数/结构化原因（fail-visible）
   lastSubSig: '',       // 最近一次已下发订阅清单签名（防重复 POST）
   ztCount: new Map(),   // 板块名 → 封板家数（zt_stocks 事件按 plate 顿号归属聚合）
   ztCountNorm: new Map(),   // 归一 plate 名 → 封板家数（匹配两侧同规则归一，见 zt_stocks case）
@@ -5694,9 +5697,12 @@ function kplHandleEvent(ev){
   switch (ev.type){
     case 'quotes':   // 3001：板块+个股混合流
       KPL.pushes++;
+      if (ev.ts) KPL.lastQuotesTs = ev.ts;   // 服务端事件时：订阅回放的旧事件不算「当下到流」
       for (const it of (ev.items || []))
         KPL.items.set(it.stock_id, {id: it.stock_id, name: it.name || '', quotas: it.quotas || [],
                                     ts: ev.ts, source: ev.source});
+      // 881 行业到流 → 补引导计数/原因复位（自愈闭环）
+      if ((ev.items || []).some(it => /^881\d{3}$/.test(String(it.stock_id)))){ KPL.hyRepairN = 0; KPL.hyNote = ''; }
       kplBanner(''); kplRenderSectors();
       if (STATE.view === 'kpl' && KPL.mode === 'live' && KPL.hist.stocks && KPL.hist.stocks.length) kplRenderStocks();
       break;
@@ -5705,7 +5711,8 @@ function kplHandleEvent(ev){
         KPL.hq.set(it.stock_id, {price: it.price, inc_price: it.inc_price, inc_rate: it.inc_rate});
       break;
     case 'auth':
-      if (ev.ok){ KPL.sessions++; KPL.status.running = true; kplUpdateColPill(); if (!stale) kplBanner(''); }
+      // 新会话建立 → 行业补引导预算复位（封顶状态不跨会话存续，每会话≤3 次有界 churn）
+      if (ev.ok){ KPL.sessions++; KPL.status.running = true; KPL.hyRepairN = 0; KPL.hyNote = ''; kplUpdateColPill(); if (!stale) kplBanner(''); }
       else if (!stale) kplBanner('认证被拒绝：' + JSON.stringify(ev.error || {}));
       break;
     case 'status':
@@ -5804,6 +5811,7 @@ async function kplEnsureRunning(){
 async function kplBootstrap(){
   if (KPL.bootstrapping || KPL.mode !== 'live') return;
   KPL.bootstrapping = true; KPL.bootstrapped = true;
+  let hyCount = 0;   // 本轮引导的行业覆盖：成功后才落 KPL.universeHy（失败保留旧值，不误触补引导）
   try {
     const rankIds = await kplFetchSectorUniverse();
     let ids = rankIds.slice();
@@ -5819,11 +5827,14 @@ async function kplBootstrap(){
       // 否则「行业」页签无行情流；不订阅则该页签只有空态
       const hyIds = Object.keys(KPL.plateTree).filter(id => /^881\d{3}$/.test(id));
       ids = ids.concat(hyIds.filter(id => !ids.includes(id)));
+      hyCount = hyIds.length;
     }
     const r = await jpost(KPL_API + '/subscriptions',
                           {stock_ids: ids, priority_ids: rankIds});
     if (!r.ok) throw new Error((r.subscriptions && r.subscriptions.reason) || '订阅更新被拒');
     KPL.universeIds = ids;                // 成分股并入订阅时必须带上板块宇宙
+    KPL.universeHy = hyCount;             // 树未就绪=0，看门狗据此补引导
+    kplRenderSectors();                   // 空态诊断随引导结果即时刷新（不留陈旧文案）
     if (STATE.view === 'lianban') lbSyncSubscription();   // 引导晚于直发：补发被替换语义覆盖掉的个股清单（2026-10-29 评审）
     if (!r.running) kplEnsureRunning();   // 采集器停着时订阅照收，需拉起才有流
     if (KPL.hist.stocks && KPL.hist.stocks.length && KPL.mode === 'live')
@@ -5838,15 +5849,77 @@ async function kplBootstrap(){
 }
 // 看门狗：页签内每 10s 检查到流健康度——订阅对象 <20（含采集器被重启/重置回 3 ID、
 // 引导从未成功、WS 掉线）则先修 WS 再重放引导（POST 幂等，排行读口有 30s 缓存兜）。
+// 行业页签覆盖状态（2026-11-11 空态修复）：引导数/到流数/流健康/是否需补引导。
+// 背景：881 只在引导时并入订阅，且依赖引导那一刻 plate-tree 可用（collector 重启窗口期
+// 该口 ok:false 而排行口独立可用 → 引导「成功」但漏行业）；旧看门狗只看 items.size≥20，
+// 到流后永不复查行业覆盖 → 空态永久化。streamAlive 用服务端事件 ts（回放不算到流）。
+function kplHyState(){
+  const hyN = Object.keys(KPL.plateTree || {}).filter(id => /^881\d{3}$/.test(id)).length;
+  let received = 0;
+  for (const it of KPL.items.values()) if (/^881\d{3}$/.test(String(it.id))) received++;
+  const streamAlive = !!KPL.lastQuotesTs && (Date.now() / 1000 - KPL.lastQuotesTs) < 45;
+  // 需补引导：树已知有行业但一条 881 都没收到，且（当下有流=订阅面缺行业；
+  // 或引导时树未就绪 universeHy=0=无流时也先把行业订上，进交易时段即有流）
+  const needRepair = KPL.mode === 'live' && hyN > 0 && received === 0
+    && (streamAlive || KPL.universeHy === 0);
+  return {hyN, received, streamAlive, guided: KPL.universeHy, needRepair};
+}
+function kplHyEmptyNote(st){
+  if (KPL.mode === 'history') return '行业页签仅实时模式（历史无行业排行读口）';
+  if (!st.streamAlive)
+    return '当前无实时行情到流（非交易时段采集挂起或 WS 重连中）；行业板块已引导 '
+      + st.guided + '/' + st.hyN + ' 个入订阅'
+      + (st.guided === 0 && st.hyN > 0 ? '（引导时板块树未就绪，自动补引导中）' : '')
+      + '，到流后自动填充';
+  if (KPL.hyNote) return KPL.hyNote;
+  return '行业板块已引导 ' + st.guided + '/' + st.hyN + ' 个入订阅，等待 WS 推送 881 行情'
+    + '（缺流每 30s 自动补引导，到流后自动填充）';
+}
+// 补引导=merge 语义并入行业（不替换清单：多页签共享订阅面，替换会抹掉别页个股）
+async function kplHyRepair(){
+  const hyIds = Object.keys(KPL.plateTree || {}).filter(id => /^881\d{3}$/.test(id));
+  if (!hyIds.length) return false;
+  const uni = KPL.universeIds.slice();
+  for (const id of hyIds) if (!uni.includes(id)) uni.push(id);
+  const r = await jpost(KPL_API + '/subscriptions', {stock_ids: uni, priority_ids: uni, merge: true});
+  if (!r.ok) throw new Error((r.subscriptions && r.subscriptions.reason) || '订阅更新被拒');
+  KPL.universeIds = uni;
+  KPL.universeHy = hyIds.length;
+  KPL.hyNote = '';
+  kplRenderSectors();   // 空态诊断即时刷新（无流时段没有 quotes 事件触发重渲染）
+  return true;
+}
+function kplHyRetry(){
+  KPL.hyRepairN = 0; KPL.hyRepairAt = 0; KPL.hyNote = '';
+  kplRenderSectors();
+  if (!KPL.universeIds.length){ KPL.bootstrapped = false; kplBootstrap(); return; }
+  kplHyRepair().then(ok => { if (ok) kplBanner('行业板块补引导已下发（' + KPL.universeHy + ' 个），到流后自动填充', 'ok'); })
+    .catch(e => kplBanner('行业补引导失败：' + (e.message || e)));
+}
 let kplStallCount = 0;
-setInterval(() => {
+function kplWatchdogTick(){
   if ((STATE.view !== 'kpl' && STATE.view !== 'lianban') || KPL.mode !== 'live' || KPL.bootstrapping) return;
+  if (!KPL.plateTree) kplFetchPlateTree();   // 树瞬态失败（502/collector 重启）每 10s 重试，不等 5min 缓存
+  // 行业覆盖自愈：有流但 881 缺流 → 30s 节流补引导，封顶 3 次后结构化透出
+  // 「订阅已含行业但上游未推」（不再无限重试刷订阅面）；空态给手动重新引导出口
+  const hy = kplHyState();
+  // 前置 universeIds.length：引导从未成功时交给下方 stall 路径全量引导（其本身含 hy），
+  // 避免发「仅行业」清单在旧 collector（merge 未生效=替换语义）上抹掉整个订阅面
+  if (hy.needRepair && KPL.universeIds.length && Date.now() - KPL.hyRepairAt > 30000){
+    if (KPL.hyRepairN < 3){
+      KPL.hyRepairAt = Date.now(); KPL.hyRepairN++;
+      kplHyRepair().catch(e => { KPL.hyNote = '行业补引导失败：' + (e.message || e); });
+    } else if (!KPL.hyNote){
+      KPL.hyNote = '已补引导 3 次上游仍未推 881 行业行情（订阅面已含行业板块）——疑似上游行业面未推，点「重新引导」重试';
+    }
+  }
   if (KPL.items.size >= 20){ kplStallCount = 0; return; }
   kplStallCount++;
   if (!KPL.ws || KPL.ws.readyState !== 1){ kplConnect(); return; }
   if (!KPL.status.running){ kplEnsureRunning(); return; }
   if (kplStallCount >= 2){ kplStallCount = 0; KPL.bootstrapped = false; kplBootstrap(); }
-}, 10000);
+}
+setInterval(kplWatchdogTick, 10000);
 async function kplFetchSectorUniverse(){
   const ms = Date.now();
   for (let back = 0; back < 7; back++){
@@ -5991,7 +6064,7 @@ function kplRenderSectors(){
   $('kplSectorTable').innerHTML = html;
   if (!shown) $('kplSectorTable').innerHTML = '<tbody><tr><td class="empty">暂无板块数据 — '
     + (KPL.tab === 'hy'
-        ? (hist ? '行业页签仅实时模式（历史无行业排行读口）' : '等待 WS 推送（引导订阅失败会每 10s 自动重试，到流后自动填充）')
+        ? kplHyEmptyNote(kplHyState()) + ' <button style="margin-left:8px" onclick="kplHyRetry()">重新引导</button>'
         : (hist ? '该日期 HTTP 无返回' : '等待 WS 推送（引导订阅失败会每 10s 自动重试，到流后自动填充）'))
     + '</td></tr></tbody>';
   // 初始加载自动选中板块#1（2026-11 用户需求）：实时模式 WS 到流后首行即触发成分股加载，

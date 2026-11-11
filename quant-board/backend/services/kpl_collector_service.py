@@ -975,18 +975,29 @@ class KplCollectorService:
             self._sub_prio = list(self._chunks(list(self._stock_ids)))
             self._sub_rest = []
 
-    def set_subscriptions(self, stock_ids: List[str], priority_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    def set_subscriptions(self, stock_ids: List[str], priority_ids: Optional[List[str]] = None,
+                          merge: bool = False) -> Dict[str, Any]:
         """动态更新订阅清单（下一个 3001 构造即生效，轮询间隔 ~2s）。
 
         priority_ids：优先块（顶级板块等高频行情），轮询时与普通块交替发——
         单请求 id 数超 ~241 会被服务器 1106 拒绝（2026-10-27 实测），故分块。
+        merge=True（2026-11-11 行业页签补引导）：与现有清单求并（保序去重）而非替换——
+        多页签共享订阅面，替换语义会抹掉别页已订个股；默认 False 保持旧合同。
         fail-visible：空清单拒绝（保留现有订阅），变更结构化返回供调用方透出。
         """
         ids = [str(s).strip() for s in (stock_ids or []) if str(s).strip()]
         if not ids:
             return {"ok": False, "reason": "empty stock_ids rejected", "count": len(self._stock_ids)}
+        prio = [str(s).strip() for s in (priority_ids or []) if str(s).strip()]
+        if merge:
+            old = list(self._stock_ids)
+            old_set = set(old)
+            ids = old + [i for i in ids if i not in old_set]
+            old_prio = list(self._sub_prio_all)
+            old_prio_set = set(old_prio)
+            prio = old_prio + [p for p in prio if p not in old_prio_set]
         self._stock_ids = ids
-        self._sub_prio_all = [str(s).strip() for s in (priority_ids or []) if str(s).strip()]
+        self._sub_prio_all = prio
         self._resplit()
         return {"ok": True, "count": len(ids),
                 "chunks": len(self._sub_prio) + len(self._sub_rest),
@@ -1014,6 +1025,18 @@ class KplCollectorService:
             "stock_detail_snaps": {lane: len(self._detail_snaps[lane])
                                    for lane in self._detail_snaps},
             "stock_detail_cap": self._DETAIL_BLOCK_MAX_STOCKS,
+            # 订阅构成观测（2026-11-11 行业页签空态排查）：hy=881 行业板块数，
+            # 页面引导/补引导是否落地一眼可核（fail-visible，不藏状态）
+            "subscriptions": {
+                "count": len(self._stock_ids),
+                "priority": len(self._sub_prio_all),
+                "hy": sum(1 for i in self._stock_ids if len(i) == 6 and i.startswith("881")),
+                "sectors": sum(1 for i in self._stock_ids
+                               if len(i) == 6 and i.startswith("8") and not i.startswith("881")),
+                "stocks": sum(1 for i in self._stock_ids
+                              if not (len(i) == 6 and i.startswith("8"))),
+                "chunks": len(self._sub_prio) + len(self._sub_rest),
+            },
             "corpus_persist": dict(self._corpus_persist_stats),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             # 会话寿命观测（2026-11-09 抖动根因修复验证）：setup=连接到订阅完成耗时，
