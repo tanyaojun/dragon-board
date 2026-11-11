@@ -38,12 +38,12 @@ _KPL_COLLECT_TIMEOUT_SECONDS = 480  # 最坏 41 调用×(3s 间隔+RTT)+20s 退�
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
 _THEME_LEADER_RESULT_MARKER = "THEME_LEADER_RESULT_JSON:"   # 子进程结果行标记（机读接口，2026-11-02）
 _THEME_LEADER_SETTLE_TIMEOUT_SECONDS = 300   # 结局回填：纯读库+写字段
-# 龙虎榜补齐（B，2026-11-11 用户裁决）：HisBeOnTheLHB 生成时点系统性晚于 17:30 挂链
-# （11-10/11-11 实测：17:30~19:42 仍结构化空态，次晨已完整）——21:30 当日 + 07:10 次晨
-# 两时点，零 token 探针 + 有新数据才定向重跑；lookback 自愈。
+# 龙虎榜补齐（B，2026-11-11 用户裁决）：HisBeOnTheLHB 主榜凌晨批处理生成（11-11 夜
+# 实测：23:42 仍结构化空态，00:08 到达，窗口 (23:42, 00:12]）——00:30 凌晨同夜补齐
+# + 07:10 次晨保险两时点，零 token 探针 + 有新数据才定向重跑；lookback 自愈。
 _LHB_BACKFILL_LOOKBACK = 5
 # 上游分钟级限频先例（kpl_lhb_history 文档串，红线 9）：多日探针间留间隔；
-# 预算 = 4 端点/探针日 × 有 pending 的日数（无 pending 日不探针），仅 21:30/07:10 两时点
+# 预算 = 4 端点/探针日 × 有 pending 的日数（无 pending 日不探针），仅 00:30/07:10 两时点
 _LHB_BACKFILL_PROBE_GAP_S = 3.0
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
@@ -433,7 +433,7 @@ def run_theme_leader_label_once(today: str | None = None, *,
     名单采集；15:35 名单完整性由 17:00 盘后链预检 run_jiuyan_preflight 补齐保障（2026-11-04）。
     龙虎榜主榜（HisBeOnTheLHB）生成系统性晚于 17:30（2026-11-11 实证：17:30~21:37 仍空，
     次晨已完整；约 17:00 生成的是席位榜）——当日主榜事实行由 C 席位/机构兜底 + B 补齐链
-    （run_theme_leader_lhb_backfill_once，21:30/07:10）保障，不再依赖挂链时点（§5.4）。
+    （run_theme_leader_lhb_backfill_once，00:30/07:10）保障，不再依赖挂链时点（§5.4）。
 
     预算语义（§1.2-7）：本步属**预登记日包络**下的常态挂链（2026-11-11 实测 22 doc/日
     ≈112k tokens；旧 ≈29k 为 13 龙头旧口径），故直接带 `--confirm-budget`；无包络的路必须走 CLI 人工批准。
@@ -560,11 +560,11 @@ def theme_leader_lhb_backfill_enabled() -> bool:
 def run_theme_leader_lhb_backfill_once(today: str | None = None, *,
                                        lookback: int = _LHB_BACKFILL_LOOKBACK,
                                        dry_run: bool = False) -> dict[str, Any]:
-    """龙虎榜语料补齐（B，2026-11-11 用户裁决；scheduler 21:30 当日 + 07:10 次晨）。
+    """龙虎榜语料补齐（B，2026-11-11 用户裁决；scheduler 00:30 凌晨 + 07:10 次晨）。
 
-    背景：HisBeOnTheLHB 交易所分组榜生成时点系统性晚于 17:30 挂链（11-10/11-11
-    实测：19:42 仍结构化空态，次晨 07:22 已完整）——17:30 链拿不到主榜，按 §1.2-8
-    整行缺席。本链 = 零 token 探针 + 有新数据才定向重跑：
+    背景：HisBeOnTheLHB 交易所分组榜凌晨批处理生成，系统性晚于 17:30 挂链（11-11 夜
+    实测：23:42 仍结构化空态，00:08 到达，窗口 (23:42, 00:12]；次晨 07:22 已完整）——
+    17:30 链拿不到主榜，按 §1.2-8 整行缺席。本链 = 零 token 探针 + 有新数据才定向重跑：
     - pending 检测：doc.lhbState.mainAvailable=False（A 留痕）；legacy doc（无 lhbState）
       按叙事缺「龙虎榜：」行判；**status=degraded 无条件 pending**（调用失败档需重标，
       含补齐自身失败留下的档——否则失败重跑把 ok 档写成 degraded 后永久搁浅）；

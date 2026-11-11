@@ -279,14 +279,16 @@
 | --- | --- |
 | 11-10 17:35 挂链 | 18/22 doc 无龙虎榜行（主榜结构化空态） |
 | 11-11 07:22 重跑 11-10 | 主榜已完整（96 行/12 组，dropped=0） |
-| 11-11 17:34~19:05 挂链 + 19:42/20:25 探针 | 双端点 errcode=0、info=[]、orderSign=11（未生成）；席位榜 75 条/机构榜 44 条已在 |
+| 11-11 17:34~23:42 挂链+探针 | 双端点 errcode=0、info=[]、orderSign=11（未生成）；席位榜 75 条/机构榜 44 条已在 |
+| **11-12 00:08 主榜到达** | 探针 00:12 捕获 groups=18/stocks=123；生成窗口 (23:42, 00:12]=凌晨批处理 |
 | 交易时段门控（9b9d9142） | 只管 socket 采集；HTTP 链无时段过滤（19:42 实测请求正常），与门控无关 |
 
-**机制**：`run_theme_leader_lhb_backfill_once`（schedule.py），scheduler 21:30 当日 +
-07:10 次晨两时点（`_THEME_LEADER_LHB_BACKFILL_SLOTS`），lookback=5 交易日自愈：
+**机制**：`run_theme_leader_lhb_backfill_once`（schedule.py），scheduler 00:30 凌晨 +
+07:10 次晨两时点（`_THEME_LEADER_LHB_BACKFILL_SLOTS`；旧 21:30 晚间时点实证必空跑已废），
+lookback=5 交易日自愈：
 
 1. pending 检测：doc `lhbState.mainAvailable=False`（A 留痕）；legacy doc（无 lhbState）
-   按叙事缺「龙虎榜：」行判；只动 status=ok；
+   按叙事缺「龙虎榜：」行判；status=ok/degraded（degraded 无条件 pending，修复路径）；
 2. 零 token 探针：`collect_lhb_facts(day)` 每 pending 日一次（4 HTTP 端点，多日间隔 3s，
    上游分钟级限频先例，红线 9）；无 pending 日不探针；
 3. 重跑条件：主榜到达；legacy doc 另席位/机构榜到达也触发（C 兜底行是新语料）；
@@ -296,8 +298,8 @@
 
 **预算包络（用户 2026-11-11 批准「A+B+C 都修，补跑 pool 池龙虎榜数据」）**：每 pending 日
 ≤1 个日包络（2026-11-11 实测：22 doc/日 ≈112k tokens，input+output；旧 ≈29k 为 13 龙头
-旧口径已作废）；探针缺席零消耗；主榜晚于 21:30
-生成时由次晨 07:10 时点承接（同一日最多一次补齐重跑）。席位兜底先行 + 主榜后补的
+旧口径已作废）；探针缺席零消耗；主榜凌晨 ~00:08 生成，
+00:30 时点同夜承接、07:10 保险（同一日最多一次补齐重跑）。席位兜底先行 + 主榜后补的
 双跑场景（如 11-11 人工补跑）属用户显式批准的一次性成本，不进入每日常态包络。
 开关：`THEME_LEADER_LHB_BACKFILL_ENABLED=0` 可关（随投喂总开关门控）。
 

@@ -79,7 +79,7 @@ class SnapshotCollectorScheduler:
         # （2026-11-11 实测 22 doc，旧 ≈29k 为 13 龙头旧口径），幂等；龙虎榜主榜晚于
         # 挂链生成，由 C 席位兜底 + B 补齐链保障，见 _THEME_LEADER_LHB_BACKFILL_SLOTS）
         self._theme_leader_last: dict[str, Any] | None = None
-        # 龙虎榜补齐（B，2026-11-11 用户裁决：21:30/07:10 两时点，零 token 探针+定向重跑）
+        # 龙虎榜补齐（B，2026-11-11 用户裁决：00:30 凌晨/07:10 次晨两时点，零 token 探针+定向重跑）
         self._theme_leader_lhb_backfill_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
@@ -528,19 +528,21 @@ _THEME_CORPUS_ATTEMPTS = (
 # **2026-10-30 用户裁决改 17:30**：晚于 16:10 题材语料刷新 + 15:35 收盘名单（名单完整性
 # 由 17:00 盘后链预检补齐保障，2026-11-04）。**2026-11-11 推翻注**：原改时动机「龙虎榜榜
 # 约 17:00 盘后生成、当日事实行当日可得」对主榜 HisBeOnTheLHB 不成立（17:30~21:37 实证仍空，
-# 约 17:00 生成的是席位榜）；主榜事实由 C 席位兜底 + B 补齐链（21:30/07:10）保障，见 §5.4。
+# 约 17:00 生成的是席位榜）；主榜事实由 C 席位兜底 + B 补齐链（00:30/07:10）保障，见 §5.4。
 # 每日 1 call/龙头（2026-11-11 实测 22 doc ≈112k tokens/日，旧 13 只 ≈29k 为旧口径），
 # 子进程幂等（同股同日不重复投喂）。
 _THEME_LEADER_LABEL_AT = datetime.time(17, 30)
 # 失败重试：每日最多 3 次，间隔 ≥10 分钟（防一次通道抖动吃掉整天 pilot 样本）
 _THEME_LEADER_MAX_ATTEMPTS = 3
 _THEME_LEADER_RETRY_AFTER = datetime.timedelta(minutes=10)
-# 龙虎榜补齐时点（B，2026-11-11 用户裁决）：HisBeOnTheLHB 生成系统性晚于 17:30 挂链
-# （11-10/11-11 实测：19:42 仍空，次晨已完整）——21:30 当日补齐 + 07:10 次晨 catching-up
-# （函数内 lookback=5 自愈，任一时点可补历史 pending 日）；零 token 探针，有新数据才
-# 定向重跑；每时点每日一次尝试，失败由下一时点/次日自愈（进程重启后当前时点自动补）。
+# 龙虎榜补齐时点（B，2026-11-11 用户裁决；时点经 11-11 夜实测钉死）：HisBeOnTheLHB
+# 主榜凌晨批处理生成——11-11 23:42 仍结构化空态，00:08 实测到达（探针 00:12 捕获
+# groups=18/stocks=123），生成窗口 (23:42, 00:12]。故 00:30 凌晨时点同夜补齐（主榜
+# 到达后、次日竞价前）+ 07:10 次晨保险（生成延迟时承接）；旧 21:30 晚间时点实证必空跑
+# 已废。函数内 lookback=5 自愈，任一时点可补历史 pending 日；零 token 探针，有新数据
+# 才定向重跑；每时点每日一次尝试，失败由下一时点/次日自愈（进程重启后当前时点自动补）。
 _THEME_LEADER_LHB_BACKFILL_SLOTS = (
-    (datetime.time(21, 30), "evening"),
+    (datetime.time(0, 30), "night"),
     (datetime.time(7, 10), "morning"),
 )
 
@@ -656,7 +658,7 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                             logger.info("theme leader label %s: %s", trading_date,
                                         json.dumps(leader_result, ensure_ascii=False,
                                                    default=str)[:200])
-                # 龙虎榜补齐（B，2026-11-11 用户裁决）：21:30 当日 / 07:10 次晨，
+                # 龙虎榜补齐（B，2026-11-11 用户裁决）：00:30 凌晨 / 07:10 次晨，
                 # 零 token 探针 + 有新数据才定向重跑（lookback 自愈在函数内）。
                 for bf_time, bf_slot in _THEME_LEADER_LHB_BACKFILL_SLOTS:
                     bf_key = f"theme_leader_lhb_backfill:{bf_slot}"
