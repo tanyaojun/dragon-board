@@ -1524,3 +1524,75 @@ class TestReviewFixes20261111:
         evs = _drain_q(q)
         assert any(e["type"] == "corpus_persist_error" for e in evs)
         assert svc._corpus_persist_stats["bogus_fail"] == 1
+
+
+class TestDetailBlockSend20261111:
+    """2026-11-11 探针定案修复：detail 订阅块发 + 静默期 flush 合同。
+
+    证据链（.tmp_review/kpl_probe_*_20261111）：服务器对 detail 订阅帧零 ErrResp
+    静默，响应在「发送停止后 <1s」全量批回（K1 10 帧块→0.3s 回 19 帧；K3 124 帧
+    连发 50s→0.1s 回 142 帧）；drain 每 tick 4 帧细水长流（I1/生产）永不 flush。
+    修复：① drain 整队列块发（块后读循环自然静默）；② 每 lane 限量
+    _DETAIL_BLOCK_MAX_STOCKS（块长压缩到会话寿命内）。
+    """
+
+    def test_drain_sends_whole_queue_in_one_call(self):
+        """块发语义：一次 drain 发完整个 pending 队列，随后队列空（读循环静默）。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False)
+        svc._stock_detail_subs = True
+        sids = ["60%04d" % i for i in range(10)]
+        for lane in svc._detail_lane_cmds:
+            with svc._detail_locks[lane]:
+                svc._pending_detail[lane] = list(sids)
+        sock = type("S", (), {"sent": [], "sendall": lambda self, b: self.sent.append(b)})()
+        svc._drain_detail_subs(sock, iter(range(1, 10 ** 6)).__next__)
+        assert len(sock.sent) == 4 * len(sids), "块发=整队列一次发完"
+        assert all(not svc._pending_detail[l] for l in svc._pending_detail)
+
+    def test_drain_empty_pending_noop(self):
+        """pending 空 → 零发送（块后静默不被破坏）。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False)
+        svc._stock_detail_subs = True
+        sock = type("S", (), {"sent": [], "sendall": lambda self, b: self.sent.append(b)})()
+        svc._drain_detail_subs(sock, iter(range(1, 10 ** 6)).__next__)
+        assert sock.sent == []
+
+    def test_queue_cap_limits_subscription_face(self):
+        """限量语义：每 lane 只入队前 _DETAIL_BLOCK_MAX_STOCKS 只，超限跳过。"""
+        cap = KplCollectorService._DETAIL_BLOCK_MAX_STOCKS
+        svc = KplCollectorService(FakeCodec(), human_delay=False,
+                                  stock_detail_max_stocks=cap)
+        svc._stock_detail_subs = True
+        pool = ["60%04d" % i for i in range(cap + 10)]
+        n = svc._queue_detail_new(pool)
+        assert n == cap * len(svc._detail_lane_cmds), "每 lane 只入队 cap 只"
+        for lane in svc._detail_lane_cmds:
+            assert len(svc._detail_subscribed[lane]) == cap
+            assert svc._pending_detail[lane] == pool[:cap], "按池序取前 cap 只"
+
+    def test_queue_cap_override_via_constructor(self):
+        """env 旋钮：stock_detail_max_stocks 覆盖默认 cap；非法值兜底 >=1。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False,
+                                  stock_detail_max_stocks=3)
+        svc._stock_detail_subs = True
+        n = svc._queue_detail_new(["60%04d" % i for i in range(10)])
+        assert n == 3 * len(svc._detail_lane_cmds)
+        assert svc._DETAIL_BLOCK_MAX_STOCKS == 3
+        svc2 = KplCollectorService(FakeCodec(), human_delay=False,
+                                   stock_detail_max_stocks=0)
+        assert svc2._DETAIL_BLOCK_MAX_STOCKS == 1, "非法 0 兜底 >=1"
+
+    def test_mid_session_new_member_beyond_cap_skipped(self):
+        """会话中盘新成员超 cap → 跳过（不破坏已发块后的静默）。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False,
+                                  stock_detail_max_stocks=2)
+        svc._stock_detail_subs = True
+        svc._queue_detail_new(["600001", "600002"])
+        n = svc._queue_detail_new(["600003", "600004"])
+        assert n == 0, "已满 cap → 新成员不入队（下一会话按池序重选）"
+
+    def test_status_exposes_detail_cap(self):
+        """status 透出 stock_detail_cap（覆盖度观测）。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False,
+                                  stock_detail_max_stocks=7)
+        assert svc.status()["stock_detail_cap"] == 7

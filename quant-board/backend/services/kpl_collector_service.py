@@ -286,6 +286,9 @@ class KplCollectorService:
         # 进入 idle_offhours 每分钟复查，下一时段自动恢复。夜间 7×24 TTL 重连的
         # 纯空转连接是风控打标的累积来源，砍掉后日常连接数降一个数量级。
         enforce_trading_hours: bool = True,
+        # 详情四通道每 lane 订阅面限量（2026-11-11 探针定案：块发后静默才触发
+        # 服务器 flush，块长必须压缩到会话寿命内；env KPL_DETAIL_MAX_STOCKS）
+        stock_detail_max_stocks: int = 15,
     ):
         self._codec = codec
         self._host = host
@@ -307,6 +310,8 @@ class KplCollectorService:
         self._drain_pause = (0.3, 0.15)
         self._ka_610 = True
         self._setup_inline_subs = bool(setup_inline_subs)
+        self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
+        self._DETAIL_BLOCK_MAX_STOCKS = self._stock_detail_max_stocks
         self._short_session_streak = 0   # 重连螺旋防线：连续短命会话连击数（<60s 计连击）
         self._enforce_trading_hours = bool(enforce_trading_hours)
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
@@ -782,7 +787,11 @@ class KplCollectorService:
             sent += 1
 
     def _queue_detail_new(self, stock_ids: List[str]) -> int:
-        """四通道新入池成员入队订阅（去重；会话线程 drain 发送）。开关关 → 零动作。"""
+        """四通道新入池成员入队订阅（去重；会话线程 drain 块发）。开关关 → 零动作。
+
+        每 lane 限量 _DETAIL_BLOCK_MAX_STOCKS（2026-11-11 探针定案：块长必须压缩
+        到会话寿命内，且块后静默才能触发服务器 flush）：超限成员不入队（
+        _detail_subscribed 也不占用名额位，下一会话按池序重选）。"""
         if not self._stock_detail_subs:
             return 0
         queued = 0
@@ -791,10 +800,13 @@ class KplCollectorService:
             with self._detail_locks[lane]:
                 for sid in stock_ids:
                     sid = str(sid or "").strip()
-                    if sid and sid not in self._detail_subscribed[lane]:
-                        self._detail_subscribed[lane].add(sid)
-                        self._pending_detail[lane].append(sid)
-                        new_ids.append(sid)
+                    if not sid or sid in self._detail_subscribed[lane]:
+                        continue
+                    if len(self._detail_subscribed[lane]) >= self._DETAIL_BLOCK_MAX_STOCKS:
+                        break
+                    self._detail_subscribed[lane].add(sid)
+                    self._pending_detail[lane].append(sid)
+                    new_ids.append(sid)
             if new_ids:
                 queued += len(new_ids)
                 self._emit(KplEvent(type="detail_subs_status", ts=time.time(),
@@ -859,9 +871,15 @@ class KplCollectorService:
                 return
             sent += 1
 
-    # 详情四通道 drain 每 tick 总预算（帧间限速沿 2203/2013 现值：0.3s 拟人停顿；
-    # 四通道交错各 1 帧/tick，频控预算=涨停池成员数×4/会话，AGENTS §1.2-9）
-    _DETAIL_DRAIN_TICK_FRAMES = 1
+    # 详情四通道发送语义（2026-11-11 探针 K1/K3/I1 定案）：服务器对 detail 订阅的
+    # 响应是「静默期 flush」——订阅帧连续发送期间零响应，发送停止后 <1s 内全量
+    # 批回（K1：10 帧块停发后 0.3s 即回 19 帧；K3：124 帧连发 50s 后 0.1s 内
+    # 批回 142 帧；I1/生产 drain 每 tick 4 帧细水长流，tick 间 ~7-9s 间隙不足以
+    # 触发 flush → 会话全程零响应）。因此：① drain 改整队列块发（一次调用发完
+    # pending，随后读循环自然静默 → flush）；② 订阅面限量 _DETAIL_BLOCK_MAX_STOCKS
+    # （默认 15 只/lane，60 帧×0.375s≈22s 块长，50s 短命会话内也能完成 flush；
+    # env KPL_DETAIL_MAX_STOCKS 可调，未订阅成员下一会话重建时按池序重选）。
+    _DETAIL_BLOCK_MAX_STOCKS = 15   # 类属性默认；实例覆盖见 __init__（env 可调）
 
     @staticmethod
     def _detail_req_for(cmd: int, sid: str) -> bytes:
@@ -873,16 +891,18 @@ class KplCollectorService:
         return proto.build_hq_req_pb(sid)   # 2010/2202 同 Hq.HQReq{f1 stockId}
 
     def _drain_detail_subs(self, sock: Any, next_seq: Any) -> None:
-        """发送待订阅详情四通道帧（与 _drain_zt_reason_subs 同款失败门禁：send 失败置
-        _sock_dead 静默，未发帧下一会话 6g 全量补订自愈）。四通道交错各限 1 帧/tick。
+        """发送待订阅详情四通道帧。2026-11-11 块发语义（探针 K1/K3/I1 定案的静默期
+        flush 合同）：一次调用发完整个 pending 队列（块），随后读循环不再发 detail
+        帧（新入池成员的小块同理）→ 服务器静默期触发全量批回。与 _drain_zt_reason_subs
+        同款失败门禁：send 失败置 _sock_dead 静默，未发帧下一会话 6g 全量补订自愈。
         setup_inline_subs=True 时本函数永久早退，改由 6h 处 _flush_pending_inline
         在 setup 窗口内内联发送（0x40 帧窗口外发送=ErrResp 1002 断连，探针 E1-E4）。"""
         if not self._stock_detail_subs or self._sock_dead or self._setup_inline_subs:
             return
         for lane, cmd in self._detail_lane_cmds.items():
             with self._detail_locks[lane]:
-                batch = self._pending_detail[lane][:self._DETAIL_DRAIN_TICK_FRAMES]
-                del self._pending_detail[lane][:self._DETAIL_DRAIN_TICK_FRAMES]
+                batch = list(self._pending_detail[lane])
+                self._pending_detail[lane] = []
             sent = 0
             for sid in batch:
                 req = self._detail_req_for(cmd, sid)
@@ -977,6 +997,7 @@ class KplCollectorService:
                                         for lane in self._detail_lane_cmds},
             "stock_detail_snaps": {lane: len(self._detail_snaps[lane])
                                    for lane in self._detail_snaps},
+            "stock_detail_cap": self._DETAIL_BLOCK_MAX_STOCKS,
             "corpus_persist": dict(self._corpus_persist_stats),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             # 会话寿命观测（2026-11-09 抖动根因修复验证）：setup=连接到订阅完成耗时，

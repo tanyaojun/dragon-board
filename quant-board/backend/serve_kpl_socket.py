@@ -98,6 +98,7 @@ _service = KplCollectorService(
     lhb_realtime_count=_LHB_REALTIME_COUNT,
     zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS,
     stock_detail_subs=_STOCK_DETAIL_SUBS,
+    stock_detail_max_stocks=int(os.environ.get("KPL_DETAIL_MAX_STOCKS", "15") or 15),
     auth_phase_delay=_AUTH_PHASE_DELAY,
     loop_send_grace_s=float(os.environ.get("KPL_LOOP_SEND_GRACE", "5")),
     # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；
