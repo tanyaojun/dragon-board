@@ -469,6 +469,12 @@ def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
     退位行不进续板率（沿 §18 口径），但身位替代计数单独从 all_rows 取——
     替代正是身位题的负结局信号，不得静默丢弃。
 
+    交叉校准（A，2026-11-12 用户批准）：硬度/身位各组另出续板概率校准三件
+    （scored/meanModelProb/gapPp）——回答「模型答续板时是否已消化催化/身位」：
+    若 soft_meme/relay_seat 组均值概率系统性高于实际续板率 → 按 §1.2-6 修题面
+    （换代+预登记+批准），**不改投影公式**（公式=模型答案忠实投影，程序侧修正
+    =双重计数+无数据校准层）。gated/insufficient（modelProb=None）不入均值。
+
     口径（review M1 修复）：只收 **live 且 questionSetVersion=v17** 样本——
     leaderHeadroom 便捷字段 v5 起各代都有，不过滤会把 v16「1-3 板→peak」硬起判
     的偏重分布混入 v17 方向代理（跨代不混评纪律）；回填样本同排除（泄漏风险，
@@ -493,6 +499,17 @@ def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
                 if isinstance(r.get("outcomeBoardNNextDay"), (int, float))]
         return round(sum(vals) / len(vals), 2) if vals else None
 
+    def _calib(rows: list[dict]) -> dict:
+        """续板概率×分组交叉校准：meanModelProb 只聚合 modelProb 非 None 的
+        scored 样本；gapPp=模型均值−实际续板率（百分点，正=系统性高估）。"""
+        scored = [r for r in rows if r.get("modelProb") is not None]
+        rate = _rate(rows)
+        mean = (sum(r["modelProb"] for r in scored) / len(scored)) if scored else None
+        gap = ((mean - rate) * 100) if mean is not None and rate is not None else None
+        return {"scored": len(scored),
+                "meanModelProb": round(mean, 3) if mean is not None else None,
+                "gapPp": round(gap, 1) if gap is not None else None}
+
     hard: dict[str, list[dict]] = {}
     seat: dict[str, list[dict]] = {}
     head: dict[str, list[dict]] = {}
@@ -515,15 +532,18 @@ def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
             if k:
                 superseded_by_seat[k] = superseded_by_seat.get(k, 0) + 1
     return {
-        "byCatalystHardness": {k: {"n": len(v), "sealRate": _rate(v), "day2": _day2(v)}
+        "byCatalystHardness": {k: {"n": len(v), "sealRate": _rate(v), "day2": _day2(v),
+                                   **_calib(v)}
                                for k, v in sorted(hard.items())},
         "bySeatDurability": {k: {"n": len(v), "sealRate": _rate(v),
                                  "boardNNextMean": _board_n_mean(v),
-                                 "supersededN": superseded_by_seat.get(k, 0)}
+                                 "supersededN": superseded_by_seat.get(k, 0),
+                                 **_calib(v)}
                              for k, v in sorted(seat.items())},
         "byHeadroom": {k: {"n": len(v), "sealRate": _rate(v)}
                        for k, v in sorted(head.items())},
         "note": "只收 live v17 样本（跨代/回填不混评，review M1）；n<10 格只作方向性信号；"
+                "gapPp=模型均值−实际率（正=高估；系统性偏差→修题面不改公式，A 裁决口径）；"
                 "空间×实际再走板数混淆矩阵需结算扩展（登记不实施）",
     }
 
@@ -588,13 +608,23 @@ def main() -> None:
             d2 = v.get("day2") or {}
             print(f"  催化硬度={k}  n={v['n']} 续板率 "
                   f"{'-' if v['sealRate'] is None else format(v['sealRate'], '.1%')}"
-                  + (f"  T+2 均 {d2['meanPct']:+.2f}%（n={d2['n']}）" if d2.get("n") else ""))
+                  + (f"  T+2 均 {d2['meanPct']:+.2f}%（n={d2['n']}）" if d2.get("n") else "")
+                  + _calib_str(v))
         for k, v in (vg.get("bySeatDurability") or {}).items():
             print(f"  身位={k}  n={v['n']} 续板率 "
                   f"{'-' if v['sealRate'] is None else format(v['sealRate'], '.1%')}"
                   f"  退位 {v['supersededN']} 只"
-                  + (f"  次日板块家数均 {v['boardNNextMean']}" if v.get("boardNNextMean") is not None else ""))
+                  + (f"  次日板块家数均 {v['boardNNextMean']}" if v.get("boardNNextMean") is not None else "")
+                  + _calib_str(v))
     print(f"\n验收：{out['acceptance']['verdict']}")
+
+
+def _calib_str(v: dict) -> str:
+    """summary 行交叉校准段（A）：模型均概率与 gapPp；scored=0 不出段。"""
+    if not v.get("scored"):
+        return ""
+    return (f"  模型均 {v['meanModelProb']:.1%}"
+            f"  gap {v['gapPp']:+.1f}pp（scored={v['scored']}）")
 
 
 if __name__ == "__main__":

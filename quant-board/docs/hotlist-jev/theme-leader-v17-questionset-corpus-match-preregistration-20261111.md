@@ -322,7 +322,8 @@ v17 实测：续板 869+空间 736+硬度 351+身位 319=**2275 字** instructio
 2. **空间题**：档位分布方差>0（区分度恢复）；机会日（锚≥1板率≥三成样本）peak 占比
    显著低于 v16 同窗；档位×实际再走板数混淆矩阵（`tl_headroom_audit` 口径）方向正确。
 3. **新题**：硬度×T+2 溢价、身位×T+1 续板/身位替代分组方向正确；≥20 题次首评，n<10
-   的格只作方向性信号（归因文档 §7 纪律）。
+   的格只作方向性信号（归因文档 §7 纪律）。追加观察项：续板概率×硬度/身位
+   交叉校准（§9.4，A；只增观察、不改本节冻结判据）。
 4. **empty_with_evidence 率<5%**（v13 审计脚本继续监视，新题纳入）。
 5. **跨题一致性**：程序侧结构化审计（choices+锚读数；reason 不可落库——jev schema
    服务端锁死，v15 追记①），`auditFlag=deviation_from_anchor` 沿 v15 机制扩新题。
@@ -466,3 +467,24 @@ v16 已标答 doc 保留只读，不 force 重跑；**首个 v17 ok 日后逐条
 
 修复后全套 **1838 passed, 6 skipped**。review 材料=.tmp_v17_review.diff（v17-only，
 剔除用户并行 RPLATE/kpl-socket 改动）。
+
+### 9.4 续板概率×新题交叉校准（A，2026-11-12 用户批准实施）
+
+**背景**：用户问「增催化/身位两题后，续板概率算法是否需同步优化」。裁决：**投影
+公式不改**——续板概率=模型续板题四档分布的中值加权期望（`continue_point_estimate`，
+后端/前端/eval 三处同口径），四题同调用同叙事，催化/身位信息已在续板答案内；
+程序侧按 hardness/seat 乘修正系数=双重计数+无已结算数据支撑的新校准层（v15 写死
+率值漂移教训、§1.2-6）。**该同步的是评估层**：用数据裁决「模型是否已消化新维度」。
+
+**实施**（`scripts/theme_leader_pilot_eval.py`，纯 eval 扩展，不动题面/hash/前端）：
+- `_v17_groups` 硬度/身位各组增 `scored`/`meanModelProb`/`gapPp` 三件：均值只聚合
+  modelProb 非 None 样本（gated/insufficient 不入均值，不编造）；gapPp=模型均值−
+  实际续板率（百分点，正=系统性高估）；全门组 mean/gap=None。
+- summary 行增校准段（`模型均 X% gap +Ypp（scored=n）`）；note 披露裁决口径。
+- 口径沿 M1：只收 live v17；n<10 只作方向性信号。
+
+**裁决规则**：若 soft_meme/relay_seat 组均值概率系统性高于实际续板率（n≥10 方向、
+≥20 首评）→ 按 §1.2-6 修**题面**（换代+预登记+批准），投影公式始终不动。
+
+**测试**：`test_v17_groups_cross_calibration`（gated 不入均值/全门组 None/gap 符号）+
+既有分组测试补校准断言。零 jev 真调。

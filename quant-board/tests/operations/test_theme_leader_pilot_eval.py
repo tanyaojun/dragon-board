@@ -404,6 +404,10 @@ def test_v17_groups_hardness_seat_headroom(patched):
     hard = vg["byCatalystHardness"]
     assert hard["hard_fact"]["n"] == 1 and hard["hard_fact"]["sealRate"] == 1.0
     assert hard["hard_fact"]["day2"]["meanPct"] == 3.2
+    # A 交叉校准：默认 probs 归一后模型均=0.55，实际 100% → gap −45pp
+    assert hard["hard_fact"]["scored"] == 1
+    assert hard["hard_fact"]["meanModelProb"] == 0.55
+    assert hard["hard_fact"]["gapPp"] == -45.0
     assert hard["soft_meme"]["n"] == 1 and hard["soft_meme"]["sealRate"] == 0.0
     assert hard["soft_meme"]["day2"]["meanPct"] == -2.0
     seat = vg["bySeatDurability"]
@@ -441,3 +445,29 @@ def test_v17_groups_exclude_legacy_and_backfill(patched):
     assert vg["byHeadroom"] == {"space_1": {"n": 1, "sealRate": 1.0}}, \
         "v16/backfill 的 peak 不混入"
     assert vg["byCatalystHardness"]["hard_fact"]["n"] == 1
+
+
+def test_v17_groups_cross_calibration(patched):
+    """A（2026-11-12 用户批准）：续板概率×硬度/身位交叉校准；gated/insufficient
+    不入均值；gapPp=模型均值−实际率（正=高估）；全门组 mean/gap=None 不编造。"""
+    a = _label("603278", "大业股份", version="v17", probs={"mid_45_65": 1.0})
+    a.update({"leaderCatalystHardness": "soft_meme", "leaderSeatDurability": "relay_seat"})
+    b = _label("603028", "赛福天", version="v17", probs={"high_ge65": 1.0})
+    b.update({"leaderCatalystHardness": "soft_meme", "leaderSeatDurability": "relay_seat"})
+    c = _label("603029", "被门行", version="v17", probs={"insufficient": 1.0})
+    c.update({"leaderCatalystHardness": "soft_meme"})
+    d = _label("603030", "全门组", version="v17", probs={"insufficient": 1.0})
+    d.update({"leaderCatalystHardness": "hard_fact"})
+    db = patched([a, b, c, d], {"603278", "603029"},
+                 dates=(("2026-10-19",), ("2026-10-20",)))
+    out = E.evaluate(db, "2026-10-19")
+    vg = out["v17Groups"]
+    sm = vg["byCatalystHardness"]["soft_meme"]
+    assert sm["n"] == 3 and sm["scored"] == 2, "insufficient 不入均值"
+    assert sm["meanModelProb"] == 0.65
+    assert abs(sm["sealRate"] - 2 / 3) < 1e-9
+    assert sm["gapPp"] == -1.7, "(0.65−2/3)×100≈−1.7"
+    rs = vg["bySeatDurability"]["relay_seat"]
+    assert rs["scored"] == 2 and rs["meanModelProb"] == 0.65 and rs["gapPp"] == 15.0
+    hf = vg["byCatalystHardness"]["hard_fact"]
+    assert hf["scored"] == 0 and hf["meanModelProb"] is None and hf["gapPp"] is None
