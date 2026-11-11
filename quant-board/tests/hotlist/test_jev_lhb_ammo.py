@@ -42,7 +42,10 @@ def test_collect_joins_stock_board_and_agency():
         _fetch_stock_board=lambda d: _raw_stock_board(),
         _fetch_agency=lambda d: _raw_agency())
     assert facts["ok"] is True
-    assert facts["version"] == "2026-10-30c"
+    assert facts["version"] == "2026-11-11"
+    # 端点级成功标志（2026-11-11）：双端点均成功时均 True，叙事层用于区分
+    # 「验证后的全市场无上榜」与「个股行端点失败但分组榜单在手」
+    assert facts["list_ok"] is True and facts["stock_ok"] is True
     assert facts["stocks"][0]["code"] == "601188"
     assert facts["stock_board"]["601188"]["buy_in"] == "121003701.36"
     assert facts["agency"]["601188"]["buy_in"] == 3225162.13

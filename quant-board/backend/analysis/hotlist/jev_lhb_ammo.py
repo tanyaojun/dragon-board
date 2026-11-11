@@ -28,15 +28,19 @@ from backend.services import kpl_lhb_history, kpl_lhb_sale
 # 2026-10-30c：接入营业部个股榜（GetStockList，席位买入额）与机构榜（GetAgencyListV2，
 # 机构净买额可负）——原 LHB 行只有盘中主力大单资金流口径，非交易所席位额；扩维后相关
 # 个股可披露席位/机构事实。判据/题集零变化。
-AMMO_VERSION_LHB = "2026-10-30c"
+# 2026-11-11：增加结构化端点标志 list_ok/stock_ok（个股行端点失败时 groups 兜底 join，
+# 已取得的分组榜单不得丢弃、更不得误称「全市场无上榜」——2026-11-11 语料丢龙虎榜数据
+# 复盘）。判据/题集零变化。
+AMMO_VERSION_LHB = "2026-11-11"
 
 
 def collect_lhb_facts(date: str, *, _fetch_list=None, _fetch_stock=None,
                       _fetch_stock_board=None, _fetch_agency=None) -> Dict[str, Any]:
     """按日收集龙虎榜事实（历史链为主；失败结构化降级，不伪装空）。
 
-    返回 {ok, date, version, groups, stocks, stock_board, agency, degraded/reason}。
-    groups: [{reason, bid, stocks:[{code,name,price,deviation,amount_yuan,turn}]}]；
+    返回 {ok, date, version, groups, stocks, stock_board, agency, list_ok, stock_ok,
+    degraded/reason}。groups: [{reason, bid, stocks:[{code,name,price,deviation,
+    amount_yuan,turn}]}]；
     stocks: [{code,name,plate,price,zf,main_net_yuan,main_buy_yuan,main_sell_yuan,reason}]；
     stock_board: code → {name, buy_in(席位买入额元), join_num(语义待证不渲染), turnover}
       （GetStockList 营业部个股榜，2026-10-30c）；
@@ -115,6 +119,10 @@ def collect_lhb_facts(date: str, *, _fetch_list=None, _fetch_stock=None,
         "stocks": stocks,
         "stock_board": stock_board,
         "agency": agency,
+        # 端点级成功标志（2026-11-11）：叙事层区分「验证后的全市场无上榜」（双端点均成功
+        # 且全空）与「个股行端点失败但分组榜单在手」（groups 兜底 join，不得丢弃）
+        "list_ok": parsed_list is not None,
+        "stock_ok": parsed_stock is not None,
         "empty_structured": bool(parsed_list and not groups
                                  and (parsed_list.get("order_sign") or [])),
         "order_sign_count": len((parsed_list or {}).get("order_sign") or []),
