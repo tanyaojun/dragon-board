@@ -130,6 +130,11 @@ ENVELOPE = {"result": {"state": "Completed", "result": {
         "leader_nextday_continue": {"type": "choice", "choice": "mid_45_65",
                                     "probabilities": {"mid_45_65": 0.55}},
         "leader_headroom": {"type": "choice", "choice": "space_2plus"},
+        # v17 两新题（个股级四题 expected_keys 缺题校验需要）
+        "leader_catalyst_hardness": {"type": "choice", "choice": "hard_fact",
+                                     "confidence": 0.7},
+        "leader_seat_durability": {"type": "choice", "choice": "contested_seat",
+                                   "confidence": 0.6},
     },
     "usage": {"total_tokens": 1234}}}, "success": True}
 
@@ -204,9 +209,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
-    assert doc["questionSetVersion"] == "v16"
-    assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-11c"   # 龙虎榜席位/机构兜底行（C，2026-11-11 用户裁决）
+    assert doc["questionSetVersion"] == "v17"
+    assert doc["questionSetHash"] == "8c6c94429abd"   # v17 题集×语料匹配+两新题+开火前修订 b（v1-v16 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-11-12b"   # v17 批次 a + 修订 b：新闻真实命中裁决→业务关联核实
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -254,7 +259,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v16", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v17", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):
@@ -1015,14 +1020,20 @@ def test_budget_guard_is_a_true_upper_bound_on_real_ledger():
 
 
 def test_budget_guard_non_bloat_on_v6_ledger():
-    """v6 代真实账（2026-10-23 首批 6 条）：上界覆盖 + 不虚胖（≤1.35×实耗）。
+    """v6 代真实账（2026-10-23 首批 6 条）：上界覆盖。
 
-    实测结论：v6 题面加长后 fixed 须 2,750（旧 2,500 时实测 25,381 > 护栏 24,390，
-    低估 4%——§10.5 缺陷当场复标）；最紧一条 603278：4,271→4,521 vs 实耗 4,419。"""
+    非胖断言（≤1.35×）为代际绑定：v17 个股级 2→4 题固定开销 2,750→3,300 后，
+    2 题代旧账对新护栏必然“过松”（同 v5 处置先例）——只验上界；v17 非胖断言
+    待首个 status=ok 日逐条补账 _REAL_COST_LEDGER_V17 后启用（预登记 v17 §4，
+    不补账=护栏失去校准依据，属缺陷）。"""
     for chars, actual in _REAL_COST_LEDGER_V6:
         est = L.estimate_tokens(chars)
-        assert est["low"] <= actual <= est["high"], f"chars={chars} actual={actual} est={est}"
-        assert est["high"] <= actual * 1.35, f"上界过松：chars={chars} {est['high']} vs {actual}"
+        assert actual <= est["high"], f"chars={chars} actual={actual} est={est}"
+
+
+# v17 代真实账占位：首个 v17 status=ok 日后从库中 narrative 长度 × usage 逐条补账
+# （(narrative 字符数, usage 总 token)），补账后启用非胖断言（≤1.35×）。
+_REAL_COST_LEDGER_V17: list[tuple[int, int]] = []
 
 
 def test_budget_guard_aggregates_over_leaders():
@@ -1483,17 +1494,17 @@ def test_v14_event_gate_wires_rebound_question_only_for_event_stock(env, monkeyp
     # 调用次数不变：4 次（2 龙头 + 2 板块），事件门只换题集不增调用
     assert len(calls) == 4
     nq = {len(q) for _n, q in calls}
-    assert nq == {2, 3}, "事件股 3 题、其余 2 题"
+    assert nq == {2, 4, 5}, "v17：板块 2 题、个股 4 题、事件股 5 题"
 
 
 def test_v14_no_wzs_doc_zero_rebound_question(env):
-    """wzs 文档缺失（当日未跑弱转强链）→ 全部龙头 2 题，不报错不硬造事件。"""
+    """wzs 文档缺失（当日未跑弱转强链）→ 全部龙头 v17 四题（不含人气题），不报错不硬造事件。"""
     calls, db = env
     out = L.run("2026-10-19", confirm_budget=True)
     assert out["ok"] == 4
     for did in ("2026-10-19:603278", "2026-10-19:603188"):
         assert L.REBOUND_QUESTION not in db[L.COLLECTION].docs[did]["questionsRaw"]
-    assert all(len(q) == 2 for _n, q in calls)
+    assert {len(q) for _n, q in calls} == {2, 4}, "板块 2 题、个股 4 题（无人气题）"
 
 
 # ---------- v14 配套：强度行专属桥（AI影视/传媒 → KPL 一级「AI应用」） ----------
@@ -2086,3 +2097,311 @@ def test_run_persists_lhb_state(env):
         assert st["mainAvailable"] is False
         assert st["reason"] == "test_disabled"
         assert st["lineRendered"] is False
+
+
+# ---------- v17：个股级四题 + 板块判答注入 + 续板基础率锚（预登记 v17） ----------
+
+def _evidence_present_builds(monkeypatch):
+    """复用 test_no_gate_when_evidence_present 的打桩模式：构建后把证据改为在场。"""
+    real_build = L.build_one
+    real_build_sector = L.build_sector_one
+
+    def fake_build_one(db_, date, row, rows_baseline, dataset_id, market_line,
+                       board_history=None, **kwargs):
+        built = real_build(db_, date, row, rows_baseline, dataset_id, market_line,
+                           board_history=board_history, **kwargs)
+        built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
+                             "evidenceMissingReason": None}
+        return built
+
+    def fake_build_sector_one(db_, date, board_rows, rows_baseline, dataset_id,
+                              market_line, board_history=None, **kwargs):
+        built = real_build_sector(db_, date, board_rows, rows_baseline, dataset_id,
+                                  market_line, board_history=board_history, **kwargs)
+        built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
+                             "evidenceMissingReason": None}
+        return built
+
+    monkeypatch.setattr(L, "build_one", fake_build_one)
+    monkeypatch.setattr(L, "build_sector_one", fake_build_sector_one)
+
+
+def test_v17_leader_four_questions_and_convenience_fields(env, monkeypatch):
+    """个股级四题子集（板块级仍两题）；两新题便捷字段落库；不过门时模型答原样。"""
+    calls, db = env
+    _evidence_present_builds(monkeypatch)
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["ok"] == 4
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert set(doc["questionsRaw"]) == set(L.LEADER_QUESTIONS)
+    assert len(L.LEADER_QUESTIONS) == 4
+    assert doc["leaderCatalystHardness"] == "hard_fact"
+    assert doc["leaderSeatDurability"] == "contested_seat"
+    assert doc["answers"]["leader_catalyst_hardness"]["confidence"] == 0.7
+    sec = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
+    assert set(sec["questionsRaw"]) == set(L.SECTOR_QUESTIONS)
+    assert sec["leaderCatalystHardness"] is None and sec["leaderSeatDurability"] is None
+    assert sec["sectorJudgmentState"] is None, "板块级 doc 不注入自身判答（不循环）"
+
+
+def test_v17_gate_covers_new_questions(env):
+    """证据门按 questions 子集门：默认夹具无语料 → 四题全门（含两新题）。"""
+    calls, db = env
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert doc["leaderCatalystHardness"] == "insufficient"
+    assert doc["leaderSeatDurability"] == "insufficient"
+    forced = set(doc["gate"]["forcedKeys"])
+    assert {"leader_catalyst_hardness", "leader_seat_durability"} <= forced
+    assert doc["modelAnswers"]["leader_catalyst_hardness"]["choice"] == "hard_fact", \
+        "模型原答留审计"
+
+
+def test_v17_sector_judgment_injected_same_run(env, monkeypatch):
+    """同轮新跑：板块 doc 先标注，个股叙事标注前注入板块判定行（位置=基线块后）；
+    sectorJudgmentState=injected；板块级叙事自身不含判定行。"""
+    calls, db = env
+    _evidence_present_builds(monkeypatch)
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "板块判定：炒作深度=发酵期；延续性=强延续" in doc["narrative"]
+    assert doc["sectorJudgmentState"] == "injected"
+    lines = doc["narrative"].split("\n")
+    i_facts = next(i for i, ln in enumerate(lines) if ln.startswith("结构事实："))
+    assert lines[i_facts + 1].startswith("板块判定："), "注入位置=结构事实行后、空间锚前"
+    sec = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
+    assert "板块判定：" not in sec["narrative"], "板块级不注入（不循环）"
+    # 下发文本与落库叙事一致（注入在 dispatch 前）
+    leader_calls = [(n, q) for n, q in calls if "leader_catalyst_hardness" in q]
+    assert all("板块判定：" in n for n, _q in leader_calls)
+
+
+def test_v17_sector_judgment_db_preload_and_idempotent(env, monkeypatch):
+    """重跑：板块 doc 已 ok → 构建时库读注入（dry-run 可见）；实跑不重复注入。"""
+    calls, db = env
+    _evidence_present_builds(monkeypatch)
+    L.run("2026-10-19", confirm_budget=True)
+    calls.clear()
+    out = L.run("2026-10-19", dry_run=True, force=True)
+    # dry-run 打印的个股叙事已含判定行（库读兜底），零调用
+    assert calls == []
+    L.run("2026-10-19", confirm_budget=True, force=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert doc["narrative"].count("板块判定：") == 1, "幂等：不重复注入"
+    assert doc["sectorJudgmentState"] == "injected"
+
+
+def test_v17_sector_degraded_line_absent_fail_visible(env, monkeypatch):
+    """板块 doc degraded → 判定行整行缺席 + sectorJudgmentState=sector_degraded（不伪造）。"""
+    calls, db = env
+    _evidence_present_builds(monkeypatch)
+
+    def fake_dispatch(narrative, questions):
+        calls.append((narrative, questions))
+        if "theme_speculation_depth" in questions:
+            # 板块调用缺题（只答深度缺延续）→ partial_answers degraded；
+            # usage 非零：避免误触通道不可达中止（空 answers 会走 not_completed 零 usage）
+            return {"result": {"state": "Completed", "result": {
+                "model": "jev-test",
+                "answers": {"theme_speculation_depth": {"type": "choice",
+                                                        "choice": "fermenting"}},
+                "usage": {"total_tokens": 50}}}, "success": True}, 12
+        return ENVELOPE, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", fake_dispatch)
+    L.run("2026-10-19", confirm_budget=True)
+    sec = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
+    assert sec["status"] == "degraded"
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "板块判定：" not in doc["narrative"]
+    assert doc["sectorJudgmentState"] == "sector_degraded"
+
+
+def test_v17_default_gated_sector_insufficient_state(env):
+    """默认夹具（无语料）：板块两题被门 insufficient → 无判答可注，
+    state=sector_insufficient（与 degraded/missing 可区分）。"""
+    calls, db = env
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "板块判定：" not in doc["narrative"]
+    assert doc["sectorJudgmentState"] == "sector_insufficient"
+
+
+def test_v17_base_rate_line_wiring_and_lookahead(env):
+    """基础率锚行接线：live 已结算人群滚动直算；排除当日/未来/backfill/退位/sector。"""
+    calls, db = env
+    col = db[L.COLLECTION]
+
+    def seed(did, date, outcome, sealed=True, **extra):
+        col.docs[did] = {"_id": did, "tradingDate": date, "docKind": "leader",
+                         "status": "ok", "sampleOrigin": "live",
+                         "outcomeSealedNextDay": outcome,
+                         "structure": {"leaderSealedToday": sealed}, **extra}
+
+    seed("2026-10-23:600001", "2026-10-23", True)
+    seed("2026-10-26:600002", "2026-10-26", False)
+    seed("2026-10-27:600003", "2026-10-27", False, sealed=False)
+    seed("2026-10-28:600004", "2026-10-28", True, sampleOrigin="backfill")  # 排除
+    seed("2026-10-29:600005", "2026-10-29", None)                            # pending 排除
+    seed("2026-11-11:600006", "2026-11-11", True)                            # 当日排除（look-ahead）
+    seed("2026-10-22:600007", "2026-10-22", True)                            # live 代前排除
+    seed("2026-10-26:600008", "2026-10-26", True, leaderSuperseded=True)     # 退位排除
+    col.docs["2026-10-26:board:X"] = {"_id": "2026-10-26:board:X",
+                                       "tradingDate": "2026-10-26",
+                                       "docKind": "sector", "status": "ok",
+                                       "outcomeSealedNextDay": True}          # sector 排除
+    L.run("2026-11-11", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-11-11:603278"]
+    ln = next(ln for ln in doc["narrative"].split("\n") if ln.startswith("续板基础率"))
+    assert "live已结算3行，2026-10-23~2026-10-27" in ln
+    assert "总体33.3%" in ln and "封板行50.0%" in ln and "断板行0.0%" in ln
+    # 位置：基线后、结构事实前
+    lines = doc["narrative"].split("\n")
+    i_base = next(i for i, x in enumerate(lines) if x.startswith("结构基线："))
+    assert lines[i_base + 1].startswith("续板基础率")
+
+
+def test_v17_budget_reserve_for_pending_injection(env, monkeypatch):
+    """整日护栏含待注入板块判定行预留（上界口径，不虚报）。"""
+    calls, db = env
+    recs = []
+    real_b, real_s = L.build_one, L.build_sector_one
+
+    def rec_b(*a, **k):
+        b = real_b(*a, **k)
+        recs.append(b)
+        return b
+
+    def rec_s(*a, **k):
+        b = real_s(*a, **k)
+        recs.append(b)
+        return b
+
+    monkeypatch.setattr(L, "build_one", rec_b)
+    monkeypatch.setattr(L, "build_sector_one", rec_s)
+    out = L.run("2026-10-19", dry_run=True)
+    base = sum(b["estimatedTokens"]["budgetGuard"] for b in recs)
+    # 2 只龙头的板块都在 sector_todo 且构建时无判定行 → 预留 2×120×1.05
+    expect = base + 2 * int(L.SECTOR_JUDGMENT_RESERVE_CHARS * L.TOKENS_PER_CHAR_HIGH)
+    assert out["estimatedTokensBudgetGuard"] == expect
+
+
+def test_inject_sector_judgment_line_position_unit():
+    """注入位置单测：基线(+基础率)(+事实)块后；无基线行防御性原样返回。"""
+    narr = "\n".join(["头部", "结构基线：x", "续板基础率（live已结算1行）：总体0.0%",
+                      "结构事实：y", "空间锚：z", "【题材证据】"])
+    out = L._inject_sector_judgment_line(narr, "板块判定：炒作深度=发酵期")
+    lines = out.split("\n")
+    assert lines[lines.index("结构事实：y") + 1] == "板块判定：炒作深度=发酵期"
+    narr2 = "头部\n结构基线：x\n空间锚：z"
+    assert L._inject_sector_judgment_line(narr2, "板块判定：L").split("\n")[2] == "板块判定：L"
+    assert L._inject_sector_judgment_line("无基线", "L") == "无基线"
+
+
+def test_live_base_rate_empty_and_subgroups():
+    """live_base_rate：无已结算行 → None（锚行整行缺席）；子组缺样本不出子率。"""
+    from backend.operations.theme_leader_seal_stats import live_base_rate
+    db = FakeDb()
+    assert live_base_rate(db, before="2026-11-11") is None
+    db[L.COLLECTION].docs["2026-10-26:600001"] = {
+        "_id": "2026-10-26:600001", "tradingDate": "2026-10-26", "docKind": "leader",
+        "status": "ok", "outcomeSealedNextDay": True,
+        "structure": {"leaderSealedToday": True}}
+    st = live_base_rate(db, before="2026-11-11")
+    assert st["n"] == 1 and st["ratePct"] == 100.0
+    assert st["sealed"]["n"] == 1 and st["broken"]["n"] == 0
+    assert st["start"] == "2026-10-26" and st["end"] == "2026-10-26"
+    # legacy 缺 sampleOrigin 视同 live；缺 structure 只进总体
+    db[L.COLLECTION].docs["2026-10-27:600002"] = {
+        "_id": "2026-10-27:600002", "tradingDate": "2026-10-27",
+        "status": "ok", "outcomeSealedNextDay": False}
+    st2 = live_base_rate(db, before="2026-11-11")
+    assert st2["n"] == 2 and st2["ratePct"] == 50.0
+    assert st2["sealed"]["n"] == 1 and st2["broken"]["n"] == 0
+
+
+def test_v17_force_sector_relabel_stale_judgment_removed(env, monkeypatch):
+    """review m1 回归：force 重跑板块 ok→degraded / ok→insufficient 时，构建期
+    预载注入的陈旧判定行必须剔除，sectorJudgmentState 与档况一致；下发文本同。"""
+    calls, db = env
+    _evidence_present_builds(monkeypatch)
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "板块判定：" in doc["narrative"] and doc["sectorJudgmentState"] == "injected"
+
+    def degraded_dispatch(narrative, questions):
+        calls.append((narrative, questions))
+        if "theme_speculation_depth" in questions:
+            return {"result": {"state": "Completed", "result": {
+                "model": "jev-test",
+                "answers": {"theme_speculation_depth": {"type": "choice",
+                                                        "choice": "fermenting"}},
+                "usage": {"total_tokens": 50}}}, "success": True}, 12
+        return ENVELOPE, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", degraded_dispatch)
+    calls.clear()
+    L.run("2026-10-19", confirm_budget=True, force=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "板块判定：" not in doc["narrative"], "陈旧判定行剔除"
+    assert doc["sectorJudgmentState"] == "sector_degraded"
+    leader_calls = [(n, q) for n, q in calls if "leader_catalyst_hardness" in q]
+    assert all("板块判定：" not in n for n, _q in leader_calls), "下发文本无陈旧行"
+
+    def insufficient_dispatch(narrative, questions):
+        calls.append((narrative, questions))
+        if "theme_speculation_depth" in questions:
+            return {"result": {"state": "Completed", "result": {
+                "model": "jev-test",
+                "answers": {k: {"type": "choice", "choice": "insufficient"}
+                            for k in ("theme_speculation_depth", "theme_continuation")},
+                "usage": {"total_tokens": 50}}}, "success": True}, 12
+        return ENVELOPE, 12
+
+    monkeypatch.setattr(L, "_dispatch_jev", insufficient_dispatch)
+    calls.clear()
+    L.run("2026-10-19", confirm_budget=True, force=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "板块判定：" not in doc["narrative"]
+    assert doc["sectorJudgmentState"] == "sector_insufficient"
+
+
+def test_v17_sector_judgment_state_resolver_four_states(env):
+    """review 缺口1：_resolve_sector_judgment_state 四态闭合（含 sector_missing）。"""
+    calls, db = env
+    col = db[L.COLLECTION]
+    assert L._resolve_sector_judgment_state(col, "2026-10-19", "机器人",
+                                            "x\n板块判定：y") == "injected"
+    assert L._resolve_sector_judgment_state(col, "2026-10-19", "机器人", "x") == \
+        "sector_missing"
+    col.docs["2026-10-19:board:机器人"] = {"_id": "2026-10-19:board:机器人",
+                                           "status": "degraded"}
+    assert L._resolve_sector_judgment_state(col, "2026-10-19", "机器人", "x") == \
+        "sector_degraded"
+    col.docs["2026-10-19:board:机器人"]["status"] = "ok"
+    assert L._resolve_sector_judgment_state(col, "2026-10-19", "机器人", "x") == \
+        "sector_insufficient"
+
+
+def test_v17_base_rate_line_absent_before_live_start(env):
+    """review 缺口3：run 级无已结算历史（日期早于 live 代起点）→ 锚行整行缺席。"""
+    calls, db = env
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert not any(ln.startswith("续板基础率") for ln in doc["narrative"].split("\n"))
+
+
+def test_live_base_rate_excludes_degraded():
+    """review m2/缺口2：degraded 已结算 doc 不入锚（无有效判答）。"""
+    from backend.operations.theme_leader_seal_stats import live_base_rate
+    db = FakeDb()
+    db[L.COLLECTION].docs["2026-10-26:600001"] = {
+        "_id": "2026-10-26:600001", "tradingDate": "2026-10-26", "docKind": "leader",
+        "status": "ok", "outcomeSealedNextDay": True,
+        "structure": {"leaderSealedToday": True}}
+    db[L.COLLECTION].docs["2026-10-27:600002"] = {
+        "_id": "2026-10-27:600002", "tradingDate": "2026-10-27", "docKind": "leader",
+        "status": "degraded", "outcomeSealedNextDay": True,
+        "structure": {"leaderSealedToday": True}}
+    st = live_base_rate(db, before="2026-11-11")
+    assert st["n"] == 1 and st["ratePct"] == 100.0

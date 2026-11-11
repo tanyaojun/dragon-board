@@ -148,7 +148,7 @@ def test_gated_row_shows_model_answer_and_reason(html: str) -> None:
     row = _fn(html, "tlRowHtml")
     assert "r.modelChoice" not in row, "表格行不得再拼模型原答单元格"
     assert "r.baselineKey" not in row, "表格行不得再拼同桶基线单元格"
-    assert "colspan=\"16\"" in row, "展开明细行跨列数须跟表头（16，P2 新增周期列）"
+    assert "colspan=\"18\"" in row, "展开明细行跨列数须跟表头（18，v17 新增催化/身位列）"
     # 门/排除原因仍可见（档位/证据列）+ 展开卡里保留原答审计
     assert "TL_GATE_CN" in html
     assert "r.modelChoice" in _fn(html, "tlEntryResp")
@@ -341,20 +341,22 @@ def test_silent_background_refresh(html: str) -> None:
 
 # ── 回归（2026-10-23 截图实测列错位）：行拼装丢 contCell → 表头 13 列/行 12 格 ──
 def test_header_and_row_column_counts_match(html: str) -> None:
-    """表头加「周期」（P2 状态机）列后，tlRowHtml 必须同步发出 16 格——少一格后续列整体左移
-    （延续性空、证据/结局错位一格）。"""
+    """表头加「催化/身位」（v17 两新题）列后，tlRowHtml 必须同步发出 18 格——少一格后续列
+    整体左移（证据/结局错位一格）。"""
     # 表头块限定在 tlRenderRows 函数体内（避免匹配到页面其他表的「结局」列）
     block = _fn(html, "tlRenderRows")
     import re as _re
     n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z0-9]+'\)", block)) + block.count("<th>")
     row = _fn(html, "tlRowHtml")
-    # 展开明细行的 colspan 单独算：数据行 16 格（含周期/空间/溢价列）+ 明细跨 16 列
+    # 展开明细行的 colspan 单独算：数据行 18 格（含周期/空间/催化/身位/溢价列）+ 明细跨 18 列
     n_td = row.count("<td") - row.count("<td colspan")
-    assert n_th == 16, f"表头应 16 列，实为 {n_th}"
-    assert n_td == 16, f"数据行应 16 格，实为 {n_td}（丢格 → 列错位）"
-    assert 'colspan="16"' in row, "展开明细行必须跨 16 列（跟表头同步）"
+    assert n_th == 18, f"表头应 18 列，实为 {n_th}"
+    assert n_td == 18, f"数据行应 18 格，实为 {n_td}（丢格 → 列错位）"
+    assert 'colspan="18"' in row, "展开明细行必须跨 18 列（跟表头同步）"
     assert "+ contCell +" in row or "+ contCell" in row, "延续性单元格必须拼进行"
     assert "+ headCell +" in row, "空间列（leaderHeadroom）必须拼进行——v5/v6 核心产出不得只在明细 JSON 里可见"
+    assert "+ hardCell +" in row and "+ seatCell +" in row, \
+        "v17 催化硬度/身位稳固度列必须拼进行（红线 §1.2-5 展示同轮同步）"
     assert "+ premHtml +" in row, "溢价单元格必须拼进行（2026-10-26 用户需求）"
 
 
@@ -572,3 +574,32 @@ def test_filter_bar_final_control_set(html: str) -> None:
         and "f.industry" not in matches, "已删筛控件的匹配键不得残留"
     assert "cycle: ''" in html and "cont: ''" in html and "head: ''" in html, \
         "tlUi 初始化/清除筛选必须含新键"
+
+
+# ── v17 两新题展示（红线 §1.2-5：题面换代与前端同轮同步） ─────────────
+
+def test_v17_new_question_maps_and_conf_chips(html: str) -> None:
+    """催化硬度/身位稳固度：CN+配色表在场（同热度语汇），置信芯片接新题键，
+    旧代档无判答显 '-'（不伪造）。"""
+    for map_name, hot, cool in (("TL_HARD_BADGE", "hard_fact", "soft_meme"),
+                                ("TL_SEAT_BADGE", "core_seat", "relay_seat")):
+        m = re.search(rf"const {map_name} = \{{([^}}]+)\}}", html)
+        assert m, f"{map_name} 分档配色表缺失"
+        assert hot in m.group(1) and cool in m.group(1)
+    assert "TL_HARD_CN" in html and "TL_SEAT_CN" in html
+    chip = _fn(html, "tlConfChip")
+    assert "leader_catalyst_hardness: r.leaderCatalystHardnessConfidence" in chip
+    assert "leader_seat_durability: r.leaderSeatDurabilityConfidence" in chip
+    row = _fn(html, "tlRowHtml")
+    assert "r.leaderCatalystHardness || '-'" in row, "旧代档无判答显 '-'（fail-visible）"
+    assert "r.leaderSeatDurability || '-'" in row
+
+
+def test_v17_detail_meta_and_sector_judgment_state(html: str) -> None:
+    """详情卡 meta 区：两新题判答+置信、板块判答注入状态（缺席/降级可辨）。"""
+    detail = _fn(html, "tlDetailHtml")
+    assert "催化硬度" in detail and "身位稳固度" in detail
+    assert "r.sectorJudgmentState" in detail, "板块判答注入状态必须可见（fail-visible）"
+    assert "TL_SJ_STATE_CN" in html
+    for state in ("injected", "sector_degraded", "sector_insufficient", "sector_missing"):
+        assert state in html, f"注入状态 {state} 必须有可读译名"

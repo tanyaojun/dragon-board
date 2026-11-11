@@ -36,6 +36,61 @@ MIDPOINTS = {"high_ge65": 0.75, "mid_45_65": 0.55, "low_25_45": 0.35, "verylow_l
 LEADER_COLLECTION = "hotlist_jev_theme_leader_labels"
 CYCLE_COLLECTION = "hotlist_jev_theme_cycle"
 
+# v17 续板基础率锚人群起点（live 代，沿 v15 口径另加 status=ok；预登记 v17 §2.4-2）
+LIVE_BASE_RATE_START = "2026-10-23"
+
+
+def live_base_rate(db, before: str) -> dict | None:
+    """v17 续板基础率锚（轻量聚合，零 jev 零写入）：个股叙事先验底的单一事实源。
+
+    人群沿 v15 口径另加 status=ok（degraded 无有效判答不入锚；v15 复算路径
+    collect_rows 不过滤 status，n/率或有微差——锚以本函数为单一事实源，
+    review m2 披露）：docKind≠sector（含 legacy 缺键）、非退位、
+    sampleOrigin≠backfill（缺键视同 live，与 collect_rows 同口径）、
+    outcomeSealedNextDay 非空、tradingDate ∈ [2026-10-23, before)——**排除当日及
+    以后**（重跑历史日不得看见当日/未来结算，防 look-ahead）。封板/断板分组=
+    structure.leaderSealedToday（True/False；None=不可考只进总体）。
+    find({})+Python 侧过滤：测试假库只支持平坦等值查询（与 fetch_driver_label 同
+    哲学）；集合规模百行级，全取成本可忽。无已结算行 → None（锚行整行缺席，
+    AGENTS §1.2-8）。
+    """
+    sealed_n = sealed_ok = broken_n = broken_ok = 0
+    total_n = total_ok = 0
+    dates: list[str] = []
+    for d in db[LEADER_COLLECTION].find({}):
+        date = str(d.get("tradingDate") or "")
+        if not (LIVE_BASE_RATE_START <= date < before):
+            continue
+        if d.get("docKind") == "sector" or d.get("leaderSuperseded"):
+            continue
+        if d.get("status") not in (None, "ok"):
+            continue
+        if (d.get("sampleOrigin") or "live") != "live":
+            continue
+        outcome = d.get("outcomeSealedNextDay")
+        if outcome is None:
+            continue
+        dates.append(date)
+        total_n += 1
+        total_ok += 1 if outcome else 0
+        sealed_today = (d.get("structure") or {}).get("leaderSealedToday")
+        if sealed_today is True:
+            sealed_n += 1
+            sealed_ok += 1 if outcome else 0
+        elif sealed_today is False:
+            broken_n += 1
+            broken_ok += 1 if outcome else 0
+    if not total_n:
+        return None
+    return {
+        "n": total_n, "ratePct": total_ok / total_n * 100,
+        "start": min(dates), "end": max(dates),
+        "sealed": ({"n": sealed_n, "ratePct": sealed_ok / sealed_n * 100}
+                   if sealed_n else {"n": 0}),
+        "broken": ({"n": broken_n, "ratePct": broken_ok / broken_n * 100}
+                   if broken_n else {"n": 0}),
+    }
+
 
 def outcome_key(doc: dict) -> str:
     v = doc.get("outcomeSealedNextDay")

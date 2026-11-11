@@ -307,6 +307,18 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                     "leader_rebound_popularity") or {}).get("choice"),
                 "reboundPopularityConfidence": ((d.get("answers") or {}).get(
                     "leader_rebound_popularity") or {}).get("confidence"),
+                # v17 两新题（个股级催化硬度/身位稳固度；旧代/板块级=None，fail-visible）
+                "leaderCatalystHardness": ((d.get("answers") or {}).get(
+                    "leader_catalyst_hardness") or {}).get("choice"),
+                "leaderCatalystHardnessConfidence": ((d.get("answers") or {}).get(
+                    "leader_catalyst_hardness") or {}).get("confidence"),
+                "leaderSeatDurability": ((d.get("answers") or {}).get(
+                    "leader_seat_durability") or {}).get("choice"),
+                "leaderSeatDurabilityConfidence": ((d.get("answers") or {}).get(
+                    "leader_seat_durability") or {}).get("confidence"),
+                # v17：板块判答注入状态（injected/sector_degraded/sector_insufficient/
+                # sector_missing；旧代=None）
+                "sectorJudgmentState": d.get("sectorJudgmentState"),
                 # v12 复盘 audit 标记（2026-10-28 两案：read口透传，页面徽章展示）
                 "auditFlag": d.get("auditFlag"),
                 "auditNote": d.get("auditNote"),

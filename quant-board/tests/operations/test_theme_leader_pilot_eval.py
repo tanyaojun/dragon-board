@@ -379,3 +379,65 @@ def test_superseded_rows_kept_for_outcome_but_excluded_from_metrics(patched):
     assert out["supersededCount"] == 1
     assert out["evaluable"] == 1 and out["actualContinue"] == 1, "现任 1/1，不被退位行稀释"
     assert all(r["code"] != "603028" for r in out["roster"])
+
+
+# ---------- v17 新题分组（预登记 v17 §5-3，零新结算代码） ----------
+
+def test_v17_groups_hardness_seat_headroom(patched):
+    """硬度×续板/T+2 溢价、身位×续板/替代、空间×续板方向；退位行不进续板率
+    但身位替代计数单独取（替代正是身位题的负结局信号）。"""
+    a = _label("603278", "大业股份", version="v17")
+    a.update({"leaderCatalystHardness": "hard_fact", "leaderSeatDurability": "core_seat",
+              "leaderHeadroom": "space_1",
+              "outcomeDay2": {"date": "2026-10-21", "closePct": 3.2}})
+    b = _label("603028", "赛福天", version="v17")
+    b.update({"leaderCatalystHardness": "soft_meme", "leaderSeatDurability": "relay_seat",
+              "leaderHeadroom": "peak",
+              "outcomeDay2": {"date": "2026-10-21", "closePct": -2.0}})
+    c = _label("603029", "幽灵行", version="v17")
+    c.update({"leaderCatalystHardness": "soft_meme", "leaderSeatDurability": "relay_seat",
+              "leaderSuperseded": True, "supersededBy": "603278"})
+    db = patched([a, b, c], {"603278", "603029"},
+                 dates=(("2026-10-19",), ("2026-10-20",)))
+    out = E.evaluate(db, "2026-10-19")
+    vg = out["v17Groups"]
+    hard = vg["byCatalystHardness"]
+    assert hard["hard_fact"]["n"] == 1 and hard["hard_fact"]["sealRate"] == 1.0
+    assert hard["hard_fact"]["day2"]["meanPct"] == 3.2
+    assert hard["soft_meme"]["n"] == 1 and hard["soft_meme"]["sealRate"] == 0.0
+    assert hard["soft_meme"]["day2"]["meanPct"] == -2.0
+    seat = vg["bySeatDurability"]
+    assert seat["core_seat"]["sealRate"] == 1.0
+    assert seat["relay_seat"]["n"] == 1 and seat["relay_seat"]["sealRate"] == 0.0
+    assert seat["relay_seat"]["supersededN"] == 1, "退位行单独计数，不混进续板率"
+    assert vg["byHeadroom"]["space_1"]["sealRate"] == 1.0
+    assert vg["byHeadroom"]["peak"]["sealRate"] == 0.0
+
+
+def test_v17_groups_empty_for_legacy_and_early_return(patched):
+    """旧代档无新题字段 → 空分组；早返回路径形状契约恒在。"""
+    db = patched([_label("603278", "大业股份")], {"603278"})
+    out = E.evaluate(db, "2026-10-19")
+    assert out["v17Groups"]["byCatalystHardness"] == {}
+    assert out["v17Groups"]["bySeatDurability"] == {}
+    db2 = patched([_label("603278", "大业股份")], None)
+    out2 = E.evaluate(db2, "2026-10-19")
+    assert "v17Groups" in out2 and out2["v17Groups"]["byHeadroom"] == {}
+
+
+def test_v17_groups_exclude_legacy_and_backfill(patched):
+    """review M1 回归：byHeadroom 跨代不混评（v16 peak 偏重分布不得进 v17 方向
+    代理）；backfill v17 同排除（泄漏风险，沿 §11）。"""
+    legacy = _label("603278", "大业股份", version="v16")
+    legacy.update({"leaderHeadroom": "peak"})
+    bf = _label("603028", "赛福天", version="v17")
+    bf.update({"leaderHeadroom": "peak", "leaderCatalystHardness": "hard_fact",
+               "sampleOrigin": "backfill"})
+    live = _label("603029", "现任行", version="v17")
+    live.update({"leaderHeadroom": "space_1", "leaderCatalystHardness": "hard_fact"})
+    db = patched([legacy, bf, live], {"603278", "603028", "603029"})
+    out = E.evaluate(db, "2026-10-19")
+    vg = out["v17Groups"]
+    assert vg["byHeadroom"] == {"space_1": {"n": 1, "sealRate": 1.0}}, \
+        "v16/backfill 的 peak 不混入"
+    assert vg["byCatalystHardness"]["hard_fact"]["n"] == 1

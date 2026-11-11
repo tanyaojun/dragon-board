@@ -2263,6 +2263,19 @@ const TL_CONT_BADGE = { strong_extend: 'b-red', weak_extend: 'b-amber', ending: 
                         insufficient: 'b-gray' };
 const TL_HEAD_BADGE = { space_2plus: 'b-red', space_1: 'b-amber', peak: 'b-gray',
                         insufficient: 'b-gray' };
+// v17 两新题（催化硬度/身位稳固度，预登记 v17 §2.3）：配色同热度语汇——
+// 红=最硬/最稳、琥珀=中、蓝=软/可替代、灰=不可判
+const TL_HARD_CN = { hard_fact: '硬催化', sector_story: '板块叙事', soft_meme: '软催化',
+                     insufficient: '证据不足' };
+const TL_HARD_BADGE = { hard_fact: 'b-red', sector_story: 'b-amber', soft_meme: 'b-blue',
+                        insufficient: 'b-gray' };
+const TL_SEAT_CN = { core_seat: '稳固', contested_seat: '被挑战', relay_seat: '接力位',
+                     insufficient: '证据不足' };
+const TL_SEAT_BADGE = { core_seat: 'b-red', contested_seat: 'b-amber', relay_seat: 'b-blue',
+                        insufficient: 'b-gray' };
+// v17 板块判答注入状态（叙事行缺席时的 fail-visible 披露）
+const TL_SJ_STATE_CN = { injected: '已注入', sector_degraded: '板块档降级',
+                         sector_insufficient: '板块判答不足', sector_missing: '板块档缺席' };
 const TL_ORIGIN_CN = { live: '前瞻', backfill: '回填' };
 
 function tlRows(){
@@ -2294,7 +2307,9 @@ function tlConfChip(r, key){
   const a = { leader_nextday_continue: r.choiceConfidence,
               theme_speculation_depth: r.themeSpeculationDepthConfidence,
               theme_continuation: r.themeContinuationConfidence,
-              leader_headroom: r.leaderHeadroomConfidence }[key];
+              leader_headroom: r.leaderHeadroomConfidence,
+              leader_catalyst_hardness: r.leaderCatalystHardnessConfidence,
+              leader_seat_durability: r.leaderSeatDurabilityConfidence }[key];
   return confChip(a);
 }
 function tlOutcomeKey(row){
@@ -2752,10 +2767,11 @@ function tlRenderRows(){
     + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
     + th('板块', 'board') + '<th>周期</th>' + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
-    + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th><th>事件</th>'
+    + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th>'
+    + '<th>催化</th><th>身位</th><th>事件</th>'
     + '<th>结局</th>' + th('溢价', 'day2') + '</tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
-      : '<tr><td class="empty" colspan="16">无匹配龙头（调整区间或筛选条件）</td></tr>');
+      : '<tr><td class="empty" colspan="18">无匹配龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('tlPagerHost'); if (ph) ph.innerHTML = tlPager(pg.page, pg.total);
 }
 function tlPager(page, total){
@@ -2842,6 +2858,13 @@ function tlRowHtml(r, f){
   const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-',
       TL_HEAD_BADGE[r.leaderHeadroom] || 'b-gray')
     + tlConfChip(r, 'leader_headroom');
+  // v17 两新题列（旧代档无判答显 '-'，不伪造；被门覆盖走 tlConfChip 「门」标记）
+  const hardCell = badge(TL_HARD_CN[r.leaderCatalystHardness] || r.leaderCatalystHardness || '-',
+      TL_HARD_BADGE[r.leaderCatalystHardness] || 'b-gray')
+    + tlConfChip(r, 'leader_catalyst_hardness');
+  const seatCell = badge(TL_SEAT_CN[r.leaderSeatDurability] || r.leaderSeatDurability || '-',
+      TL_SEAT_BADGE[r.leaderSeatDurability] || 'b-gray')
+    + tlConfChip(r, 'leader_seat_durability');
   // 题材证据分层（v3）：板内解析 / 缺失原因
   // 2026-10-27 用户裁决（两轮纠偏定稿）：事件列**只出窄徽章、题材名称一律不显示**
   //（名称与「板块」列重复，占宽）；完整题材驱动事件文字描述进 tooltip。
@@ -2911,8 +2934,9 @@ function tlRowHtml(r, f){
     + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td>'
     + '<td>' + stage + '</td><td>' + contCell + '</td><td>' + headCell + '</td>'
+    + '<td>' + hardCell + '</td><td>' + seatCell + '</td>'
     + '<td>' + evid + '</td><td>' + outcome + '</td><td class="num">' + premHtml + '</td></tr>'
-    + (open ? '<tr class="lg-detail"><td colspan="16">' + tlDetailHtml(r) + '</td></tr>' : '');
+    + (open ? '<tr class="lg-detail"><td colspan="18">' + tlDetailHtml(r) + '</td></tr>' : '');
 }
 
 // ── 明细卡：jev 调用日志卡（lg-card 范式，与连板情绪同构） ──
@@ -3028,6 +3052,20 @@ function tlDetailHtml(r){
     + esc(r.questionSetVersion || '旧代') + '</div></div>'
     + '<div><div class="k">续板档位</div><div class="v">'
     + esc(TL_CHOICE_CN[r.choice] || r.choice || '-') + '</div></div>'
+    // v17 两新题 + 板块判答注入状态（旧代档无字段时不出项，不伪造）
+    + (r.leaderCatalystHardness
+      ? '<div><div class="k">催化硬度</div><div class="v" title="v17 新题：驱动涨停的催化可证实性（硬事实/板块叙事/软催化）">'
+        + esc(TL_HARD_CN[r.leaderCatalystHardness] || r.leaderCatalystHardness)
+        + (r.leaderCatalystHardnessConfidence != null
+          ? '（置信 ' + r.leaderCatalystHardnessConfidence + '）' : '') + '</div></div>' : '')
+    + (r.leaderSeatDurability
+      ? '<div><div class="k">身位稳固度</div><div class="v" title="v17 新题：板块内身位稳固/被挑战/可替代接力位">'
+        + esc(TL_SEAT_CN[r.leaderSeatDurability] || r.leaderSeatDurability)
+        + (r.leaderSeatDurabilityConfidence != null
+          ? '（置信 ' + r.leaderSeatDurabilityConfidence + '）' : '') + '</div></div>' : '')
+    + (r.sectorJudgmentState
+      ? '<div><div class="k">板块判答</div><div class="v" title="v17：板块级深度/延续判答注入个股叙事的状态（空间题跨题一致性原料）">'
+        + esc(TL_SJ_STATE_CN[r.sectorJudgmentState] || r.sectorJudgmentState) + '</div></div>' : '')
     + '<div><div class="k">结局</div><div class="v" style="color:' + outColor + '">'
     + esc(outTxt) + '</div></div>'
     + (outKey === 'sealed'

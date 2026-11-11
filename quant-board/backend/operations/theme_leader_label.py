@@ -52,6 +52,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     QUESTIONS_THEME_LEADER,
     THEME_LEADER_KEYS,
     apply_evidence_gate,
+    base_rate_line,
     baseline_line,
     board_ladder_line,
     board_zhaban_line,
@@ -70,6 +71,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     popularity_rank_line,
     rank_sentinel_warnings,
     risk_profile_line,
+    sector_judgment_line,
     structure_facts_line,
     limitup_reason_line,
     plate_strength_line,
@@ -85,6 +87,7 @@ from backend.operations.leader_wzs import COLLECTION as WZS_COLLECTION
 from backend.operations.theme_cycle import COLLECTION as CYCLE_COLLECTION
 from backend.operations.theme_leader_baseline import (
     board_count_history, build_rows, day_leader_rows)
+from backend.operations.theme_leader_seal_stats import live_base_rate
 from backend.services.jev.jev_client import parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
@@ -129,7 +132,10 @@ DRIVER_LABEL_COLLECTION = "hotlist_jev_driver_labels"
 ORIGIN = "theme_leader_label_v1"
 # v12 A2 拆题：板块级/个股级题面子集与 docKind（预登记 §2.3）
 SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
-LEADER_QUESTIONS = ("leader_nextday_continue", "leader_headroom")
+# v17（预登记 v17 §2.3）：个股级扩为四题——续板/空间 + 催化硬度/身位稳固度
+# （同调用判答零额外调用次数）；事件日 +rebound 共五题。
+LEADER_QUESTIONS = ("leader_nextday_continue", "leader_headroom",
+                    "leader_catalyst_hardness", "leader_seat_durability")
 # v14（P3 工作流 B，B1:A 事件门）：人气成色题仅弱转强事件股判答——非事件日叙事
 # 不含本题零额外调用（预算预登记 §四）；事件门数据单源 hotlist_jev_leader_wzs
 REBOUND_QUESTION = "leader_rebound_popularity"
@@ -995,9 +1001,15 @@ def forward_date_axis_line(date: str, days: int = 2) -> str:
 # v6 题面加长（insufficient 边界收紧措辞，instructions 增 ~400 字）：2026-10-23 v6 首批
 # 实测单条 residual（usage−1.05×chars）最高 2,682 > 旧 2,500，护栏低估 4%（§10.5 缺陷，
 # 实测 25,381 > 护栏 24,390）——上调至 2,750 复标（test_budget_guard_* 钉住）。
+# v17 个股级 2→4 题（+催化硬度/身位稳固度，输出再增两答）：固定开销预标 2,200/3,300
+# （预登记 v17 §4；叙事另增板块判定/基础率两行 ≈80 字）。**首个 v17 status=ok 日后
+# 必须逐条补账 _REAL_COST_LEDGER_V17**（v5 §14.2 纪律：不补账=护栏失去校准依据）。
 TOKENS_PER_CHAR_LOW, TOKENS_PER_CHAR_HIGH = 0.80, 1.05
-TOKENS_FIXED_LOW = 1800
-TOKENS_FIXED_HIGH = 2750
+TOKENS_FIXED_LOW = 2200
+TOKENS_FIXED_HIGH = 3300
+# v17 板块判定行注入预算预留（字符上界）：构建时板块 doc 尚未标注（同轮先板块后个股），
+# 标注时注入的行最长 ≈70 字，按 120 字预留进整日护栏（上界口径，不虚报）。
+SECTOR_JUDGMENT_RESERVE_CHARS = 120
 # 连续 N 次「失败且零 usage」→ 判通道不可达并中止（单次抖动仍继续，不误杀）
 _TRANSPORT_FAIL_ABORT = 2
 
@@ -1203,14 +1215,19 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               dt_line: str | None = None,
               detail_lines: dict[str, str | None] | None = None,
               forecast_line: str | None = None,
-              realtime_lhb_line: str | None = None) -> dict:
-    """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。
+              realtime_lhb_line: str | None = None,
+              sector_judgment: dict | None = None,
+              base_rate_stats: dict | None = None) -> dict:
+    """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v17 四题）。
 
     2026-11-11 语料缺口补全新增入参（均 None 不出行）：`bid_line`（竞价承接行）、
     `dt_line`（板内跌停行）、`detail_lines`（个股详情四通道行 dict：
     ztBigOrder/bfReason/abnormalPrice/relatedPlate，detail_lines_for_leader 产出）、
     `forecast_line`（上榜预测行）、`realtime_lhb_line`（实时龙虎榜行）；热度排名/
     风险画像两行由 reason_entries 直接派生（单一事实源），不另传入参。
+    v17 新增入参：`sector_judgment`（板块级 doc answers，板块判定行 join；同轮标注
+    时由 run() 在标注前注入，构建时仅库读兜底）、`base_rate_stats`（续板基础率锚
+    统计，live_base_rate 产出）；均 None 不出行（旧调用形状不变）。
     """
     from backend.operations.jev_label_jiuyan import market_facts_line
 
@@ -1271,11 +1288,16 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
         segment=row.get("segment"),
-        # v15 P1：结构事实行（周期/封板/高度/梯队，程序直读；Q8:A 校准参考不仲裁）
+        # v15 P1：结构事实行（周期/封板/高度/梯队，程序直读；v17 D5 周期可作佐证）
         facts_line=structure_facts_line(row, cycle),
+        # v17：续板基础率锚行（先验底单一事实源）+ 板块判定行（A2 跨题修复）
+        base_rate_line=base_rate_line(base_rate_stats),
+        sector_judgment_line=sector_judgment_line(sector_judgment),
     )
     return {"docKind": DOC_KIND_LEADER, "narrative": narrative, "evidence": block,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_facts_line is not None),
+            # v17：板块判答注入状态（构建时仅库读兜底；同轮注入由 run() 标注前终裁）
+            "sectorJudgmentState": ("injected" if "板块判定：" in narrative else None),
             "driverCross": {"found": bool(driver_doc),
                             "labelSlot": (driver_doc or {}).get("labelSlot"),
                             "questionSetVersion": (driver_doc or {}).get("questionSetVersion")},
@@ -1362,13 +1384,57 @@ def estimate_tokens(chars: int) -> dict:
     return {"low": low, "high": high, "budgetGuard": high}
 
 
+# ── v17 板块判定行注入（预登记 v17 §2.4-1，修复 A2 跨题引用悬空）──
+
+def _inject_sector_judgment_line(narrative: str, line: str) -> str:
+    """把板块判定行插到叙事固定位置：基线（+基础率锚）（+结构事实）块之后、空间锚前。
+
+    与 build_leader_narrative 的装配位置一致（标注时注入与构建时注入同形）；
+    基线行恒在（build_leader_narrative 无条件 append），防御性找不到时原样返回。
+    """
+    lines = narrative.split("\n")
+    idx = next((i for i, ln in enumerate(lines) if ln.startswith("结构基线：")), None)
+    if idx is None:
+        return narrative
+    j = idx + 1
+    while j < len(lines) and lines[j].startswith(("续板基础率", "结构事实：")):
+        j += 1
+    lines.insert(j, line)
+    return "\n".join(lines)
+
+
+def _strip_sector_judgment_line(narrative: str) -> str:
+    """剔除叙事中的板块判定行（review m1：force 重跑板块 ok→degraded/insufficient
+    时清理构建期预载注入的陈旧判答行；无行时原样返回）。"""
+    return "\n".join(ln for ln in narrative.split("\n")
+                     if not ln.startswith("板块判定："))
+
+
+def _resolve_sector_judgment_state(col: Any, date: str, board: str,
+                                   narrative: str) -> str:
+    """板块判答注入状态（结构化留痕，fail-visible；叙事整行缺席时审计唯一可观测源）。
+
+    injected=行在场；sector_degraded=板块 doc 存在但 degraded；sector_insufficient=
+    板块 doc ok 但两题均 insufficient（无判答可注）；sector_missing=无板块 doc。
+    """
+    if "板块判定：" in narrative:
+        return "injected"
+    sec = col.find_one({"_id": f"{date}:board:{board}"})
+    if not sec:
+        return "sector_missing"
+    if sec.get("status") != "ok":
+        return "sector_degraded"
+    return "sector_insufficient"
+
+
 def _label_one(db, col, date: str, built: dict,
                baseline_meta: dict,
                sample_origin: str = SAMPLE_ORIGIN_LIVE) -> tuple[bool, int]:
     """单条真实 jev 调用（唯一花 token 的路径）。返回 (ok, tokens)。
 
     v12 A2 拆题：按 built["docKind"] 分流——板块级 doc 只发板块题子集（深度/延续），
-    个股级 doc 只发个股题子集（续板/空间）；证据门只门对应子集（预登记 §2.3）。
+    个股级 doc 只发个股题子集（v17 四题：续板/空间/催化硬度/身位稳固度，事件日
+    +rebound 五题）；证据门只门对应子集（预登记 §2.3）。
     """
     doc_kind = built.get("docKind", DOC_KIND_LEADER)
     questions = built.get("questions") or QUESTIONS_THEME_LEADER
@@ -1387,6 +1453,8 @@ def _label_one(db, col, date: str, built: dict,
     depth = answers.get("theme_speculation_depth") or {}
     contn = answers.get("theme_continuation") or {}
     head = answers.get("leader_headroom") or {}
+    hard = answers.get("leader_catalyst_hardness") or {}
+    seat = answers.get("leader_seat_durability") or {}
     # P1-1 改道（2026-11-07）：reason 协议注经 5 探针实证无效已撤；审计改程序侧偏离标记。
     # 模型若附 reason（平台未来放开）仍容错透传落库（P2-2 旧行为不变）。
     answer_reasons = {str(k): str(v.get("reason")) for k, v in answers.items()
@@ -1471,6 +1539,13 @@ def _label_one(db, col, date: str, built: dict,
         "themeSpeculationDepth": depth.get("choice") if doc_kind == DOC_KIND_SECTOR else None,
         "themeContinuation": contn.get("choice") if doc_kind == DOC_KIND_SECTOR else None,
         "leaderHeadroom": head.get("choice") if doc_kind == DOC_KIND_LEADER else None,
+        # v17 两新题便捷字段（全答仍在 answers；旧代/板块级=None）
+        "leaderCatalystHardness": hard.get("choice") if doc_kind == DOC_KIND_LEADER else None,
+        "leaderSeatDurability": seat.get("choice") if doc_kind == DOC_KIND_LEADER else None,
+        # v17：板块判答注入状态（injected/sector_degraded/sector_insufficient/
+        # sector_missing；叙事整行缺席时审计唯一可观测源，fail-visible）
+        "sectorJudgmentState": (built.get("sectorJudgmentState")
+                                if doc_kind == DOC_KIND_LEADER else None),
         # v14（P3 工作流 B）：人气成色便捷字段（全答仍在 answers；非事件日/旧代=None）
         "leaderReboundPopularity": ((answers.get(REBOUND_QUESTION) or {}).get("choice")
                                     if doc_kind == DOC_KIND_LEADER else None),
@@ -1569,6 +1644,12 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     done = {str(d.get("code")) for d in done_docs if d.get("code")}
     done_boards = {str(d.get("board")) for d in done_docs
                    if d.get("docKind") == DOC_KIND_SECTOR and d.get("board")}
+    # v17：板块判答预载（库读兜底：重跑/板块 doc 已 ok 场景构建时即可注入；同轮新跑
+    # 板块 doc 尚未标注，由下方标注循环先板块后个股在标注前注入，预登记 v17 §2.4-1）
+    sector_answers_by_board: dict[str, dict] = {}
+    for d in col.find({"tradingDate": date, "docKind": DOC_KIND_SECTOR, "status": "ok"}):
+        if d.get("board"):
+            sector_answers_by_board[str(d["board"])] = d.get("answers") or {}
     already = [r for r in rows if not force and r["code"] in done]
     todo = [r for r in rows if force or r["code"] not in done]
     if max_leaders is not None and len(todo) > max_leaders:
@@ -1612,6 +1693,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     fc_corpus = fetch_lhb_forecast_corpus(db, date)
     rt_corpus = fetch_lhb_realtime_corpus(db, date)
     detail_corpus = fetch_stock_detail_corpus(db, date)
+    # v17：续板基础率锚先验底（滚动直算，窗 2026-10-23~当日之前，防 look-ahead；
+    # 无已结算行=None → 锚行整行缺席，fail-visible）
+    base_rate_stats = live_base_rate(db, before=date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -1769,7 +1853,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             market_summary=market_summary,
             lhb_facts=lhb_facts,
             rebound_line=rebound_line,
-            cycle=cyc or None)
+            cycle=cyc or None,
+            sector_judgment=sector_answers_by_board.get(rb),
+            base_rate_stats=base_rate_stats)
         built["row"] = row
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k]
                               for k in (LEADER_QUESTIONS_REBOUND
@@ -1778,6 +1864,13 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             built["reboundEvent"] = event
         built_all.append(built)
     tokens = sum(b["estimatedTokens"]["budgetGuard"] for b in built_all)
+    # v17：待注入板块判定行的预算预留（构建时板块 doc 尚未标注，标注时注入；
+    # 上界口径 SECTOR_JUDGMENT_RESERVE_CHARS，不虚报；charsTotal 仍为构建时口径）
+    pending_inject = sum(1 for b in built_all
+                         if b["docKind"] == DOC_KIND_LEADER
+                         and "板块判定：" not in b["narrative"]
+                         and str(b["row"]["board"]) in sector_todo_boards)
+    tokens += int(pending_inject * SECTOR_JUDGMENT_RESERVE_CHARS * TOKENS_PER_CHAR_HIGH)
     plan = {"ok": True, "date": date, "leaders": len(rows),
             "leadersTotal": plan_leaders_total, "todo": len(todo),
             "sectorDocs": len(sector_todo_boards),
@@ -1813,10 +1906,35 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             f"确认预算请加 --confirm-budget；先看文本用 --dry-run。")
     n_ok = n_used = transport_fails = 0
     for i, b in enumerate(built_all, 1):
+        if b["docKind"] == DOC_KIND_LEADER:
+            # v17：标注前先剔除构建期预载注入的判定行、再按本轮缓存重注（review m1：
+            # force 重跑板块 ok→degraded/insufficient 时陈旧判答不得残留，状态与档况
+            # 一致）；位置与构建时装配一致（基线块后、空间锚前）；幂等
+            rb = str(b["row"]["board"])
+            narr = _strip_sector_judgment_line(b["narrative"])
+            sj_line = sector_judgment_line(sector_answers_by_board.get(rb))
+            if sj_line:
+                narr = _inject_sector_judgment_line(narr, sj_line)
+            if narr != b["narrative"]:
+                b["narrative"] = narr
+                b["chars"] = len(narr)
+                b["estimatedTokens"] = estimate_tokens(b["chars"])
+            b["sectorJudgmentState"] = _resolve_sector_judgment_state(
+                col, date, rb, b["narrative"])
         ok, used = _label_one(db, col, date, b, baseline_meta,
                               sample_origin=sample_origin)
         n_ok += 1 if ok else 0
         n_used += used
+        if b["docKind"] == DOC_KIND_SECTOR:
+            sb = str(b["rows"][0]["board"])
+            if ok:
+                # v17：缓存板块判答（供同轮后序同板块个股叙事注入；从落库 doc 读，
+                # 与消费端单一事实源同口径=过门后 answers）
+                sec_doc = col.find_one({"_id": f"{date}:board:{sb}"}) or {}
+                sector_answers_by_board[sb] = sec_doc.get("answers") or {}
+            else:
+                # review m1：板块重标失败 → 清预载缓存，个股侧剔除残留判定行
+                sector_answers_by_board.pop(sb, None)
         if b["docKind"] == DOC_KIND_SECTOR:
             head = f"板块级 {b['rows'][0]['board']}"
         else:

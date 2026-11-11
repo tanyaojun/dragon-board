@@ -505,3 +505,31 @@ def test_theme_leaders_read_survives_answers_none_skipped_docs(monkeypatch):
     assert row["status"] == "skipped"
     assert row["catalystStage"] is None
     assert row["themeSpeculationDepth"] is None
+
+
+def test_v17_new_question_fields_and_sector_judgment_state(monkeypatch):
+    """v17 两新题便捷字段+置信透传；板块判答注入状态可见；旧代档=None（不伪造）。"""
+    doc = _doc("002708", "机器人", questionSetVersion="v17",
+               answers={"leader_nextday_continue": {"choice": "mid_45_65",
+                                                     "probabilities": {"mid_45_65": 0.55}},
+                        "leader_catalyst_hardness": {"choice": "hard_fact",
+                                                     "confidence": 0.7},
+                        "leader_seat_durability": {"choice": "contested_seat",
+                                                   "confidence": 0.6}},
+               sectorJudgmentState="injected")
+    c = _client(monkeypatch, [doc])
+    row = c.get("/api/hotlist-jev/theme-leaders",
+                params={"date": "2026-10-16"}).json()["leaders"][0]
+    assert row["leaderCatalystHardness"] == "hard_fact"
+    assert row["leaderCatalystHardnessConfidence"] == 0.7
+    assert row["leaderSeatDurability"] == "contested_seat"
+    assert row["leaderSeatDurabilityConfidence"] == 0.6
+    assert row["sectorJudgmentState"] == "injected"
+    # 旧代档（无新题字段）→ None，不伪造判答
+    old = _doc("600002", "机器人", questionSetVersion="v16")
+    c2 = _client(monkeypatch, [old])
+    row2 = c2.get("/api/hotlist-jev/theme-leaders",
+                  params={"date": "2026-10-16"}).json()["leaders"][0]
+    assert row2["leaderCatalystHardness"] is None
+    assert row2["leaderSeatDurability"] is None
+    assert row2["sectorJudgmentState"] is None

@@ -79,65 +79,90 @@ def test_question_set_frozen_hash_and_versions():
     **2026-10-28a v12 批次**（涨停原因行 limitup_reason_line：join 韭研 expound 单一
     事实源，龙一+板内并列；板块强度行 plate_strength_line：KPL 层1 名称桥，未匹配
     fail-visible）。
+    **v17 = 2026-11-11 题集 × 语料匹配优化 + 个股级两新题（hash 见断言，预登记
+    theme-leader-v17-questionset-corpus-match-preregistration-20261111，用户裁决
+    「两个问题有点少」，D1-D8 批准）**：①续板题重写——先验底改读程序注入「续板
+    基础率」锚行（废写死 21.4%，窗口漂移教训），竞价/封板质量方向读法，high 档不再
+    字面要求高度领先，周期状态解禁为佐证（D5）；②空间题重写——起判档改空间锚
+    读数映射（废 1-3 板→peak 硬编码），跨题引用改可见板块判定行+同调用三题（A2
+    修复）；③新增催化硬度/身位稳固度两题（结局锚复用已落库字段零新结算）；④人气题
+    与板块级两题一字不改。AMMO 2026-11-12a：板块判定行 + 续板基础率锚行 + GENE_CN
+    「首板被板」→「首板炸板」错字修复；b（开火前修订，用户裁决海洋新闻真实命中）：
+    新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-11c"   # 龙虎榜席位/机构兜底行（C，2026-11-11 用户裁决）
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
-    # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
-    # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
-    # v14：+leader_rebound_popularity（事件驱动题，事件门在 operations 层）
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v17"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-12b"   # a + 开火前修订 b（新闻真实命中裁决）
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "8c6c94429abd"
+    # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
                                    "leader_nextday_continue", "leader_headroom",
+                                   "leader_catalyst_hardness", "leader_seat_durability",
                                    "leader_rebound_popularity")
     for key in A.THEME_LEADER_KEYS:
         q = A.QUESTIONS_THEME_LEADER[key]
         assert q["type"] == "choice" and q["instructions"] and q["criteria"]
         assert "insufficient" in q["criteria"], "每题必须留证据不足档，禁止逼模型硬填"
-    # v7 锚规则只加在空间题 instructions（criteria 门不动，space_2plus 零命中先观察）
-    assert "空间锚" in A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
-    # v9 三项（预登记 §21.3，2026-10-26 用户批准）：双向化 + 默认起判档 + criteria 锚读数
-    ins = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
-    assert "无论上调还是下调" in ins, "硬规则②双向：下调偏离锚同样须引用锚行数字+新证据"
-    assert "1-3 板 → peak 起判" in ins and "space_1 起判" in ins, "默认起判档映射在场"
-    # v13 修订：高度不可算含未封板分支，默认档改由空间锚最细出率桶起判
-    assert "连板高度不可算时（含待判龙头今日未封板的断板反包候选）" in ins, "v13 未封板分支接线"
-    assert "默认档按「空间锚」最细出率桶起判" in ins, "v13 未封板默认档=空间锚起判"
-    assert "锚行整体缺席（叙事无空间锚行）才允许按证据自判" in ins, "v13 锚缺席才可自判"
-    crit = A.QUESTIONS_THEME_LEADER["leader_headroom"]["criteria"]
-    assert "再走≥1板率三成上下" in crit["space_1"], "space_1 绑锚行读数（非写死绝对阈值）"
-    assert "再走≥1板率不足三成" in crit["peak"], "peak 绑锚行读数"
-    assert "锚行读数参照" not in crit["space_2plus"], "space_2plus 零命中先观察，不加校准（§21.3 范围）"
-    assert "叙事含空间锚行（有率值）时不得选本档" in crit["insufficient"], "v13 空间题对称禁令"
-    # v11 两项（预登记 §22，2026-10-27 用户批准）：续板规则①对称化 + 延续性引用义务
+    # ── v17 续板题（预登记 v17 §2.1）：锚单一事实源 + 量化方向读法 + 元规则压缩 ──
     cont = A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["instructions"]
-    assert "必须先对齐的概率中枢" in cont, "规则①对称化：中枢语义"
-    assert "上调或下调" in cont and "按连板高度」桶为中枢" in cont, "双向偏离义务+同桶未出率回退"
-    assert "个股打标交叉行" in cont, "打标交叉行列入可引证据"
-    # v13：续板题⑤未封板 insufficient 禁令 + 强制降置信
-    assert "锚缺失如实对待**不等于**可判 insufficient" in cont, "v13 反向禁令接线"
-    assert "confidence ≤0.6" in cont, "v13 未封板锚缺失强制降置信"
-    assert "结构基线行有任一出率桶时不得选本档" in A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["criteria"]["insufficient"], "v13 续板题对称禁令"
-    # v15 C1（预登记 theme-leader-v15-seal-calibration-preregistration-20261104）：
-    # 续板题规则①加全样本基础率锚（归因：四桶无区分力+系统性高估，0 行 ≥65%）
-    assert "全样本基础率锚" in cont, "v15 基础率锚必须写入续板题题面"
-    assert "n=112 续板率 21.4%" in cont, "锚必须是实测数字（程序直算可复算，非拍脑袋）"
-    assert "先验底" in cont and "≥45%" in cont, "锚语义：无差异化证据的先验底 + 高档抬升需点名强证据"
-    assert "必须先对齐的概率中枢" in cont, "v11 同桶中枢语义不得回潮"
-    # v16（预登记 theme-leader-v16-seal-quality-preregistration-20261108，2026-11-08 用户裁决
-    # 「同步改题面判据」）：续板题⑦/空间题⑥ 把「封板质量」行写成显式可量化判据引用源
-    assert "⑦封板质量量化（v16）" in cont, "v16 续板题规则⑦必须在场"
-    assert "唯一可量化判据源" in cont and "不得以封板质量为由调档" in cont, \
-        "⑦语义（评审消歧）：行不可考/待校验=封板质量维度禁用，不禁其他证据调档"
-    assert "仍可按规则①凭基线" in cont, "⑦与规则①相容：其他锚外证据通道保留"
-    assert "规则⑤（今日未封板的断板反包候选）不适用本项" in cont, "⑦与断板分支互斥"
-    ins_space = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
-    assert "⑥封板质量量化（v16）" in ins_space, "v16 空间题规则⑥必须在场"
-    assert "锚外新证据的一类" in ins_space and "该行不可考时不得据此调档" in ins_space,         "⑥语义：封板质量属锚外新证据，不可考禁调档"
-    # criteria 文案不动（避免档位语义漂移）：v16 只加 instructions
-    assert "封单" not in "".join(A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["criteria"].values())
-    assert "封单" not in "".join(A.QUESTIONS_THEME_LEADER["leader_headroom"]["criteria"].values())
+    assert "先验底=「续板基础率」锚行" in cont, "先验底改读锚行（程序直算随窗滚动）"
+    assert "21.4%" not in cont and "n=112" not in cont, "写死率值废除（窗口漂移教训）"
+    assert "概率中枢=叙事「结构基线」行最细出率同桶" in cont, "中枢语义不回潮"
+    assert "上调或下调" in cont and "按连板高度」桶" in cont, "双向偏离义务+同桶未出率回退"
+    assert "封单占比低、峰值大幅回落、主力净额大幅流出=封板质量弱" in cont, "封板质量方向读法"
+    assert "竞价放量高开=承接强" in cont, "竞价方向读法"
+    assert "不得以该行为由调档" in cont and "自行补 0" in cont, "不可考/待校验禁调档不补 0"
+    assert "周期状态可作调档佐证之一" in cont and "不得单独定档" in cont, "D5 周期解禁为佐证"
+    assert "引用新闻须按业务/产业链关联核实" in cont, "新闻真实命中裁决（b）：业务关联核实"
+    assert "标题未点名公司" in cont and "不等于无关" in cont, "标题/关联股不点名≠无关"
+    hard_crit = A.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]["criteria"]
+    assert "业务/产业链关联经核实即计" in hard_crit["sector_story"], \
+        "sector_story 同口径：板块政策新闻经业务核实即计（b）"
+    assert "confidence ≤0.6" in cont, "v13 未封板锚缺失强制降置信延续"
+    assert "不得以「无同构历史锚」判 insufficient" in cont, "v13 反向禁令延续"
+    assert "程序强制覆盖" in cont, "证据门程序强制说明保留"
+    ccrit = A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["criteria"]
+    assert "高度领先，或竞价放量高开+昨日承接强" in ccrit["high_ge65"], \
+        "high 档不再字面要求高度领先（光洋持平案）"
+    assert "新催化≤2 日" in ccrit["high_ge65"], "打标交叉新鲜度进判据"
+    assert "封单占比低+峰值大幅回落+主力净流出" in ccrit["low_25_45"], "封板质量示警进低档"
+    assert "板块判定=退潮期/临近结束" in ccrit["verylow_lt25"], "板块判定行进很低档"
+    assert "结构基线行有任一出率桶时不得选本档" in ccrit["insufficient"], "v13 对称禁令延续"
+    # ── v17 空间题（预登记 v17 §2.2）：锚读数映射 + 可见跨题引用 ──
+    ins = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
+    assert "「板块判定」行" in ins and "催化硬度/身位稳固度/次日续板概率" in ins, \
+        "综合可见判答（A2 跨题悬空修复）"
+    assert "综合前三题" not in ins, "悬空引用废除"
+    assert "起判档由空间锚最细出率桶读数直接映射" in ins
+    assert "再走≥1板率不足三成 → peak 起判" in ins
+    assert "三成及以上 → space_1 起判" in ins
+    assert "≥2板率两成及以上且板块判定为发酵期/强延续 → space_2plus 起判" in ins
+    assert "1-3 板 → peak 起判" not in ins and "仅一到三成" not in ins, \
+        "高度硬编码+漂移窗读数废除（光洋 3 板桶 47.5% 案）"
+    assert "上调或下调" in ins, "双向偏离义务延续"
+    assert "连板高度不可算时" in ins and "锚行整体缺席" in ins, "v13 未封板分支延续"
+    assert "板块判定深度=启动期/发酵期时本题默认不得选 peak" in ins, "跨题一致性消费板块判定行"
+    assert "催化硬度=soft_meme 且身位=relay_seat" in ins, "跨题一致性消费两新题"
+    hcrit = A.QUESTIONS_THEME_LEADER["leader_headroom"]["criteria"]
+    assert "锚≥2板率两成及以上" in hcrit["space_2plus"] and "身位 core_seat" in hcrit["space_2plus"]
+    assert "再走≥1板率三成上下" in hcrit["space_1"]
+    assert "再走≥1板率不足三成" in hcrit["peak"]
+    assert "叙事含空间锚行（有率值）时不得选本档" in hcrit["insufficient"], "v13 对称禁令延续"
+    # ── v17 两新题（预登记 v17 §2.3）：深度/广度个股侧显式中间判断 ──
+    hard = A.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]
+    assert set(hard["criteria"]) == {"hard_fact", "sector_story", "soft_meme", "insufficient"}
+    assert "最硬的可证实事实" in hard["instructions"]
+    assert "不降低硬事实档位" in hard["instructions"], "软成分披露不降档（光洋羊字辈案）"
+    assert "未证实" in hard["instructions"] and "按软证据计" in hard["instructions"]
+    assert "只作交叉参考" in hard["instructions"], "打标交叉不替代证据判读"
+    assert "涨停原因行亦缺席" in hard["criteria"]["insufficient"], "窄门：三层+原因行四源全缺"
+    seat = A.QUESTIONS_THEME_LEADER["leader_seat_durability"]
+    assert set(seat["criteria"]) == {"core_seat", "contested_seat", "relay_seat", "insufficient"}
+    assert "梯队领先差/热度排名/买盘逻辑" in seat["instructions"]
+    assert "默认 relay_seat" in seat["instructions"] and "领先差≥1 板" in seat["instructions"]
+    assert "板块判定=退潮期/临近结束时默认不得判 core_seat" in seat["instructions"]
+    assert "板块结构不可考且三层证据" in seat["criteria"]["insufficient"], "窄门延续"
+    # ── 板块级两题一字不改（v17 纪律，v12 断言原样保留）──
     tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
-    # v12 修订：引用义务扩源（结构再点火）+ ending 方向约束；v11 保守条款改为板块级表述
     assert "引用义务（v12 修订）" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"
     assert "结构再点火信号" in tcont and "二选一" in tcont, "strong_extend 引用源扩源"
     assert "家数扩张或家数序列不可考时不得判 ending" in tcont, "ending 方向约束"
@@ -146,8 +171,6 @@ def test_question_set_frozen_hash_and_versions():
     assert "本题不得判 ending" in tcont and "跨题一致性（v12）" in tcont, "跨题一致性"
     tdep = A.QUESTIONS_THEME_LEADER["theme_speculation_depth"]["instructions"]
     assert "贫料 ≠ 断流" in tdep and "igniting 优先" in tdep, "深度题贫料定向"
-    thead = A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
-    assert "默认不得选 peak" in thead, "空间题跨题一致性"
 
 
 def test_structure_facts_line_v15_p1():
@@ -587,14 +610,15 @@ def test_gate_holds_when_previously_gated_answer_reruns():
     assert gate["applied"] is True and gate["modelChoice"] == "insufficient"
     assert out["leader_nextday_continue"]["choice"] == "insufficient"
     # 模型已自判不足的题不重复覆盖（forcedKeys 不含它）；未作答的其余题补强制 insufficient
-    # （v14 起全题=5，含事件驱动题 leader_rebound_popularity）
+    # （v17 起全题=7，含两新题与事件驱动题 leader_rebound_popularity）
     assert gate["forcedKeys"] == ["theme_speculation_depth", "theme_continuation",
-                                  "leader_headroom", "leader_rebound_popularity"]
+                                  "leader_headroom", "leader_catalyst_hardness",
+                                  "leader_seat_durability", "leader_rebound_popularity"]
 
 
 def test_gate_forces_all_questions_in_v5_plus_v14():
     """全题门：证据缺失时全部判定题强制 insufficient（模型已自判不足的题不重复覆盖）；
-    v14 起全题=5（含事件驱动题）。forcedKeys 留痕，原答在 modelAnswers 审计。"""
+    v17 起全题=7（含两新题与事件驱动题）。forcedKeys 留痕，原答在 modelAnswers 审计。"""
     answers = {"leader_nextday_continue": {"choice": "mid_45_65",
                                           "probabilities": {"mid_45_65": 0.55}},
                "theme_speculation_depth": {"choice": "fermenting"},
@@ -603,7 +627,8 @@ def test_gate_forces_all_questions_in_v5_plus_v14():
     out, gate = A.apply_evidence_gate(answers, {"evidenceMissing": True,
                                                 "evidenceMissingReason": "industry_tree_unmapped"})
     assert gate["forcedKeys"] == ["theme_speculation_depth", "leader_nextday_continue",
-                                  "leader_headroom", "leader_rebound_popularity"], \
+                                  "leader_headroom", "leader_catalyst_hardness",
+                                  "leader_seat_durability", "leader_rebound_popularity"], \
         "模型已自判 insufficient 的题不重复覆盖"
     assert out["theme_speculation_depth"]["choice"] == "insufficient"
     assert out["leader_headroom"]["choice"] == "insufficient"
@@ -1286,7 +1311,7 @@ def test_zt_gene_line_six_fields_units_and_no_fake_zero():
     line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM},
                            {"label": "双创龙一 301697", "item": None}])
     assert line.startswith("涨停基因")
-    assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、首板被板0%、连板33.3%" in line
+    assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、首板炸板0%、连板33.3%" in line
     assert "301697" not in line, "缺该股语料整段缺席（AGENTS §1.2-8）"
     assert A.zt_gene_line([]) is None
 
@@ -1313,7 +1338,7 @@ def test_zt_gene_line_partial_gene_marks_missing_field():
                                     "next_day_red_pct": 50, "first_seal_pct": 100,
                                     "first_broken_pct": None, "lianban_pct": 50})
     line = A.zt_gene_line([{"label": "龙一 301697", "item": partial}])
-    assert "首板被板不可考" in line and "首板封板100%" in line
+    assert "首板炸板不可考" in line and "首板封板100%" in line
 
 
 def test_narrative_gene_line_placement_before_reason_line():
@@ -1730,3 +1755,70 @@ def test_narrative_20261111_line_placements():
     s_idx = [s.index(t) for t in ["炸板面行", "板内跌停行", "涨停原因行", "热度排名行",
                                   "风险画像行", "上榜预测行", "龙虎榜行", "实时榜行"]]
     assert s_idx == sorted(s_idx)
+
+
+# ---------- v17（AMMO 2026-11-12a/b）：板块判定行 + 续板基础率锚行 ----------
+
+def test_sector_judgment_line_render_and_absence():
+    """板块判定行：纯数据事实（无开发注释）；insufficient/缺失判答不出段；
+    两段均缺整行缺席（§1.2-8，结构化 sectorJudgmentState 留痕）。"""
+    ans = {"theme_speculation_depth": {"choice": "fermenting", "confidence": 0.55},
+           "theme_continuation": {"choice": "strong_extend", "confidence": 0.5}}
+    ln = A.sector_judgment_line(ans)
+    assert ln == "板块判定：炒作深度=发酵期（置信0.55）；延续性=强延续（置信0.50）"
+    assert "供" not in ln and "参考" not in ln and "程序" not in ln, "开发注释禁入叙事"
+    # 单侧 insufficient → 只出另一段；双侧 insufficient/缺失 → 整行缺席
+    partial = {"theme_speculation_depth": {"choice": "insufficient"},
+               "theme_continuation": {"choice": "weak_extend", "confidence": 0.4}}
+    assert A.sector_judgment_line(partial) == "板块判定：延续性=弱延续（置信0.40）"
+    assert A.sector_judgment_line({"theme_speculation_depth": {"choice": "insufficient"},
+                                   "theme_continuation": {"choice": "insufficient"}}) is None
+    assert A.sector_judgment_line(None) is None
+    assert A.sector_judgment_line({}) is None
+    # 置信缺位不出段（不伪造）；非数置信容错
+    noconf = {"theme_speculation_depth": {"choice": "ebbing"}}
+    assert A.sector_judgment_line(noconf) == "板块判定：炒作深度=退潮期"
+    assert A.sector_judgment_line({"theme_speculation_depth":
+                                   {"choice": "climax", "confidence": "x"}}) == "板块判定：炒作深度=高潮期"
+
+
+def test_base_rate_line_render_and_absence():
+    """续板基础率锚行：总体率恒出；封板/断板子率仅有样本时出段；无样本整行缺席。"""
+    stats = {"n": 112, "ratePct": 21.4, "start": "2026-10-23", "end": "2026-11-05",
+             "sealed": {"n": 90, "ratePct": 25.6}, "broken": {"n": 22, "ratePct": 5.6}}
+    ln = A.base_rate_line(stats)
+    assert ln == "续板基础率（live已结算112行，2026-10-23~2026-11-05）：总体21.4%；封板行25.6%／断板行5.6%"
+    only_sealed = dict(stats, broken={"n": 0})
+    assert "断板行" not in A.base_rate_line(only_sealed)
+    assert A.base_rate_line(None) is None
+    assert A.base_rate_line({"n": 0}) is None
+
+
+def test_narrative_v17_line_placements():
+    """v17 两新行装配位置：基线 < 基础率锚 < 结构事实 < 板块判定 < 空间锚；
+    None 不出行（旧调用形状不变）；板块级叙事不注入（不循环）。"""
+    base = dict(date="2026-11-11", market_line="涨停 46 家",
+                structure="结构行", baseline="结构基线：同桶[x] 历史次日连板率 50.0%（104 样本）",
+                evidence_block="【题材证据】", leader_name="光洋股份", leader_code="002708")
+    n = A.build_leader_narrative(
+        **base, headroom="空间锚：按连板高度[3] 再走≥1板率 47.5%",
+        facts_line="结构事实：周期状态=转弱",
+        base_rate_line="续板基础率（live已结算112行）：总体21.4%",
+        sector_judgment_line="板块判定：炒作深度=发酵期；延续性=强延续")
+    order = ["结构基线：", "续板基础率", "结构事实：", "板块判定：", "空间锚："]
+    idx = [n.index(t) for t in order]
+    assert idx == sorted(idx)
+    n0 = A.build_leader_narrative(**base)
+    assert "续板基础率" not in n0 and "板块判定：" not in n0, "不传=不出行（旧形状不变）"
+
+
+def test_v17_criteria_consume_new_corpus_lines():
+    """判据×语料匹配（预登记 §1.3 修复）：竞价/基因/热度排名/龙虎榜/涨停原因/
+    打标交叉/题材热度至少被一道个股级题的 instructions 或 criteria 点名。"""
+    blob = "".join(q["instructions"] + "".join(q["criteria"].values())
+                   for k, q in A.QUESTIONS_THEME_LEADER.items()
+                   if k.startswith("leader_"))
+    for line_name in ("竞价", "封板质量", "涨停原因", "打标交叉", "热度排名", "龙虎榜",
+                      "梯队", "题材热度", "板块判定"):
+        assert line_name in blob, f"v17 判据必须消费语料行：{line_name}"
+

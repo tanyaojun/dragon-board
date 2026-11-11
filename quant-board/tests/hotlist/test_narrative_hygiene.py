@@ -357,3 +357,21 @@ def test_hygiene_20261111_new_lines():
                    "lhb_realtime_line(无档)")
     _assert_absent(A.board_dt_line([], lane_ok=False), "board_dt_line(无档)")
     _assert_absent(A.bid_line([{"label": "X", "item": None}]), "bid_line(缺竞价)")
+
+
+def test_hygiene_v17_sector_judgment_and_base_rate_lines():
+    """v17 两新叙事行接入 §1.2-8 强制黑名单回归（review m3）；缺数据整行缺席。"""
+    ans = {"theme_speculation_depth": {"choice": "fermenting", "confidence": 0.68},
+           "theme_continuation": {"choice": "strong_extend", "confidence": 0.92}}
+    _assert_clean(A.sector_judgment_line(ans), "sector_judgment_line")
+    _assert_clean(A.base_rate_line({"n": 143, "ratePct": 21.7, "start": "2026-10-23",
+                                    "end": "2026-11-10",
+                                    "sealed": {"n": 100, "ratePct": 26.6},
+                                    "broken": {"n": 43, "ratePct": 5.9}}),
+                  "base_rate_line")
+    _assert_absent(A.sector_judgment_line(None), "sector_judgment_line(缺判答)")
+    _assert_absent(A.sector_judgment_line(
+        {"theme_speculation_depth": {"choice": "insufficient"},
+         "theme_continuation": {"choice": "insufficient"}}),
+        "sector_judgment_line(双侧 insufficient)")
+    _assert_absent(A.base_rate_line(None), "base_rate_line(无已结算行)")

@@ -284,6 +284,8 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
         "degradedCount": 0, "degradedShare": None,
         "supersededCount": superseded_n,
         "sectorDay": sector_day_summary,
+        # 形状契约：早返回路径也补齐 v17 分组键（无样本=空分组）
+        "v17Groups": _v17_groups([], rows),
     }
     out["acceptance"] = {
         "minTradingDays": ACCEPTANCE_MIN_TRADING_DAYS,
@@ -326,6 +328,8 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
                        "回填样本见 originMetrics（可能含语料泄漏，不得进验收）")
 
     out["tradingDaysCovered"] = 1
+    # v17 新题分组（旧代样本无新题字段 → 空分组，形状契约恒在）
+    out["v17Groups"] = _v17_groups(samples_eval, rows)
     out["acceptance"] = {
         "minTradingDays": ACCEPTANCE_MIN_TRADING_DAYS,
         "minTradingDaysMet": False,
@@ -429,6 +433,12 @@ def _sample_row(doc: dict, outcome: bool | None, lookup) -> dict:
         "themeContinuation": doc.get("themeContinuation"),
         "leaderHeadroom": doc.get("leaderHeadroom"),
         "catalystStage": doc.get("catalystStage"),
+        # v17 两新题（旧代档=None，分组自然排除）+ 身位替代结局原料
+        "leaderCatalystHardness": doc.get("leaderCatalystHardness"),
+        "leaderSeatDurability": doc.get("leaderSeatDurability"),
+        "outcomeDay2ClosePct": (doc.get("outcomeDay2") or {}).get("closePct"),
+        "leaderSuperseded": bool(doc.get("leaderSuperseded")),
+        "supersededBy": doc.get("supersededBy"),
         # 题材延续性结局锚：次日该板块封板家数（None=未回填/不可判）
         "outcomeBoardNNextDay": doc.get("outcomeBoardNNextDay"),
         # `bucket` = 结构 JSON（审计字段，不可当键）；`bucketKey` = 同桶键（与 baseline 对照同粒度）
@@ -448,6 +458,74 @@ def _combo_key_of(doc: dict) -> str:
         except json.JSONDecodeError:
             struct = None
     return combo_key(struct) if isinstance(struct, dict) else ""
+
+
+def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
+    """v17 新题分组评估（预登记 v17 §5-3，零新结算代码）。
+
+    催化硬度×T+1 续板/T+2 溢价；身位稳固度×T+1 续板/次日板块家数/身位替代；
+    空间档×T+1 续板方向（实际再走板数混淆矩阵需结算扩展，登记不实施，先用
+    T+1 续板作方向代理）。n<10 的格只作方向性信号（归因文档 §7 纪律）。
+    退位行不进续板率（沿 §18 口径），但身位替代计数单独从 all_rows 取——
+    替代正是身位题的负结局信号，不得静默丢弃。
+
+    口径（review M1 修复）：只收 **live 且 questionSetVersion=v17** 样本——
+    leaderHeadroom 便捷字段 v5 起各代都有，不过滤会把 v16「1-3 板→peak」硬起判
+    的偏重分布混入 v17 方向代理（跨代不混评纪律）；回填样本同排除（泄漏风险，
+    沿 §11）。硬度/身位字段虽天然仅 v17 存在，仍同口径过滤保持一致。
+    """
+    samples = [s for s in samples
+               if s.get("questionSetVersion") == "v17"
+               and (s.get("sampleOrigin") or "live") == "live"]
+    def _rate(rows: list[dict]) -> float | None:
+        return (sum(1 for r in rows if r["outcome"]) / len(rows)) if rows else None
+
+    def _day2(rows: list[dict]) -> dict:
+        vals = [r.get("outcomeDay2ClosePct") for r in rows
+                if isinstance(r.get("outcomeDay2ClosePct"), (int, float))]
+        if not vals:
+            return {"n": 0}
+        return {"n": len(vals), "meanPct": round(sum(vals) / len(vals), 2),
+                "winRate": round(sum(1 for v in vals if v > 0) / len(vals), 3)}
+
+    def _board_n_mean(rows: list[dict]) -> float | None:
+        vals = [r.get("outcomeBoardNNextDay") for r in rows
+                if isinstance(r.get("outcomeBoardNNextDay"), (int, float))]
+        return round(sum(vals) / len(vals), 2) if vals else None
+
+    hard: dict[str, list[dict]] = {}
+    seat: dict[str, list[dict]] = {}
+    head: dict[str, list[dict]] = {}
+    for s in samples:
+        if s.get("leaderCatalystHardness"):
+            hard.setdefault(s["leaderCatalystHardness"], []).append(s)
+        if s.get("leaderSeatDurability"):
+            seat.setdefault(s["leaderSeatDurability"], []).append(s)
+        if s.get("leaderHeadroom"):
+            head.setdefault(s["leaderHeadroom"], []).append(s)
+    # 身位替代计数：退位行（含结局已结算者）按身位档分组，不进续板率
+    superseded_by_seat: dict[str, int] = {}
+    for r in all_rows:
+        d = r["doc"]
+        if d.get("questionSetVersion") != "v17" or \
+                (d.get("sampleOrigin") or "live") != "live":
+            continue
+        if d.get("leaderSuperseded") and r["outcome"] is not None:
+            k = d.get("leaderSeatDurability")
+            if k:
+                superseded_by_seat[k] = superseded_by_seat.get(k, 0) + 1
+    return {
+        "byCatalystHardness": {k: {"n": len(v), "sealRate": _rate(v), "day2": _day2(v)}
+                               for k, v in sorted(hard.items())},
+        "bySeatDurability": {k: {"n": len(v), "sealRate": _rate(v),
+                                 "boardNNextMean": _board_n_mean(v),
+                                 "supersededN": superseded_by_seat.get(k, 0)}
+                             for k, v in sorted(seat.items())},
+        "byHeadroom": {k: {"n": len(v), "sealRate": _rate(v)}
+                       for k, v in sorted(head.items())},
+        "note": "只收 live v17 样本（跨代/回填不混评，review M1）；n<10 格只作方向性信号；"
+                "空间×实际再走板数混淆矩阵需结算扩展（登记不实施）",
+    }
 
 
 def main() -> None:
@@ -503,6 +581,19 @@ def main() -> None:
         print("\n同桶聚合：")
         for pb in out["perBucket"]:
             print(f"  {pb['bucket']}  n={pb['n']} 实际 {pb['actualRate']:.1%} 模型均 {pb['meanModelProb']:.1%} {pb['codes']}")
+    vg = out.get("v17Groups") or {}
+    if vg.get("byCatalystHardness") or vg.get("bySeatDurability"):
+        print("\nv17 新题分组（n<10 只作方向性信号）：")
+        for k, v in (vg.get("byCatalystHardness") or {}).items():
+            d2 = v.get("day2") or {}
+            print(f"  催化硬度={k}  n={v['n']} 续板率 "
+                  f"{'-' if v['sealRate'] is None else format(v['sealRate'], '.1%')}"
+                  + (f"  T+2 均 {d2['meanPct']:+.2f}%（n={d2['n']}）" if d2.get("n") else ""))
+        for k, v in (vg.get("bySeatDurability") or {}).items():
+            print(f"  身位={k}  n={v['n']} 续板率 "
+                  f"{'-' if v['sealRate'] is None else format(v['sealRate'], '.1%')}"
+                  f"  退位 {v['supersededN']} 只"
+                  + (f"  次日板块家数均 {v['boardNNextMean']}" if v.get("boardNNextMean") is not None else ""))
     print(f"\n验收：{out['acceptance']['verdict']}")
 
 
