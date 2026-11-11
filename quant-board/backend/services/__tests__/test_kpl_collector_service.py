@@ -1377,10 +1377,13 @@ class TestCorpusPersist20261111:
         assert any(e["type"] == "abnormal_price" for e in evs)
         assert any(e["type"] == "stock_related_plate" for e in evs)
         row = db._coll.rows["2026-11-10"]
-        assert row["bdo_items"][0]["zt_tur"] == 150, "封板大单聚合 sum（明细 100+50）"
+        assert row["bdo_items"][0]["zt_tur"] == 150, "raw sum 聚合（审计保留，明细 100+50）"
         assert row["bdo_items"][0]["buy_tur"] == 100
+        assert row["bdo_items"][0]["zt_tur_yuan"] == 50.0, "尾条派生聚合（元口径，封单额=级值）"
+        assert row["bdo_items"][0]["buy_tur_yuan"] == 40.0, "尾条派生聚合（元口径，累计取尾条）"
+        assert row["bdo_items"][0]["sell_tur_yuan"] == 0.0, "真实 0 不吞"
         assert row["bf_items"][0]["desc"] == "订单放量"
-        assert row["abn_items"][0]["next_day_zf"] == 320, "float 原始值透传（缩放待校准）"
+        assert row["abn_items"][0]["next_day_zf"] == 320, "float 原始值透传（2030 口径阴性未钉死）"
         assert row["rplate_items"][0]["plates"][0]["plate_id"] == "801464"
         st = svc._corpus_persist_stats
         assert (st["bdo_ok"], st["bf_ok"], st["abn_ok"], st["rplate_ok"]) == (1, 1, 1, 1)

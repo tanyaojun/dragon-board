@@ -40,6 +40,24 @@ CMD_STOCK_RELATED_THEME = 2013  # ServiceHqStock.StockRelatedThemeResp（个股�
 CMD_STOCK_RELATED_PLATE = 2010  # Hq.StockRelatedPlateListResp（所属板块实时，请求同 HQReq）
 CMD_STOCK_ZT_BIG_ORDER = 2014   # ServiceHqStock.StockZTBigOrderDetailResp（封板大单明细）
 CMD_ABNORMAL_PRICE = 2030       # ServiceHqStock.AbnormalPriceResp（异动提醒）
+
+# ── 2014 封板大单实弹值裁决（2026-11-11 收盘日档 16 股 2936 items 全样本被动校准，
+#    证据链与复验路径见 docs/kpl-socket/detail-scaling-verification.md）──────────
+# - time = HHMM（时×100+分）：0 条越界、0 条落午休空洞（1131-1259）、全 items 时序单调；
+#   首条时间与池 zt_time 封板时刻对齐（一字板 09:25 封 → 首条 09:30）。
+# - zt_tur/tur/buy_tur/sell_tur = 元×1：16/16 股尾条 zt_tur 与池 zt_tur（App 渲染封单额）
+#   精确吻合（实测全部 1.00000）；buy/sell 全 items 单调（累计语义）且 buy−sell 与池
+#   main_net（元原样，lhb-scaling-verification 同源）量级一致（×100/×10000 越界排除）。
+# - rate = tur/ztTur×100：2905/2905 items 帧内自洽（含 298629.53% 极端样本精确吻合），
+#   raw 已是百分数，rate_pct 原样不乘 100。
+BDO_TUR_DIVISOR = 1         # 2014 金额族（tur/buyTur/sellTur/ztTur）raw → 元除数
+BDO_TIME_IS_HHMM = True     # 2014 time 编码 = HHMM（时×100+分）
+BDO_RATE_IS_PERCENT = True  # 2014 rate 已是百分数（tur/ztTur×100）
+
+# 2030 异动提醒 price/nextDayPrice/nextDayZf 缩放与 zf 口径：**未钉死**（2026-11-11 阴性——
+# 当日事件推送 16/16 样本三字段全缺位，date 语义=异动日；复验路径见
+# docs/kpl-socket/detail-scaling-verification.md §二）。证据不足解析器不动，原始值透出。
+ABN_SCALING_VERIFIED = False
 CMD_BF_REASON = 2202            # Hq.BFReasonResp（爆发原因推送，请求同 HQReq）
 CMD_STOCK_MX_SUB = 2006   # Hq.StockMXResp 首拉+订阅（请求 Hq.HQItemReq{f1 stockId, f2 count}，App 固定 count=25）
 CMD_STOCK_MX_PUSH = 2007  # Hq.StockMXResp 增量推送（不在 @y51 订阅面内，服务端跟在 2006 订阅后推）
@@ -453,6 +471,55 @@ def build_abnormal_price_req_pb(stock_id: str) -> bytes:
     return pb_bytes(1, str(stock_id).encode("utf-8"))
 
 
+def bdo_item_yuan(item: Dict[str, Any]) -> Dict[str, Any]:
+    """2014 单条 item raw → 派生字段（2026-11-11 裁决，单一换算出口；叙事回退同源复用）。
+
+    - time_text：HHMM → "HH:MM"；raw 缺位/0（proto3 缺省与缺位不可分，A 股无 00:00
+      交易时段）或结构非法 → None（缺失保持缺失，不伪造时间）。
+    - tur_yuan/buy_tur_yuan/sell_tur_yuan/zt_tur_yuan：raw ÷ BDO_TUR_DIVISOR；
+      非数值（异形帧 bytes 透传）→ None。0 是真实值（该分钟尚无大单/封单），不吞。
+    - rate_pct：raw 原样（已是百分数 tur/ztTur×100）；缺位/非数值 → None。
+    """
+    out: Dict[str, Any] = {"time_text": None, "tur_yuan": None, "buy_tur_yuan": None,
+                           "sell_tur_yuan": None, "zt_tur_yuan": None, "rate_pct": None}
+    t = item.get("time")
+    if isinstance(t, (int, float)) and not isinstance(t, bool):
+        ti = int(t)
+        if ti > 0 and 0 <= ti % 100 <= 59 and ti // 100 <= 23:
+            out["time_text"] = f"{ti // 100:02d}:{ti % 100:02d}"
+    for rk, yk in (("tur", "tur_yuan"), ("buy_tur", "buy_tur_yuan"),
+                   ("sell_tur", "sell_tur_yuan"), ("zt_tur", "zt_tur_yuan")):
+        v = item.get(rk)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[yk] = v / BDO_TUR_DIVISOR
+    rt = item.get("rate")
+    if isinstance(rt, (int, float)) and not isinstance(rt, bool):
+        out["rate_pct"] = float(rt)
+    return out
+
+
+def bdo_aggregate_last(data: Dict[str, Any]) -> Dict[str, Any]:
+    """2014 解析产物 → 尾条派生聚合 {zt_tur_yuan, buy_tur_yuan, sell_tur_yuan}。
+
+    尾条语义（2026-11-11 裁决）：zt_tur=该分钟封单额（级值，sum 无意义）、
+    buy/sell_tur=当日累计封板大单买/卖额（sum 同样无意义）→ 展示口径一律取**最后一条**
+    （最新状态）。items 空/无数值尾条 → 返回 {}（*_yuan 缺位 fail-visible，不补 0）。
+    本函数防御式实现（异形帧不抛），供采集层在同一守卫内复用。
+    """
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return {}
+    for it in reversed(items):
+        if not isinstance(it, dict):
+            continue
+        y = bdo_item_yuan(it)
+        if y["zt_tur_yuan"] is None and y["buy_tur_yuan"] is None and y["sell_tur_yuan"] is None:
+            continue
+        return {k: y[k] for k in ("zt_tur_yuan", "buy_tur_yuan", "sell_tur_yuan")
+                if y[k] is not None}
+    return {}
+
+
 def parse_stock_zt_big_order_resp(payload: bytes) -> Dict[str, Any]:
     """2014 StockZTBigOrderDetailResp → 封板大单明细（2026-11-11 ④ 协议层落地）。
 
@@ -460,20 +527,25 @@ def parse_stock_zt_big_order_resp(payload: bytes) -> Dict[str, Any]:
     Resp{stockId=1(string), type=2(uint32), ztState=3(string), total=4(uint32),
     items=5(repeated Item)}；Item{time=1(uint32), tur=2(uint64), rate=3(float),
     buyTur=4(uint64), SellTur=5(uint64), ztTur=6(uint64)}。
-    缩放/时间编码（time 是否 9 位 HHMMSS+ms、tur 族单位）**待实弹校准**，原始值
-    透出不换算（fail-visible，不猜）。"""
+    缩放/时间编码已钉死（2026-11-11 实弹值校准，见模块头裁决注与
+    docs/kpl-socket/detail-scaling-verification.md）：time=HHMM、金额族=元×1、
+    rate=百分数（tur/ztTur×100）。**raw 字段全保留**，items 追加派生字段
+    time_text/tur_yuan/buy_tur_yuan/sell_tur_yuan/zt_tur_yuan/rate_pct
+    （bdo_item_yuan 单一换算出口；缺位派生=None，fail-visible 不补 0）。"""
     pb = parse_pb(payload)
     items: List[Dict[str, Any]] = []
     for raw in pb.get(5, []):
         sub = parse_pb(raw)
-        items.append({
+        item = {
             "time": _signed64(pb_first(sub, 1, 0)),
             "tur": _signed64(pb_first(sub, 2, 0)),
             "rate": pb_first(sub, 3),
             "buy_tur": _signed64(pb_first(sub, 4, 0)),
             "sell_tur": _signed64(pb_first(sub, 5, 0)),
             "zt_tur": _signed64(pb_first(sub, 6, 0)),
-        })
+        }
+        item.update(bdo_item_yuan(item))
+        items.append(item)
     return {
         "stock_id": _s_field(pb, 1),
         "type": pb_first(pb, 2, 0),
@@ -499,7 +571,9 @@ def parse_bf_reason_resp(payload: bytes) -> Dict[str, Any]:
 def parse_abnormal_price_resp(payload: bytes) -> Dict[str, Any]:
     """2030 AbnormalPriceResp → 异动提醒（proto 描述符：stockId=1, price=2(uint32),
     date=3(string), nextDayPrice=10(uint32), nextDayZf=11(float)）。
-    price 族缩放待实弹校准（原始值透出不换算）。"""
+    price 族缩放与 next_day_zf 口径**未钉死**（2026-11-11 阴性：当日事件推送
+    16/16 样本三字段全缺位，无对照样本；解析器不动，原始值透出不换算，
+    复验路径见 docs/kpl-socket/detail-scaling-verification.md §二）。"""
     pb = parse_pb(payload)
     return {
         "stock_id": _s_field(pb, 1),

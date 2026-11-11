@@ -422,11 +422,18 @@ class TestStockDetailChannels20261111:
         assert proto.build_abnormal_price_req_pb("002708") == proto.pb_bytes(1, b"002708")
 
     def test_parse_stock_zt_big_order_resp(self):
-        item = (proto.pb_varint_field(1, 93005)
-                + proto.pb_varint_field(2, 12345)
-                + proto.pb_varint_field(4, 6000)
-                + proto.pb_varint_field(5, 1200)
-                + proto.pb_varint_field(6, 900))
+        import struct as _struct
+
+        def pb_fixed32(field: int, f: float) -> bytes:
+            return proto.encode_varint((field << 3) | 5) + _struct.pack("<f", f)
+
+        # rate=41.15（fixed32 float）＝tur/ztTur×100（21376680/51950196×100）帧内自洽样本
+        item = (proto.pb_varint_field(1, 941)
+                + proto.pb_varint_field(2, 21376680)
+                + pb_fixed32(3, 41.15)
+                + proto.pb_varint_field(4, 208147347)
+                + proto.pb_varint_field(5, 103086910)
+                + proto.pb_varint_field(6, 51950196))
         payload = (proto.pb_bytes(1, b"002708")
                    + proto.pb_varint_field(2, 1)
                    + proto.pb_bytes(3, b"sealed")
@@ -436,9 +443,65 @@ class TestStockDetailChannels20261111:
         d = proto.parse_stock_zt_big_order_resp(payload)
         assert d["stock_id"] == "002708" and d["type"] == 1
         assert d["zt_state"] == "sealed" and d["total"] == 3
-        assert d["items"][0] == {"time": 93005, "tur": 12345, "rate": None,
-                                 "buy_tur": 6000, "sell_tur": 1200, "zt_tur": 900}
-        assert d["items"][1]["tur"] == 222
+        it0 = d["items"][0]
+        # raw 字段全保留
+        assert (it0["time"], it0["tur"], it0["buy_tur"], it0["sell_tur"],
+                it0["zt_tur"]) == (941, 21376680, 208147347, 103086910, 51950196)
+        assert abs(it0["rate"] - 41.15) < 0.01
+        # 派生字段（2026-11-11 裁决：time=HHMM、金额族=元×1、rate=百分数原样）
+        assert it0["time_text"] == "09:41"
+        assert it0["tur_yuan"] == 21376680.0
+        assert it0["zt_tur_yuan"] == 51950196.0
+        assert it0["buy_tur_yuan"] == 208147347.0
+        assert it0["sell_tur_yuan"] == 103086910.0
+        assert abs(it0["rate_pct"] - 41.15) < 0.01, "rate 已是百分数（tur/zt×100），不×100"
+        # 缺位派生 = None（fail-visible，不补 0/不伪造）
+        assert d["items"][1]["time"] == 0 and d["items"][1]["time_text"] is None
+        assert d["items"][1]["rate"] is None and d["items"][1]["rate_pct"] is None
+        assert d["items"][1]["tur"] == 222 and d["items"][1]["tur_yuan"] == 222.0
+
+    def test_bdo_time_text_decoding(self):
+        """time=HHMM 裁决：941→09:41 / 1500→15:00 / 0（proto3 缺省=缺位）→None。"""
+        assert proto.BDO_TIME_IS_HHMM and proto.BDO_TUR_DIVISOR == 1
+        assert proto.BDO_RATE_IS_PERCENT
+
+        def one(t) -> dict:
+            return proto.bdo_item_yuan({"time": t})
+
+        assert one(941)["time_text"] == "09:41"
+        assert one(1500)["time_text"] == "15:00"
+        assert one(1130)["time_text"] == "11:30"
+        assert one(0)["time_text"] is None, "0=缺位不可分，不伪造 00:00"
+        assert one(None)["time_text"] is None
+        assert one(b"\x01")["time_text"] is None, "异形帧 bytes 透传 → None"
+
+    def test_bdo_item_yuan_missing_and_weird(self):
+        # 非数值字段派生 None；数值 0 是真实值（该分钟无大单）不吞
+        y = proto.bdo_item_yuan({"tur": 0, "buy_tur": b"\x01", "rate": None})
+        assert y["tur_yuan"] == 0.0
+        assert y["buy_tur_yuan"] is None
+        assert y["zt_tur_yuan"] is None and y["sell_tur_yuan"] is None
+        assert y["rate_pct"] is None
+
+    def test_bdo_aggregate_last(self):
+        """尾条派生聚合：zt=封单额级值、buy/sell=当日累计 → 取尾条最新态（sum 无意义）。"""
+        d = {"items": [
+            {"zt_tur": 22391088, "buy_tur": 5236460, "sell_tur": 0},
+            {"zt_tur": 51950196, "buy_tur": 208147347, "sell_tur": 103086910},
+        ]}
+        assert proto.bdo_aggregate_last(d) == {
+            "zt_tur_yuan": 51950196.0, "buy_tur_yuan": 208147347.0,
+            "sell_tur_yuan": 103086910.0}
+        # 空/异形 → {}（*_yuan 缺位 fail-visible，不补 0）
+        assert proto.bdo_aggregate_last({"items": []}) == {}
+        assert proto.bdo_aggregate_last({"items": ["x", 3]}) == {}
+        assert proto.bdo_aggregate_last({}) == {}
+        assert proto.bdo_aggregate_last(None) == {}
+        # 尾条字段全非数值 → 跳过找上一条
+        d2 = {"items": [{"zt_tur": 100}, {"zt_tur": b"\x01"},
+                        {"zt_tur": 51950196, "buy_tur": 7}]}
+        assert proto.bdo_aggregate_last(d2) == {"zt_tur_yuan": 51950196.0,
+                                                "buy_tur_yuan": 7.0}
 
     def test_parse_bf_reason_resp(self):
         payload = (proto.pb_bytes(1, b"002708")

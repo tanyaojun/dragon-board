@@ -726,13 +726,18 @@ def load_lhb_realtime(db: Any, date: str) -> dict[str, Any]:
 # 写入方 = collector（单写者，订阅面=涨停池成员，订阅开关默认关）；bdo_/bf_/abn_/
 # rplate_ 前缀日档，合同同 fc_/rt_（_archive_stock_corpus 单一实现）。
 _DETAIL_LANES: dict[str, dict[str, Any]] = {
-    # bdo：items 明细列表原样 + 采集侧聚合的涨停额/买卖拆分（sum，供封板大单行消费；
-    # 缩放待实弹校准，聚合只求和不换算）
+    # bdo：items 明细列表原样 + 采集侧聚合。raw sum（zt_tur/buy_tur/sell_tur）仅审计
+    # 保留（级值/累计 sum 无意义，向后兼容不删）；2026-11-11 裁决追加尾条派生
+    # zt_tur_yuan/buy_tur_yuan/sell_tur_yuan（元口径，复用协议层
+    # bdo_aggregate_last，证据见 docs/kpl-socket/detail-scaling-verification.md）
     "bdo": {"prefix": "bdo_", "source": "socket_2014",
             "fields": ("type", "zt_state", "total", "items",
-                       "zt_tur", "buy_tur", "sell_tur")},
+                       "zt_tur", "buy_tur", "sell_tur",
+                       "zt_tur_yuan", "buy_tur_yuan", "sell_tur_yuan")},
     "bf": {"prefix": "bf_", "source": "socket_2202",
            "fields": ("desc", "jump_id")},
+    # abn：price 族缩放与 next_day_zf 口径 2026-11-11 阴性未钉死（当日事件推送三字段
+    # 全缺位），保持 raw 透出，无派生字段（复验路径见 detail-scaling-verification.md）
     "abn": {"prefix": "abn_", "source": "socket_2030",
             "fields": ("price", "date", "next_day_price", "next_day_zf")},
     "rplate": {"prefix": "rplate_", "source": "socket_2010",

@@ -1797,14 +1797,18 @@ class KplCollectorService:
             lane = DETAIL_LANE_BY_CMD[cmd]
             sid = str(data.get("stock_id") or "").strip()
             if lane == "bdo" and sid:
-                # 2014 单股聚合（涨停额/买卖拆分 = 明细 sum，供封板大单行消费；
-                # 原始值不换算，缩放待实弹校准）。2026-11-11 评审 major-1：异形帧
-                # 字段可能透传 bytes，无守卫算术会抛 TypeError 杀收流会话（重连
-                # 螺旋形态，§1.2-9）——聚合失败 fail-visible 并按无聚合值落库。
+                # 2014 单股聚合（原始值 sum 仅审计保留，合同向后兼容；2026-11-11 实弹值裁决追加
+                # 尾条派生聚合 *_yuan：zt_tur=封单额级值、buy/sell=当日累计——sum 无意义，
+                # 展示口径取尾条最新态；换算单一出口=协议层 bdo_aggregate_last（复用
+                # BDO_TUR_DIVISOR）。2026-11-11 评审 major-1：异形帧字段可能透传 bytes，
+                # 无守卫算术会抛 TypeError 杀收流会话（重连螺旋形态，§1.2-9）——聚合失败
+                # fail-visible 并按无聚合值落库；bdo_aggregate_last 防御式实现，异形帧返回
+                # {} → *_yuan 缺位，叙事整股缺席（不补 0）。
                 try:
                     agg = {k: sum((it.get(k) or 0) for it in (data.get("items") or [])
                                   if isinstance(it, dict))
                            for k in ("zt_tur", "buy_tur", "sell_tur")}
+                    agg.update(proto.bdo_aggregate_last(data))
                 except Exception as exc:
                     self._err(f"2014 aggregate failed: {exc}")
                     self._emit(KplEvent(type="stock_detail_error", ts=time.time(), cmd=cmd,

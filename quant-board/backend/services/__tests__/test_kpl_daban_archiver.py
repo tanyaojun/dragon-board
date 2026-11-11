@@ -1277,11 +1277,23 @@ def test_archive_lhb_realtime_union_contract():
 def test_archive_stock_detail_lanes_contract():
     db = _FakeDb()
     r = archive_stock_detail_corpus(db, {"date": "2026-11-10", "items": [
-        {"stock_id": "603278", "zt_tur": 100, "buy_tur": 50, "items": [], "ts": 1794289200.0}]},
+        {"stock_id": "603278", "zt_tur": 100, "buy_tur": 50, "items": [],
+         "zt_tur_yuan": 100.0, "buy_tur_yuan": 50.0, "sell_tur_yuan": 0.0,
+         "ts": 1794289200.0}]},
         lane="bdo")
     assert r["ok"] and r["lane"] == "bdo"
     loaded = load_stock_detail_corpus(db, "2026-11-10", lane="bdo")
     assert loaded["ok"] and loaded["items"][0]["zt_tur"] == 100
+    assert loaded["items"][0]["zt_tur_yuan"] == 100.0, "尾条派生聚合随新日档落库"
+    # 旧日档（无派生字段）向后兼容可读，raw 合同不变
+    archive_stock_detail_corpus(db, {"date": "2026-11-09", "items": [
+        {"stock_id": "603278", "zt_tur": 77237472, "buy_tur": 407660096,
+         "items": [{"time": 941, "zt_tur": 77237472}], "ts": 1794202800.0}]},
+        lane="bdo")
+    legacy = load_stock_detail_corpus(db, "2026-11-09", lane="bdo")
+    assert legacy["ok"]
+    assert "zt_tur_yuan" not in legacy["items"][0], "旧档无派生字段，不伪造"
+    assert legacy["items"][0]["zt_tur"] == 77237472
     # rplate plates 列表原样
     archive_stock_detail_corpus(db, {"date": "2026-11-10", "items": [
         {"stock_id": "603278", "plates": [{"plate_name": "人形机器人"}],
