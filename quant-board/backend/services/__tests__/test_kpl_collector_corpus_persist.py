@@ -139,3 +139,51 @@ def test_pytest_process_without_factory_skips_real_db():
     svc._persist_corpus("theme", {"items": [{"stock_id": "601188", "themes": []}]})
     assert svc._corpus_persist_stats["theme_fail"] == 1
     assert "corpus_db_unavailable" in svc._corpus_persist_stats["last_error"]
+
+
+# ---------- 2026-11-11 ③④：fc/rt 落库 lanes + 个股详情四通道 lanes ----------
+
+def test_forecast_push_persists_immediately():
+    """2112 非空推送 → fc_items 即时写日档（推送即落库，与 2203/2013 同款时点）。"""
+    db = _FakeDb()
+    svc = _collector(db, pool_date="2026-11-10")
+    svc._persist_corpus("fc", {"items": [
+        {"stock_id": "601188", "stock_name": "龙江交通", "hot_val": 100, "ts": 1794289200.0}]})
+    row = db._coll.rows["2026-11-10"]
+    assert row["fc_items"][0]["stock_id"] == "601188"
+    assert svc._corpus_persist_stats["fc_ok"] == 1
+
+
+def test_realtime_push_persists_immediately():
+    """3004/3101 非空推送 → rt_items 即时写日档。"""
+    db = _FakeDb()
+    svc = _collector(db, pool_date="2026-11-10")
+    svc._persist_corpus("rt", {"items": [
+        {"stock_id": "601188", "name": "龙江交通", "quotas": ["9.9"], "ts": 1794289200.0}]})
+    row = db._coll.rows["2026-11-10"]
+    assert row["rt_items"][0]["quotas"] == ["9.9"]
+    assert svc._corpus_persist_stats["rt_ok"] == 1
+
+
+def test_detail_lanes_persist_and_stats():
+    """④ bdo/bf/abn/rplate 四条 lane → 各自前缀字段 + 计数 fail-visible。"""
+    db = _FakeDb()
+    svc = _collector(db, pool_date="2026-11-10")
+    svc._persist_corpus("bdo", {"items": [
+        {"stock_id": "601188", "zt_tur": 100, "items": [], "ts": 1794289200.0}]})
+    svc._persist_corpus("bf", {"items": [
+        {"stock_id": "601188", "desc": "订单放量", "ts": 1794289200.0}]})
+    svc._persist_corpus("abn", {"items": [
+        {"stock_id": "601188", "next_day_zf": 3.2, "ts": 1794289200.0}]})
+    svc._persist_corpus("rplate", {"items": [
+        {"stock_id": "601188", "plates": [{"plate_name": "物流"}], "ts": 1794289200.0}]})
+    svc._persist_corpus("bdo", {"items": []})   # 空帧抑制 → fail 计数
+    row = db._coll.rows["2026-11-10"]
+    assert row["bdo_items"][0]["zt_tur"] == 100
+    assert row["bf_items"][0]["desc"] == "订单放量"
+    assert row["abn_items"][0]["next_day_zf"] == 3.2
+    assert row["rplate_items"][0]["plates"][0]["plate_name"] == "物流"
+    st = svc._corpus_persist_stats
+    assert (st["bdo_ok"], st["bf_ok"], st["abn_ok"], st["rplate_ok"]) == (1, 1, 1, 1)
+    assert st["bdo_fail"] == 1 and "empty_bdo_items" in st["last_error"]
+    assert svc.status()["corpus_persist"]["fc_ok"] == 0, "status 透出全部计数位"

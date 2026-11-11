@@ -196,6 +196,29 @@ LHB_EVENT_NAMES: Dict[int, str] = {
 }
 
 
+# 个股详情四通道（2026-11-11 ④，mock 全绿；实弹开火另走预登记）事件名与落库 lane 映射
+DETAIL_EVENT_NAMES: Dict[int, str] = {
+    proto.CMD_STOCK_RELATED_PLATE: "stock_related_plate",
+    proto.CMD_STOCK_ZT_BIG_ORDER: "stock_zt_big_order",
+    proto.CMD_ABNORMAL_PRICE: "abnormal_price",
+    proto.CMD_BF_REASON: "bf_reason",
+}
+
+DETAIL_LANE_BY_CMD: Dict[int, str] = {
+    proto.CMD_STOCK_RELATED_PLATE: "rplate",
+    proto.CMD_STOCK_ZT_BIG_ORDER: "bdo",
+    proto.CMD_ABNORMAL_PRICE: "abn",
+    proto.CMD_BF_REASON: "bf",
+}
+
+# 解析器映射（kpl_socket_protocol 详情四通道，字段合同见各 parse docstring）
+DETAIL_PARSERS: Dict[int, Any] = {
+    proto.CMD_STOCK_RELATED_PLATE: proto.parse_stock_related_plate_resp,
+    proto.CMD_STOCK_ZT_BIG_ORDER: proto.parse_stock_zt_big_order_resp,
+    proto.CMD_ABNORMAL_PRICE: proto.parse_abnormal_price_resp,
+    proto.CMD_BF_REASON: proto.parse_bf_reason_resp,
+}
+
 DABAN_EVENT_NAMES: Dict[int, str] = {
     daban.CMD_ZD_STAT: "zd_stat",
     daban.CMD_MARKET_OVERVIEW: "market_overview",
@@ -247,6 +270,7 @@ class KplCollectorService:
         lhb_realtime_count: int = 120,
         zt_reason_subs: bool = True,
         theme_subs: bool = True,
+        stock_detail_subs: bool = False,
         corpus_db_factory: Optional[Any] = None,
         # 2026-11-10 假说判别实验：读循环开始后前 N 秒纯读不发（保活/drain 全部延后），
         # 看杀连时刻落在宽限期内（=setup 打标定时处决）还是宽限期结束时（=循环期发送
@@ -327,6 +351,24 @@ class KplCollectorService:
         self._theme_subscribed: set = set()
         self._pending_theme: List[str] = []
         self._theme_lock = threading.Lock()
+        # 个股详情四通道订阅（2026-11-11 ④，2014/2202/2030/2010）：与 2203/2013 完全同款
+        # 模式（订阅面=涨停池成员自动跟随、无退订、每会话重建订阅）。**默认关**——本轮
+        # 只到 mock 全绿，实弹开火另走预登记 + 频控预算确认（AGENTS §1.2-9）：帧数上限
+        # =涨停池成员数×4/会话（每通道每股一帧），drain 限速沿 2203/2013 现值（每 tick
+        # 总预算 4 帧、帧间拟人停顿），status 经 corpus_persist 计数 fail-visible。
+        self._stock_detail_subs = bool(stock_detail_subs)
+        self._detail_lane_cmds: Dict[str, int] = {
+            "rplate": proto.CMD_STOCK_RELATED_PLATE,     # 所属板块（Hq.HQReq）
+            "bdo": proto.CMD_STOCK_ZT_BIG_ORDER,         # 封板大单（ZTBigOrderDetailReq）
+            "bf": proto.CMD_BF_REASON,                   # 爆发原因（Hq.HQReq）
+            "abn": proto.CMD_ABNORMAL_PRICE,             # 异动提醒（AbnormalPriceReq）
+        }
+        self._detail_snaps: Dict[str, Dict[str, Dict[str, Any]]] = {
+            k: {} for k in self._detail_lane_cmds}
+        self._detail_subscribed: Dict[str, set] = {k: set() for k in self._detail_lane_cmds}
+        self._pending_detail: Dict[str, List[str]] = {k: [] for k in self._detail_lane_cmds}
+        self._detail_locks: Dict[str, threading.Lock] = {
+            k: threading.Lock() for k in self._detail_lane_cmds}
         # 推送即落库（2026-11-10 用户裁决，与直播文本同款时点）：2013/2203 推送解析成功
         # 后立即写 kpl_daban_pool 日档（不再等 ：8000 archiver 盘后轮询拉快照）。
         # corpus_db_factory 可注入（pytest 用假库）；默认 storage_backend=mongodb 时才
@@ -334,6 +376,10 @@ class KplCollectorService:
         self._corpus_db_factory = corpus_db_factory
         self._corpus_persist_stats: Dict[str, Any] = {
             "theme_ok": 0, "theme_fail": 0, "reason_ok": 0, "reason_fail": 0,
+            # 2026-11-11 ③/④：2112/3004/3101 落库计数 + 个股详情四通道计数（fail-visible）
+            "fc_ok": 0, "fc_fail": 0, "rt_ok": 0, "rt_fail": 0,
+            "bdo_ok": 0, "bdo_fail": 0, "bf_ok": 0, "bf_fail": 0,
+            "abn_ok": 0, "abn_fail": 0, "rplate_ok": 0, "rplate_fail": 0,
             "last_error": ""}
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
@@ -515,39 +561,56 @@ class KplCollectorService:
     def _persist_corpus(self, lane: str, payload: Dict[str, Any]) -> None:
         """单条推送即时落库（线程内同步写，单写者=本采集线程；失败不阻断收流）。
 
-        lane="theme" → archive_theme_corpus；lane="reason" → archive_reason_corpus。
+        lane="theme" → archive_theme_corpus；"reason" → archive_reason_corpus；
+        2026-11-11 ③扩展："fc" → archive_lhb_forecast（2112），"rt" →
+        archive_lhb_realtime（3004/3101）；④扩展："bdo"/"bf"/"abn"/"rplate" →
+        archive_stock_detail_corpus（个股详情四通道，订阅默认关）。
         跨日残留/无交易日/空 payload 由归档函数结构化拒绝（不猜不补）。
         """
         from backend.services.kpl_daban_archiver import (
+            archive_lhb_forecast,
+            archive_lhb_realtime,
             archive_reason_corpus,
+            archive_stock_detail_corpus,
             archive_theme_corpus,
         )
+        fns = {"theme": archive_theme_corpus, "reason": archive_reason_corpus,
+               "fc": archive_lhb_forecast, "rt": archive_lhb_realtime,
+               "bdo": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="bdo"),
+               "bf": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="bf"),
+               "abn": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="abn"),
+               "rplate": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="rplate")}
+        events = {"theme": "theme_heat_persist", "reason": "zt_reasons_persist",
+                  "fc": "lhb_forecast_persist", "rt": "lhb_realtime_persist",
+                  "bdo": "stock_detail_persist", "bf": "stock_detail_persist",
+                  "abn": "stock_detail_persist", "rplate": "stock_detail_persist"}
         try:
+            # 2026-11-11 评审 nit-6：lane 校验入 try（拼错 lane 走 fail 计数不杀会话）
+            if lane not in fns:
+                raise ValueError(f"unknown corpus lane: {lane}")
             date = self._pool_date_for_corpus()
             if not date:
                 raise RuntimeError("no_pool_date")
             db = self._corpus_db()
             if db is None:
                 raise RuntimeError("corpus_db_unavailable")
-            fn = archive_theme_corpus if lane == "theme" else archive_reason_corpus
-            result = fn(db, {"ok": True, "date": date, **payload})
+            result = fns[lane](db, {"ok": True, "date": date, **payload})
             if result.get("ok"):
                 self._corpus_persist_stats[f"{lane}_ok"] += 1
             else:
                 self._corpus_persist_stats[f"{lane}_fail"] += 1
                 self._corpus_persist_stats["last_error"] = (
                     f"{lane}:{result.get('reason')}")
-            self._emit(KplEvent(type=f"{lane}_heat_persist" if lane == "theme"
-                                else "zt_reasons_persist",
+            self._emit(KplEvent(type=events[lane],
                                 ts=time.time(), date=date,
                                 ok=bool(result.get("ok")),
                                 reason=str(result.get("reason") or "")))
         except Exception as exc:   # 落库失败绝不阻断收流（fail-visible 进 stats/事件）
-            self._corpus_persist_stats[f"{lane}_fail"] += 1
+            self._corpus_persist_stats[f"{lane}_fail"] = \
+                self._corpus_persist_stats.get(f"{lane}_fail", 0) + 1
             self._corpus_persist_stats["last_error"] = f"{lane}:{exc}"
             self._err(f"{lane} push persist failed: {exc}")
-            self._emit(KplEvent(type=f"{lane}_heat_persist" if lane == "theme"
-                                else "zt_reasons_persist",
+            self._emit(KplEvent(type=events.get(lane, "corpus_persist_error"),
                                 ts=time.time(), ok=False,
                                 reason=f"persist failed: {type(exc).__name__}"))
 
@@ -603,6 +666,24 @@ class KplCollectorService:
                 self._human_pause(*self._drain_pause)
                 self._dbg("C", frame)
                 sock.sendall(frame)
+            return
+        if lane == "detail":
+            # 2026-11-11 评审 major-2：setup_inline_subs=True 时详情四通道改 setup
+            # 窗口内内联发送（同 2203/2013 的 zt_reason/theme lane；窗口关闭后发送
+            # 0x40 帧→ErrResp 1002 断连）。OSError 上抛交 _run_loop 重连链。
+            for dl, dcmd in self._detail_lane_cmds.items():
+                with self._detail_locks[dl]:
+                    batch = list(self._pending_detail[dl])
+                    self._pending_detail[dl].clear()
+                for sid in batch:
+                    req = self._detail_req_for(dcmd, sid)
+                    enc = self._codec.enc(req)
+                    frame = proto.build_frame(dcmd, next_seq(), enc or req, d=0,
+                                              encrypted=bool(enc), pkg=proto.PKG_ROUTE,
+                                              ext=bytes([0x02]) + struct.pack(">H", dcmd))
+                    self._dbg("C", frame)
+                    sock.sendall(frame)
+                    self._human_pause(*self._drain_pause)
             return
         lock, pending_ref = ((self._zt_reason_lock, self._pending_zt_reason) if lane == "zt_reason"
                              else (self._theme_lock, self._pending_theme))
@@ -700,6 +781,27 @@ class KplCollectorService:
                 return
             sent += 1
 
+    def _queue_detail_new(self, stock_ids: List[str]) -> int:
+        """四通道新入池成员入队订阅（去重；会话线程 drain 发送）。开关关 → 零动作。"""
+        if not self._stock_detail_subs:
+            return 0
+        queued = 0
+        for lane in self._detail_lane_cmds:
+            new_ids: List[str] = []
+            with self._detail_locks[lane]:
+                for sid in stock_ids:
+                    sid = str(sid or "").strip()
+                    if sid and sid not in self._detail_subscribed[lane]:
+                        self._detail_subscribed[lane].add(sid)
+                        self._pending_detail[lane].append(sid)
+                        new_ids.append(sid)
+            if new_ids:
+                queued += len(new_ids)
+                self._emit(KplEvent(type="detail_subs_status", ts=time.time(),
+                                    lane=lane, note=f"queued {len(new_ids)} new subscriptions",
+                                    stock_ids=new_ids))
+        return queued
+
     def _queue_theme_new(self, stock_ids: List[str]) -> int:
         """新入池成员入队 2013 订阅（与 2203 同款去重；会话线程 drain 发送）。"""
         if not self._theme_subs:
@@ -756,6 +858,57 @@ class KplCollectorService:
                                     error=str(exc)))
                 return
             sent += 1
+
+    # 详情四通道 drain 每 tick 总预算（帧间限速沿 2203/2013 现值：0.3s 拟人停顿；
+    # 四通道交错各 1 帧/tick，频控预算=涨停池成员数×4/会话，AGENTS §1.2-9）
+    _DETAIL_DRAIN_TICK_FRAMES = 1
+
+    @staticmethod
+    def _detail_req_for(cmd: int, sid: str) -> bytes:
+        """详情四通道订阅 Req 构造（drain/inline flush 共用单一实现）。"""
+        if cmd == proto.CMD_STOCK_ZT_BIG_ORDER:
+            return proto.build_stock_zt_big_order_req_pb(sid, 0, 0)
+        if cmd == proto.CMD_ABNORMAL_PRICE:
+            return proto.build_abnormal_price_req_pb(sid)
+        return proto.build_hq_req_pb(sid)   # 2010/2202 同 Hq.HQReq{f1 stockId}
+
+    def _drain_detail_subs(self, sock: Any, next_seq: Any) -> None:
+        """发送待订阅详情四通道帧（与 _drain_zt_reason_subs 同款失败门禁：send 失败置
+        _sock_dead 静默，未发帧下一会话 6g 全量补订自愈）。四通道交错各限 1 帧/tick。
+        setup_inline_subs=True 时本函数永久早退，改由 6h 处 _flush_pending_inline
+        在 setup 窗口内内联发送（0x40 帧窗口外发送=ErrResp 1002 断连，探针 E1-E4）。"""
+        if not self._stock_detail_subs or self._sock_dead or self._setup_inline_subs:
+            return
+        for lane, cmd in self._detail_lane_cmds.items():
+            with self._detail_locks[lane]:
+                batch = self._pending_detail[lane][:self._DETAIL_DRAIN_TICK_FRAMES]
+                del self._pending_detail[lane][:self._DETAIL_DRAIN_TICK_FRAMES]
+            sent = 0
+            for sid in batch:
+                req = self._detail_req_for(cmd, sid)
+                enc = self._codec.enc(req)
+                frame = proto.build_frame(cmd, next_seq(), enc or req, d=0,
+                                          encrypted=bool(enc), pkg=proto.PKG_ROUTE,
+                                          ext=bytes([0x02]) + struct.pack(">H", cmd))
+                self._dbg("C", frame)
+                try:
+                    sock.sendall(frame)
+                except OSError as exc:
+                    self._sock_dead = True
+                    rest = batch[sent:]
+                    with self._detail_locks[lane]:
+                        self._pending_detail[lane][:0] = rest
+                    self._stats["detail_send_drops"] = \
+                        self._stats.get("detail_send_drops", 0) + len(rest)
+                    self._err(f"detail {lane} subscribe send failed ({sid}): {exc} "
+                              f"(sent={sent} dropped={len(rest)}, next-session 6g resubscribe)")
+                    self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                        lane=lane, cmd=cmd, sent=sent,
+                                        dropped=len(rest), session=self._session_no,
+                                        error=str(exc)))
+                    return
+                sent += 1
+                self._human_pause(0.3, 0.15)
 
     def get_lhb_realtime(self) -> Dict[str, Any]:
         """3004/3101 RealtimeLHB 快照读口（task-4）：空帧抑制后最新非空帧。
@@ -1306,6 +1459,18 @@ class KplCollectorService:
                 self._queue_theme_new(self._pool_stock_ids())
                 if self._setup_inline_subs:
                     self._flush_pending_inline(sock, next_seq, "theme")
+            # 6h) 个股详情四通道（2026-11-11 ④，默认关）：每会话重建订阅（同 2203/2013
+            # 服务器 TTL 同源；跨会话去重会让第二会话起一帧不发、推送静默停流）
+            if self._stock_detail_subs:
+                for lane in self._detail_lane_cmds:
+                    with self._detail_locks[lane]:
+                        self._detail_subscribed[lane].clear()
+                        self._pending_detail[lane].clear()
+                self._queue_detail_new(self._pool_stock_ids())
+                if self._setup_inline_subs:
+                    # 2026-11-11 评审 major-2：inline 模式下详情订阅同 2203/2013
+                    # 改 setup 窗口内内联发送（否则 6h 只入队、循环期永久静默）
+                    self._flush_pending_inline(sock, next_seq, "detail")
             # setup 打点在 6g（2203/2013 订阅入队）之后：口径=「连接到内联订阅链
             # （3001/3006）全部完成」；daban 家族已重排为读循环续发，不占此口径
             # （实弹口径见 _drain_setup_subs 注释）
@@ -1401,6 +1566,7 @@ class KplCollectorService:
                 # zt(30)=4 tick、theme(22)=3 tick、daban 页(42)=6 tick，全部 ~6 tick 完成
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)
+                self._drain_detail_subs(sock, next_seq)
                 self._drain_setup_subs(sock, next_seq)
                 if fr == "timeout":
                     continue
@@ -1560,6 +1726,54 @@ class KplCollectorService:
                                 source="push" if fr.get("fmt") == "push" else "resp",
                                 stock_id=sid, themes=data.get("themes") or []))
             return
+        if cmd in DETAIL_EVENT_NAMES:
+            # 个股详情四通道推送（2026-11-11 ④）：dec/解析 fail-visible，不静默丢弃；
+            # 解析成功 → snap 更新 + 即时落库（单写者=采集线程，失败不阻断收流）
+            dec = self._codec.dec(payload.hex()) if payload else None
+            if not dec:
+                self._err(f"{cmd} detail push decode failed ({len(payload)}B)")
+                self._emit(KplEvent(type="stock_detail_error", ts=time.time(), cmd=cmd,
+                                    reason="push decode failed", payload_len=len(payload)))
+                return
+            parser = DETAIL_PARSERS[cmd]
+            try:
+                data = parser(dec)
+            except Exception as exc:
+                self._err(f"{cmd} detail parse error: {exc}")
+                self._emit(KplEvent(type="stock_detail_error", ts=time.time(), cmd=cmd,
+                                    reason=f"parse error: {exc}", payload_len=len(payload)))
+                return
+            self._stats["pushes"] += 1
+            lane = DETAIL_LANE_BY_CMD[cmd]
+            sid = str(data.get("stock_id") or "").strip()
+            if lane == "bdo" and sid:
+                # 2014 单股聚合（涨停额/买卖拆分 = 明细 sum，供封板大单行消费；
+                # 原始值不换算，缩放待实弹校准）。2026-11-11 评审 major-1：异形帧
+                # 字段可能透传 bytes，无守卫算术会抛 TypeError 杀收流会话（重连
+                # 螺旋形态，§1.2-9）——聚合失败 fail-visible 并按无聚合值落库。
+                try:
+                    agg = {k: sum((it.get(k) or 0) for it in (data.get("items") or [])
+                                  if isinstance(it, dict))
+                           for k in ("zt_tur", "buy_tur", "sell_tur")}
+                except Exception as exc:
+                    self._err(f"2014 aggregate failed: {exc}")
+                    self._emit(KplEvent(type="stock_detail_error", ts=time.time(), cmd=cmd,
+                                        reason=f"aggregate failed: {exc}"))
+                    agg = {}
+                data = {**data, **agg}
+            if sid:
+                self._detail_snaps[lane][sid] = {**data, "ts": time.time()}
+                # 推送即落库（合同同 2203/2013；bdo_/bf_/abn_/rplate_ 前缀日档）
+                self._persist_corpus(lane, {"items": [{**data, "ts": time.time()}]})
+            else:
+                # 2026-11-11 评审 minor-5：sid 缺位与 decode/parse 失败同款 fail-visible
+                self._emit(KplEvent(type="stock_detail_error", ts=time.time(), cmd=cmd,
+                                    reason="missing_stock_id", payload_len=len(dec)))
+            self._emit(KplEvent(type=DETAIL_EVENT_NAMES[cmd], ts=time.time(), cmd=cmd,
+                                source="push" if fr.get("fmt") == "push" else "resp",
+                                **{k: v for k, v in data.items()
+                                   if k not in ("type", "ts", "cmd")}))
+            return
         if cmd == proto.CMD_GROUP_QUOTAS:
             dec = self._codec.dec(payload.hex()) if payload else None
             if not dec:
@@ -1635,6 +1849,16 @@ class KplCollectorService:
                                     [str(it.get("stock_id") or "").strip() for it in pool_items])
                     except (TypeError, ValueError):
                         pass
+                if self._stock_detail_subs:
+                    # 详情四通道同款钩子：涨停池新入池成员自动补订（2014/2202/2030/2010）
+                    try:
+                        if int(data.get("pid_type", 0)) == 1:
+                            pool_items = data.get("items") or []
+                            if pool_items:
+                                self._queue_detail_new(
+                                    [str(it.get("stock_id") or "").strip() for it in pool_items])
+                    except (TypeError, ValueError):
+                        pass
             event_type = DABAN_EVENT_NAMES.get(cmd) or LHB_EVENT_NAMES.get(cmd, "daban")
             if cmd == daban.CMD_FORECAST_LHB:
                 # 2112 空帧抑制（同 2103/3004 规；2026-10-29 午间实测：休市推流
@@ -1650,6 +1874,12 @@ class KplCollectorService:
                     self._lhb_forecast_snap = kept_fc
                 else:
                     self._lhb_forecast_snap = {**data, "ts": time.time()}
+                if new_fc_items:
+                    # 推送即落库（2026-11-11 ③）：2112 非空帧即时写 fc_ 日档（单写者，
+                    # 失败不阻断收流）；空帧已抑制不落库（空帧写也只是浪费一次写）
+                    self._persist_corpus("fc", {"items": [
+                        {**it, "ts": time.time()} for it in new_fc_items
+                        if isinstance(it, dict)]})
             elif cmd in (lhb.CMD_REALTIME_LHB_SUB, lhb.CMD_REALTIME_LHB_RANGE):
                 # 3004/3101 空帧抑制（同 2103 规）：空 items 不覆盖非空快照
                 new_items = data.get("items") or []
@@ -1661,6 +1891,11 @@ class KplCollectorService:
                     self._lhb_realtime_snap = kept
                 else:
                     self._lhb_realtime_snap = {**data, "ts": time.time()}
+                if new_items:
+                    # 推送即落库（2026-11-11 ③）：3004/3101 非空帧即时写 rt_ 日档
+                    self._persist_corpus("rt", {"items": [
+                        {**it, "ts": time.time()} for it in new_items
+                        if isinstance(it, dict)]})
             self._emit(KplEvent(type=event_type, ts=time.time(), cmd=cmd,
                                 source="push" if fr.get("fmt") == "push" else "resp", **data))
             return

@@ -577,6 +577,184 @@ def load_theme_corpus(db: Any, date: str) -> dict[str, Any]:
             "corpus_source": row.get("theme_source") or "socket_2013"}
 
 
+# ── 2112 上榜预测 / 3004-3101 实时龙虎榜语料通道（2026-11-11 ③）────────────
+# 写入方 = collector（:8002）单写者：2112/3004/3101 推送帧解析成功后即时落库
+# （与 2203/2013 推送即落库同款时点），本服务不轮询这两通道。
+# 合同（沿 reason_/theme_ 先例）：同 kpl_daban_pool 日档前缀字段（fc_/rt_）、
+# stock_id 并集、字段随新帧刷新（留 first_ts）、跨日残留 skip、空帧抑制
+# （沿 2112 现规：空 items 不覆盖非空，fail-visible 结构化返回）；日期 = 调用方
+# 注入的涨停池快照交易日。
+_FC_LANE = "fc"
+_RT_LANE = "rt"
+# 2112 ForecastLHBResp.Item 保留字段（parse_forecast_lhb 具名字段；quota 原始值透传）
+_FC_FIELDS = ("stock_name", "plate", "price", "zf", "tur_rate", "tur",
+              "main_net_amount", "main_buy", "main_sell", "hot_val", "hot_change",
+              "reason", "rank_state", "is_new")
+# 3004/3101 RealtimeLHB items 复用 GroupStockQuotasResp.Item（quotas 原样数组，
+# 缩放未破译不猜——单一事实源同 3001 约定）
+_RT_FIELDS = ("name", "quotas")
+
+
+def _corpus_incoming(snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """items list 快照 → {stock_id: item}（兼容 dict 形态）。"""
+    raw = snapshot.get("items")
+    if raw is None:
+        raw = snapshot.get("stocks")
+    out: dict[str, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for sid, item in raw.items():
+            if isinstance(item, dict) and str(sid or "").strip():
+                out[str(sid).strip()] = dict(item)
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                sid = str(item.get("stock_id") or "").strip()
+                if sid:
+                    out[sid] = dict(item)
+    return out
+
+
+def _archive_stock_corpus(db: Any, snapshot: dict[str, Any], *, lane: str,
+                          fields: tuple[str, ...], prefix: str,
+                          source: str,
+                          now: Optional[datetime] = None) -> dict[str, Any]:
+    """单股并集语料通道通用落库（fc/rt/bdo/bf/abn/rplate 同款合同，单一实现）。
+
+    - {prefix}items：按 stock_id 并集，whitelist 字段随新帧刷新（留 first_ts 首次到流）；
+    - {prefix}date/ts/count/archived_at/source；日期 = 调用方注入交易日，无 → 不写；
+    - 跨日残留：条目 ts 转北京时间早于该日 → skip（不污染当日档）；
+    - 空帧抑制：空 items 不覆盖已有语料（fail-visible 结构化返回 ok False）。
+    纯函数（db 注入）；字段级 $set，不整 doc 回写。
+    """
+    date = str(snapshot.get("date") or "")
+    if not date:
+        return {"ok": False, "reason": "no_pool_date", "lane": lane,
+                "date": None, "item_n": 0}
+    incoming = _corpus_incoming(snapshot)
+    row = dict(db[_COLLECTION].find_one({"_id": date}) or {})
+    row.pop("_id", None)
+    members: dict[str, dict[str, Any]] = {}
+    for m in row.get(prefix + "items") or []:
+        sid = str((m or {}).get("stock_id") or "")
+        if sid:
+            members[sid] = dict(m)
+    if not incoming:
+        return {"ok": False, "reason": f"empty_{lane}_items", "lane": lane,
+                "date": date, "item_n": len(members), "empty": True}
+    merged_n = skipped_stale = 0
+    for sid, it in incoming.items():
+        ts = it.get("ts")
+        ts_date = _ts_date(ts)
+        if ts_date and ts_date < date:
+            skipped_stale += 1
+            continue
+        merged = dict(members.get(sid) or {})
+        for f in fields:
+            if f in it and it[f] not in (None, "", []):
+                merged[f] = it[f]
+        merged["stock_id"] = sid
+        if ts:
+            merged["ts"] = ts
+            merged["ts_date"] = ts_date or merged.get("ts_date")
+            merged.setdefault("first_ts", ts)
+        members[sid] = merged
+        merged_n += 1
+    if not merged_n:
+        return {"ok": False, "reason": "all_stale", "lane": lane, "date": date,
+                "item_n": len(members), "skipped_stale": skipped_stale}
+    doc = {
+        prefix + "date": date,
+        prefix + "source": source,
+        prefix + "items": list(members.values()),
+        prefix + "count": len(members),
+        prefix + "ts": max((m.get("ts") or 0) for m in members.values()),
+        prefix + "archived_at": (now or datetime.now(TZ_SHANGHAI)).isoformat(),
+    }
+    db[_COLLECTION].update_one({"_id": date}, {"$set": doc}, upsert=True)
+    return {"ok": True, "lane": lane, "date": date, "item_n": len(members),
+            "merged_n": merged_n, "skipped_stale": skipped_stale}
+
+
+def _load_stock_corpus(db: Any, date: str, *, lane: str, prefix: str) -> dict[str, Any]:
+    """单股并集语料读口（fail-visible：no_archive 与 no_<lane>_corpus 严格分开）。"""
+    row = db[_COLLECTION].find_one({"_id": date})
+    if not row:
+        return {"ok": False, "degraded": True, "reason": "no_archive",
+                "date": date, "lane": lane}
+    items = row.get(prefix + "items") or []
+    if not items:
+        return {"ok": False, "degraded": True, "reason": f"no_{lane}_corpus",
+                "date": date, "lane": lane, "item_n": 0}
+    return {"ok": True, "source": "local_archive", "lane": lane,
+            "date": row.get(prefix + "date") or date, "items": items,
+            "count": len(items), "ts": row.get(prefix + "ts"),
+            "archived_at": row.get(prefix + "archived_at"),
+            "corpus_source": row.get(prefix + "source")}
+
+
+def archive_lhb_forecast(db: Any, snapshot: dict[str, Any], *,
+                         now: Optional[datetime] = None,
+                         source: str = "socket_2112") -> dict[str, Any]:
+    """2112 会不会上龙虎榜预测语料落库（fc_ 前缀；2026-11-11 ③）。
+
+    写入方 = collector 推送即落库（单写者）；合同见 _archive_stock_corpus。
+    """
+    return _archive_stock_corpus(db, snapshot, lane=_FC_LANE,
+                                 fields=_FC_FIELDS, prefix="fc_", source=source, now=now)
+
+
+def load_lhb_forecast(db: Any, date: str) -> dict[str, Any]:
+    """2112 上榜预测语料读口（jev 投喂原料）。"""
+    return _load_stock_corpus(db, date, lane=_FC_LANE, prefix="fc_")
+
+
+def archive_lhb_realtime(db: Any, snapshot: dict[str, Any], *,
+                         now: Optional[datetime] = None,
+                         source: str = "socket_3004") -> dict[str, Any]:
+    """3004/3101 实时龙虎榜语料落库（rt_ 前缀；2026-11-11 ③）。"""
+    return _archive_stock_corpus(db, snapshot, lane=_RT_LANE,
+                                 fields=_RT_FIELDS, prefix="rt_", source=source, now=now)
+
+
+def load_lhb_realtime(db: Any, date: str) -> dict[str, Any]:
+    """3004/3101 实时龙虎榜语料读口（jev 投喂原料）。"""
+    return _load_stock_corpus(db, date, lane=_RT_LANE, prefix="rt_")
+
+
+# ── 个股详情四通道语料（2014 封板大单/2202 爆发原因/2030 异动提醒/2010 所属板块，
+#    2026-11-11 ④；**本轮只落协议+落库+读口+叙事 mock，不实弹开火**）────────────
+# 写入方 = collector（单写者，订阅面=涨停池成员，订阅开关默认关）；bdo_/bf_/abn_/
+# rplate_ 前缀日档，合同同 fc_/rt_（_archive_stock_corpus 单一实现）。
+_DETAIL_LANES: dict[str, dict[str, Any]] = {
+    # bdo：items 明细列表原样 + 采集侧聚合的涨停额/买卖拆分（sum，供封板大单行消费；
+    # 缩放待实弹校准，聚合只求和不换算）
+    "bdo": {"prefix": "bdo_", "source": "socket_2014",
+            "fields": ("type", "zt_state", "total", "items",
+                       "zt_tur", "buy_tur", "sell_tur")},
+    "bf": {"prefix": "bf_", "source": "socket_2202",
+           "fields": ("desc", "jump_id")},
+    "abn": {"prefix": "abn_", "source": "socket_2030",
+            "fields": ("price", "date", "next_day_price", "next_day_zf")},
+    "rplate": {"prefix": "rplate_", "source": "socket_2010",
+               "fields": ("plates", "indexes", "max_size")},
+}
+
+
+def archive_stock_detail_corpus(db: Any, snapshot: dict[str, Any], *,
+                                lane: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    """个股详情通道语料落库（lane=bdo/bf/abn/rplate，合同同 fc/rt）。"""
+    cfg = _DETAIL_LANES[lane]
+    return _archive_stock_corpus(db, snapshot, lane=lane,
+                                 fields=tuple(cfg["fields"]), prefix=cfg["prefix"],
+                                 source=cfg["source"], now=now)
+
+
+def load_stock_detail_corpus(db: Any, date: str, *, lane: str) -> dict[str, Any]:
+    """个股详情通道语料读口（lane=bdo/bf/abn/rplate）。"""
+    cfg = _DETAIL_LANES[lane]
+    return _load_stock_corpus(db, date, lane=lane, prefix=cfg["prefix"])
+
+
 # ── 公告/新闻/研报计数语料通道（2026-11-08 题材龙头语料第 3 项）────────────
 # 协议层见 backend/services/kpl_stock_notice.py（apphis CompanyNotice/GetCompanyCount，
 # announcement/report/news 三计数 + 上游数据日期；计数统计窗口上游未标注 → 原样透出

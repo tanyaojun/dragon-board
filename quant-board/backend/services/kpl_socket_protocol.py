@@ -37,6 +37,10 @@ CMD_HQ_ID_LIST = 3006  # Hq.HQStockIdListReq（个股行情订阅，f1 repeated 
 CMD_HQ_REASONS = 2203  # Hq.HQReasonsResp（个股涨停原因实时推送，请求 Hq.HQReq{f1 stockId}）
 CMD_STOCK_RELATED_THEME = 2013  # ServiceHqStock.StockRelatedThemeResp（个股题材库热度推送，
                                 # 请求同 Hq.HQReq{f1 stockId}；2026-11-08 逆向）
+CMD_STOCK_RELATED_PLATE = 2010  # Hq.StockRelatedPlateListResp（所属板块实时，请求同 HQReq）
+CMD_STOCK_ZT_BIG_ORDER = 2014   # ServiceHqStock.StockZTBigOrderDetailResp（封板大单明细）
+CMD_ABNORMAL_PRICE = 2030       # ServiceHqStock.AbnormalPriceResp（异动提醒）
+CMD_BF_REASON = 2202            # Hq.BFReasonResp（爆发原因推送，请求同 HQReq）
 CMD_STOCK_MX_SUB = 2006   # Hq.StockMXResp 首拉+订阅（请求 Hq.HQItemReq{f1 stockId, f2 count}，App 固定 count=25）
 CMD_STOCK_MX_PUSH = 2007  # Hq.StockMXResp 增量推送（不在 @y51 订阅面内，服务端跟在 2006 订阅后推）
 CMD_TY_DAN_LABEL = 2009   # Hq.TYDanLabelResp 大单标签推送（分时图大单标记，请求 Hq.HQListReq{stockId,currNum=已收数}）
@@ -426,6 +430,122 @@ def build_hq_req_pb(stock_id: str) -> bytes:
     2203 涨停原因推送试点（2026-11-08）用；App 侧 2010/2012/2013/2203/2204 等
     均用此请求（StockQuotationInfoPresenter 3470-3530）。"""
     return pb_bytes(1, stock_id.encode("utf-8"))
+
+
+def build_stock_zt_big_order_req_pb(stock_id: str, type_: int = 0, count: int = 0) -> bytes:
+    """StockZTBigOrderDetailReq{f1 stockId, f2 type, f3 count}：2014 封板大单订阅。
+
+    字段合同（proto 描述符，2026-11-11 提取自 ServiceHqStock.java）；App 基线
+    （StockQuotationInfoPresenter case 2014）：type = 页签筛选 stock_zt_da_dan_select
+    （默认 0），count = 本地已收数（首拉 0 取全量，增量语义待实弹校准）。
+    proto3 零值省略（与 build_forecast_lhb_req_pb 同约定）。"""
+    out = pb_bytes(1, str(stock_id).encode("utf-8"))
+    if type_:
+        out += pb_varint_field(2, int(type_))
+    if count:
+        out += pb_varint_field(3, int(count))
+    return out
+
+
+def build_abnormal_price_req_pb(stock_id: str) -> bytes:
+    """AbnormalPriceReq{f1 stockId}：2030 异动提醒订阅（与 Hq.HQReq 同形，独立命名
+    防混用；sub AbnormalPrice，SubAbnormalPrice 服务合同见 service_hq_stock 描述符）。"""
+    return pb_bytes(1, str(stock_id).encode("utf-8"))
+
+
+def parse_stock_zt_big_order_resp(payload: bytes) -> Dict[str, Any]:
+    """2014 StockZTBigOrderDetailResp → 封板大单明细（2026-11-11 ④ 协议层落地）。
+
+    字段合同（proto 描述符，ServiceHqStock.java）：
+    Resp{stockId=1(string), type=2(uint32), ztState=3(string), total=4(uint32),
+    items=5(repeated Item)}；Item{time=1(uint32), tur=2(uint64), rate=3(float),
+    buyTur=4(uint64), SellTur=5(uint64), ztTur=6(uint64)}。
+    缩放/时间编码（time 是否 9 位 HHMMSS+ms、tur 族单位）**待实弹校准**，原始值
+    透出不换算（fail-visible，不猜）。"""
+    pb = parse_pb(payload)
+    items: List[Dict[str, Any]] = []
+    for raw in pb.get(5, []):
+        sub = parse_pb(raw)
+        items.append({
+            "time": _signed64(pb_first(sub, 1, 0)),
+            "tur": _signed64(pb_first(sub, 2, 0)),
+            "rate": pb_first(sub, 3),
+            "buy_tur": _signed64(pb_first(sub, 4, 0)),
+            "sell_tur": _signed64(pb_first(sub, 5, 0)),
+            "zt_tur": _signed64(pb_first(sub, 6, 0)),
+        })
+    return {
+        "stock_id": _s_field(pb, 1),
+        "type": pb_first(pb, 2, 0),
+        "zt_state": _s_field(pb, 3),
+        "total": pb_first(pb, 4, 0),
+        "items": items,
+        "raw_len": len(payload),
+    }
+
+
+def parse_bf_reason_resp(payload: bytes) -> Dict[str, Any]:
+    """2202 BFReasonResp → 爆发原因推送（与 GetHisBFReason 历史同构；proto 描述符：
+    stockId=1(string), desc=2(string 爆发解析全文), jumpId=3(int64)）。"""
+    pb = parse_pb(payload)
+    return {
+        "stock_id": _s_field(pb, 1),
+        "desc": _s_field(pb, 2),
+        "jump_id": _signed64(pb_first(pb, 3, 0)),
+        "raw_len": len(payload),
+    }
+
+
+def parse_abnormal_price_resp(payload: bytes) -> Dict[str, Any]:
+    """2030 AbnormalPriceResp → 异动提醒（proto 描述符：stockId=1, price=2(uint32),
+    date=3(string), nextDayPrice=10(uint32), nextDayZf=11(float)）。
+    price 族缩放待实弹校准（原始值透出不换算）。"""
+    pb = parse_pb(payload)
+    return {
+        "stock_id": _s_field(pb, 1),
+        "price": _signed64(pb_first(pb, 2, 0)),
+        "date": _s_field(pb, 3),
+        "next_day_price": _signed64(pb_first(pb, 10, 0)),
+        "next_day_zf": pb_first(pb, 11),
+        "raw_len": len(payload),
+    }
+
+
+def parse_stock_related_plate_resp(payload: bytes) -> Dict[str, Any]:
+    """2010 StockRelatedPlateListResp → 所属板块实时（proto 描述符：
+    Resp{stockId=1, items=2(repeated Item), indexes=3(repeated uint32), maxSize=4}；
+    Item{plateId=1(string), plateName=2(string), plateIncRate=3(float),
+    stockId=4(string), stockName=5(string), stockIncRate=6(float), qzType=7(uint32)}）。
+    qzType 语义未定，原样透出不自算。"""
+    pb = parse_pb(payload)
+
+    items: List[Dict[str, Any]] = []
+    for raw in pb.get(2, []):
+        sub = parse_pb(raw)
+        items.append({
+            "plate_id": _s_field(sub, 1),
+            "plate_name": _s_field(sub, 2),
+            "plate_inc_rate": pb_first(sub, 3),
+            "stock_id": _s_field(sub, 4),
+            "stock_name": _s_field(sub, 5),
+            "stock_inc_rate": pb_first(sub, 6),
+            "qz_type": pb_first(sub, 7, 0),
+        })
+    return {
+        "stock_id": _s_field(pb, 1),
+        "plates": items,
+        "indexes": decode_packed_varints(pb.get(3, [])),
+        "max_size": pb_first(pb, 4, 0),
+        "raw_len": len(payload),
+    }
+
+
+def _s_field(pb: Dict[int, List[Any]], field: int) -> str:
+    """pb string 字段取首个并解码（详情四通道解析共用）。"""
+    v = pb_first(pb, field, b"")
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", "replace")
+    return "" if v is None else str(v)
 
 
 def parse_anti_cheat_261(payload: bytes) -> bytes:

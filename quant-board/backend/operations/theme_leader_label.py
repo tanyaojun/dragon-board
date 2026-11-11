@@ -55,6 +55,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     baseline_line,
     board_ladder_line,
     board_zhaban_line,
+    bid_line,
+    board_dt_line,
     build_leader_narrative,
     build_sector_narrative,
     combo_key,
@@ -62,8 +64,12 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     headroom_anchor_line,
     kpl_live_line,
     lhb_line,
+    lhb_forecast_line,
+    lhb_realtime_line,
     plate_series_line,
+    popularity_rank_line,
     rank_sentinel_warnings,
+    risk_profile_line,
     structure_facts_line,
     limitup_reason_line,
     plate_strength_line,
@@ -423,41 +429,73 @@ def _lhb_codes_roles(codes: list[str], roles_in: list[tuple[str, str | None]]) -
     return ordered, roles
 
 
-def expound_map(db: Any, date: str) -> dict[str, tuple[str, str | None]]:
-    """当日全市场涨停原因映射（裁决③，预登记 §4.1）：code → (name, reason|None)。
+def fetch_reason_corpus(db: Any, date: str) -> dict[str, dict]:
+    """当日涨停原因伴生语料映射 code → item（2026-11-11 用户裁决改源：单一事实源
+    `kpl_daban_pool.reason_items`，2203 推送 collector 盘中即落库）。
 
-    单一事实源 = `jev_label_jiuyan.expound_reason()`（expound 缺失回退 reason 键，
-    与打标链读口同源，禁第二套解析）；查一次全日共用（与 market_line 同哲学）。
-    文档缺失/无字段 → 空映射（调用方出 fail-visible 不可考，不伪装）。
+    取数走存档器读口 `load_reason_corpus`（禁止第二套解析/第二份库；原 jiuyan
+    expound 源已随本裁决淘汰，回退靠 git），一次取全日共用（与基因/热度同哲学）。
+    **返回形状（2026-11-11 ①升级）**：dict[code → dict]，只透传**非空**字段（缺位键
+    不出现）：`zt` = 异动解析全文（标题+概念解析完整正文，仅折叠换行/多空白为单空格，
+    不截断不删节；标题中的「；」分隔保留原样）+ `plate`（热点摘引）+ `rank`/
+    `rank_total`（>0 才带）+ `rank_top`（Top 榜名单）+ `zt_group`（涨停梯队串）+
+    `fx`/`jc`/`jj`/`pledge`（风险画像族）；`zt_tag` 为数值 tag 无文案映射（实测样本=0）
+    → **只透传落库已有，不渲染**（映射实测确认后二次裁决）。降级/异常/空映射 →
+    空映射（涨停原因行整段缺席，缺席状态由 load_reason_corpus 结构化 degraded 载荷
+    承载，不伪装无原因）。
     """
-    from backend.operations.jev_label_jiuyan import expound_reason
-    doc = db["jiuyan_action"].find_one(
-        {"_id": f"{date}:final"},
-        {"fields.stocks.code": 1, "fields.stocks.name": 1,
-         "fields.stocks.expound": 1, "fields.stocks.reason": 1}) or {}
-    out: dict[str, tuple[str, str | None]] = {}
-    for field in doc.get("fields") or []:
-        for st in field.get("stocks") or []:
-            code = str(st.get("code") or "")[-6:]
-            if code and code not in out:
-                out[code] = (str(st.get("name") or ""), expound_reason(st))
+    try:
+        from backend.services.kpl_daban_archiver import load_reason_corpus
+        corpus = load_reason_corpus(db, date)
+    except Exception:      # 读口异常不阻断投喂：整行缺席，异常不打断整轮
+        return {}
+    if not corpus.get("ok"):
+        logger.warning("reason_corpus degraded date=%s reason=%s",
+                       date, corpus.get("reason"))
+        return {}
+
+    def _fold(v: Any) -> str:
+        return re.sub(r"\s+", " ", str(v or "")).strip()
+
+    out: dict[str, dict] = {}
+    for item in corpus.get("items") or []:
+        code = str((item or {}).get("stock_id") or "")[-6:]
+        if not code or code in out:
+            continue
+        fields: dict[str, Any] = {}
+        for key in ("zt", "plate", "zt_group", "fx", "jc", "jj", "pledge"):
+            val = _fold((item or {}).get(key))
+            if val:
+                fields[key] = val
+        for key in ("rank", "rank_total"):
+            v = (item or {}).get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                fields[key] = int(v)
+        top = [str(x).strip() for x in ((item or {}).get("rank_top") or [])
+               if str(x).strip()]
+        if top:
+            fields["rank_top"] = top
+        if fields:
+            out[code] = fields
     return out
 
 
-def reason_entries_for_leaders(rows: list[dict], expounds: dict[str, tuple[str, str | None]]) -> list[tuple[str, str | None]]:
-    """涨停原因行条目（预登记 §4.1，2026-10-28 用户裁决收窄）：**仅待判龙一自身**。
+def reason_entries_for_leaders(rows: list[dict],
+                               reasons: dict[str, dict]) -> list[dict]:
+    """涨停原因/热度排名/风险画像三行共用的条目（预登记 §4.1，2026-10-28 用户裁决收窄）：
+    **仅待判龙一自身**（2026-11-11 ①条目形状 dict 升级：{"label", "item"}）。
 
     `rows` = 同板块分轨龙一行（main 优先）；板块成员原因不列（板内同伴由既有「板内
-    解析/板内同伴驱动」行承载，不重复；大板块全列会把叙事撑爆且非本题重点）。
-    原因缺失逐项 None（limitup_reason_line 出不可考，fail-visible）。
+    解析/板内同伴驱动」行承载，不重复）。无该股语料 → item=None（三行各自整段缺席，
+    AGENTS §1.2-8）。单一事实源 = `fetch_reason_corpus`（kpl_daban_pool.reason_items）。
     """
-    entries: list[tuple[str, str | None]] = []
+    entries: list[dict] = []
     for row in rows:
-        code = str(row.get("code") or "")
+        code = str(row.get("code") or "")[-6:]
         seg = row.get("segment")
         seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
-        name, reason = expounds.get(code, (str(row.get("name") or ""), None))
-        entries.append((f"{seg_cn} {name}", reason))
+        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+                        "item": reasons.get(code)})
     return entries
 def fetch_gene_corpus(db: Any, date: str) -> dict[str, dict]:
     """当日涨停基因语料映射 code → gene_item（单一事实源 `kpl_daban_pool.gene_items`）。
@@ -658,6 +696,201 @@ def seal_quality_entries_for_leaders(rows: list[dict],
                         "unsealed": row.get("leaderSealedToday") is False,
                         "poolMissing": None if hit else degraded})
     return entries
+
+
+# ── 2026-11-11 语料缺口补全（①→④）：bid/zb/dt 三通道 + 2112/3004/3101 落库 +
+#    个股详情四通道（2014/2202/2030/2010）。全部走存档器读口单一事实源，一次取全日共用。
+
+def fetch_daban_lanes(db: Any, date: str) -> dict[str, Any]:
+    """bid/zb/dt 三通道日档 → {"bid": {code: item}, ..., "bidLane": "ok"|"missing"...}。
+
+    单一事实源 = `load_day(lane=bid/zb/dt)`；lane 状态："ok"（采集成功，含「采集成功
+    且池为空」空档），“missing:<原因>”（无档/读口异常，结构化原因透出）。条目归一
+    code（后 6 位）→ 2103 具名字段 dict（bidding_pct/bidding_amount/zt_time/open_time
+    等，原样不换算）。读口异常不阻断投喂（对应 lane 置 missing）。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_day
+    except Exception:      # 模块不可达（极端）：三通道全部置 missing，不阻断投喂
+        return {"bid": {}, "zb": {}, "dt": {}, "bidLane": "missing:import_error",
+                "zbLane": "missing:import_error", "dtLane": "missing:import_error"}
+    out: dict[str, Any] = {}
+    for lane in ("bid", "zb", "dt"):
+        try:
+            payload = load_day(db, date, lane=lane)
+        except Exception:
+            payload = {"ok": False, "reason": "load_error"}
+        items: dict[str, dict] = {}
+        if payload.get("ok"):
+            for it in payload.get("items") or []:
+                code = str((it or {}).get("stock_id") or "")[-6:]
+                if code and code not in items:
+                    items[code] = it
+            out[f"{lane}Lane"] = "ok"
+        else:
+            out[f"{lane}Lane"] = f"missing:{payload.get('reason') or 'no_archive'}"
+        out[lane] = items
+    return out
+
+
+def bid_entries_for_leaders(rows: list[dict], lanes: dict[str, Any]) -> list[dict]:
+    """竞价承接行条目：仅待判龙一自身（与基因/封板质量同口径）。item=None = 缺该股。"""
+    bid_items = lanes.get("bid") or {}
+    entries: list[dict] = []
+    for row in rows:
+        code = str(row.get("code") or "")[-6:]
+        seg = row.get("segment")
+        seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
+        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+                        "item": bid_items.get(code)})
+    return entries
+
+
+def zhaban_detail_for_board(row: dict, lanes: dict[str, Any]) -> list[dict]:
+    """板内炸板明细条目：row.boardCodes ∩ zb_items → [{name, zt_time, open_time}]。
+
+    板块成员取自结构行 boardCodes（触板未封二分口径）；时刻字段原样透传（渲染层
+    _hhmm_from_ts 归一，不可读缺席）。
+    """
+    zb_items = lanes.get("zb") or {}
+    detail: list[dict] = []
+    for c in row.get("boardCodes") or []:
+        it = zb_items.get(str(c)[-6:])
+        if isinstance(it, dict):
+            detail.append({"name": it.get("name") or str(c)[-6:],
+                           "zt_time": it.get("zt_time"),
+                           "open_time": it.get("open_time")})
+    return detail
+
+
+def dt_names_for_board(row: dict, lanes: dict[str, Any]) -> tuple[list[str], bool]:
+    """板内跌停名单 + lane 可用性：(names, lane_ok)。lane ok 且板内无成员 → ([], True)。"""
+    lane_ok = lanes.get("dtLane") == "ok"
+    dt_items = lanes.get("dt") or {}
+    names: list[str] = []
+    for c in row.get("boardCodes") or []:
+        it = dt_items.get(str(c)[-6:])
+        if isinstance(it, dict):
+            names.append(str(it.get("name") or str(c)[-6:]))
+    return names, lane_ok
+
+
+def fetch_lhb_forecast_corpus(db: Any, date: str) -> dict[str, Any]:
+    """2112 上榜预测落库语料 → {"items": {code: item}, "laneOk": bool}（单一事实源
+    `load_lhb_forecast`，fc_ 前缀日档）。降级（无档/未落库/读口异常）→ 空映射 +
+    laneOk=False（上榜预测行整行缺席，不伪装空榜）。"""
+    try:
+        from backend.services.kpl_daban_archiver import load_lhb_forecast
+        corpus = load_lhb_forecast(db, date)
+    except Exception:
+        return {"items": {}, "laneOk": False}
+    if not corpus.get("ok"):
+        logger.warning("lhb_forecast_corpus degraded date=%s reason=%s",
+                       date, corpus.get("reason"))
+        return {"items": {}, "laneOk": False}
+    out: dict[str, dict] = {}
+    for item in corpus.get("items") or []:
+        code = str((item or {}).get("stock_id") or "")[-6:]
+        if code and code not in out:
+            out[code] = item
+    return {"items": out, "laneOk": True}
+
+
+def fetch_lhb_realtime_corpus(db: Any, date: str) -> dict[str, Any]:
+    """3004/3101 实时龙虎榜落库语料 → {"items": {code: item}, "laneOk": bool}（单一
+    事实源 `load_lhb_realtime`，rt_ 前缀日档）。降级语义同上榜预测行。"""
+    try:
+        from backend.services.kpl_daban_archiver import load_lhb_realtime
+        corpus = load_lhb_realtime(db, date)
+    except Exception:
+        return {"items": {}, "laneOk": False}
+    if not corpus.get("ok"):
+        logger.warning("lhb_realtime_corpus degraded date=%s reason=%s",
+                       date, corpus.get("reason"))
+        return {"items": {}, "laneOk": False}
+    out: dict[str, dict] = {}
+    for item in corpus.get("items") or []:
+        code = str((item or {}).get("stock_id") or "")[-6:]
+        if code and code not in out:
+            out[code] = item
+    return {"items": out, "laneOk": True}
+
+
+def _scope_entries(ordered_codes: list[str], roles: dict[str, str],
+                   items: dict[str, dict]) -> list[dict]:
+    """龙虎榜行同款相关个股集合 → 上榜预测/实时榜条目（身位标签 + 归一 item）。"""
+    return [{"label": f"{roles.get(k, '相关个股')} {k}", "item": (items or {}).get(k)}
+            for k in ordered_codes]
+
+
+def fetch_stock_detail_corpus(db: Any, date: str) -> dict[str, Any]:
+    """个股详情四通道（2014/2202/2030/2010）落库语料 →
+    {"items": {code: {"bdo"|"bf"|"abn"|"rplate": item}}, "lanes": {lane: "ok"|"missing:<原因>"}}。
+
+    单一事实源 = `load_stock_detail_corpus(lane=...)`；lane 状态口径与 fetch_daban_lanes
+    同款（"ok" 含空档；降级不伪装）。读口异常不阻断投喂（对应 lane 置 missing）。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_stock_detail_corpus
+    except Exception:
+        return {"items": {}, "lanes": {k: "missing:import_error"
+                                       for k in ("bdo", "bf", "abn", "rplate")}}
+    out: dict[str, Any] = {"items": {}}
+    lanes_state: dict[str, str] = {}
+    per_lane: dict[str, dict[str, dict]] = {k: {} for k in ("bdo", "bf", "abn", "rplate")}
+    for lane in ("bdo", "bf", "abn", "rplate"):
+        try:
+            payload = load_stock_detail_corpus(db, date, lane=lane)
+        except Exception:
+            payload = {"ok": False, "reason": "load_error"}
+        if payload.get("ok"):
+            for it in payload.get("items") or []:
+                code = str((it or {}).get("stock_id") or "")[-6:]
+                if code:
+                    per_lane[lane][code] = it
+            lanes_state[lane] = "ok"
+        else:
+            lanes_state[lane] = f"missing:{payload.get('reason') or 'no_archive'}"
+    for code in {c for m in per_lane.values() for c in m}:
+        out["items"][code] = {lane: per_lane[lane][code]
+                              for lane in ("bdo", "bf", "abn", "rplate")
+                              if per_lane[lane].get(code)}
+    out["lanes"] = lanes_state
+    return out
+
+
+def detail_lines_for_leader(row: dict, detail_corpus: dict[str, Any],
+                            theme_heat_corpus: dict[str, Any]) -> dict[str, str | None]:
+    """个股级四条详情通道叙事行（2014/2202/2030/2010）一次性拼装（纯函数）。
+
+    返回 {"ztBigOrder", "bfReason", "abnormalPrice", "relatedPlate"}；lane 降级或
+    缺该股 → 对应行 None（整行缺席，AGENTS §1.2-8）。板块归属行的已知题材 = 题材
+    热度语料该股 themes 名称集 + 待判板块名（避免与题材热度行重复）。
+    """
+    code = str(row.get("code") or "")[-6:]
+    seg = row.get("segment")
+    seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
+    label = f"{seg_cn} {row.get('name') or code}"
+    det = (detail_corpus.get("items") or {}).get(code) or {}
+    lanes = detail_corpus.get("lanes") or {}
+    heat = ((theme_heat_corpus.get("items") or {}).get(code) or {}).get("themes") or []
+    known = [str((t or {}).get("name") or "").strip() for t in heat if (t or {}).get("name")]
+    entries = [{"label": label}]
+    from backend.analysis.hotlist import theme_leader_ammo as _ammo
+    return {
+        "ztBigOrder": (_ammo.zt_big_order_line(
+            [{**entries[0], "item": det.get("bdo")}])
+            if lanes.get("bdo") == "ok" else None),
+        "bfReason": _ammo.bf_reason_line(
+            [{**entries[0], "item": det.get("bf")}]),
+        "abnormalPrice": (_ammo.abnormal_price_line(
+            [{**entries[0], "item": det.get("abn")}])
+            if lanes.get("abn") == "ok" else None),
+        "relatedPlate": (_ammo.related_plate_line(
+            [{**entries[0], "item": det.get("rplate"), "knownThemes": known,
+              "board": str(row.get("board") or "")}])
+            if lanes.get("rplate") == "ok" else None),
+    }
 
 
 # 代际来源：`live` = 当日挂链（17:30，2026-10-30 改时；前瞻样本）；`backfill` = 事后补跑历史日。
@@ -940,8 +1173,20 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               market_summary: str | None = None,
               lhb_facts: dict | None = None,
               rebound_line: str | None = None,
-              cycle: dict | None = None) -> dict:
-    """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。"""
+              cycle: dict | None = None,
+              bid_line: str | None = None,
+              dt_line: str | None = None,
+              detail_lines: dict[str, str | None] | None = None,
+              forecast_line: str | None = None,
+              realtime_lhb_line: str | None = None) -> dict:
+    """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v12 续板/空间题）。
+
+    2026-11-11 语料缺口补全新增入参（均 None 不出行）：`bid_line`（竞价承接行）、
+    `dt_line`（板内跌停行）、`detail_lines`（个股详情四通道行 dict：
+    ztBigOrder/bfReason/abnormalPrice/relatedPlate，detail_lines_for_leader 产出）、
+    `forecast_line`（上榜预测行）、`realtime_lhb_line`（实时龙虎榜行）；热度排名/
+    风险画像两行由 reason_entries 直接派生（单一事实源），不另传入参。
+    """
     from backend.operations.jev_label_jiuyan import market_facts_line
 
     if market_line is None:
@@ -983,8 +1228,18 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         theme_heat_line=theme_heat_line(theme_heat_entries or []),
         notice_count_line=notice_count_line(notice_entries or []),
         reason_line=limitup_reason_line(reason_entries or []),
+        bf_reason_line=(detail_lines or {}).get("bfReason"),
+        popularity_rank_line=popularity_rank_line(reason_entries or []),
+        risk_line=risk_profile_line(reason_entries or []),
+        abnormal_price_line=(detail_lines or {}).get("abnormalPrice"),
+        related_plate_line=(detail_lines or {}).get("relatedPlate"),
+        zt_big_order_line=(detail_lines or {}).get("ztBigOrder"),
+        bid_line=bid_line,
+        dt_line=dt_line,
+        forecast_line=forecast_line,
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
                         if lhb_facts is not None else None),
+        realtime_lhb_line=realtime_lhb_line,
         rebound_line=rebound_line,
         evidence_block=block["text"],
         leader_name=str(row.get("name") or ""),
@@ -1007,11 +1262,14 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
                      market_line: str | None = None,
                      board_history: dict[str, list[tuple[str, int]]] | None = None,
                      strength_match: dict | None = None,
-                     reason_entries: list[tuple[str, str | None]] | None = None,
+                     reason_entries: list[dict] | None = None,
                      series_line: str | None = None,
                      live_line: str | None = None,
                      market_summary: str | None = None,
-                     lhb_facts: dict | None = None) -> dict:
+                     lhb_facts: dict | None = None,
+                     dt_line: str | None = None,
+                     forecast_line: str | None = None,
+                     realtime_lhb_line: str | None = None) -> dict:
     """组装一条**板块级**投喂（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3）。
 
     `board_rows` = 该板块分轨龙一行（≤2，main 优先）；基线/梯队/炸板面以首轨龙一为参照行
@@ -1046,14 +1304,19 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
             history=board_history.get(ref["board"], []) if board_history is not None else None),
         ladder_line=board_ladder_line(ref),
         zhaban_line=board_zhaban_line(ref),
+        dt_line=dt_line,
         plate_strength=plate_strength_line(strength_match) if strength_match is not None else None,
         series_line=series_line,
         live_line=live_line,
         market_summary=market_summary,
         baseline=baseline_line(rows_baseline, ref, BASELINE_MIN_SAMPLES),
         reason_line=limitup_reason_line(reason_entries or []),
+        popularity_rank_line=popularity_rank_line(reason_entries or []),
+        risk_line=risk_profile_line(reason_entries or []),
+        forecast_line=forecast_line,
         lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
                         if lhb_facts is not None else None),
+        realtime_lhb_line=realtime_lhb_line,
         evidence_block=block["text"],
         board=str(ref["board"]),
     )
@@ -1286,12 +1549,12 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     # boardN 与结构行同源）；板块名逐日未收录/THS 池缺失日如实留缺口
     board_history = board_count_history(db, date, days=BOARD_HISTORY_DAYS, dataset_id=dataset_id)
     # v12 新原料（AMMO 2026-10-28a）：KPL 板块强度 + 直播播报（各一次取数全板块共用）
-    # + 涨停原因映射
+    # 涨停原因映射（2026-11-11 改源：单一事实源 kpl_daban_pool.reason_items，一次取全日共用）
     strength_payload = fetch_plate_strength(date)
     live_payload = get_live_for_label(db, date)
     # 15:00 收盘总结（AMMO 2026-10-30e）：一次提取全板块/全个股共用（与直播同源）
     market_summary = market_summary_line(market_summary_entry(live_payload, date))
-    expounds = expound_map(db, date)
+    reasons = fetch_reason_corpus(db, date)
     # 龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用（与板块强度/直播同哲学）
     lhb_facts = fetch_lhb_facts(date)
     # 涨停基因语料（AMMO 2026-11-08a）：一次取全日共用（个股级叙事行，板块级不消费）
@@ -1302,6 +1565,12 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     theme_heat = fetch_theme_heat(db, date)
     # 公告计数语料（AMMO 2026-11-08e）：懒取落库，一次取全日共用（个股级，板块级不消费）
     notice_corpus = fetch_notice_corpus(db, date)
+    # 2026-11-11 语料缺口补全（①→④，全部一次取全日共用，降级不阻断投喂）：
+    # bid/zb/dt 三通道（②，日档已落库）+ 2112/3004/3101 落库（③）+ 个股详情四通道（④）
+    lanes_corpus = fetch_daban_lanes(db, date)
+    fc_corpus = fetch_lhb_forecast_corpus(db, date)
+    rt_corpus = fetch_lhb_realtime_corpus(db, date)
+    detail_corpus = fetch_stock_detail_corpus(db, date)
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r["board"]), []).append(r)
@@ -1381,12 +1650,25 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             continue
         le, lm = _live(b)
         smatch = match_board_strength(strength_payload, b)
+        brows_codes, brows_roles = _lhb_codes_roles(
+            [str(c) for c in (brows[0].get("boardCodes") or [])],
+            [(str(r.get("code") or ""),
+              {"main": "主板龙一", "growth": "双创龙一"}.get(r.get("segment"), "龙一"))
+             for r in brows])
+        dt_names, dt_ok = dt_names_for_board(brows[0], lanes_corpus)
         built = build_sector_one(
             db, date, brows, rows_baseline, dataset_id, market_line,
             board_history=board_history,
             strength_match=smatch,
-            reason_entries=reason_entries_for_leaders(brows, expounds),
+            reason_entries=reason_entries_for_leaders(brows, reasons),
             series_line=_series_line(b, smatch),
+            dt_line=board_dt_line(dt_names, dt_ok),
+            forecast_line=lhb_forecast_line(
+                _scope_entries(brows_codes, brows_roles, fc_corpus.get("items") or {}),
+                lane_ok=bool(fc_corpus.get("laneOk"))),
+            realtime_lhb_line=lhb_realtime_line(
+                _scope_entries(brows_codes, brows_roles, rt_corpus.get("items") or {}),
+                lane_ok=bool(rt_corpus.get("laneOk"))),
             live_line=kpl_live_line(le, board=b, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),
@@ -1416,17 +1698,30 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         event = events_hit[0] if events_hit else None
         rebound_line = rebound_popularity_line(
             event, pool_row_hit, board_n=row.get("boardN"), cycle=cyc or None)
+        row_codes, row_roles = _lhb_codes_roles(
+            [str(c) for c in (row.get("boardCodes") or [])],
+            [(str(row.get("code") or ""), "待判龙一")])
+        dt_names, dt_ok = dt_names_for_board(row, lanes_corpus)
         built = build_one(
             db, date, row, rows_baseline, dataset_id, market_line,
             board_history=board_history,
             strength_match=smatch,
-            reason_entries=reason_entries_for_leaders([row], expounds),
+            reason_entries=reason_entries_for_leaders([row], reasons),
             gene_entries=gene_entries_for_leaders([row], gene_corpus),
             theme_heat_entries=theme_heat_entries_for_leaders([row], theme_heat),
             notice_entries=notice_entries_for_leaders([row], notice_corpus),
             seal_quality_entries=seal_quality_entries_for_leaders([row], pool_quality),
             series_line=_series_line(rb, smatch),
             segment=row.get("segment"),
+            bid_line=bid_line(bid_entries_for_leaders([row], lanes_corpus)),
+            dt_line=board_dt_line(dt_names, dt_ok),
+            detail_lines=detail_lines_for_leader(row, detail_corpus, theme_heat),
+            forecast_line=lhb_forecast_line(
+                _scope_entries(row_codes, row_roles, fc_corpus.get("items") or {}),
+                lane_ok=bool(fc_corpus.get("laneOk"))),
+            realtime_lhb_line=lhb_realtime_line(
+                _scope_entries(row_codes, row_roles, rt_corpus.get("items") or {}),
+                lane_ok=bool(rt_corpus.get("laneOk"))),
             live_line=kpl_live_line(le, board=rb, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),

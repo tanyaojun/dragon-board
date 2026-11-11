@@ -402,3 +402,84 @@ class TestStockRelatedTheme2013:
         out2 = proto.parse_stock_related_theme_resp(payload)
         assert out2["themes"][0]["number"] is None
         assert out2["themes"][0]["name"] == "光伏"
+
+
+# ---------- 2026-11-11 ④：详情四通道 Req 构造 + Resp 解析（字段号=proto 描述符） ----------
+
+class TestStockDetailChannels20261111:
+    """2014/2202/2030/2010（封板大单/爆发原因/异动提醒/所属板块，mock 全绿；
+    缩放/时间编码待实弹校准，原始值透出不换算）。"""
+
+    def test_build_stock_zt_big_order_req(self):
+        # {stockId=1, type=2, count=3}；proto3 零值省略
+        assert (proto.build_stock_zt_big_order_req_pb("002708", 0, 0)
+                == proto.pb_bytes(1, b"002708"))
+        req = proto.build_stock_zt_big_order_req_pb("002708", 1, 5)
+        assert req == (proto.pb_bytes(1, b"002708")
+                       + proto.pb_varint_field(2, 1) + proto.pb_varint_field(3, 5))
+
+    def test_build_abnormal_price_req(self):
+        assert proto.build_abnormal_price_req_pb("002708") == proto.pb_bytes(1, b"002708")
+
+    def test_parse_stock_zt_big_order_resp(self):
+        item = (proto.pb_varint_field(1, 93005)
+                + proto.pb_varint_field(2, 12345)
+                + proto.pb_varint_field(4, 6000)
+                + proto.pb_varint_field(5, 1200)
+                + proto.pb_varint_field(6, 900))
+        payload = (proto.pb_bytes(1, b"002708")
+                   + proto.pb_varint_field(2, 1)
+                   + proto.pb_bytes(3, b"sealed")
+                   + proto.pb_varint_field(4, 3)
+                   + proto.pb_bytes(5, item)
+                   + proto.pb_bytes(5, proto.pb_varint_field(2, 222)))
+        d = proto.parse_stock_zt_big_order_resp(payload)
+        assert d["stock_id"] == "002708" and d["type"] == 1
+        assert d["zt_state"] == "sealed" and d["total"] == 3
+        assert d["items"][0] == {"time": 93005, "tur": 12345, "rate": None,
+                                 "buy_tur": 6000, "sell_tur": 1200, "zt_tur": 900}
+        assert d["items"][1]["tur"] == 222
+
+    def test_parse_bf_reason_resp(self):
+        payload = (proto.pb_bytes(1, b"002708")
+                   + proto.pb_bytes(2, "光伏订单放量".encode())
+                   + proto.pb_varint_field(3, 801464))
+        d = proto.parse_bf_reason_resp(payload)
+        assert d == {"stock_id": "002708", "desc": "光伏订单放量", "jump_id": 801464,
+                     "raw_len": len(payload)}
+
+    def test_parse_abnormal_price_resp(self):
+        payload = (proto.pb_bytes(1, b"002708")
+                   + proto.pb_varint_field(2, 580)
+                   + proto.pb_bytes(3, b"2026-11-10")
+                   + proto.pb_varint_field(10, 600)
+                   + proto.pb_varint_field(11, 321))
+        d = proto.parse_abnormal_price_resp(payload)
+        assert d["stock_id"] == "002708" and d["price"] == 580
+        assert d["date"] == "2026-11-10"
+        assert d["next_day_price"] == 600 and d["next_day_zf"] == 321
+
+    def test_parse_stock_related_plate_resp(self):
+        plate = (proto.pb_bytes(1, b"801464")
+                 + proto.pb_bytes(2, "机器人".encode())
+                 + proto.pb_varint_field(3, 0)
+                 + proto.pb_bytes(5, "002708".encode())
+                 + proto.pb_varint_field(6, 0)
+                 + proto.pb_varint_field(7, 1))
+        payload = (proto.pb_bytes(1, b"002708")
+                   + proto.pb_bytes(2, plate)
+                   + proto.pb_varint_field(4, 9))
+        d = proto.parse_stock_related_plate_resp(payload)
+        assert d["stock_id"] == "002708" and d["max_size"] == 9
+        assert d["plates"][0]["plate_id"] == "801464"
+        assert d["plates"][0]["plate_name"] == "机器人"
+        assert d["plates"][0]["qz_type"] == 1
+
+    def test_parsers_tolerate_truncated_payload(self):
+        # fail-visible：乱码/截断宽容解析不出异常（同 parse_pb 宽容模式）
+        for parser in (proto.parse_stock_zt_big_order_resp,
+                       proto.parse_bf_reason_resp,
+                       proto.parse_abnormal_price_resp,
+                       proto.parse_stock_related_plate_resp):
+            d = parser(b"\xff\xff\xff")
+            assert isinstance(d, dict) and "raw_len" in d

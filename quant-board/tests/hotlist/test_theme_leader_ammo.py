@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-08e"   # 2026-11-08e：+公告计数行（纯语料补行）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-11a"   # 2026-11-11 语料缺口补全（原料合同变更，题面零改动）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -743,17 +743,56 @@ def test_structure_line_dual_renders_both_segment_leaders():
 
 
 def test_limitup_reason_line_fail_visible():
-    """涨停原因行（AMMO 2026-10-28a）：龙一+板内并列；缺失逐项/全部不可考 fail-visible。"""
-    line = A.limitup_reason_line([("主板龙一 菲林格尔", "PCB设备+木地板"),
-                                  ("斯迪克", None)])
+    """涨停原因行（AMMO 2026-10-28a；2026-11-11 ①升级热点摘引）：缺失逐项/全部缺席。"""
+    line = A.limitup_reason_line(
+        [{"label": "主板龙一 菲林格尔", "item": {"zt": "PCB设备+木地板"}},
+         {"label": "斯迪克", "item": None}])
     assert line.startswith("涨停原因："), "2026-10-30d：工程注记删"
-    assert "韭研板内解析" not in line
     assert "主板龙一 菲林格尔=PCB设备+木地板" in line
     assert "斯迪克" not in line, "缺原因整段缺席（AGENTS §1.2-8：缺数据不投喂占位）"
+    assert "热点摘引" not in line, "plate 缺位不出摘引段"
+    # ①热点摘引（plate 非空）
+    line2 = A.limitup_reason_line(
+        [{"label": "主板龙一 龙江交通",
+          "item": {"zt": "冰雪经济+中俄贸易受益", "plate": "冰雪产业、中俄贸易"}}])
+    assert "热点摘引：冰雪产业、中俄贸易" in line2
     # 全缺 → 整行缺席
-    assert A.limitup_reason_line([("文投控股", None)]) is None
+    assert A.limitup_reason_line([{"label": "文投控股", "item": None}]) is None
     # 空条目 → None 不出行
     assert A.limitup_reason_line([]) is None
+
+
+def test_popularity_rank_line_and_risk_profile_line():
+    """热度排名行/风险画像行（2026-11-11 ①）：rank>0 才出；风险字段逐项非空才出。"""
+    entries = [
+        {"label": "主板龙一 龙江交通",
+         "item": {"rank": 15, "rank_total": 5575, "rank_top": ["美邦服饰", "晋亿实业"],
+                  "zt_group": "2板",
+                  "jc": "股东拟减持不超过2%", "pledge": "质押比 12.3%"}},
+        {"label": "双创龙一 斯迪克", "item": None},
+    ]
+    rank_line = A.popularity_rank_line(entries)
+    assert rank_line.startswith("热度排名：")
+    assert "主板龙一 龙江交通 15/5575" in rank_line
+    assert "（Top3：美邦服饰、晋亿实业）" in rank_line
+    assert "（梯队：2板）" in rank_line
+    assert "斯迪克" not in rank_line, "排名缺位 → 整段缺席"
+    # rank=0/rank_total=0 → 缺席（不在榜）
+    assert A.popularity_rank_line(
+        [{"label": "X", "item": {"rank": 0, "rank_total": 0}}]) is None
+    # 多名龙头并一行
+    two = A.popularity_rank_line(entries + [
+        {"label": "双创龙一 某股", "item": {"rank": 3, "rank_total": 100}}])
+    assert two.count("/") == 2 and "双创龙一 某股 3/100" in two
+
+    risk_line = A.risk_profile_line(entries)
+    assert risk_line.startswith("风险：")
+    assert "主板龙一 龙江交通 减持：股东拟减持不超过2%" in risk_line
+    assert "质押：质押比 12.3%" in risk_line
+    assert "解禁：" not in risk_line and "风险提示：" not in risk_line, "缺位项不出，不补占位"
+    assert "斯迪克" not in risk_line, "整行无任一风险字段 → 该股缺席"
+    assert A.risk_profile_line([{"label": "X", "item": {"rank": 1}}]) is None
+    assert A.risk_profile_line([]) is None
 
 
 def test_plate_strength_line_matches_and_fail_visible():
@@ -989,6 +1028,44 @@ def test_lhb_line_empty_structured_discloses_ordersign():
     line = A.lhb_line({"ok": False, "empty_structured": True, "order_sign_count": 3,
                        "stocks": []}, codes=["603278"])
     assert line is None, "榜单未生成 → 整行缺席（AGENTS §1.2-8）"
+
+
+def test_lhb_line_verified_absence_requires_both_endpoints_ok():
+    """验证后的全市场缺席（2026-11-11）：仅双端点均成功且 groups/stocks 全空才出；
+    个股行端点失败但分组榜单在手不得误称无上榜（旧缺陷：ok=True+stocks 空把龙虎榜
+    数据整行丢弃并作虚假陈述）。"""
+    line = A.lhb_line({"ok": False, "list_ok": True, "stock_ok": True,
+                       "groups": [], "stocks": []}, codes=["603278"])
+    assert line == "龙虎榜：当日全市场无上榜个股"
+    # 个股行端点失败但分组榜单在手 → 不再误称无上榜（旧缺陷复现输入）
+    degraded = {"ok": True, "degraded": True, "list_ok": True, "stock_ok": False,
+                "groups": [{"bid": "1", "reason": "日涨幅偏离值达7%的证券",
+                            "stocks": [{"code": "sh603278", "name": "大业股份",
+                                        "price": 12.0, "deviation": 10.02,
+                                        "amount_yuan": 2.4e8, "turn": 8.1}]}],
+                "stocks": []}
+    line2 = A.lhb_line(degraded, codes=["603278"], roles={"603278": "待判龙一"})
+    assert line2 is not None and "全市场无上榜" not in line2, "分组榜单在手不得丢弃"
+    assert "待判龙一 大业股份（603278）：偏离 10.02，上榜额 2.40亿，" \
+        "上榜原因 日涨幅偏离值达7%的证券" in line2, "分组榜单兑底 join 出已有事实"
+    # 相关个股不在分组榜 → 披露总数（stocks/groups 并集）且 0 只
+    line3 = A.lhb_line(degraded, codes=["300001"])
+    assert line3 == "龙虎榜：当日全市场上榜 1 只，本叙事相关个股 0 只上榜"
+
+
+def test_lhb_line_groups_fallback_partial_stock_rows():
+    """个股行部分缺位（短行被上游丢）：stocks 有的走主力净额段，缺的从 groups 兑底
+    join；两者并存时相关代码不丢。"""
+    facts = {"ok": True, "list_ok": True, "stock_ok": True, "degraded": True,
+             "groups": [{"bid": "2", "reason": "连续三个交易日内收盘价格涨幅偏离值累计20%",
+                         "stocks": [{"code": "sh603278", "name": "大业股份",
+                                     "price": 12.0, "deviation": 10.02,
+                                     "amount_yuan": 2.4e8, "turn": 8.1}]}],
+             "stocks": [LHB_FACTS["stocks"][0]]}
+    line = A.lhb_line(facts, codes=["603278", "600715"],
+                      roles={"603278": "待判龙一"})
+    assert "待判龙一 大业股份（603278）：偏离 10.02，上榜额 2.40亿" in line
+    assert "相关个股 文投控股（600715）：主力净额 1.50亿" in line
 
 
 def test_lhb_line_matches_leader_first_and_roles():
@@ -1417,3 +1494,143 @@ def test_narrative_seal_quality_placement_after_zhaban():
     assert n.index("炸板面行") < n.index("封板质量行") < n.index("板块强度行")
     n2 = A.build_leader_narrative(**base, leader_name="红太阳", leader_code="000525")
     assert "封板质量" not in n2
+
+
+# ---------- 2026-11-11 语料缺口补全（①→④）：新叙事行渲染/缺席 ----------
+
+def test_bid_line_rendering_and_absence():
+    """竞价承接行（②）：竞价额>0 或竞价涨幅≠0 才出；全空整行缺席。"""
+    entries = [
+        {"label": "主板龙一 龙江交通",
+         "item": {"bidding_pct": 4.32, "bidding_amount": 1.23e7}},
+        {"label": "双创龙一 某股", "item": {"bidding_pct": 0.0, "bidding_amount": 0.0}},
+        {"label": "缺竞价", "item": None},
+    ]
+    line = A.bid_line(entries)
+    assert line.startswith("竞价：")
+    assert "主板龙一 龙江交通 +4.32% 竞价额 0.12亿" in line
+    assert "双创龙一" not in line and "缺竞价" not in line, "无信息量/缺数据 → 整段缺席"
+    # 只有涨幅非零也出行（竞价额缺 → 不可考标注）
+    line2 = A.bid_line([{"label": "X", "item": {"bidding_pct": -1.1}}])
+    assert "X -1.10% 竞价额 不可考" in line2
+    assert A.bid_line([]) is None
+    assert A.bid_line([{"label": "X", "item": {}}]) is None
+
+
+def test_board_zhaban_line_detail_and_dt_line():
+    """炸板明细升级（②）：板内成员触板/开板时刻追加；板内跌停行缺席语义。"""
+    row = {"zhabanN": 3, "prevZhabanN": 2}
+    base_line = A.board_zhaban_line(row)
+    assert base_line == "板内炸板面：今日触板未封 3 家（昨日 2 家）"
+    detail = [{"name": "某股", "zt_time": 1794119726.2, "open_time": None},
+              {"name": "缺时刻", "zt_time": None, "open_time": "bad"},
+              {"name": None, "zt_time": None, "open_time": None}]
+    up = A.board_zhaban_line(row, detail=detail)
+    assert up.startswith(base_line)
+    assert "；某股 触板" in up and "开板" not in up.replace("触板", "")
+    assert "缺时刻" not in up, "时刻不可读 → 该段缺席"
+    # 家数不可考 → 原整行缺席语义不变
+    assert A.board_zhaban_line({"zhabanN": None}) is None
+
+    # 板内跌停行：lane ok + 无成员 → 验证缺席行；lane 无档 → 整行缺席
+    assert A.board_dt_line([], lane_ok=True) == "板内无跌停"
+    assert A.board_dt_line(["A 股", "B 股"], lane_ok=True) == "板内跌停：A 股、B 股"
+    assert A.board_dt_line(["A 股"], lane_ok=False) is None
+
+
+def test_lhb_forecast_and_realtime_lines():
+    """上榜预测行/实时龙虎榜行（③）：命中渲染、0 命中验证缺席、无档整行缺席。"""
+    entries = [
+        {"label": "待判龙一 603278", "item": {"stock_name": "某股", "hot_val": 35214,
+                                              "hot_change": 1234,
+                                              "main_net_amount": 1.48e8}},
+        {"label": "相关个股 000001", "item": None},
+    ]
+    fc = A.lhb_forecast_line(entries, lane_ok=True)
+    assert fc.startswith("上榜预测：")
+    assert "待判龙一 603278 某股 热度 35214（+1234） 主力净额 +1.48亿" in fc
+    assert "相关个股 000001" not in fc, "未命中 → 该股缺席"
+    zero = A.lhb_forecast_line([{"label": "相关个股 000001", "item": None}], lane_ok=True)
+    assert zero == "上榜预测：本叙事相关个股 0 只在预测榜"
+    assert A.lhb_forecast_line(entries, lane_ok=False) is None, "fc 无档整行缺席"
+
+    rt = A.lhb_realtime_line([{"label": "相关个股 603278",
+                               "item": {"name": "某股", "quotas": ["9.9"]}}], lane_ok=True)
+    assert rt == "实时龙虎榜：相关个股 603278 某股"
+    assert A.lhb_realtime_line([{"label": "相关个股 603278", "item": None}],
+                               lane_ok=True) == "实时龙虎榜：无实时上榜记录"
+    assert A.lhb_realtime_line([{"label": "相关个股 603278", "item": None}],
+                               lane_ok=False) is None
+
+
+def test_detail_channel_lines():
+    """个股详情四通道行（④）：2014 原始值不换算 / 2202 全文 / 2030 次日涨幅 / 2010 剔已知板块。"""
+    bdo = A.zt_big_order_line([
+        {"label": "主板龙一 某股",
+         "item": {"zt_tur": 77237472, "buy_tur": 407660096, "sell_tur": None}}])
+    assert bdo == "封板大单：主板龙一 某股 涨停额 77237472（买 407660096/卖 不可考）"
+    assert "亿" not in bdo, "缩放待实弹校准 → 原始值不套量级"
+    assert A.zt_big_order_line([{"label": "X", "item": {"zt_tur": 0}}]) is None
+    assert A.zt_big_order_line([{"label": "X", "item": None}]) is None
+
+    bf = A.bf_reason_line([{"label": "主板龙一 某股", "item": {"desc": "光伏订单放量"}},
+                           {"label": "缺原因", "item": {}}])
+    assert bf == "爆发原因：主板龙一 某股=光伏订单放量"
+    assert "缺原因" not in bf
+    assert A.bf_reason_line([]) is None
+
+    abn = A.abnormal_price_line([{"label": "主板龙一 某股", "item": {"next_day_zf": 3.21}},
+                                 {"label": "缺字段", "item": {}}])
+    assert abn == "异动提醒：主板龙一 某股 次日 +3.21%"
+    assert "缺字段" not in abn
+    assert A.abnormal_price_line([{"label": "X", "item": None}]) is None
+
+    rp = A.related_plate_line([
+        {"label": "主板龙一 某股", "board": "机器人",
+         "knownThemes": ["减速器"],
+         "item": {"plates": [
+             {"plate_name": "减速器", "plate_inc_rate": 1.5, "stock_inc_rate": 10.0},
+             {"plate_name": "机器人", "plate_inc_rate": 2.0, "stock_inc_rate": 10.0},
+             {"plate_name": "人形机器人", "plate_inc_rate": -1.63,
+              "stock_inc_rate": None},
+             {"plate_name": "", "plate_inc_rate": 9.9}]}}])
+    assert rp.startswith("板块归属：")
+    assert "减速器" not in rp, "题材热度已知板块剔除（避免重复）"
+    assert "机器人 " not in rp.replace("人形机器人", ""), "待判板块自身剔除"
+    assert "人形机器人 -1.63%" in rp and "（个股 +10.00%）" not in rp
+    assert rp.endswith("人形机器人 -1.63%")
+    assert A.related_plate_line([]) is None
+
+
+def test_narrative_20261111_line_placements():
+    """新行装配位置：竞价/跌停紧炸板面；封板大单紧封板质量；爆发原因紧涨停原因；
+    板块归属紧题材热度；上榜预测在公告后、龙虎榜前；实时榜在龙虎榜后。"""
+    base = dict(date="2026-10-19", market_line="涨停 46 家",
+                structure="结构行", baseline="基线行", evidence_block="【题材证据】")
+    n = A.build_leader_narrative(
+        **base, leader_name="红太阳", leader_code="000525",
+        zhaban_line="炸板面行", dt_line="板内跌停行", bid_line="竞价行",
+        seal_quality_line="封板质量行", zt_big_order_line="封板大单行",
+        theme_heat_line="题材热度行", related_plate_line="板块归属行",
+        gene_line="基因行", reason_line="涨停原因行", bf_reason_line="爆发原因行",
+        popularity_rank_line="热度排名行", risk_line="风险画像行",
+        abnormal_price_line="异动提醒行", notice_count_line="公告计数行",
+        forecast_line="上榜预测行", lhb_facts_line="龙虎榜行",
+        realtime_lhb_line="实时榜行")
+    order = ["炸板面行", "板内跌停行", "竞价行", "封板质量行", "封板大单行",
+             "题材热度行", "板块归属行", "基因行", "涨停原因行", "爆发原因行",
+             "热度排名行", "风险画像行", "异动提醒行", "公告计数行",
+             "上榜预测行", "龙虎榜行", "实时榜行"]
+    idx = [n.index(t) for t in order]
+    assert idx == sorted(idx)
+    # None 不出行
+    n2 = A.build_leader_narrative(**base, leader_name="红太阳", leader_code="000525")
+    assert all(t not in n2 for t in order)
+    s = A.build_sector_narrative(**base, board="机器人", zhaban_line="炸板面行",
+                                 dt_line="板内跌停行", reason_line="涨停原因行",
+                                 popularity_rank_line="热度排名行", risk_line="风险画像行",
+                                 forecast_line="上榜预测行", lhb_facts_line="龙虎榜行",
+                                 realtime_lhb_line="实时榜行")
+    s_idx = [s.index(t) for t in ["炸板面行", "板内跌停行", "涨停原因行", "热度排名行",
+                                  "风险画像行", "上榜预测行", "龙虎榜行", "实时榜行"]]
+    assert s_idx == sorted(s_idx)

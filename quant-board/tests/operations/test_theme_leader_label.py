@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v16"
     assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-08e"   # 2026-11-08e：+公告计数行 / 题面 v16
+    assert doc["ammoVersion"] == "2026-11-11a"   # 2026-11-11 语料缺口补全
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1559,13 +1559,98 @@ def test_gene_entries_for_leaders_labels_and_missing():
     assert entries[1]["label"].startswith("双创龙一") and entries[1]["item"] is None
 
 
+# ---------- 2026-11-11：涨停原因改源（kpl_daban_pool.reason_items，2203 推送） ----------
+
+REASON_ITEM = {"stock_id": "002708",
+               "zt": "机器人概念+PCB概念；2027年是农历羊年，近来部分A股名称中带「羊」的个股频频异动。\r\n\r\n1. 机器人概念：据2026年11月2日投资者关系活动记录表，机器人业务快速上量交付。\r\n\r\n2. PCB概念：据2026年11月2日投资者关系活动记录表，公司具备软硬结合板优势",
+               "rank": 15, "rank_total": 5575, "ts": 1794289200.0,
+               "ts_date": "2026-11-10"}
+
+
+def test_fetch_reason_corpus_maps_full_text_and_degraded_is_empty(monkeypatch):
+    """改源单一事实源（load_reason_corpus）+ 全文带入 + 伴生字段透传（2026-11-11 ①升级）：
+    ok → code → dict（非空字段透传：zt 全文/plate/rank 族/风险族）；降级/异常 → 空映射。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    full = REASON_ITEM
+    monkeypatch.setattr(arch, "load_reason_corpus",
+                        lambda db, date: {"ok": True, "items": [
+                            full, dict(full, stock_id="sz603278")], "count": 2})
+    got = L.fetch_reason_corpus(FakeDb(), "2026-11-10")
+    assert got["002708"]["zt"] == ("机器人概念+PCB概念；2027年是农历羊年，近来部分A股名称中带「羊」的"
+                                    "个股频频异动。 1. 机器人概念：据2026年11月2日投资者关系活动记录表，"
+                                    "机器人业务快速上量交付。 2. PCB概念：据2026年11月2日投资者关系活动"
+                                    "记录表，公司具备软硬结合板优势"), \
+        "全文带入不截断，换行/多空白折叠为单空格"
+    assert got["002708"]["rank"] == 15 and got["002708"]["rank_total"] == 5575
+    assert got["603278"]["zt"].startswith("机器人概念+PCB概念"), "stock_id 取后 6 位"
+    # ①伴生字段：非空透传、缺位键不出现
+    rich = dict(full, stock_id="002708", plate="冰雪产业", rank_top=["美邦服饰"],
+                zt_group="2板", fx="异动提醒", jc="减持公告", jj="", pledge=None,
+                zt_tag=3)
+    monkeypatch.setattr(arch, "load_reason_corpus",
+                        lambda db, date: {"ok": True, "items": [rich], "count": 1})
+    item = L.fetch_reason_corpus(FakeDb(), "2026-11-10")["002708"]
+    assert item["plate"] == "冰雪产业" and item["rank_top"] == ["美邦服饰"]
+    assert item["zt_group"] == "2板" and item["fx"] == "异动提醒" and item["jc"] == "减持公告"
+    assert "jj" not in item and "pledge" not in item, "空/None 字段缺位键不出现"
+    assert "zt_tag" not in item, "zt_tag 数值 tag 无文案映射 → 不渲染（只透传落库已有）"
+
+    monkeypatch.setattr(arch, "load_reason_corpus",
+                        lambda db, date: {"ok": False, "reason": "no_reason_corpus"})
+    assert L.fetch_reason_corpus(FakeDb(), "2026-11-10") == {}
+
+    def boom(db, date):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_reason_corpus", boom)
+    assert L.fetch_reason_corpus(FakeDb(), "2026-11-10") == {}, "读口异常不阻断整轮投喂"
+
+
+def test_fetch_reason_corpus_single_segment_untouched(monkeypatch):
+    """上游只有短概念串（无详述）：原样透出，不截断不删节（§4.0）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    monkeypatch.setattr(arch, "load_reason_corpus",
+                        lambda db, date: {"ok": True, "items": [
+                            dict(REASON_ITEM, zt="机器人概念+PCB概念")], "count": 1})
+    assert L.fetch_reason_corpus(FakeDb(), "2026-11-10")["002708"]["zt"] == "机器人概念+PCB概念"
+
+
+def test_reason_entries_for_leaders_labels_and_missing():
+    """仅待判龙一自身；分轨标签；无该股语料 → item=None（整段缺席）。"""
+    rows = [dict(ROWS[0], segment="main"), dict(ROWS[1], segment="growth")]
+    entries = L.reason_entries_for_leaders(rows, {"603278": {"zt": "机器人概念"}})
+    assert entries[0]["label"].startswith("主板龙一")
+    assert entries[0]["item"] == {"zt": "机器人概念"}
+    assert entries[1]["label"].startswith("双创龙一") and entries[1]["item"] is None
+
+
+def test_run_feeds_kpl_reason_corpus_into_leader_docs(env, monkeypatch):
+    """run 装配：涨停原因改源后个股级叙事带 KPL 短概念串（非 jiuyan expound）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    calls, db = env
+    monkeypatch.setattr(arch, "load_reason_corpus",
+                        lambda db_, date: {"ok": True, "items": [
+                            dict(REASON_ITEM, stock_id=str(r.get("code") or "")[-6:],
+                                 zt="机器人概念+PCB概念；详述") for r in ROWS], "count": 2})
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
+    assert leader_docs, "至少一条个股级 doc"
+    assert any("涨停原因：" in d["narrative"]
+               and "=机器人概念+PCB概念" in d["narrative"] for d in leader_docs), \
+        "涨停原因行取 kpl_daban_pool 语料"
+
+
 def test_build_one_wires_gene_line_before_reason_line():
     """个股级叙事：涨停基因行排涨停原因行前；未传入 → 不出行（旧行为不变）。"""
     row = dict(ROWS[0], segment="main", boardCodes=["603278"])
     built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE, market_line="涨停 46 家",
                         gene_entries=L.gene_entries_for_leaders([row],
                                                                 {"603278": GENE_ITEM}),
-                        reason_entries=[("主板龙一 大业股份", "机器人")])
+                        reason_entries=[{"label": "主板龙一 大业股份",
+                                         "item": {"zt": "机器人"}}])
     n = built["narrative"]
     assert "涨停基因：主板龙一 大业股份=涨停4次" in n, "口径注不进叙事（AGENTS §1.2-8）"
     assert n.index("涨停基因：") < n.index("涨停原因：")
@@ -1792,3 +1877,154 @@ def test_run_notice_degraded_marks_unknown_not_absent(env, monkeypatch):
     assert leader_docs and all(
         "公告计数" not in d["narrative"] and "公告计数语料不可考" not in d["narrative"]
         for d in leader_docs), "缺语料 → 整行缺席，不留占位（AGENTS §1.2-8）"
+
+
+# ---------- 2026-11-11 语料缺口补全（②③④）：fetch/entries/装配 ----------
+
+def test_fetch_daban_lanes_and_entries(monkeypatch):
+    """② bid/zb/dt 三通道：一次取全日共用；lane ok/missing 严格分开；异常不阻断。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    bid_item = {"stock_id": "603278", "name": "大业股份", "bidding_pct": 4.32,
+                "bidding_amount": 1.23e7}
+    zb_item = {"stock_id": "000005", "name": "某炸板", "zt_time": 1794119726.2}
+    dt_item = {"stock_id": "603278", "name": "大业股份"}
+
+    def fake_load_day(db, date, lane="pool"):
+        return {"bid": {"ok": True, "empty": False, "items": [bid_item]},
+                "zb": {"ok": True, "empty": False, "items": [zb_item]},
+                "dt": {"ok": True, "empty": True, "items": []},
+                "bad": {"ok": False, "reason": "no_archive"}}[lane]
+
+    monkeypatch.setattr(arch, "load_day", fake_load_day)
+    lanes = L.fetch_daban_lanes(FakeDb(), "2026-11-10")
+    assert lanes["bid"]["603278"]["bidding_pct"] == 4.32
+    assert lanes["zb"]["000005"]["zt_time"]
+    assert lanes["dt"] == {} and lanes["dtLane"] == "ok", "采集成功且空档 → ok"
+    lanes2 = L.fetch_daban_lanes(FakeDb(), "2026-11-10")
+    lanes2["dtLane"] = lanes["dtLane"]
+
+    def boom(db, date, lane="pool"):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_day", boom)
+    lanes3 = L.fetch_daban_lanes(FakeDb(), "2026-11-10")
+    assert all(v.startswith("missing:") for k, v in lanes3.items() if k.endswith("Lane")), \
+        "读口异常 → lane missing，不阻断投喂"
+
+    # entries 辅助
+    row = dict(ROWS[0], segment="main", boardCodes=["000005", "603278"])
+    assert L.bid_entries_for_leaders([row], lanes)[0]["item"]["bidding_pct"] == 4.32
+    detail = L.zhaban_detail_for_board(row, lanes)
+    assert detail == [{"name": "某炸板", "zt_time": zb_item["zt_time"], "open_time": None}]
+    dt_names, dt_ok = L.dt_names_for_board(row, {"dt": {}, "dtLane": "ok"})
+    assert dt_names == [] and dt_ok is True, "板内无跌停 → 验证缺席"
+    dt_names2, _ = L.dt_names_for_board(row, {"dt": {"603278": dt_item}, "dtLane": "ok"})
+    assert dt_names2 == ["大业股份"]
+
+
+def test_fetch_lhb_forecast_and_realtime_corpus(monkeypatch):
+    """③ 2112/3004/3101 落库语料 fetch：ok → code 映射；降级 → laneOk=False。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    fc_item = {"stock_id": "603278", "stock_name": "大业股份", "hot_val": 35214}
+    monkeypatch.setattr(arch, "load_lhb_forecast",
+                        lambda db, date: {"ok": True, "items": [fc_item], "count": 1})
+    monkeypatch.setattr(arch, "load_lhb_realtime",
+                        lambda db, date: {"ok": False, "reason": "no_rt_corpus"})
+    fc = L.fetch_lhb_forecast_corpus(FakeDb(), "2026-11-10")
+    rt = L.fetch_lhb_realtime_corpus(FakeDb(), "2026-11-10")
+    assert fc == {"items": {"603278": fc_item}, "laneOk": True}
+    assert rt == {"items": {}, "laneOk": False}
+
+    def boom(db, date):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(arch, "load_lhb_forecast", boom)
+    assert L.fetch_lhb_forecast_corpus(FakeDb(), "2026-11-10") == \
+        {"items": {}, "laneOk": False}, "读口异常不阻断投喂"
+
+
+def test_fetch_stock_detail_corpus_and_detail_lines(monkeypatch):
+    """④ 个股详情四通道：fetch 聚合 + detail_lines_for_leader 行派生（缺 lane/缺股缺席）。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    payloads = {
+        "bdo": {"ok": True, "items": [{"stock_id": "603278", "zt_tur": 77237472,
+                                       "buy_tur": 100, "sell_tur": 50}]},
+        "bf": {"ok": True, "items": [{"stock_id": "603278", "desc": "光伏订单放量"}]},
+        "abn": {"ok": True, "items": [{"stock_id": "603278", "next_day_zf": 3.21}]},
+        "rplate": {"ok": True, "items": [{"stock_id": "603278",
+                                          "plates": [{"plate_name": "人形机器人",
+                                                      "plate_inc_rate": -1.63}]}]},
+    }
+
+    def fake_load(db, date, lane="bdo"):
+        return payloads[lane]
+
+    monkeypatch.setattr(arch, "load_stock_detail_corpus", fake_load)
+    corpus = L.fetch_stock_detail_corpus(FakeDb(), "2026-11-10")
+    assert set(corpus["lanes"]) == {"bdo", "bf", "abn", "rplate"}
+    assert all(v == "ok" for v in corpus["lanes"].values())
+    assert corpus["items"]["603278"]["bdo"]["zt_tur"] == 77237472
+
+    row = dict(ROWS[0], segment="main")
+    heat = {"items": {"603278": {"themes": [{"name": "机器人概念"}]}}, "degraded": None}
+    lines = L.detail_lines_for_leader(row, corpus, heat)
+    assert lines["ztBigOrder"] == "封板大单：主板龙一 大业股份 涨停额 77237472（买 100/卖 50）"
+    assert lines["bfReason"] == "爆发原因：主板龙一 大业股份=光伏订单放量"
+    assert lines["abnormalPrice"] == "异动提醒：主板龙一 大业股份 次日 +3.21%"
+    assert lines["relatedPlate"] == "板块归属：主板龙一 大业股份 人形机器人 -1.63%", \
+        "已知题材（机器人概念）与待判板块（机器人）剔除"
+
+    # lane 降级 → 对应行缺席；缺该股 → 缺席
+    payloads_bad = {k: {"ok": False, "reason": "no_archive"} for k in payloads}
+    monkeypatch.setattr(arch, "load_stock_detail_corpus",
+                        lambda db, date, lane="bdo": payloads_bad[lane])
+    corpus_bad = L.fetch_stock_detail_corpus(FakeDb(), "2026-11-10")
+    assert all(v.startswith("missing:") for v in corpus_bad["lanes"].values())
+    lines_bad = L.detail_lines_for_leader(row, corpus_bad, heat)
+    assert all(v is None for v in lines_bad.values())
+
+    missing_stock = L.detail_lines_for_leader(dict(row, code="999999"), corpus, heat)
+    assert missing_stock == {"ztBigOrder": None, "bfReason": None,
+                             "abnormalPrice": None, "relatedPlate": None}
+
+
+def test_run_feeds_20261111_new_lines(env, monkeypatch):
+    """run 装配：涨停原因伴生字段/竞价/跌停/上榜预测/详情通道行按语料在场与否出行。"""
+    import backend.services.kpl_daban_archiver as arch
+
+    calls, db = env
+    monkeypatch.setattr(arch, "load_reason_corpus",
+                        lambda db_, date: {"ok": True, "items": [
+                            dict(REASON_ITEM, stock_id=str(r.get("code") or "")[-6:],
+                                 zt="机器人概念+PCB概念", plate="机器人",
+                                 rank=15, rank_total=5575, jc="股东拟减持")
+                            for r in ROWS], "count": 2})
+    monkeypatch.setattr(arch, "load_day", lambda db_, date, lane="pool": {
+        "bid": {"ok": True, "empty": False, "items": [
+            {"stock_id": str(r.get("code") or "")[-6:], "bidding_pct": 4.32,
+             "bidding_amount": 1.23e7} for r in ROWS]},
+        "zb": {"ok": True, "empty": True, "items": []},
+        "dt": {"ok": True, "empty": True, "items": []}}[lane])
+    monkeypatch.setattr(arch, "load_lhb_forecast",
+                        lambda db_, date: {"ok": True, "items": [
+                            {"stock_id": str(r.get("code") or "")[-6:],
+                             "stock_name": r.get("name"), "hot_val": 35214} for r in ROWS]})
+    monkeypatch.setattr(arch, "load_lhb_realtime",
+                        lambda db_, date: {"ok": False, "reason": "no_rt_corpus"})
+    monkeypatch.setattr(arch, "load_stock_detail_corpus",
+                        lambda db_, date, lane="bdo": {"ok": False, "reason": "no_archive"})
+    L.run("2026-10-19", confirm_budget=True)
+    col = db[L.COLLECTION]
+    leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
+    n = leader_docs[0]["narrative"]
+    assert "热点摘引：机器人" in n, "①涨停原因行热点摘引"
+    assert "热度排名：龙一 大业股份 15/5575" in n, "①热度排名行"
+    assert "风险：龙一 大业股份 减持：股东拟减持" in n, "①风险画像行"
+    assert "竞价：龙一 大业股份 +4.32%" in n, "②竞价承接行"
+    assert "板内无跌停" in n, "②板内跌停（验证缺席）"
+    assert "上榜预测：待判龙一 603278 大业股份 热度 35214" in n, "③上榜预测行"
+    assert "实时龙虎榜" not in n, "③rt 无档 → 整行缺席"
+    sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
+    assert sector_docs and any("热度排名：" in d["narrative"] for d in sector_docs), \
+        "板块级消费热度排名/风险画像（双龙一并一行）"

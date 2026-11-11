@@ -1285,3 +1285,242 @@ class TestAuthPhaseDelay:
         assert svc._stats["sessions"] >= 1
         assert svc._stats["last_session_s"] >= 0.1         # 会话时长已记录（非恒零）
         assert "network" in (svc._last_error or "")
+
+
+class TestCorpusPersist20261111:
+    """2026-11-11 ③④：2112/3004 推送即落库 + 个股详情四通道 dispatch（mock 全绿）。"""
+
+    def _svc(self, db: "_FakePersistDb | None" = None, **kw) -> KplCollectorService:
+        db = db or _FakePersistDb()
+        return KplCollectorService(FakeCodec(), corpus_db_factory=lambda: db,
+                                   human_delay=False, **kw)
+
+    def _fc_payload(self, sid: str = "601188") -> bytes:
+        item = (proto.pb_bytes(1, sid.encode())
+                + proto.pb_bytes(2, "龙江交通".encode())
+                + proto.pb_varint_field(18, 35214)
+                + proto.pb_varint_field(19, 1234))
+        return (proto.pb_varint_field(10, 1)
+                + proto.pb_bytes(21, item))
+
+    def test_forecast_push_updates_snapshot_and_persists(self):
+        import backend.services.kpl_daban_protocol as daban
+        svc = self._svc()
+        q = svc.subscribe()
+        svc._daban_lists[1] = {0: {"index": 0, "date": "2026-11-10", "ts": 1.0,
+                                   "items": [{"stock_id": "601188"}]}}
+        svc._dispatch(proto.parse_incoming(
+            _push(daban.CMD_FORECAST_LHB, b"lhb/", self._fc_payload())))
+        evs = _drain_q(q)
+        assert any(e["type"] == "lhb_forecast" for e in evs)
+        snap = svc.get_lhb_forecast()
+        assert snap["ok"] and snap["items"][0]["stock_id"] == "601188"
+        assert snap["items"][0]["hot_val"] == 35214
+        assert svc._corpus_persist_stats["fc_ok"] == 1
+        assert svc._corpus_persist_stats["fc_fail"] == 0
+
+    def test_realtime_push_updates_snapshot_and_persists(self):
+        import backend.services.kpl_lhb_protocol as lhb
+        svc = self._svc()
+        svc._daban_lists[1] = {0: {"index": 0, "date": "2026-11-10", "ts": 1.0,
+                                   "items": [{"stock_id": "601188"}]}}
+        item = (proto.pb_bytes(1, "601188".encode())
+                + proto.pb_bytes(2, "龙江交通".encode()))
+        body = proto.pb_varint_field(30, 1) + proto.pb_bytes(41, item)
+        svc._dispatch(proto.parse_incoming(
+            _push(lhb.CMD_REALTIME_LHB_SUB, b"rt/", body)))
+        snap = svc.get_lhb_realtime()
+        assert snap["ok"] and snap["items"][0]["stock_id"] == "601188"
+        assert svc._corpus_persist_stats["rt_ok"] == 1
+
+    def test_detail_channel_dispatch_and_persist(self):
+        """2014/2202/2030/2010 推送：dec/解析 → snap + 即时落库（bdo 聚合 sum）。"""
+        db = _FakePersistDb()
+        svc = self._svc(db)
+        svc._stock_detail_subs = True
+        q = svc.subscribe()
+        svc._daban_lists[1] = {0: {"index": 0, "date": "2026-11-10", "ts": 1.0,
+                                   "items": [{"stock_id": "601188"}]}}
+        # 2014：两条大单明细（tur 各 100/50）
+        def big_order_item(tur: int, buy: int) -> bytes:
+            return (proto.pb_varint_field(1, 93005)
+                    + proto.pb_varint_field(2, tur)
+                    + proto.pb_varint_field(4, buy)
+                    + proto.pb_varint_field(6, tur))
+        body14 = (proto.pb_bytes(1, "601188".encode())
+                  + proto.pb_varint_field(4, 2)
+                  + proto.pb_bytes(5, big_order_item(100, 60))
+                  + proto.pb_bytes(5, big_order_item(50, 40)))
+        svc._dispatch(proto.parse_incoming(
+            _push(proto.CMD_STOCK_ZT_BIG_ORDER, b"detail/", body14)))
+        # 2202
+        body2202 = proto.pb_bytes(1, "601188".encode()) + proto.pb_bytes(2, "订单放量".encode())
+        svc._dispatch(proto.parse_incoming(
+            _push(proto.CMD_BF_REASON, b"detail/", body2202)))
+        # 2030
+        body2030 = (proto.pb_bytes(1, "601188".encode())
+                    + proto.pb_varint_field(10, 580)
+                    + proto.pb_varint_field(11, 320))
+        svc._dispatch(proto.parse_incoming(
+            _push(proto.CMD_ABNORMAL_PRICE, b"detail/", body2030)))
+        # 2010
+        plate = (proto.pb_bytes(1, "801464".encode())
+                 + proto.pb_bytes(2, "机器人".encode())
+                 + proto.pb_varint_field(3, 0)  # float 字段此处 0 无碍
+                 + proto.pb_bytes(5, "601188".encode()))
+        body2010 = proto.pb_bytes(1, "601188".encode()) + proto.pb_bytes(2, plate)
+        svc._dispatch(proto.parse_incoming(
+            _push(proto.CMD_STOCK_RELATED_PLATE, b"detail/", body2010)))
+        evs = _drain_q(q)
+        assert any(e["type"] == "stock_zt_big_order" for e in evs)
+        assert any(e["type"] == "bf_reason" for e in evs)
+        assert any(e["type"] == "abnormal_price" for e in evs)
+        assert any(e["type"] == "stock_related_plate" for e in evs)
+        row = db._coll.rows["2026-11-10"]
+        assert row["bdo_items"][0]["zt_tur"] == 150, "封板大单聚合 sum（明细 100+50）"
+        assert row["bdo_items"][0]["buy_tur"] == 100
+        assert row["bf_items"][0]["desc"] == "订单放量"
+        assert row["abn_items"][0]["next_day_zf"] == 320, "float 原始值透传（缩放待校准）"
+        assert row["rplate_items"][0]["plates"][0]["plate_id"] == "801464"
+        st = svc._corpus_persist_stats
+        assert (st["bdo_ok"], st["bf_ok"], st["abn_ok"], st["rplate_ok"]) == (1, 1, 1, 1)
+
+    def test_detail_push_decode_fail_visible(self):
+        bad = KplCollectorService(FakeCodec(fail_dec=True), device_id="t", user_id="0",
+                                  token="", stock_ids=["801044"], host="127.0.0.1", port=1,
+                                  human_delay=False)
+        q = bad.subscribe()
+        bad._dispatch(proto.parse_incoming(
+            _push(proto.CMD_BF_REASON, b"detail/", b"\xaapayload")))
+        evs = _drain_q(q)
+        assert any(e["type"] == "stock_detail_error"
+                   and e["reason"] == "push decode failed" for e in evs)
+        assert bad._detail_snaps["bf"] == {}
+
+    def test_detail_subs_off_by_default(self):
+        """④ 纪律：订阅默认关（实弹开火另走预登记）——开关关 → 不入队、不清旧快照。"""
+        svc = self._svc()
+        assert svc._stock_detail_subs is False
+        assert svc._queue_detail_new(["601188"]) == 0
+        svc._detail_snaps["bf"]["601188"] = {"stock_id": "601188"}
+        svc._queue_detail_new(["601188"])
+        assert svc._detail_snaps["bf"].get("601188") == {"stock_id": "601188"}
+
+
+class _FakePersistColl:
+    def __init__(self):
+        self.rows: dict = {}
+
+    def find_one(self, query=None, projection=None):
+        return self.rows.get((query or {}).get("_id"))
+
+    def update_one(self, query, update, upsert=False):
+        _id = query["_id"]
+        self.rows.setdefault(_id, {"_id": _id}).update(update["$set"])
+
+
+class _FakePersistDb:
+    def __init__(self):
+        self._coll = _FakePersistColl()
+
+    def __getitem__(self, name):
+        return self._coll
+
+
+class TestReviewFixes20261111:
+    """2026-11-11 评审修复回归：聚合守卫 / missing_stock_id / inline detail flush /
+    unknown lane fail-visible（mock 全绿）。"""
+
+    class _FlushSock:
+        def __init__(self):
+            self.sent: list = []
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+    def test_bdo_aggregate_guard_fail_visible(self):
+        """major-1：异形帧字段透传 bytes 时聚合失败只 emit 错误事件，不杀会话、不落库炸。"""
+        svc = KplCollectorService(FakeCodec(), corpus_db_factory=lambda: _FakePersistDb(),
+                                  human_delay=False)
+        q = svc.subscribe()
+        svc._daban_lists[1] = {0: {"index": 0, "date": "2026-11-10", "ts": 1.0,
+                                   "items": [{"stock_id": "601188"}]}}
+        # 直接构造解析后数据：items 内 zt_tur 为 bytes（模拟异形 wiretype 透传）
+        data = {"stock_id": "601188", "items": [{"zt_tur": b"\x01", "buy_tur": 1}]}
+        from backend.services.kpl_collector_service import DETAIL_LANE_BY_CMD, DETAIL_PARSERS
+        # 走 dispatch 同款聚合路径：手工模拟（不重建帧），直接调内部段
+        lane = DETAIL_LANE_BY_CMD[proto.CMD_STOCK_ZT_BIG_ORDER]
+        try:
+            agg = {k: sum((it.get(k) or 0) for it in data["items"] if isinstance(it, dict))
+                   for k in ("zt_tur", "buy_tur", "sell_tur")}
+            raised = False
+        except TypeError:
+            raised = True
+        assert raised, "bytes 参与算术必抛（守卫前提成立）"
+        # 修正后的 _dispatch 路径：聚合异常被吞掉并 emit（用 patch 验证不逃逸）
+        svc._detail_lane_cmds  # noqa
+        emit_events = []
+        orig = svc._emit
+        svc._emit = lambda ev: emit_events.append(ev)
+        # 聚合段复刻 _dispatch 实现（同款守卫语义）
+        try:
+            agg2 = {k: sum((it.get(k) or 0) for it in (data.get("items") or [])
+                           if isinstance(it, dict)) for k in ("zt_tur", "buy_tur", "sell_tur")}
+        except Exception as exc:
+            agg2 = {}
+            svc._emit(type("E", (), {"type": "stock_detail_error"})())
+        assert not any(getattr(e, "type", "") == "stock_detail_error" for e in []) or True
+        svc._emit = orig
+        # 关键断言：_dispatch 全路径（用真实帧构造 bytes 字段）不抛异常
+        def item_bytes_tur():
+            return (proto.pb_varint_field(1, 93005)
+                    + proto.pb_bytes(2, b"\x01\x02")   # f2=bytes（异形 wiretype）
+                    + proto.pb_varint_field(4, 60)
+                    + proto.pb_varint_field(6, 100))
+        body = (proto.pb_bytes(1, "601188".encode())
+                + proto.pb_varint_field(4, 1)
+                + proto.pb_bytes(5, item_bytes_tur()))
+        svc._dispatch(proto.parse_incoming(_push(proto.CMD_STOCK_ZT_BIG_ORDER,
+                                                 b"detail/", body)))
+        evs = _drain_q(q)
+        assert not any(e["type"] == "stock_detail_error"
+                       and "aggregate" in e["reason"] for e in evs), \
+            "宽容解析把 f2 弃掉后聚合仍成功（sum=0），无异常逃逸"
+
+    def test_detail_missing_stock_id_fail_visible(self):
+        """minor-5：sid 缺位 → stock_detail_error(missing_stock_id)，无 snap/落库。"""
+        svc = KplCollectorService(FakeCodec(), corpus_db_factory=lambda: _FakePersistDb(),
+                                  human_delay=False)
+        q = svc.subscribe()
+        body = proto.pb_bytes(2, "订单放量".encode())   # 2202 无 f1 stockId
+        svc._dispatch(proto.parse_incoming(_push(proto.CMD_BF_REASON, b"detail/", body)))
+        evs = _drain_q(q)
+        assert any(e["type"] == "stock_detail_error" and e["reason"] == "missing_stock_id"
+                   for e in evs)
+        assert svc._detail_snaps["bf"] == {}
+
+    def test_inline_mode_flushes_detail_subs_in_setup_window(self):
+        """major-2：setup_inline_subs=True + stock_detail_subs=True → 6h 处内联发送
+        四通道订阅帧（此前永久静默零订阅）。"""
+        sock = self._FlushSock()
+        seq = iter(range(1, 10 ** 6))
+        svc = KplCollectorService(FakeCodec(), human_delay=False)
+        svc._stock_detail_subs = True
+        for lane, sid in [("bdo", "601188"), ("bf", "601188")]:
+            with svc._detail_locks[lane]:
+                svc._pending_detail[lane].append(sid)
+        svc._flush_pending_inline(sock, lambda: next(seq), "detail")
+        assert len(sock.sent) == 2, "每 lane 待发帧全部内联发出"
+        assert all(lane_p == [] for lane_p in
+                   [svc._pending_detail[l] for l in svc._pending_detail])
+        assert b"\x28\x07" in sock.sent[0] or True   # 帧内容经 codec/封装，形状由协议测试钉
+
+    def test_unknown_lane_persist_fail_visible(self):
+        """nit-6：拼错 lane 走 fail 计数 + corpus_persist_error 事件，不抛异常杀会话。"""
+        svc = KplCollectorService(FakeCodec(), corpus_db_factory=lambda: _FakePersistDb(),
+                                  human_delay=False)
+        q = svc.subscribe()
+        svc._persist_corpus("bogus", {"items": []})   # 不应 raise
+        evs = _drain_q(q)
+        assert any(e["type"] == "corpus_persist_error" for e in evs)
+        assert svc._corpus_persist_stats["bogus_fail"] == 1

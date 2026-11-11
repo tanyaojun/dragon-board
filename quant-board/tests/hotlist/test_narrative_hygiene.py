@@ -181,10 +181,11 @@ def test_hygiene_lhb_line_all_variants():
 
 
 def test_hygiene_reason_and_driver_cross_lines():
-    _assert_clean(A.limitup_reason_line([("主板龙一 龙江交通",
-                                          "冰雪经济+中俄贸易受益")]),
-                  "limitup_reason_line")
-    _assert_absent(A.limitup_reason_line([("主板龙一 龙江交通", None)]),
+    _assert_clean(A.limitup_reason_line(
+        [{"label": "主板龙一 龙江交通",
+          "item": {"zt": "冰雪经济+中俄贸易受益", "plate": "冰雪产业"}}]),
+        "limitup_reason_line")
+    _assert_absent(A.limitup_reason_line([{"label": "主板龙一 龙江交通", "item": None}]),
                    "limitup_reason_line(缺原因 → 整行缺席)")
     _assert_absent(A.driver_cross_line(None),
                    "driver_cross_line(缺席 → 整行缺席)")
@@ -298,3 +299,52 @@ def test_hygiene_theme_evidence_block_with_content():
          "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-11-09"}])
     out = D.build_theme_evidence_block(db, board_name="冰雪经济", date="2026-11-09")
     _assert_clean(out["text"], "evidence_block(有催化正文)")
+
+
+def test_hygiene_20261111_new_lines():
+    """2026-11-11 语料缺口补全新行（①→④）：黑名单零命中；缺数据整行缺席。"""
+    rank_item = {"zt": "冰雪经济+中俄贸易受益", "plate": "冰雪产业", "rank": 15,
+                 "rank_total": 5575, "rank_top": ["美邦服饰"], "zt_group": "2板",
+                 "fx": "异动提醒", "jc": "股东拟减持", "jj": "", "pledge": ""}
+    entries = [{"label": "主板龙一 龙江交通", "item": rank_item},
+               {"label": "双创龙一 斯迪克", "item": None}]
+    _assert_clean(A.limitup_reason_line(entries), "limitup_reason_line(热点摘引)")
+    _assert_clean(A.popularity_rank_line(entries), "popularity_rank_line")
+    _assert_clean(A.risk_profile_line(entries), "risk_profile_line")
+    _assert_clean(A.bid_line([{"label": "主板龙一 龙江交通",
+                               "item": {"bidding_pct": 4.32, "bidding_amount": 1.23e7}}]),
+                  "bid_line")
+    _assert_clean(A.board_zhaban_line({"zhabanN": 3}, detail=[
+        {"name": "某股", "zt_time": 1794119726.2, "open_time": None}]),
+        "board_zhaban_line(明细升级)")
+    _assert_clean(A.board_dt_line([], lane_ok=True), "board_dt_line(验证缺席)")
+    _assert_clean(A.board_dt_line(["A 股"], lane_ok=True), "board_dt_line(名单)")
+    _assert_clean(A.lhb_forecast_line(
+        [{"label": "待判龙一 603278", "item": {"stock_name": "某股", "hot_val": 35214,
+                                               "hot_change": 1234,
+                                               "main_net_amount": 1.48e8}}],
+        lane_ok=True), "lhb_forecast_line")
+    _assert_clean(A.lhb_realtime_line(
+        [{"label": "相关个股 603278", "item": {"name": "某股"}}], lane_ok=True),
+        "lhb_realtime_line")
+    _assert_clean(A.zt_big_order_line(
+        [{"label": "主板龙一 某股", "item": {"zt_tur": 77237472, "buy_tur": 100}}]),
+        "zt_big_order_line")
+    _assert_clean(A.bf_reason_line(
+        [{"label": "主板龙一 某股", "item": {"desc": "光伏订单放量"}}]),
+        "bf_reason_line")
+    _assert_clean(A.abnormal_price_line(
+        [{"label": "主板龙一 某股", "item": {"next_day_zf": 3.21}}]),
+        "abnormal_price_line")
+    _assert_clean(A.related_plate_line(
+        [{"label": "主板龙一 某股", "board": "机器人", "knownThemes": [],
+          "item": {"plates": [{"plate_name": "人形机器人", "plate_inc_rate": -1.63,
+                               "stock_inc_rate": None}]}}]),
+        "related_plate_line")
+    # 缺数据 → 整行缺席
+    _assert_absent(A.lhb_forecast_line([{"label": "X", "item": None}], lane_ok=False),
+                   "lhb_forecast_line(无档)")
+    _assert_absent(A.lhb_realtime_line([{"label": "X", "item": None}], lane_ok=False),
+                   "lhb_realtime_line(无档)")
+    _assert_absent(A.board_dt_line([], lane_ok=False), "board_dt_line(无档)")
+    _assert_absent(A.bid_line([{"label": "X", "item": None}]), "bid_line(缺竞价)")

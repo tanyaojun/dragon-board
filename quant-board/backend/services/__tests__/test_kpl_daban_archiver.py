@@ -12,10 +12,16 @@ from backend.services.kpl_daban_archiver import (
     archive_bid_snapshot,
     archive_dt_snapshot,
     archive_gene_corpus,
+    archive_lhb_forecast,
+    archive_lhb_realtime,
     archive_snapshot,
+    archive_stock_detail_corpus,
     archive_zb_snapshot,
     load_day,
     load_gene_corpus,
+    load_lhb_forecast,
+    load_lhb_realtime,
+    load_stock_detail_corpus,
     pick_gene_targets,
 )
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
@@ -1210,3 +1216,75 @@ def test_archive_once_lead_channel(monkeypatch):
                                   clock=lambda: datetime(2026, 11, 9, 10, 0, tzinfo=TZ_SHANGHAI))
     asyncio.run(archiver2._archive_once())
     assert archiver2.status()["lastResult"]["lead"]["ok"] is False
+
+
+# ---------- 2026-11-11 ③④：fc/rt 落库 + 个股详情四通道（同款并集合同） ----------
+
+def _fc_item(sid: str, hot: int = 100, ts: float = 1794289200.0) -> dict:
+    return {"stock_id": sid, "stock_name": f"股{sid}", "hot_val": hot,
+            "main_net_amount": 12345, "ts": ts, "ts_date": "2026-11-10"}
+
+
+def test_archive_lhb_forecast_union_refresh_and_stale_skip():
+    db = _FakeDb()
+    r1 = archive_lhb_forecast(db, {"date": "2026-11-10", "items": [
+        _fc_item("603278"), _fc_item("000001")]})
+    assert r1["ok"] and r1["item_n"] == 2
+    # 并集 + 字段随新帧刷新
+    r2 = archive_lhb_forecast(db, {"date": "2026-11-10", "items": [
+        dict(_fc_item("603278", hot=200), ts=1794290000.0), _fc_item("000002")]})
+    assert r2["ok"] and r2["item_n"] == 3 and r2["merged_n"] == 2
+    row = db._coll.rows["2026-11-10"]
+    items = {i["stock_id"]: i for i in row["fc_items"]}
+    assert items["603278"]["hot_val"] == 200
+    assert items["603278"]["first_ts"] == 1794289200.0, "first_ts 首次到流不覆盖"
+    # 跨日残留 skip
+    r3 = archive_lhb_forecast(db, {"date": "2026-11-10", "items": [
+        dict(_fc_item("999999"), ts=1790000000.0)]})
+    assert r3["ok"] is False and r3["reason"] == "all_stale" and r3["skipped_stale"] == 1
+    assert "999999" not in {i["stock_id"] for i in row["fc_items"]}
+
+
+def test_archive_lhb_forecast_empty_suppression_and_no_date():
+    db = _FakeDb()
+    r = archive_lhb_forecast(db, {"date": "2026-11-10", "items": []})
+    assert r["ok"] is False and r["reason"] == "empty_fc_items" and r["empty"] is True, \
+        "空帧抑制（不覆盖非空）"
+    assert archive_lhb_forecast(db, {"items": [_fc_item("000001")]})["reason"] == "no_pool_date"
+
+
+def test_load_lhb_forecast_layers():
+    db = _FakeDb()
+    assert load_lhb_forecast(db, "2026-11-10")["reason"] == "no_archive"
+    db._coll.update_one({"_id": "2026-11-10"}, {"$set": {"date": "2026-11-10"}}, upsert=True)
+    assert load_lhb_forecast(db, "2026-11-10")["reason"] == "no_fc_corpus", \
+        "日档在但语料未落库 ≠ 无档（fail-visible 分层）"
+    archive_lhb_forecast(db, {"date": "2026-11-10", "items": [_fc_item("603278")]})
+    loaded = load_lhb_forecast(db, "2026-11-10")
+    assert loaded["ok"] and loaded["items"][0]["stock_id"] == "603278"
+
+
+def test_archive_lhb_realtime_union_contract():
+    db = _FakeDb()
+    r = archive_lhb_realtime(db, {"date": "2026-11-10", "items": [
+        {"stock_id": "603278", "name": "大业股份", "quotas": ["9.9"],
+         "ts": 1794289200.0}]})
+    assert r["ok"] and r["item_n"] == 1
+    loaded = load_lhb_realtime(db, "2026-11-10")
+    assert loaded["ok"] and loaded["items"][0]["quotas"] == ["9.9"]
+
+
+def test_archive_stock_detail_lanes_contract():
+    db = _FakeDb()
+    r = archive_stock_detail_corpus(db, {"date": "2026-11-10", "items": [
+        {"stock_id": "603278", "zt_tur": 100, "buy_tur": 50, "items": [], "ts": 1794289200.0}]},
+        lane="bdo")
+    assert r["ok"] and r["lane"] == "bdo"
+    loaded = load_stock_detail_corpus(db, "2026-11-10", lane="bdo")
+    assert loaded["ok"] and loaded["items"][0]["zt_tur"] == 100
+    # rplate plates 列表原样
+    archive_stock_detail_corpus(db, {"date": "2026-11-10", "items": [
+        {"stock_id": "603278", "plates": [{"plate_name": "人形机器人"}],
+         "ts": 1794289200.0}]}, lane="rplate")
+    loaded = load_stock_detail_corpus(db, "2026-11-10", lane="rplate")
+    assert loaded["ok"] and loaded["items"][0]["plates"][0]["plate_name"] == "人形机器人"
