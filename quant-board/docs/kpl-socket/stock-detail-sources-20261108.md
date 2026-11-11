@@ -62,11 +62,11 @@
 | 2011 | `Hq.StockRangeTradeResp` | `HQListReq{stockId, currNum}` | 区间成交 |
 | 2012 | `ServiceHqStock.StockRelatedCommodityResp` | `Hq.HQReq{stockId}` | 商品现货 |
 | 2013 | `ServiceHqStock.StockRelatedThemeResp` | `Hq.HQReq{stockId}` | **题材库**（items{id,name,number=题材热度}） |
-| 2014 | `ServiceHqStock.StockZTBigOrderDetailResp` | `StockZTBigOrderDetailReq{stockId,type,count}` | 涨停大单明细（time/tur/rate/buyTur/sellTur/ztTur） |
+| 2014 | `ServiceHqStock.StockZTBigOrderDetailResp` | `StockZTBigOrderDetailReq{stockId,type,count}` | 涨停大单明细（time/tur/rate/buyTur/sellTur/ztTur）；**2026-11-11 实弹值校准已钉死**：time=HHMM、金额族=元×1、rate=百分数（tur/ztTur×100）、buy/sell=当日累计——详见 detail-scaling-verification.md |
 | 2015 | `ServiceHqStock.StockMinWTResp` | `HQListReq{stockId, currNum}` | **逐笔委托盘口**（items{time,totalSellTur,totalBuyTur,totalSell,totalBuy,sells[],buys[]{price,vol}}） |
 | 2016 | `ServiceHqStock.StockPHTLineResp` | `HQListReq{stockId, currNum}` | 盘后分时 |
 | 2025 | `ServiceHqStock.HKRelateHKStockResp` | `Hq.HKStockReq{stockId}` | A/H 关联（港股溢价） |
-| 2030 | `ServiceHqStock.AbnormalPriceResp` | `AbnormalPriceReq{stockId}` | **异动提醒**（price/date/nextDayPrice/nextDayZf） |
+| 2030 | `ServiceHqStock.AbnormalPriceResp` | `AbnormalPriceReq{stockId}` | **异动提醒**（price/date/nextDayPrice/nextDayZf）；**price 族缩放与 nextDayZf 比率/百分比口径 2026-11-11 阴性未钉死**（当日事件推送三字段全缺位，date=异动日），raw 透出不换算——复验路径见 detail-scaling-verification.md §二 |
 | 2202 | `Hq.BFReasonResp` | `Hq.HQReq{stockId}` | 爆发原因（GetHisBFReason 历史同构） |
 | 2203 | `Hq.HQReasonsResp` | `Hq.HQReq{stockId}` | **涨停原因实时推送**（SubMultiReasons/V1；单条 SubZTReason 同族） |
 | 2204/2205 | `Hq.StockKZZResp` / `KzzStockHeadResp` | `Hq.HQReq{stockId}` | 可转债 |

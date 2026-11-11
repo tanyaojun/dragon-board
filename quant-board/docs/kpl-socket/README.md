@@ -205,7 +205,11 @@ QuantBoard 主后端 :8000
   streak 归零、会话回 70-80s 健康 TTL 档；块发语义下**四通道首次全量打通**——
   snaps rplate/bdo/bf/abn 各 15 只落地，persist rplate_ok=80、bdo_ok=68、
   bf_ok=32、abn_ok=15、reason_ok=66 且持续增长，全程 0 fail、0 backoff。
-  2030（bdo）float 缩放与 2014 时间编码仍待实弹值比对校准（后续任务）。
+  实弹值校准（同日收盘后被动完成，详见 [detail-scaling-verification.md](detail-scaling-verification.md)）：
+  **2014（bdo）time=HHMM、金额族=元×1、rate=百分数（tur/ztTur×100）三项全钉死**
+  （16 股 2936 items 全样本）；**2030（abn）price/nextDayPrice/nextDayZf 当日事件推送
+  全缺位 → 口径阴性未钉死**，解析器不动、异动提醒行暂停渲染，等下一交易日日档被动
+  复验（复验路径见该文档 §二）。
 
   **午后两修（2026-11-11 14:0x）**：① 2103 f21 `indexes`（pidType=0/8 页）服务端
   packed 编码 → parse_pb_f32 宽容解析返回原始 bytes → `get_daban_list` 原样透传
