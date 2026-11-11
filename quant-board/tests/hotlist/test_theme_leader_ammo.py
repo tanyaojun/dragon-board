@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-11a"   # 2026-11-11 语料缺口补全（原料合同变更，题面零改动）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-11b"   # 2026-11-11 封板大单元口径化 + 2030 行暂停渲染
     assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -1564,14 +1564,32 @@ def test_lhb_forecast_and_realtime_lines():
 
 
 def test_detail_channel_lines():
-    """个股详情四通道行（④）：2014 原始值不换算 / 2202 全文 / 2030 次日涨幅 / 2010 剔已知板块。"""
+    """个股详情四通道行（④ + 2026-11-11 实弹值校准）：2014 元口径万/亿格式化
+    （尾条最新态，回退同一常量源）/ 2202 全文 / 2030 zf 口径未钉死整行暂停 /
+    2010 剔已知板块。"""
+    # 新日档：采集侧尾条派生聚合 *_yuan 直消费
     bdo = A.zt_big_order_line([
         {"label": "主板龙一 某股",
-         "item": {"zt_tur": 77237472, "buy_tur": 407660096, "sell_tur": None}}])
-    assert bdo == "封板大单：主板龙一 某股 涨停额 77237472（买 407660096/卖 不可考）"
-    assert "亿" not in bdo, "缩放待实弹校准 → 原始值不套量级"
-    assert A.zt_big_order_line([{"label": "X", "item": {"zt_tur": 0}}]) is None
+         "item": {"zt_tur_yuan": 51950196.0, "buy_tur_yuan": 208147347.0,
+                  "sell_tur_yuan": None}}])
+    assert bdo == "封板大单：主板龙一 某股 封单 0.52亿（买 2.08亿/卖 不可考）"
+    # 历史日档回退：无 *_yuan → items 尾条 raw ÷ BDO_TUR_DIVISOR（同一常量源，
+    # 禁止消费 raw sum 聚合——级值/累计求和无意义）
+    legacy = A.zt_big_order_line([
+        {"label": "主板龙一 某股",
+         "item": {"zt_tur": 22570503760, "buy_tur": 28911631120,
+                  "items": [{"zt_tur": 22391088, "buy_tur": 5236460, "sell_tur": 0},
+                            {"zt_tur": 51950196, "buy_tur": 208147347,
+                             "sell_tur": 103086910}]}}])
+    assert legacy == "封板大单：主板龙一 某股 封单 0.52亿（买 2.08亿/卖 1.03亿）"
+    # 万位阈值：50 万 → 「50.0万」非「0.00亿」（非零显 0 是误导）
+    w = A.zt_big_order_line([{"label": "X", "item": {"zt_tur_yuan": 500000.0}}])
+    assert w == "封板大单：X 封单 50.0万"
+    # 缺席纪律：封单非正/不可读 → 整股缺席（不伪装有封单）；buy/sell 缺位「不可考」不补 0
+    assert A.zt_big_order_line([{"label": "X", "item": {"zt_tur_yuan": 0}}]) is None
+    assert A.zt_big_order_line([{"label": "X", "item": {"items": []}}]) is None
     assert A.zt_big_order_line([{"label": "X", "item": None}]) is None
+    assert A.zt_big_order_line([]) is None
 
     bf = A.bf_reason_line([{"label": "主板龙一 某股", "item": {"desc": "光伏订单放量"}},
                            {"label": "缺原因", "item": {}}])
@@ -1579,11 +1597,13 @@ def test_detail_channel_lines():
     assert "缺原因" not in bf
     assert A.bf_reason_line([]) is None
 
-    abn = A.abnormal_price_line([{"label": "主板龙一 某股", "item": {"next_day_zf": 3.21}},
-                                 {"label": "缺字段", "item": {}}])
-    assert abn == "异动提醒：主板龙一 某股 次日 +3.21%"
-    assert "缺字段" not in abn
+    # 2030：zf 口径 2026-11-11 阴性未钉死（当日事件推送三字段全缺位）→ 整行暂停渲染
+    # （fail-visible 不出未裁决口径的伪精度；复验后按钉死口径恢复）
+    assert A.abnormal_price_line([
+        {"label": "主板龙一 某股", "item": {"next_day_zf": 3.21}},
+        {"label": "缺字段", "item": {}}]) is None
     assert A.abnormal_price_line([{"label": "X", "item": None}]) is None
+    assert A.abnormal_price_line([]) is None
 
     rp = A.related_plate_line([
         {"label": "主板龙一 某股", "board": "机器人",

@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v16"
     assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-11a"   # 2026-11-11 语料缺口补全
+    assert doc["ammoVersion"] == "2026-11-11b"   # 2026-11-11 实弹值校准（2014 元口径/2030 暂停）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1948,8 +1948,10 @@ def test_fetch_stock_detail_corpus_and_detail_lines(monkeypatch):
     import backend.services.kpl_daban_archiver as arch
 
     payloads = {
-        "bdo": {"ok": True, "items": [{"stock_id": "603278", "zt_tur": 77237472,
-                                       "buy_tur": 100, "sell_tur": 50}]},
+        "bdo": {"ok": True, "items": [{"stock_id": "603278",
+                                       "zt_tur_yuan": 77237472.0,
+                                       "buy_tur_yuan": 407660096.0,
+                                       "sell_tur_yuan": 110000000.0}]},
         "bf": {"ok": True, "items": [{"stock_id": "603278", "desc": "光伏订单放量"}]},
         "abn": {"ok": True, "items": [{"stock_id": "603278", "next_day_zf": 3.21}]},
         "rplate": {"ok": True, "items": [{"stock_id": "603278",
@@ -1964,14 +1966,16 @@ def test_fetch_stock_detail_corpus_and_detail_lines(monkeypatch):
     corpus = L.fetch_stock_detail_corpus(FakeDb(), "2026-11-10")
     assert set(corpus["lanes"]) == {"bdo", "bf", "abn", "rplate"}
     assert all(v == "ok" for v in corpus["lanes"].values())
-    assert corpus["items"]["603278"]["bdo"]["zt_tur"] == 77237472
+    assert corpus["items"]["603278"]["bdo"]["zt_tur_yuan"] == 77237472.0
+    assert corpus["items"]["603278"]["abn"]["next_day_zf"] == 3.21, "2030 raw 仍透传落库"
 
     row = dict(ROWS[0], segment="main")
     heat = {"items": {"603278": {"themes": [{"name": "机器人概念"}]}}, "degraded": None}
     lines = L.detail_lines_for_leader(row, corpus, heat)
-    assert lines["ztBigOrder"] == "封板大单：主板龙一 大业股份 涨停额 77237472（买 100/卖 50）"
+    assert lines["ztBigOrder"] == "封板大单：主板龙一 大业股份 封单 0.77亿（买 4.08亿/卖 1.10亿）", \
+        "2014 元口径（2026-11-11 校准）"
     assert lines["bfReason"] == "爆发原因：主板龙一 大业股份=光伏订单放量"
-    assert lines["abnormalPrice"] == "异动提醒：主板龙一 大业股份 次日 +3.21%"
+    assert lines["abnormalPrice"] is None, "2030 zf 口径未钉死，整行暂停渲染"
     assert lines["relatedPlate"] == "板块归属：主板龙一 大业股份 人形机器人 -1.63%", \
         "已知题材（机器人概念）与待判板块（机器人）剔除"
 

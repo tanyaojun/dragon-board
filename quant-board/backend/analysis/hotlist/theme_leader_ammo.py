@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
+from backend.services.kpl_socket_protocol import bdo_item_yuan
 
 # ── 代际戳 ──
 # 题集/口径任何一字变更必须换代（跨代不可比）。v1 = 2026-10-20 定版（龙头隔日连板两题）；
@@ -214,10 +215,12 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 #   时刻）/板内跌停行（dt_items，采集成功且板内无成员=「板内无跌停」验证缺席行）。
 # ③2112/3004/3101 落库语料进叙事：上榜预测行（fc_items：热度=人气值口径，与 rank=排名
 #   严格区分）/实时龙虎榜行（rt_items 命中板内成员）。
-# ④2014/2202/2030/2010 四通道进叙事：封板大单行（原始值，缩放待实弹校准不换算）/
-#   爆发原因行/异动提醒行/板块归属行（剔题材热度已知板块防重复）。
+# ④2014/2202/2030/2010 四通道进叙事：封板大单行（2026-11-11 实弹值校准后元口径万/亿
+#   格式化，尾条最新态）/ 爆发原因行 / 异动提醒行（zf 口径未钉死整行暂停渲染）/
+#   板块归属行（剔题材热度已知板块防重复）。
 # AMMO_VERSION 随原料合同变更 bump（fetch_reason_corpus 形状 dict[str,str]→dict[str,dict]）。
-AMMO_VERSION_THEME_LEADER = "2026-11-11a"   # 语料缺口补全 ①→④（原料合同变更，题面零改动）
+AMMO_VERSION_THEME_LEADER = "2026-11-11b"   # 2014 封板大单元口径化（sum→尾条+万/亿格式化）
+                                            # + 2030 异动提醒行暂停渲染（zf 口径阴性未钉死）
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1993,15 +1996,43 @@ def lhb_realtime_line(entries: list[dict], *, lane_ok: bool) -> str | None:
 # ── 个股详情四通道叙事行（2026-11-11 ④，2014/2202/2030/2010 落库语料；mock 全绿，
 #    实弹开火另走预登记 + 预算确认）──
 
+def _bdo_stock_amounts(item: dict) -> tuple[float | None, float | None, float | None]:
+    """2014 日档条目 → (封单额, 累计封板大单买, 累计封板大单卖) 元口径。
+
+    消费次序：①采集侧尾条派生聚合 *_yuan（新日档）；②历史日档无派生字段 →
+    items 尾条 raw 经 bdo_item_yuan 回退（与协议层同一换算出口/常量源，不造第二套）。
+    raw sum 聚合（zt_tur/buy_tur/sell_tur）是级值/累计求和、语义无效，禁止消费。
+    全缺 → (None, None, None)（fail-visible，不补 0）。
+    """
+    zt = _qnum(item.get("zt_tur_yuan"))
+    buy = _qnum(item.get("buy_tur_yuan"))
+    sell = _qnum(item.get("sell_tur_yuan"))
+    if zt is None and buy is None and sell is None:
+        for it in reversed(item.get("items") or []):
+            if not isinstance(it, dict):
+                continue
+            y = bdo_item_yuan(it)
+            if (y["zt_tur_yuan"] is None and y["buy_tur_yuan"] is None
+                    and y["sell_tur_yuan"] is None):
+                continue
+            return y["zt_tur_yuan"], y["buy_tur_yuan"], y["sell_tur_yuan"]
+        return None, None, None
+    return zt, buy, sell
+
+
 def zt_big_order_line(entries: list[dict]) -> str | None:
-    """封板大单行（2026-11-11 ④）：2014 封板大单明细聚合，补封板质量行静态快照之不足。
+    """封板大单行（2014 封板大单明细聚合，补封板质量行静态快照之不足）。
 
     `entries` = [{"label", "item"}]，item 取自 kpl_daban_pool bdo_items（单股聚合，
-    fetch_stock_detail_corpus 归一产物）。口径纪律：
-    - 涨停额/买卖拆分为**原始值**（2014 tur 族缩放未与 App 同屏核对，不换算不套亿/万
-      量级，防错量级误导；实弹校准钉死单位后再改一处格式化）；
-    - zt_tur（涨停额）非正/不可读 → 该股缺席（不伪装有封单）；
-    - buy_tur/sell_tur 缺位项缺席，不补 0。
+    fetch_stock_detail_corpus 归一产物）。口径纪律（2026-11-11 实弹值校准裁决，
+    证据链见 docs/kpl-socket/detail-scaling-verification.md）：
+    - 封单/买卖拆分为**元口径**（2014 金额族=元×1，16/16 股尾条与池封单精确互证），
+      亿/万自适应格式化（_fmt_amount_yuan）；
+    - 值取**尾条最新态**（zt_tur=封单额级值、buy/sell_tur=当日累计封板大单买/卖，
+      sum 无意义），换算单一出口=_bdo_stock_amounts；
+    - 封单非正/不可读 → 该股缺席（不伪装有封单）；
+    - buy/sell 缺位项「不可考」，不补 0；
+    - 不渲染时间（time_text 已落库备审计，叙事禁开发注释 §1.2-8）。
     """
     if not entries:
         return None
@@ -2010,14 +2041,13 @@ def zt_big_order_line(entries: list[dict]) -> str | None:
         item = (entry or {}).get("item")
         if not isinstance(item, dict):
             continue
-        zt = _qnum(item.get("zt_tur"))
+        zt, buy, sell = _bdo_stock_amounts(item)
         if zt is None or zt <= 0:
             continue
-        seg = (f"{entry.get('label') or '该股'} 涨停额 {_raw_num(zt)}")
-        buy, sell = _qnum(item.get("buy_tur")), _qnum(item.get("sell_tur"))
+        seg = (f"{entry.get('label') or '该股'} 封单 {_fmt_amount_yuan(zt)}")
         if buy is not None or sell is not None:
-            seg += f"（买 {_raw_num(buy) if buy is not None else '不可考'}"
-            seg += f"/卖 {_raw_num(sell) if sell is not None else '不可考'}）"
+            seg += f"（买 {_fmt_amount_yuan(buy) if buy is not None else '不可考'}"
+            seg += f"/卖 {_fmt_amount_yuan(sell) if sell is not None else '不可考'}）"
         parts.append(seg)
     return "封板大单：" + "；".join(parts) if parts else None
 
@@ -2039,24 +2069,18 @@ def bf_reason_line(entries: list[dict]) -> str | None:
 
 
 def abnormal_price_line(entries: list[dict]) -> str | None:
-    """异动提醒行（2026-11-11 ④）：2030 AbnormalPriceResp 次日涨幅偏离实况。
+    """异动提醒行（2030）：**next_day_zf 口径未钉死，整行暂停渲染**（2026-11-11 实弹值
+    校准阴性）。
 
-    next_day_zf 可读才出该股段（price 族缩放待实弹校准，本行只渲染涨幅百分比，
-    不渲染原始价）；全部缺 → None。实现裁决：独立成行（不并入风险画像行），
-    风险画像行是事件文本，本行是次日实况数值，语义不同。
+    2026-11-11 收盘日档 16/16 样本 price/nextDayPrice/nextDayZf 全缺位（当日异动
+    事件推送只带 stockId+date），比率/百分比与 price 族缩放无对照样本可裁决。旧实现
+    把 raw next_day_zf 直接按百分数渲染（`+X.XX%`）——若上游是比率即伪精度误导
+    （fail-visible：不渲染未裁决口径；AGENTS §1.2-5 展示与结论同步）。恢复条件：
+    下一交易日日档出现 price/next_day_zf 非空样本 → 被动复验钉死口径 → 按钉死口径
+    切派生字段消费（复验路径见 docs/kpl-socket/detail-scaling-verification.md §二）。
+    缺席纪律：raw 仍随 abn_items 落库，本行缺席 = 口径未裁决而非无数据。
     """
-    if not entries:
-        return None
-    parts: list[str] = []
-    for entry in entries:
-        item = (entry or {}).get("item")
-        if not isinstance(item, dict):
-            continue
-        zf = item.get("next_day_zf")
-        if not isinstance(zf, (int, float)) or isinstance(zf, bool):
-            continue
-        parts.append(f"{entry.get('label') or '该股'} 次日 {zf:+.2f}%")
-    return "异动提醒：" + "；".join(parts) if parts else None
+    return None
 
 
 def related_plate_line(entries: list[dict]) -> str | None:
