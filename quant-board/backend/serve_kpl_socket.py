@@ -59,6 +59,12 @@ _LHB_REALTIME = _env_flag("KPL_LHB_REALTIME")
 _ZT_REASON_SUBS = _env_flag("KPL_ZT_REASON_SUBS")
 # 显式关闭 KPL_THEME_SUBS=0（切换需重启进程）；订阅面=涨停池成员自动跟随（2026-11-08 题材库）。
 _THEME_SUBS = _env_flag("KPL_THEME_SUBS")
+# 个股详情四通道订阅（2026-11-11 ④，实弹开火开关）：默认关（纪律：实弹开火需
+# 用户预登记+预算确认，AGENTS §1.2-7）；显式开启 KPL_STOCK_DETAIL_SUBS=1
+# （切换需重启进程）；订阅面=涨停池成员自动跟随（bdo=2014/bf=2202/abn=2030/
+# rplate=2010，频控预算=池成员×4 帧/会话，每 lane 每 tick 1 帧 + 0.3s 拟人停顿）。
+_STOCK_DETAIL_SUBS = os.environ.get("KPL_STOCK_DETAIL_SUBS", "0").strip().lower() in (
+    "1", "true", "on", "yes")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
 _LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
@@ -91,6 +97,7 @@ _service = KplCollectorService(
     daban_lhb=_DABAN_LHB, lhb_realtime=_LHB_REALTIME,
     lhb_realtime_count=_LHB_REALTIME_COUNT,
     zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS,
+    stock_detail_subs=_STOCK_DETAIL_SUBS,
     auth_phase_delay=_AUTH_PHASE_DELAY,
     loop_send_grace_s=float(os.environ.get("KPL_LOOP_SEND_GRACE", "5")),
     # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；
