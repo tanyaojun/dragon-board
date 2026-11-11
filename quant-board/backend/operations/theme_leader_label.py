@@ -395,15 +395,40 @@ def fetch_lhb_facts(date: str) -> dict:
     """龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用，单一源=jev_lhb_ammo.collect_lhb_facts。
 
     与方向线 task-6 同源（禁第二套取数）；失败/未生成均为结构化降级（collect 内部已
-    逐端点捕获，行文由 lhb_line 承担），非 jev 调用、不花 token。挂链 17:30（2026-10-30
-    用户裁决改时）晚于榜生成（约 17:00 盘后），当日事实行当日可得；上游延迟未生成时
-    为结构化空态——行内显式披露，不伪装成「无上榜」。
+    逐端点捕获，行文由 lhb_line 承担），非 jev 调用、不花 token。主榜（HisBeOnTheLHB）
+    生成系统性晚于 17:30 挂链（2026-11-11 实证，约 17:00 生成的是席位榜）：主榜缺席时
+    lhb_line 出 C 席位/机构兜底行（已取得事实不丢弃），doc.lhbState 留痕（A），B 补齐链
+    主榜到达后定向重跑；三源全空才断言「无上榜」，不伪装（§1.2-8 / §5.4）。
     """
     try:
         return collect_lhb_facts(date)
     except Exception as exc:  # noqa: BLE001 — 双端点均异常的兜底（collect 内部已各端点捕获）
         return {"ok": False, "date": date, "degraded": True,
                 "reason": f"fetch_failed: {exc}"}
+
+
+def _lhb_state_payload(facts: dict | None, *, line_rendered: bool) -> dict | None:
+    """A（2026-11-11 用户裁决）：龙虎榜缺席结构化留痕（§1.2-8 落库层 fail-visible）。
+
+    叙事整行缺席不再只活在内存：主榜可用性/端点成功标志/结构化空态/席位机构计数/
+    降级原因/出行状态随 doc 落库，供审计、前端展示与补齐链（B）pending 检测。
+    facts=None（未传入）→ None。
+    """
+    if facts is None:
+        return None
+    f = facts
+    return {
+        "mainAvailable": bool(f.get("groups") or f.get("stocks")),
+        "listOk": bool(f.get("list_ok")),
+        "stockOk": bool(f.get("stock_ok")),
+        "emptyStructured": bool(f.get("empty_structured")),
+        "orderSignCount": int(f.get("order_sign_count") or 0),
+        "seatN": len(f.get("stock_board") or {}),
+        "agencyN": len(f.get("agency") or {}),
+        "degraded": bool(f.get("degraded")),
+        "reason": f.get("reason"),
+        "lineRendered": bool(line_rendered),
+    }
 
 
 def _lhb_codes_roles(codes: list[str], roles_in: list[tuple[str, str | None]]) -> tuple[list[str], dict[str, str]]:
@@ -1202,6 +1227,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
     lhb_codes, lhb_roles = _lhb_codes_roles(
         [str(c) for c in (row.get("boardCodes") or [])],
         [(str(row.get("code") or ""), "待判龙一")])
+    lhb_facts_line = (lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
+                      if lhb_facts is not None else None)
     narrative = build_leader_narrative(
         date=date,
         market_line=market_line,
@@ -1237,8 +1264,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         bid_line=bid_line,
         dt_line=dt_line,
         forecast_line=forecast_line,
-        lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
-                        if lhb_facts is not None else None),
+        lhb_facts_line=lhb_facts_line,
         realtime_lhb_line=realtime_lhb_line,
         rebound_line=rebound_line,
         evidence_block=block["text"],
@@ -1249,6 +1275,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         facts_line=structure_facts_line(row, cycle),
     )
     return {"docKind": DOC_KIND_LEADER, "narrative": narrative, "evidence": block,
+            "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_facts_line is not None),
             "driverCross": {"found": bool(driver_doc),
                             "labelSlot": (driver_doc or {}).get("labelSlot"),
                             "questionSetVersion": (driver_doc or {}).get("questionSetVersion")},
@@ -1290,6 +1317,8 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         [(str(r.get("code") or ""),
           {"main": "主板龙一", "growth": "双创龙一"}.get(r.get("segment"), "龙一"))
          for r in board_rows])
+    lhb_facts_line = (lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
+                      if lhb_facts is not None else None)
     block = digest.build_theme_evidence_block(db, board_name=ref["board"], date=date,
                                               leader_code="",
                                               sealed_codes=sealed or None)
@@ -1314,13 +1343,13 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         popularity_rank_line=popularity_rank_line(reason_entries or []),
         risk_line=risk_profile_line(reason_entries or []),
         forecast_line=forecast_line,
-        lhb_facts_line=(lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles)
-                        if lhb_facts is not None else None),
+        lhb_facts_line=lhb_facts_line,
         realtime_lhb_line=realtime_lhb_line,
         evidence_block=block["text"],
         board=str(ref["board"]),
     )
     return {"docKind": DOC_KIND_SECTOR, "narrative": narrative, "evidence": block,
+            "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_facts_line is not None),
             "driverCross": None,
             "chars": len(narrative),
             "estimatedTokens": estimate_tokens(len(narrative))}
@@ -1392,6 +1421,9 @@ def _label_one(db, col, date: str, built: dict,
             doc["segment"] = row["segment"]
     doc.update({
         "ammoVersion": AMMO_VERSION_THEME_LEADER,
+        # A（2026-11-11 用户裁决）：龙虎榜缺席结构化留痕（叙事整行缺席时审计/补齐链
+        # 唯一可观测源；§1.2-8 落库层 fail-visible）
+        "lhbState": built.get("lhbState"),
         "questionSetVersion": QUESTION_SET_VERSION_THEME_LEADER,
         "questionSetHash": QUESTION_SET_HASH_THEME_LEADER,
         "structure": {k: (built.get("rows") or [built["row"]])[0].get(k) for k in (
@@ -1557,6 +1589,15 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     reasons = fetch_reason_corpus(db, date)
     # 龙虎榜事实（AMMO 2026-10-30a）：一次取数全日共用（与板块强度/直播同哲学）
     lhb_facts = fetch_lhb_facts(date)
+    # A（2026-11-11）：主榜缺席结构化日志（fail-visible；叙事整行缺席按 §1.2-8，
+    # 留痕双保险 = doc.lhbState 落库 + 本日志；补齐链 B 按 lhbState 探测补跑）
+    if not (lhb_facts.get("groups") or lhb_facts.get("stocks")):
+        logger.warning(
+            "lhb_facts 主榜缺席 date=%s list_ok=%s stock_ok=%s empty_structured=%s "
+            "seat_n=%s agency_n=%s reason=%s",
+            date, lhb_facts.get("list_ok"), lhb_facts.get("stock_ok"),
+            lhb_facts.get("empty_structured"), len(lhb_facts.get("stock_board") or {}),
+            len(lhb_facts.get("agency") or {}), lhb_facts.get("reason"))
     # 涨停基因语料（AMMO 2026-11-08a）：一次取全日共用（个股级叙事行，板块级不消费）
     gene_corpus = fetch_gene_corpus(db, date)
     # 封板质量（2026-11-08b / 题集 v16）：同一日档 items 的量价字段，一次取全日共用

@@ -81,7 +81,7 @@ def test_question_set_frozen_hash_and_versions():
     fail-visible）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v16"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-11b"   # 2026-11-11 封板大单元口径化 + 2030 行暂停渲染
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-11c"   # 龙虎榜席位/机构兜底行（C，2026-11-11 用户裁决）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "06604cf47c5c"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读；
@@ -1066,6 +1066,82 @@ def test_lhb_line_groups_fallback_partial_stock_rows():
                       roles={"603278": "待判龙一"})
     assert "待判龙一 大业股份（603278）：偏离 10.02，上榜额 2.40亿" in line
     assert "相关个股 文投控股（600715）：主力净额 1.50亿" in line
+
+
+def test_lhb_line_seat_agency_fallback_main_absent():
+    """C（2026-11-11 用户裁决）：主榜未生成但席位/机构榜已有数据 → 按 code join
+    出兜底事实行，已取得的榜单数据不得丢弃；主力资金/偏离/上榜额/上榜原因属主榜
+    端点字段，缺位不伪装（§4.0）。"""
+    facts = {"ok": False, "list_ok": True, "stock_ok": True,
+             "empty_structured": True, "order_sign_count": 11,
+             "groups": [], "stocks": [],
+             "stock_board": {"603278": {"name": "大业股份", "buy_in": 2.4e8,
+                                         "join_num": 3, "turnover": 12.5}},
+             "agency": {"603278": {"name": "大业股份", "buy_in": -1.1e8,
+                                    "join_num": 2, "turnover": 8.0}}}
+    line = A.lhb_line(facts, codes=["603278"], roles={"603278": "待判龙一"})
+    assert line is not None, "席位/机构榜在手不得整行丢弃"
+    assert line.startswith("龙虎榜：")
+    assert "待判龙一 大业股份（603278）：席位买入 2.40亿；机构净买 -1.10亿（2 家）" in line
+    for banned in ("主力净额", "偏离", "上榜额", "上榜原因"):
+        assert banned not in line, f"主榜端点缺位字段不得伪装：{banned}"
+
+
+def test_lhb_line_agency_only_fallback():
+    """C：只有机构榜命中（席位榜缺席）→ 只列机构净买段，席位段缺席不伪装。"""
+    facts = {"ok": False, "empty_structured": True, "groups": [], "stocks": [],
+             "stock_board": {},
+             "agency": {"603278": {"name": "大业股份", "buy_in": 3e7,
+                                    "join_num": 1, "turnover": 2.0}}}
+    line = A.lhb_line(facts, codes=["603278"])
+    assert "相关个股 大业股份（603278）：机构净买 0.30亿（1 家）" in line
+    assert "席位买入" not in line
+
+
+def test_lhb_line_seat_fallback_when_code_only_in_seats():
+    """C：主榜在场但相关代码只在席位榜 → 兜底 join 出行，不得误称 0 只上榜。"""
+    facts = {**LHB_FACTS, "list_ok": True, "stock_ok": True,
+             "stock_board": {"300001": {"name": "测试股", "buy_in": 5e7,
+                                         "join_num": 1, "turnover": 3.2}},
+             "agency": {}}
+    line = A.lhb_line(facts, codes=["300001"], roles={"300001": "待判龙一"})
+    assert "待判龙一 测试股（300001）：席位买入 0.50亿" in line
+    assert "0 只上榜" not in line
+
+
+def test_lhb_line_verified_absence_requires_seats_empty():
+    """C：「全市场无上榜」是全市场断言——席位/机构榜有数据（即使与本叙事无关）
+    不得出本行；三源全空才出验证后缺席。"""
+    facts = {"ok": False, "list_ok": True, "stock_ok": True,
+             "groups": [], "stocks": [],
+             "stock_board": {"600000": {"name": "X", "buy_in": 1e8,
+                                         "join_num": 1, "turnover": 1.0}},
+             "agency": {}}
+    assert A.lhb_line(facts, codes=["603278"]) is None
+    facts2 = {**facts, "stock_board": {}}
+    assert A.lhb_line(facts2, codes=["603278"]) == "龙虎榜：当日全市场无上榜个股"
+
+
+def test_lhb_line_seat_entry_without_buy_in_is_absent():
+    """C：席位榜条目在场但 buy_in 缺位 → 无可读事实不出行（不伪装 0）。"""
+    facts = {"ok": False, "empty_structured": True, "groups": [], "stocks": [],
+             "stock_board": {"603278": {"name": "大业股份", "buy_in": None,
+                                         "join_num": 3, "turnover": 12.5}},
+             "agency": {}}
+    assert A.lhb_line(facts, codes=["603278"]) is None
+
+
+def test_lhb_line_seat_fallback_order_and_cap():
+    """C：兜底段仍按传入 codes 顺序（龙一优先）与 max_items 截断。"""
+    sb = {f"60000{i}": {"name": f"股{i}", "buy_in": 1e8 * (i + 1),
+                        "join_num": 1, "turnover": 1.0} for i in range(4)}
+    facts = {"ok": False, "empty_structured": True, "groups": [], "stocks": [],
+             "stock_board": sb, "agency": {}}
+    line = A.lhb_line(facts, codes=["600003", "600001", "600002", "600000"],
+                      roles={"600003": "待判龙一"}, max_items=2)
+    assert line.index("600003") < line.index("600001")
+    assert "600002" not in line and "600000" not in line
+    assert "待判龙一" in line
 
 
 def test_lhb_line_matches_leader_first_and_roles():

@@ -219,7 +219,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v16"
 #   格式化，尾条最新态）/ 爆发原因行 / 异动提醒行（zf 口径未钉死整行暂停渲染）/
 #   板块归属行（剔题材热度已知板块防重复）。
 # AMMO_VERSION 随原料合同变更 bump（fetch_reason_corpus 形状 dict[str,str]→dict[str,dict]）。
-AMMO_VERSION_THEME_LEADER = "2026-11-11b"   # 2014 封板大单元口径化（sum→尾条+万/亿格式化）
+AMMO_VERSION_THEME_LEADER = "2026-11-11c"   # 龙虎榜席位/机构兜底行 + 无上榜断言三源全空（C，2026-11-11 用户裁决；题面零改动）
                                             # + 2030 异动提醒行暂停渲染（zf 口径阴性未钉死）
 
 
@@ -1843,13 +1843,17 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
     待判龙一 + 板内封板成员；板块级=双龙一 + 板内封板成员；可带交易所前缀，取后 6 位）；
     `roles` = code(后 6 位) → 身位（如「待判龙一」「主板龙一」），缺省「相关个股」。
 
-    五种结构化状态（§4.0，不伪装、不插值、不给方向结论；2026-11-11 修复丢数据缺陷）：
-    - 取数失败/双端点均不可用/当日分组榜单未生成 → **整行缺席**（AGENTS §1.2-8：
-      缺数据不投喂占位；缺席状态只留 collect_lhb_facts 的结构化降级载荷）；
-    - 双端点均成功且 groups/stocks 全空 → 「当日全市场无上榜个股」（验证后的缺席，
-      一行事实）；注意：个股行端点失败但分组榜单在手**不是**无上榜，不得出本行
-      （2026-11-11 前 ok=True+stocks 空会误称无上榜，把已取得的龙虎榜数据丢弃）；
-    - 榜单已生成但相关个股 0 只上榜 → 显式披露 0 只（事实陈述）；
+    结构化状态（§4.0，不伪装、不插值、不给方向结论；2026-11-11 修复丢数据缺陷 +
+    C 席位/机构兜底，用户裁决）：
+    - 取数失败/双端点均不可用/当日分组榜单未生成且席位机构榜也无命中 → **整行缺席**
+      （AGENTS §1.2-8：缺数据不投喂占位；缺席状态留 collect_lhb_facts 结构化降级载荷
+      + doc.lhbState 落库留痕，A 2026-11-11）；
+    - 主榜缺席但席位/机构榜相关个股命中 → 兜底事实行（C：只列席位买入/机构净买，
+      主力资金/偏离/上榜额/上榜原因属主榜端点字段，缺位不伪装不出；不带全市场计数）；
+    - 双端点均成功且 groups/stocks/席位/机构三源全空 → 「当日全市场无上榜个股」
+      （验证后的缺席，一行事实）；注意：个股行端点失败但分组榜单在手**不是**无上榜，
+      不得出本行（2026-11-11 前 ok=True+stocks 空会误称无上榜，把已取得的龙虎榜数据丢弃）；
+    - 榜单已生成但相关个股 0 只上榜（含席位/机构榜也无命中）→ 显式披露 0 只（事实陈述）；
     - 有相关上榜 → 按传入 codes 顺序（龙一优先）列主力净额/买/卖（元→亿）与上榜原因。
     个股行缺位时分组榜单兜底（2026-11-11）：相关代码不在 stocks 时从 groups join
     （偏离/上榜额/分组原因，纯事实；主力资金字段个股行端点缺位，段内不伪装不出）。
@@ -1877,31 +1881,44 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
             k = str(s.get("code") or "")[-6:]
             if k and k not in groups_by_code:
                 groups_by_code[k] = {**s, "group_reason": g_reason}
-    if not stocks and not groups_by_code:
-        # 榜单未生成 → 整行缺席；双端点均成功且全空 → 验证后的缺席（一行事实）；
-        # 取数失败 → 整行缺席（缺席状态只留 collect_lhb_facts 结构化降级载荷）
-        if f.get("empty_structured"):
-            return None
-        if f.get("list_ok") and f.get("stock_ok"):
-            return head + "当日全市场无上榜个股"
-        return None
+    # 席位/机构兜底（C，2026-11-11 用户裁决）：主榜未生成/相关代码只在席位榜时，
+    # 已取得的 GetStockList/GetAgencyListV2 事实不得丢弃——按 code join 出兜底段；
+    # buy_in 缺位 = 无可读事实，不算命中（不伪装 0）
+    sb = f.get("stock_board") or {}
+    ag = f.get("agency") or {}
+
+    def _seat_facts(k: str) -> tuple[dict | None, dict | None]:
+        s, a = sb.get(k), ag.get(k)
+        return (s if isinstance(s, dict) and s.get("buy_in") is not None else None,
+                a if isinstance(a, dict) and a.get("buy_in") is not None else None)
+
     by_code = {str(s.get("code") or "")[-6:]: s for s in stocks if str(s.get("code") or "")[-6:]}
     ordered: list[str] = []
     for c in (codes or []):
         k = str(c or "")[-6:]
-        if k and (k in by_code or k in groups_by_code) and k not in ordered:
+        if k and k not in ordered and (k in by_code or k in groups_by_code
+                                       or any(_seat_facts(k))):
             ordered.append(k)
-    if not ordered:
-        total = len(set(by_code) | set(groups_by_code))
-        return (head + f"当日全市场上榜 {total} 只，"
-                "本叙事相关个股 0 只上榜")
 
     def _seg(k: str) -> str:
         s = by_code.get(k)
         role = (roles or {}).get(k, "相关个股")
+        sb_e, ag_e = _seat_facts(k)
         if s is None:
+            g = groups_by_code.get(k)
+            if g is None:
+                # 席位/机构兜底段（C）：只列已取得的席位事实；主力资金/偏离/上榜额/
+                # 上榜原因属主榜端点字段，缺位不伪装不出（§4.0）
+                name = str(((sb_e or ag_e) or {}).get("name") or "") or k
+                segs: list[str] = []
+                if sb_e is not None:
+                    segs.append(f"席位买入 {_fmt_yi(sb_e.get('buy_in'))}")
+                if ag_e is not None:
+                    jn = ag_e.get("join_num")
+                    segs.append(f"机构净买 {_fmt_yi(ag_e.get('buy_in'))}"
+                                + (f"（{jn} 家）" if jn else ""))
+                return f"{role} {name}（{k}）：" + "；".join(segs)
             # 分组榜单兜底段：只有已取得的事实，主力资金段不出（§4.0 不伪装）
-            g = groups_by_code[k]
             name = str(g.get("name") or "") or k
             dev = g.get("deviation")
             seg = (f"{role} {name}（{k}）："
@@ -1910,23 +1927,37 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
             reason = str(g.get("group_reason") or "").strip()
             if reason:
                 seg += f"，上榜原因 {reason}"
-            return seg
-        name = str(s.get("name") or "") or k
-        buy, sell = s.get("main_buy_yuan"), s.get("main_sell_yuan")
-        seg = f"{role} {name}（{k}）：主力净额 {_fmt_yi(s.get('main_net_yuan'))}"
-        if buy is not None or sell is not None:
-            seg += f"（买 {_fmt_yi(buy)} / 卖 {_fmt_yi(sell)}）"
-        seg += f"，上榜原因 {str(s.get('reason') or '').strip() or '--'}"
+        else:
+            name = str(s.get("name") or "") or k
+            buy, sell = s.get("main_buy_yuan"), s.get("main_sell_yuan")
+            seg = f"{role} {name}（{k}）：主力净额 {_fmt_yi(s.get('main_net_yuan'))}"
+            if buy is not None or sell is not None:
+                seg += f"（买 {_fmt_yi(buy)} / 卖 {_fmt_yi(sell)}）"
+            seg += f"，上榜原因 {str(s.get('reason') or '').strip() or '--'}"
         # 席位/机构扩维（2026-10-30c）：不在榜/端点失败时缺席，不伪装零（§4.0）
-        sb = ((facts or {}).get("stock_board") or {}).get(k)
-        if sb and sb.get("buy_in") is not None:
-            seg += f"；席位买入 {_fmt_yi(sb.get('buy_in'))}"
-        ag = ((facts or {}).get("agency") or {}).get(k)
-        if ag and ag.get("buy_in") is not None:
-            jn = ag.get("join_num")
-            seg += f"；机构净买 {_fmt_yi(ag.get('buy_in'))}" + (f"（{jn} 家）" if jn else "")
+        if sb_e is not None:
+            seg += f"；席位买入 {_fmt_yi(sb_e.get('buy_in'))}"
+        if ag_e is not None:
+            jn = ag_e.get("join_num")
+            seg += f"；机构净买 {_fmt_yi(ag_e.get('buy_in'))}" + (f"（{jn} 家）" if jn else "")
         return seg
 
+    if not stocks and not groups_by_code:
+        if ordered:
+            # 主榜缺席但席位/机构榜命中 → 兜底事实行（C，不带全市场计数断言）
+            return head + "；".join(_seg(k) for k in ordered[:max_items])
+        # 榜单未生成/取数失败 → 整行缺席（缺席状态留 collect_lhb_facts 结构化降级
+        # 载荷 + doc.lhbState 落库留痕，A 2026-11-11）；
+        # 「全市场无上榜」须三源全空（分组/个股/席位机构，C）
+        if f.get("empty_structured"):
+            return None
+        if f.get("list_ok") and f.get("stock_ok") and not sb and not ag:
+            return head + "当日全市场无上榜个股"
+        return None
+    if not ordered:
+        total = len(set(by_code) | set(groups_by_code))
+        return (head + f"当日全市场上榜 {total} 只，"
+                "本叙事相关个股 0 只上榜")
     parts = [_seg(k) for k in ordered[:max_items]]
     return head + "；".join(parts)
 

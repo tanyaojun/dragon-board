@@ -271,6 +271,36 @@
 可取 → 可回补更早事件（离线重放样本更多）；不可取 → 事件语料只有首屏窗口
 （过去 ≈2 周 + 未来 ≈2 周），题材层只能**向前**积累样本。留作冷却后单发探测项。
 
+### 5.4 龙虎榜补齐包络（B，2026-11-11 用户裁决预登记）
+
+**背景（实测证据链）**：HisBeOnTheLHB 交易所分组榜生成时点系统性晚于 17:30 投喂挂链：
+
+| 观测 | 结果 |
+| --- | --- |
+| 11-10 17:35 挂链 | 18/22 doc 无龙虎榜行（主榜结构化空态） |
+| 11-11 07:22 重跑 11-10 | 主榜已完整（96 行/12 组，dropped=0） |
+| 11-11 17:34~19:05 挂链 + 19:42/20:25 探针 | 双端点 errcode=0、info=[]、orderSign=11（未生成）；席位榜 75 条/机构榜 44 条已在 |
+| 交易时段门控（9b9d9142） | 只管 socket 采集；HTTP 链无时段过滤（19:42 实测请求正常），与门控无关 |
+
+**机制**：`run_theme_leader_lhb_backfill_once`（schedule.py），scheduler 21:30 当日 +
+07:10 次晨两时点（`_THEME_LEADER_LHB_BACKFILL_SLOTS`），lookback=5 交易日自愈：
+
+1. pending 检测：doc `lhbState.mainAvailable=False`（A 留痕）；legacy doc（无 lhbState）
+   按叙事缺「龙虎榜：」行判；只动 status=ok；
+2. 零 token 探针：`collect_lhb_facts(day)` 每 pending 日一次（4 HTTP 端点，多日间隔 3s，
+   上游分钟级限频先例，红线 9）；无 pending 日不探针；
+3. 重跑条件：主榜到达；legacy doc 另席位/机构榜到达也触发（C 兜底行是新语料）；
+   已有 lhbState 的 doc 席位-only 增量不触发（防双烧）；
+4. 定向重跑：pending 龙头 `--codes` + 独立 pending 板块 `--boards`（≤2 子进程，
+   `--force --confirm-budget`；outcome* 事实字段由 runner 原样带走）。
+
+**预算包络（用户 2026-11-11 批准「A+B+C 都修，补跑 pool 池龙虎榜数据」）**：每 pending 日
+≤1 个日包络（2026-11-11 实测：22 doc/日 ≈112k tokens，input+output；旧 ≈29k 为 13 龙头
+旧口径已作废）；探针缺席零消耗；主榜晚于 21:30
+生成时由次晨 07:10 时点承接（同一日最多一次补齐重跑）。席位兜底先行 + 主榜后补的
+双跑场景（如 11-11 人工补跑）属用户显式批准的一次性成本，不进入每日常态包络。
+开关：`THEME_LEADER_LHB_BACKFILL_ENABLED=0` 可关（随投喂总开关门控）。
+
 ### 5.2 仍缺什么（不自欺）
 
 | 缺项 | 影响 | 处理 |
@@ -1424,6 +1454,11 @@ hash、破坏跨代可比，本轮不动，须单独立项换代替换。
 **动机**：AMMO 2026-10-30a 龙虎榜事实行当日可得——龙虎榜榜约 17:00 盘后生成，旧
 16:20 挂链时点常拿不到当日榜（结构化空态）；改 17:30 后当日龙虎榜事实行直接进当日
 前瞻叙事。
+
+**2026-11-11 推翻注**：「≈17:00 生成」假设对 HisBeOnTheLHB 主榜不成立——11-05/09/10/11
+四日实证 17:35 挂链从未拿到主榜，11-09 21:37 重跑仍空；约 17:00 生成的是席位榜
+GetStockList。主榜生成窗口 (21:37, 次晨 07:22)，实测与补齐机制见 §5.4 + kpl-socket
+README；当日龙虎榜行可得性改由 C 席位/机构兜底 + B 晨间补齐保证，不再依赖挂链时点。
 
 **改动**（单一事实源 `backend/snapshot_collector/scheduler.py::_THEME_LEADER_LABEL_AT`，
 16:20 → 17:30）：同步更新 `operations/schedule.py::run_theme_leader_label_once` docstring、

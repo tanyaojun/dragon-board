@@ -178,6 +178,15 @@ def test_hygiene_lhb_line_all_variants():
     _assert_absent(A.lhb_line(None, codes=["601188"]), "lhb_line(无数据)")
     _assert_clean(A.lhb_line(facts, codes=["300001"]), "lhb_line(相关个股 0 只，验证后缺席)")
     _assert_clean(A.lhb_line(facts, codes=["601188"]), "lhb_line(上榜)")
+    # C（2026-11-11）：席位/机构兜底行只列已取得事实，无开发注释
+    seat_facts = {"ok": False, "list_ok": True, "stock_ok": True,
+                  "empty_structured": True, "groups": [], "stocks": [],
+                  "stock_board": {"601188": {"name": "龙江交通", "buy_in": 2.4e8,
+                                              "join_num": 3, "turnover": 12.5}},
+                  "agency": {"601188": {"name": "龙江交通", "buy_in": -1.1e8,
+                                         "join_num": 2, "turnover": 8.0}}}
+    _assert_clean(A.lhb_line(seat_facts, codes=["601188"]),
+                  "lhb_line(席位/机构兜底)")
 
 
 def test_hygiene_reason_and_driver_cross_lines():

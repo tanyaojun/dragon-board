@@ -1076,6 +1076,16 @@ DabanPoolArchiver 循环在涨停池通道后执行，与 gene/notice 同款并�
   `st=300` 翻满（实测 10-29 st=300 饱和：个股 129 行/分组 20 组去重 129，两端点一致；
   st=100 时个股端点被截到 100 行）；`Count` 字段≠info 行数（同日 61 vs 129），不可当
   总数用；`st` 必须进缓存 key。
+  **生成时点实测（2026-11-11 登记，推翻「约 17:00 盘后生成」旧假设）**：11-10/11-11
+  两日 17:30~19:42 双端点均 errcode=0 但 info=[]（orderSign=11 结构化空态），次晨
+  07:22 已完整（11-10：96 行/12 组）——交易所分组榜生成系统性晚于 17:30 投喂挂链；
+  约 17:00 生成的是席位榜 GetStockList（11-11 19:42 已有 75 条）/机构榜 GetAgencyListV2
+  （44 条），两源时点不同不得混同。应对（2026-11-11 用户裁决 A+B+C）：主榜缺席时
+  席位/机构命中出兜底事实行（C）；doc.lhbState 结构化留痕（A）；21:30 当日 + 07:10
+  次晨零 token 探针补齐链（B，`run_theme_leader_lhb_backfill_once`，lookback=5 自愈，
+  预登记 theme-leader-nextday-preregistration §5.4）。**交易时段门控（9b9d9142）只管
+  socket 采集（09:15-11:30/13:00-15:35），本 HTTP 链与席位/机构榜 HTTP 链均无时段过滤**
+  （19:42 实测请求正常发出）——「17:00 后没采到龙虎榜」与门控无关，是上游未生成。
 - **营业部个股榜/机构榜 HTTP**（`kpl_lhb_sale.py`，2026-10-30 开火实测接入）：同域同
   参数合同——`a=GetStockList|GetAgencyListV2&c=LongHuBang&Time=YYYY-MM-DD&Index=0&
   Type=0&STAT_SDK_TYPE=500`（一页全量，实测 10-29：个股榜 69 行/机构榜 42 行）。

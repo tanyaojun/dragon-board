@@ -206,7 +206,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v16"
     assert doc["questionSetHash"] == "06604cf47c5c"   # v16 封板质量判据（v1-v15 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-11b"   # 2026-11-11 实弹值校准（2014 元口径/2030 暂停）
+    assert doc["ammoVersion"] == "2026-11-11c"   # 龙虎榜席位/机构兜底行（C，2026-11-11 用户裁决）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -2032,3 +2032,57 @@ def test_run_feeds_20261111_new_lines(env, monkeypatch):
     sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
     assert sector_docs and any("热度排名：" in d["narrative"] for d in sector_docs), \
         "板块级消费热度排名/风险画像（双龙一并一行）"
+
+
+def test_build_one_lhb_state_payload():
+    """A（2026-11-11 用户裁决）：lhbState 结构化缺席留痕——主榜可用性/端点标志/
+    席位机构计数/降级原因/出行状态随 doc 落库，缺席不再只活在内存（§1.2-8 落库层
+    fail-visible）。"""
+    facts = {"ok": True, "list_ok": True, "stock_ok": False, "degraded": True,
+             "reason": "lhb_stock_fetch_failed: boom",
+             "groups": [{"reason": "日涨幅偏离", "stocks": [
+                 {"code": "603278", "name": "大业股份",
+                  "deviation": 10.0, "amount_yuan": 2e8}]}],
+             "stocks": [], "stock_board": {"603278": {"buy_in": 1e8}},
+             "agency": {}, "empty_structured": False, "order_sign_count": 0}
+    built = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0], boardCodes=["603278"]),
+                        BASELINE, market_line="涨停 46 家", lhb_facts=facts)
+    st = built["lhbState"]
+    assert st["mainAvailable"] is True and st["listOk"] is True and st["stockOk"] is False
+    assert st["degraded"] is True and st["reason"] == "lhb_stock_fetch_failed: boom"
+    assert st["seatN"] == 1 and st["agencyN"] == 0 and st["lineRendered"] is True
+    # facts=None → lhbState=None（旧行为：不出行）
+    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                         market_line="涨停 46 家")
+    assert built0["lhbState"] is None
+    # 主榜缺席（结构化空态）→ mainAvailable=False，行缺席但留痕在
+    built_e = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                          market_line="涨停 46 家",
+                          lhb_facts={"ok": False, "list_ok": True, "stock_ok": True,
+                                     "empty_structured": True, "order_sign_count": 11,
+                                     "groups": [], "stocks": [],
+                                     "stock_board": {}, "agency": {}})
+    ste = built_e["lhbState"]
+    assert ste["mainAvailable"] is False and ste["emptyStructured"] is True
+    assert ste["orderSignCount"] == 11 and ste["lineRendered"] is False
+    assert "龙虎榜" not in built_e["narrative"]
+    # 板块级同留痕
+    built_s = L.build_sector_one(FakeDb(), "2026-10-19",
+                                 [dict(ROWS[0], segment="main", boardCodes=["603278"])],
+                                 BASELINE, market_line="涨停 46 家", lhb_facts=facts)
+    assert built_s["lhbState"]["mainAvailable"] is True
+
+
+def test_run_persists_lhb_state(env):
+    """A：lhbState 随 _label_one 落 doc（个股/板块两级）；取数降级原因可审计。"""
+    calls, db = env
+    out = L.run("2026-10-19", confirm_budget=True)
+    assert out["ok"]
+    docs = db[L.COLLECTION].docs
+    assert docs, "应有 doc 落库"
+    for d in docs.values():
+        st = d.get("lhbState")
+        assert isinstance(st, dict), f"{d['_id']} 缺 lhbState 留痕"
+        assert st["mainAvailable"] is False
+        assert st["reason"] == "test_disabled"
+        assert st["lineRendered"] is False

@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,13 @@ _KPL_COLLECT_TIMEOUT_SECONDS = 480  # 最坏 41 调用×(3s 间隔+RTT)+20s 退�
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
 _THEME_LEADER_RESULT_MARKER = "THEME_LEADER_RESULT_JSON:"   # 子进程结果行标记（机读接口，2026-11-02）
 _THEME_LEADER_SETTLE_TIMEOUT_SECONDS = 300   # 结局回填：纯读库+写字段
+# 龙虎榜补齐（B，2026-11-11 用户裁决）：HisBeOnTheLHB 生成时点系统性晚于 17:30 挂链
+# （11-10/11-11 实测：17:30~19:42 仍结构化空态，次晨已完整）——21:30 当日 + 07:10 次晨
+# 两时点，零 token 探针 + 有新数据才定向重跑；lookback 自愈。
+_LHB_BACKFILL_LOOKBACK = 5
+# 上游分钟级限频先例（kpl_lhb_history 文档串，红线 9）：多日探针间留间隔；
+# 预算 = 4 端点/探针日 × 有 pending 的日数（无 pending 日不探针），仅 21:30/07:10 两时点
+_LHB_BACKFILL_PROBE_GAP_S = 3.0
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
 
@@ -385,6 +393,31 @@ def theme_leader_label_enabled() -> bool:
     return os.environ.get("THEME_LEADER_LABEL_ENABLED", "1") != "0"
 
 
+def _parse_theme_leader_stdout(stdout: str | None) -> tuple[dict | None, str]:
+    """结果 JSON 提取（2026-11-02 修复；2026-11-11 抽出供补齐链复用）。
+
+    子进程以 `THEME_LEADER_RESULT_JSON:` 标记行输出结果（单行）；旧逻辑「首个 { 截取」
+    会被 stdout 前部的降级披露行（P2-6，含 Python dict 单引号文本）截中 → parse_failed
+    → 结局回填被整体跳过（10-29/10-30 两日结局漏回填的根因）。兼容回退：从后往前
+    找首行可解析 dict。
+    """
+    result = None
+    parse_error = "result JSON line not found in stdout"
+    for line in reversed((stdout or "").splitlines()):
+        cand = line.strip()
+        if cand.startswith(_THEME_LEADER_RESULT_MARKER):
+            cand = cand[len(_THEME_LEADER_RESULT_MARKER):].strip()
+        if not cand.startswith("{"):
+            continue
+        try:
+            result = json.loads(cand)
+            break
+        except json.JSONDecodeError as exc:
+            parse_error = str(exc)
+            continue
+    return result, parse_error
+
+
 def run_theme_leader_label_once(today: str | None = None, *,
                                 dry_run: bool = False) -> dict[str, Any]:
     """题材层「板块龙头隔日连板」投喂（17:30 调度，2026-10-20 挂链；
@@ -397,11 +430,13 @@ def run_theme_leader_label_once(today: str | None = None, *,
     门控：开关（`THEME_LEADER_LABEL_ENABLED`）→ 交易日（非抛错日历：bridge 宕机不丢一天）→
     子进程自身幂等（`_id={date}:{code}` 已 `status=ok` 跳过，重跑不重复烧 token）。
     时点 17:30：晚于 16:10 的题材语料刷新（当日晚于收盘的催化正文先进库）、15:35 收盘
-    名单采集与龙虎榜榜生成（约 17:00 盘后），当日龙虎榜事实行（AMMO 2026-10-30a）当日可得；
-    15:35 名单完整性由 17:00 盘后链预检 run_jiuyan_preflight 补齐保障（2026-11-04）。
+    名单采集；15:35 名单完整性由 17:00 盘后链预检 run_jiuyan_preflight 补齐保障（2026-11-04）。
+    龙虎榜主榜（HisBeOnTheLHB）生成系统性晚于 17:30（2026-11-11 实证：17:30~21:37 仍空，
+    次晨已完整；约 17:00 生成的是席位榜）——当日主榜事实行由 C 席位/机构兜底 + B 补齐链
+    （run_theme_leader_lhb_backfill_once，21:30/07:10）保障，不再依赖挂链时点（§5.4）。
 
-    预算语义（§1.2-7）：本步属**预登记日包络**下的常态挂链（用户已批准 ≈29k tokens/交易日），
-    故直接带 `--confirm-budget`；无包络的路必须走 CLI 人工批准。
+    预算语义（§1.2-7）：本步属**预登记日包络**下的常态挂链（2026-11-11 实测 22 doc/日
+    ≈112k tokens；旧 ≈29k 为 13 龙头旧口径），故直接带 `--confirm-budget`；无包络的路必须走 CLI 人工批准。
 
     advisory 语义：失败/跳过不翻转调用方整体 ok。
     """
@@ -434,24 +469,8 @@ def run_theme_leader_label_once(today: str | None = None, *,
         return {"ok": False, "date": today,
                 "error": {"code": "theme_leader_failed",
                           "message": (proc.stderr or proc.stdout or "")[-400:]}}
-    # 结果 JSON 提取（2026-11-02 修复）：子进程以 `THEME_LEADER_RESULT_JSON:` 标记行
-    # 输出结果（单行）；旧逻辑「首个 { 截取」会被 stdout 前部的降级披露行（P2-6，
-    # 含 Python dict 单引号文本）截中 → parse_failed → 结局回填被整体跳过
-    # （10-29/10-30 两日结局漏回填的根因）。兼容回退：从后往前找首行可解析 dict。
-    result = None
-    parse_error = "result JSON line not found in stdout"
-    for line in reversed((proc.stdout or "").splitlines()):
-        cand = line.strip()
-        if cand.startswith(_THEME_LEADER_RESULT_MARKER):
-            cand = cand[len(_THEME_LEADER_RESULT_MARKER):].strip()
-        if not cand.startswith("{"):
-            continue
-        try:
-            result = json.loads(cand)
-            break
-        except json.JSONDecodeError as exc:
-            parse_error = str(exc)
-            continue
+    # 结果 JSON 提取（2026-11-02 修复；2026-11-11 抽出 _parse_theme_leader_stdout 复用）
+    result, parse_error = _parse_theme_leader_stdout(proc.stdout)
     if result is None:
         return {"ok": False, "date": today,
                 "error": {"code": "theme_leader_parse_failed", "message": parse_error}}
@@ -531,6 +550,174 @@ def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict
     except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
         results.append({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
     return results
+
+
+def theme_leader_lhb_backfill_enabled() -> bool:
+    """龙虎榜补齐开关（B，2026-11-11 用户裁决；默认开，随投喂总开关门控）。"""
+    return os.environ.get("THEME_LEADER_LHB_BACKFILL_ENABLED", "1") != "0"
+
+
+def run_theme_leader_lhb_backfill_once(today: str | None = None, *,
+                                       lookback: int = _LHB_BACKFILL_LOOKBACK,
+                                       dry_run: bool = False) -> dict[str, Any]:
+    """龙虎榜语料补齐（B，2026-11-11 用户裁决；scheduler 21:30 当日 + 07:10 次晨）。
+
+    背景：HisBeOnTheLHB 交易所分组榜生成时点系统性晚于 17:30 挂链（11-10/11-11
+    实测：19:42 仍结构化空态，次晨 07:22 已完整）——17:30 链拿不到主榜，按 §1.2-8
+    整行缺席。本链 = 零 token 探针 + 有新数据才定向重跑：
+    - pending 检测：doc.lhbState.mainAvailable=False（A 留痕）；legacy doc（无 lhbState）
+      按叙事缺「龙虎榜：」行判；**status=degraded 无条件 pending**（调用失败档需重标，
+      含补齐自身失败留下的档——否则失败重跑把 ok 档写成 degraded 后永久搁浅）；
+    - 探针：collect_lhb_facts(day) 每 pending 日一次（4 HTTP 端点，30s TTL；多日间隔
+      _LHB_BACKFILL_PROBE_GAP_S，上游分钟级限频先例，红线 9）；无 pending 日不探针；
+    - 重跑条件：主榜到达（groups/stocks 非空）；legacy doc 另席位/机构榜到达也触发
+      （C 兜底行对它是新语料）；已有 lhbState 的 doc 席位-only 增量**不触发**
+      （兜底行可能已出，等主榜到达一次补齐，防双烧 token）；degraded pending 无条件
+      触发（修复路径；通道挂时 runner 零 usage 快速中止不烧 token，但会把首 2 档写成
+      degraded——故通道中止后本次调用不再发后续子进程，下一时点再试）；
+    - 定向重跑：pending 龙头 --codes + 独立 pending 板块 --boards（≤2 子进程，
+      --force --confirm-budget；codes 链顺带重建其板别 sector doc，板粒度；
+      outcome* 事实字段由 runner 原样带走）；
+    - 预算（§1.2-7）：重跑属 2026-11-11 用户裁决补齐包络（每 pending 日 ≤1 日包络，
+      探针缺席零消耗）；预登记见 theme-leader-nextday-preregistration §5.4。
+    自愈：lookback 个交易日，任一时点失败/缺席由后续时点自动补（与结局回填同哲学）。
+    """
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    if not theme_leader_label_enabled() or not theme_leader_lhb_backfill_enabled():
+        return {"ok": True, "skipped": True, "reason": "disabled", "date": today}
+    db = repository_factory.get_runtime_mongodb_database()
+    from backend.operations.theme_leader_baseline import trading_dates
+    try:
+        days = [d for d in trading_dates(db, "2000-01-01", today) if d <= today]
+    except Exception:  # noqa: BLE001 — advisory：日历失败退回仅今日，不翻转整链
+        days = []
+    if today not in days:
+        try:
+            trading, _src = is_trading_day_cached(
+                datetime.strptime(today, "%Y-%m-%d").date())
+        except Exception:  # noqa: BLE001
+            trading = False
+        if trading:
+            days.append(today)
+    days = sorted(set(days))[-lookback:]
+    col = db["hotlist_jev_theme_leader_labels"]
+    from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
+    out_days: list[dict[str, Any]] = []
+    tokens_total = 0
+    all_ok = True
+    probed = False
+    for day in days:
+        docs = [d for d in col.find({"tradingDate": day})
+                if d.get("status") in ("ok", "degraded")]
+        pending, legacy, degraded = [], [], []
+        for d in docs:
+            if d.get("status") == "degraded":
+                pending.append(d)
+                degraded.append(d)
+                continue
+            st = d.get("lhbState")
+            if isinstance(st, dict):
+                if not st.get("mainAvailable"):
+                    pending.append(d)
+            elif "龙虎榜：" not in (d.get("narrative") or ""):
+                pending.append(d)
+                legacy.append(d)
+        if not pending:
+            out_days.append({"date": day, "pending": 0, "action": "skip",
+                             "skipReason": "no_pending"})
+            continue
+        if probed:
+            time.sleep(_LHB_BACKFILL_PROBE_GAP_S)   # 限频间隔（红线 9）
+        probed = True
+        try:
+            facts = collect_lhb_facts(day)
+        except Exception as exc:  # noqa: BLE001 — 探针失败结构化跳过，下一时点补
+            out_days.append({"date": day, "pending": len(pending),
+                             "pendingLegacy": len(legacy), "action": "skip",
+                             "skipReason": f"probe_failed: {type(exc).__name__}: {exc}"})
+            continue
+        main_now = bool(facts.get("groups") or facts.get("stocks"))
+        seat_now = bool(facts.get("stock_board") or facts.get("agency"))
+        probe = {"mainAvailable": main_now,
+                 "seatN": len(facts.get("stock_board") or {}),
+                 "agencyN": len(facts.get("agency") or {}),
+                 "listOk": bool(facts.get("list_ok")),
+                 "stockOk": bool(facts.get("stock_ok")),
+                 "emptyStructured": bool(facts.get("empty_structured")),
+                 "reason": facts.get("reason")}
+        need_rerun = main_now or (bool(legacy) and seat_now) or bool(degraded)
+        if not need_rerun:
+            out_days.append({"date": day, "pending": len(pending),
+                             "pendingLegacy": len(legacy), "probe": probe,
+                             "action": "skip", "skipReason": "lhb_data_not_available"})
+            continue
+        if dry_run:
+            out_days.append({"date": day, "pending": len(pending),
+                             "pendingLegacy": len(legacy), "probe": probe,
+                             "action": "would_rerun"})
+            continue
+        # 定向重跑：pending 龙头（--codes，顺带重建其板别 sector doc）+
+        # 独立 pending 板块（--boards，codes 链未覆盖的板别）
+        leader_codes = sorted({str(d["code"]) for d in pending
+                               if d.get("docKind") == "leader" and d.get("code")})
+        covered_boards = {str(d["board"]) for d in pending
+                          if d.get("docKind") == "leader" and d.get("board")}
+        sector_boards = sorted({str(d["board"]) for d in pending
+                                if d.get("docKind") == "sector" and d.get("board")}
+                               - covered_boards)
+        extra_runs: list[list[str]] = []
+        if leader_codes:
+            extra_runs.append(["--codes", ",".join(leader_codes)])
+        if sector_boards:
+            extra_runs.append(["--boards", ",".join(sector_boards)])
+        if not extra_runs:
+            extra_runs.append([])   # 防御：pending 无 code/board（异常形状）→ 全日重跑
+        runs: list[dict[str, Any]] = []
+        channel_down = False
+        for extra in extra_runs:
+            try:
+                proc = subprocess.run(
+                    [sys.executable, "-m", "backend.operations.theme_leader_label",
+                     "--date", day, "--force", "--confirm-budget", *extra],
+                    cwd=str(Path(__file__).resolve().parents[2]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=_THEME_LEADER_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                runs.append({"ok": False, "args": extra,
+                             "error": f"timeout {_THEME_LEADER_TIMEOUT_SECONDS}s"})
+                all_ok = False
+                continue
+            if proc.returncode != 0:
+                runs.append({"ok": False, "args": extra,
+                             "error": (proc.stderr or proc.stdout or "")[-400:]})
+                all_ok = False
+                continue
+            result, parse_error = _parse_theme_leader_stdout(proc.stdout)
+            if result is None:
+                runs.append({"ok": False, "args": extra, "error": parse_error})
+                all_ok = False
+                continue
+            used = int(result.get("tokensUsed") or 0)
+            tokens_total += used
+            runs.append({"ok": bool(result.get("ok")), "args": extra,
+                         "labeled": result.get("labeled"), "tokensUsed": used,
+                         **({"aborted": result["aborted"]} if result.get("aborted") else {})})
+            if not result.get("ok"):
+                all_ok = False
+            if result.get("aborted") == "channel_unreachable":
+                # 通道挂：零 usage 快速中止已把首 2 档写 degraded——不再发后续子进程
+                # （避免逐日扩散降级），下一时点探针+重跑自愈
+                channel_down = True
+                break
+        out_days.append({"date": day, "pending": len(pending),
+                         "pendingLegacy": len(legacy), "probe": probe,
+                         "action": "rerun", "runs": runs})
+        if channel_down:
+            for rest in days[days.index(day) + 1:]:
+                out_days.append({"date": rest, "action": "skip",
+                                 "skipReason": "channel_unreachable_abort"})
+            break
+    return {"ok": all_ok, "date": today, "days": out_days, "tokensUsed": tokens_total}
 
 
 def run_theme_corpus_collect_once(today: str | None = None, *,
