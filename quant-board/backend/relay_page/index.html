@@ -530,6 +530,18 @@
       </div>
     </div>
 
+    <!-- ⑧ 市场情绪周期（rv-cycle，第4课 P2）：确定性事件流+状态机，单源 analysis/hotlist/market_cycle；
+        预登记 docs/hotlist-jev/market-cycle-preregistration-20261112.md。
+        锚=市场空间龙一（v12 全市场）+空间天花板；输入=事件流 E1–E4，参照并列无预设权威（裁决1A）。 -->
+    <div class="rv" id="rv-cycle">
+      <div class="card" style="margin-top:18px">
+        <div id="cycleHead"></div>
+        <div class="tbl-h" style="margin-top:10px">市场情绪监控表（第4课核心工具：连板梯队天花板 + 高位龙一命运逐日记录）</div>
+        <div id="cycleTable"></div>
+        <div id="cycleHint" style="margin-top:8px;color:var(--muted2);font-size:12px"></div>
+      </div>
+    </div>
+
     <!-- ② 钱效分带 -->
     <!-- ③ 分带观察（2026-10-18 用户裁决：钱效分带 + 毒带观察 + 分带实测 三页合并） -->
     <div class="rv" id="rv-bands">
@@ -922,6 +934,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayPage: 1,   // 连板情绪表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
+  cycleData: null,   // 市场情绪周期（rv-cycle，第4课 P2）：单日文档 + 近 N 日监控序列
   labelSort: { key: 'rank', dir: 1 },
   diebanSort: { key: 'pctChange', dir: 1 },
   riseSort: { key: 'pctChange', dir: -1 } };   // 上涨复盘默认涨幅最高在前（下跌复盘默认最弱在前）
@@ -1389,6 +1402,7 @@ async function loadAll(){
   renderRelayTab(); renderLabels(); renderDieban(); renderRise();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
+  cycleFetch(date);   // 市场情绪周期（rv-cycle 子视图，第4课 P2）：同上
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -2442,6 +2456,89 @@ const NODE_TIP = {
 const NODE_STATE_CN = { sealed: '续板', broken: '断板', suspended: '停牌',
                         unknown: '不可考', none: '昨日无龙头' };
 let _nodesSeq = 0;
+// ── 市场情绪周期（rv-cycle，第4课 P2）：确定性事件流+状态机，零 token ──
+const CYCLE_STATE_CN = { loss: '亏钱', ice: '冰点', wzs: '弱转强', gain: '赚钱' };
+const CYCLE_STATE_CLS = { loss: 'b-red', ice: 'b-blue', wzs: 'b-amber', gain: 'b-green' };
+const CYCLE_EV_MARK = { spaceBreakthrough: '↑突破', spaceCompress: '↓压缩',
+                        highCollapse: '✗崩塌', highTolerance: '✓宽容' };
+function cycleStateBadge(s){
+  return s ? `<span class="badge ${CYCLE_STATE_CLS[s] || 'b-gray'}">${esc(CYCLE_STATE_CN[s] || s)}</span>` : '—';
+}
+function cycleAnchorCell(a){
+  // 龙一命运徽章只看自身 leaderSealedToday（封/断）；缺档显—（fail-visible 不伪造）
+  if (!a || !a.code) return '<span style="color:var(--muted2)">—</span>';
+  const st = a.leaderSealedToday === true ? ' <span class="badge b-green">封</span>'
+    : a.leaderSealedToday === false ? ' <span class="badge b-red">断</span>' : '';
+  return esc(a.name || a.code) + st;
+}
+let _cycleSeq = 0;
+async function cycleFetch(date){
+  if (!STATE.series || !STATE.series.length) return;   // 序列未定（首屏竞态）
+  const seq = ++_cycleSeq;
+  const bg = !!(STATE.cycleData && STATE.cycleData.doc);
+  STATE.cycleData = { loading: !bg, error: null, api: null, doc: bg ? STATE.cycleData.doc : null };
+  renderCycle();
+  try {
+    const r = await jget('/api/hotlist-jev/market-cycle?days=60'
+      + (date ? '&date=' + encodeURIComponent(date) : ''));
+    if (seq !== _cycleSeq) return;
+    STATE.cycleData = { loading: false,
+      error: (r && r.ok === false) ? (r.reason || '读库降级') : null, api: r, doc: (r && r.doc) || null };
+  } catch (e) {
+    if (seq !== _cycleSeq) return;
+    STATE.cycleData = { loading: false,
+      error: 'market_cycle_read_failed: ' + (e && e.message ? e.message : e),
+      api: null, doc: bg ? STATE.cycleData.doc : null };
+  }
+  renderCycle();
+}
+function renderCycle(){
+  const head = $('cycleHead'); if (!head) return;
+  const d = STATE.cycleData || {};
+  const doc = d.doc;
+  if (d.error && !doc){
+    if (window.sbLog) sbLog('error', '[情绪周期] ' + d.error);
+    head.innerHTML = ''; $('cycleTable').innerHTML = ''; $('cycleHint').textContent = '';
+    return;
+  }
+  if (d.loading && !doc){ head.innerHTML = '<div class="empty">情绪周期加载中…</div>'; return; }
+  const api = d.api || {};
+  const series = (api.series || []).slice().reverse();   // 最新在上
+  if (doc){
+    const tr = doc.transition;
+    const ceil = doc.ceiling || {};
+    head.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div class="kpi"><div class="k">当前态</div><div class="v">${cycleStateBadge(doc.state)}</div><div class="s">已 ${doc.daysInState || 0} 交易日（wzs 无超时，Q3）</div></div>
+      <div class="kpi"><div class="k">空间天花板</div><div class="v">${ceil.maxBoard != null ? ceil.maxBoard + ' 板' : '—'}</div><div class="s">≥3板 ${ceil.threePlusN != null ? ceil.threePlusN : '—'} 家 · 20日前高 ${ceil.prevCeiling20 != null ? ceil.prevCeiling20 : '—'}</div></div>
+      <div class="kpi"><div class="k">最近转折</div><div class="v">${tr ? esc(tr.date || '') : '—'}</div><div class="s">${tr ? esc(CYCLE_STATE_CN[tr.from] || tr.from || '首日') + '→' + esc(CYCLE_STATE_CN[tr.to] || tr.to) : ''}</div></div>
+    </div>`;
+  } else head.innerHTML = '';
+  const rows = series.map(s => {
+    const ev = (s.eventTypes || []).map(t => CYCLE_EV_MARK[t] || t).join(' ')
+      || '<span style="color:var(--muted2)">—</span>';
+    const tr = (s.transition && s.transition.trigger && s.transition.trigger !== 'init_default')
+      ? `<span class="badge b-amber">→${esc(CYCLE_STATE_CN[s.transition.to] || s.transition.to)}</span>` : '';
+    const ref = s.reference || {};
+    const wzs = (ref.marketWzs && ref.marketWzs.state) ? ref.marketWzs.state : '—';
+    const refTxt = `${esc(ref.relayPhase || '—')} / wzs:${esc(wzs)} / ${esc(ref.ruleStage || '—')}`;
+    const ceil = s.ceiling || {};
+    return `<tr>
+      <td>${esc(String(s.tradingDate).slice(5))}</td>
+      <td>${ceil.maxBoard != null ? ceil.maxBoard : '—'}</td>
+      <td>${ceil.threePlusN != null ? ceil.threePlusN : '—'}</td>
+      <td>${cycleAnchorCell(s.anchor && s.anchor.main)}</td>
+      <td>${cycleAnchorCell(s.anchor && s.anchor.growth)}</td>
+      <td>${ev}</td>
+      <td>${cycleStateBadge(s.state)}${s.daysInState > 1 ? ` <span style="color:var(--muted2)">${s.daysInState}日</span>` : ''}</td>
+      <td>${tr}</td>
+      <td style="font-size:11px;color:var(--muted2)">${refTxt}</td>
+    </tr>`;
+  }).join('');
+  $('cycleTable').innerHTML = `<table><thead><tr>
+    <th>日期</th><th>天花板</th><th>≥3板</th><th>主板龙一</th><th>双创龙一</th><th>事件</th><th>态</th><th>转折</th><th>参照（relay相位/大盘wzs/规则档）</th>
+    </tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">暂无数据</td></tr>'}</tbody></table>`;
+  $('cycleHint').textContent = `共 ${series.length} 交易日 · 降级 ${api.degradedCount || 0} 日 · 状态机输入=事件流 E1–E4，参照并列无预设权威（裁决1A）· 暖机期突破参照窗不足如实披露`;
+}
 async function nodesFetch(date){
   if (!STATE.series || !STATE.series.length) return;   // 序列未定（首屏竞态）
   const seq = ++_nodesSeq;
@@ -4287,6 +4384,7 @@ const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察'
                      ['leaders', '板块龙头', '🐉'], ['themes', '题材龙头', '👑'],
                      // 2026-10-19 用户裁决：页名由「判定明细」改为「连板情绪」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
+                     ['cycle', '情绪周期', '🌡️'],
                      ['detail', '连板情绪', '🗓️']];
 const NAV = [
   {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['rise', '上涨复盘', '📈'], ['dieban', '下跌复盘', '📉']]},

@@ -472,6 +472,8 @@ def get_market_cycle(date: str | None = None, days: int = 60) -> dict[str, Any]:
             {"tradingDate": {"$ne": None}},
             {"tradingDate": 1, "status": 1, "state": 1, "daysInState": 1,
              "ceiling.maxBoard": 1, "ceiling.threePlusN": 1,
+             "anchor.main.code": 1, "anchor.main.name": 1, "anchor.main.leaderSealedToday": 1,
+             "anchor.growth.code": 1, "anchor.growth.name": 1, "anchor.growth.leaderSealedToday": 1,
              "events.type": 1, "transition.trigger": 1, "transition.to": 1,
              "reference": 1}).sort("tradingDate", -1).limit(capped))
         series.reverse()
