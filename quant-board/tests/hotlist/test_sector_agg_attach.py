@@ -84,7 +84,7 @@ def test_settle_day_doc_carries_agg(monkeypatch):
     # 其余依赖最小桩：晋级链不可算（影子聚合不受影响）、龙头状态停牌外全 sealed
     monkeypatch.setattr(ops, "_promotion_by_board",
                         lambda db, prev_date, date, ds: {"ok": False, "reason": "无昨日"})
-    monkeypatch.setattr(ops, "_leader_states", lambda db, d, pr, ds: {})
+    monkeypatch.setattr(ops, "_leader_day_states", lambda db, d, rows, ds: {})
     monkeypatch.setattr(ops, "board_count_history", lambda db, d, days, dataset_id=None: {})
     monkeypatch.setattr(ops, "_member_ratio_history", lambda db, d, days=21, dataset_id=None: {})
     monkeypatch.setattr(ops, "_prev_nodes_of", lambda db, d: None)

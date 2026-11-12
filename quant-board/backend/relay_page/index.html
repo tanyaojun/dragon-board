@@ -2539,18 +2539,35 @@ function renderNodes(){
     const sh = r.ladderShape || (r.count == null ? null : { first: 0, two: 0, threePlus: 0 });
     const shTxt = sh ? `首 ${sh.first ?? 0} / 2板 ${sh.two ?? 0} / 3板+ ${sh.threePlus ?? 0}` : '—';
     const ld = r.leader;
+    // 龙头列高度（2026-11-12 用户修复）：封板龙一=真连板 K板；未封龙一（断板反包
+    // 候选）=区间高度 N天M板（台账 days/boards，韭研 num 截至最近封板日 poolDay）。
+    // 旧「断板反包」琥珀徽章占高度位被用户判不正确→删除；缺档→高度不可考（fail-visible）。
+    const ldUnsealed = ld && (ld.dayStatus
+      ? ld.dayStatus !== 'sealed' : ld.leaderSealedToday === false);
     const ldTxt = ld ? esc(ld.name || ld.code || '?')
       + (ld.streak != null ? ' ' + ld.streak + '板'
-        // v5.1 空间龙一：断板反包候选（今日未封）真连板如实不可考，显式披露不冒充「板数?」
-        : ld.leaderSealedToday === false
-          ? ' <span class="badge b-amber" title="空间龙一为断板反包候选：今日未封板，真连板数如实不可考">断板反包</span>'
+        : ldUnsealed
+          ? (ld.boards != null
+            ? ` <span title="区间高度（韭研 num，截至最近封板日 ${esc(ld.poolDay || '?')}）；今日未封板，真连板不可考">`
+              + (ld.days != null ? ld.days + '天' + ld.boards + '板' : ld.boards + '板') + '</span>'
+            : ' <span style="color:var(--muted2)" title="今日未封板且区间高度缺档（韭研 num 不可解析），不伪造板数">高度不可考</span>')
           : ' 板数?') : '—';
-    const ls = r.leaderState
-      ? (r.leaderState === 'broken' ? ' <span class="badge b-red">断板</span>'
-        : r.leaderState === 'sealed' ? ' <span class="badge b-green" title="昨日龙一今日续板">续</span>'
-        : r.leaderState === 'suspended' ? ' <span class="badge b-gray" title="停牌不算断板">停</span>'
-        : r.leaderState === 'unknown' ? ' <span class="badge b-gray" title="日线数据洞，不可考">?</span>' : '')
-      : '';
+    // 续/断徽章只看**今日龙一自身**状态（2026-11-12 用户修复）：leaderState 是
+    // 「昨日龙一今日状态」（节点判据口径），v5 空间龙一下今/昨龙一常不同股，
+    // 贴在今日龙一名旁会误标（日出东方 4 板封板被贴昨龙一断板徽章）。
+    // dayStatus=day_status_of 单源（停牌不算断板）；旧档无 dayStatus 回落
+    // leaderSealedToday/streak 推导（fail-visible：unknown 显 ? 不猜）。
+    const ldState = ld ? (ld.dayStatus || (ld.leaderSealedToday === false ? 'broken'
+      : (ld.leaderSealedToday === true || ld.streak != null) ? 'sealed' : null)) : null;
+    const ls = ldState === 'broken'
+      ? ' <span class="badge b-red" title="该龙一今日未封板（断板反包候选）；区间高度见左侧高度位">断板</span>'
+      : ldState === 'sealed'
+        ? (ld.streak != null && ld.streak >= 2
+          ? ' <span class="badge b-green" title="该龙一今日续板（真连板 ' + ld.streak + '）">续</span>'
+          : ld.streak == null
+            ? ' <span class="badge b-gray" title="今日封板但真连板不可考">?</span>' : '')
+        : ldState === 'suspended' ? ' <span class="badge b-gray" title="停牌不算断板">停</span>'
+        : ldState === 'unknown' ? ' <span class="badge b-gray" title="日线数据洞，不可考">?</span>' : '';
     const prom = r.promN == null ? '—' : r.promN
       + ((r.promGe2 != null && r.promGe2 > 0) ? `<span style="color:var(--muted2)">（≥2板 ${r.promGe2}）</span>` : '')
       + ((r.promOutOfPoolN != null && r.promOutOfPoolN > 0)
@@ -2611,7 +2628,7 @@ function renderNodes(){
           ${((r.notes || []).length) ? '<div style="margin-top:4px;color:#b45309">注记：' + (r.notes || []).map(esc).join('；') + '</div>' : ''}
           ${nodesAggCard(r)}
           <div style="margin-top:4px;color:var(--muted)">昨日节点：${r.prevNode ? esc(NODE_CN[r.prevNode]) : '—'}
-            · 龙头状态：${r.leaderState ? esc(NODE_STATE_CN[r.leaderState]) : '—'}
+            · 昨日龙一今日状态：${r.leaderState ? esc(NODE_STATE_CN[r.leaderState]) : '—'}
             · 昨日龙一：${r.prevLeader ? esc(r.prevLeader.name || r.prevLeader.code || '—') : '—'}
             · 家数分位：${r.countPct == null ? '不可算' : 'P' + Math.round(r.countPct * 100)}
             · 板内炸板（昨日 ${r.prevZhabanN == null ? '—' : r.prevZhabanN}）

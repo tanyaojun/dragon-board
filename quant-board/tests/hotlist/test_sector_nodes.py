@@ -669,3 +669,45 @@ def test_vol_series_absent_board_keeps_none():
     r = _node_of(out)
     assert r["volSeries"][-1] == [D0, 1.1]
     assert r["volSeries"][0] == [D2, None] and r["volSeries"][1] == [D1, None]
+
+
+# ── 2026-11-12 用户修复：龙头续/断主语=昨日龙一；台账扩容区间高度/自身状态 ──
+
+def test_state_basis_names_prev_leader_not_today_leader():
+    """leader_state 是「昨日龙一今日状态」：续/断 basis 必须名昨日龙一。
+
+    空间龙一口径下今/昨龙一常不同股，旧版拿今日龙一名写昨龙一状态→
+    「天普股份 2 板被说断板」自相矛盾（2026-11-12 用户截图报障）。判据不变。"""
+    out = _assemble(today_rows=[_row(n=4)],
+                    prev_rows=[_row(n=5, streak=1, code="600002", name="昨龙")],
+                    count_hist=_hist([(D2, 5), (D1, 5)]),
+                    leader_status={"AI算力": "broken"})
+    r = _node_of(out)
+    assert r["node"] == "weakening"
+    assert any("龙头断板（昨龙（1 板））" in b for b in r["basis"])
+    assert not any("龙头股" in b for b in r["basis"])
+
+
+def test_state_basis_unsealed_prev_leader_shows_range_height():
+    """昨龙一未封板（真连板不可考）→ basis 披露区间高度 N天M板，不掩成「板数不可考」。"""
+    out = _assemble(today_rows=[_row(n=4)],
+                    prev_rows=[_row(n=5, streak=None, code="600002", name="昨龙",
+                                    days=5, boards=5)],
+                    count_hist=_hist([(D2, 5), (D1, 5)]),
+                    leader_status={"AI算力": "broken"})
+    r = _node_of(out)
+    assert any("龙头断板（昨龙（5天5板））" in b for b in r["basis"])
+
+
+def test_leader_ledger_carries_range_height_and_day_status():
+    """台账 leader dict 透传 days/boards/dayStatus（龙一只算一次落一次库）。"""
+    out = _assemble(today_rows=[_row(n=3, days=8, boards=5, dayStatus="sealed")])
+    lead = _node_of(out)["leader"]
+    assert lead["days"] == 8 and lead["boards"] == 5
+    assert lead["dayStatus"] == "sealed"
+
+
+def test_leader_ledger_missing_keys_not_fabricated():
+    """旧行形状无新键 → leader dict 不伪造（消费方 fail-visible 回落）。"""
+    lead = _node_of(_assemble())["leader"]
+    assert "days" not in lead and "boards" not in lead and "dayStatus" not in lead

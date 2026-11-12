@@ -140,26 +140,38 @@ def _promotion_by_board(db: Any, prev_date: str | None, date: str,
             "unattributed": sorted(unattributed)}
 
 
-def _leader_states(db: Any, date: str, prev_rows: list[dict[str, Any]] | None,
-                   dataset_id: str) -> dict[str, str]:
-    """昨日各板块龙一 → 今日状态（day_status_of：停牌不算断板，v4）。"""
-    if not prev_rows:
+def _leader_day_states(db: Any, date: str, rows: list[dict[str, Any]] | None,
+                       dataset_id: str) -> dict[str, str]:
+    """rows 各龙一在 date 日的接力状态（day_status_of：停牌不算断板，v4）。
+
+    昨日龙一→今日状态（节点判据 leaderState）与今日龙一→自身状态（leader.dayStatus，
+    2026-11-12 用户修复：龙头列续/断徽章只看今日龙一自己）共用本实现，禁双实现。
+    bars_need_upto 声明当日：本地末棒落后时线上补尾，避免「无棒」误判停牌。
+    """
+    if not rows:
         return {}
     sealed, info, _meta = sealed_and_info(db, date, dataset_id)
     # sealed=None（今日 THS 池缺失）交 day_status_of 决策表日线补证，不在此伪造
     touch = set(info) if info else None
     out: dict[str, str] = {}
-    for r in prev_rows:
-        board = str(r.get("board") or "")
-        # day_leader_rows 行形状平铺：龙一 code 就是行自身 code（非嵌套 leader.code）
-        code = str(r.get("code") or "")
-        if not board or not code:
-            continue
-        bars = _daily_bars(code)
-        adj = _adj_prev_series(date, code, bars) if bars else {}
-        out[board] = day_status_of(code, date, sealed=sealed, touch=touch,
-                                   bars=bars or None, adj=adj)
+    with bars_need_upto(date):
+        for r in rows:
+            board = str(r.get("board") or "")
+            # day_leader_rows 行形状平铺：龙一 code 就是行自身 code（非嵌套 leader.code）
+            code = str(r.get("code") or "")
+            if not board or not code:
+                continue
+            bars = _daily_bars(code)
+            adj = _adj_prev_series(date, code, bars) if bars else {}
+            out[board] = day_status_of(code, date, sealed=sealed, touch=touch,
+                                       bars=bars or None, adj=adj)
     return out
+
+
+def _leader_states(db: Any, date: str, prev_rows: list[dict[str, Any]] | None,
+                   dataset_id: str) -> dict[str, str]:
+    """昨日各板块龙一 → 今日状态（day_status_of：停牌不算断板，v4）。"""
+    return _leader_day_states(db, date, prev_rows, dataset_id)
 
 
 # V2 影子聚合的窗口池进程缓存（键 (date, dataset_id)）：回填升序成链时
@@ -280,7 +292,9 @@ def ledger_leaders(db: Any, date: str) -> dict[str, dict[str, Any]] | None:
     """龙一台账读口（2026-11-09 三链合一 v5.1）：{板块: leader dict}。
 
     - 文档缺失/非 ok/非 v5 → None（消费方 fail-visible，不回退其他口径）；
-    - leader dict 含扩容事实键（gain10/leaderSealedToday/segment/poolDay/histStreak）；
+    - leader dict 含扩容事实键（gain10/leaderSealedToday/segment/poolDay/days/boards/
+      dayStatus；days/boards=区间高度 N天M板，dayStatus=今日龙一自身接力状态，
+      2026-11-12 用户修复龙头列徽章口径）；
     - 消费方：题材龙头打标候选（theme_leader_label.leaders_for）、relay 题材梯队表、
       limitup 读口「领涨」列——龙一身份全站唯一。
     """
@@ -414,6 +428,15 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
     today_rows = _collapse_segment_rows(today_rows)
     prev_rows = _collapse_segment_rows(prev_rows)
     prev2_rows = _collapse_segment_rows(prev2_rows)
+
+    # 今日龙一自身接力状态（2026-11-12 用户修复）：龙头列续/断徽章单源。
+    # leaderState 仍是「昨日龙一今日状态」（节点判据口径），两者身份在空间龙一
+    # 口径下常不同股，不得混贴（日出东方 4 板被贴昨日龙一断板徽章事故）。
+    today_status = _leader_day_states(db, date, today_rows, dataset_id)
+    for r in today_rows or []:
+        st = today_status.get(str(r.get("board") or ""))
+        if st is not None:
+            r["dayStatus"] = st
 
     prom = _promotion_by_board(db, prev_date, date, dataset_id)
     leader_status = _leader_states(db, date, prev_rows, dataset_id)

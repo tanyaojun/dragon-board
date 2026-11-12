@@ -81,7 +81,9 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     ∪ `pool_dates`（近 3 个交易日）封板池（同板块，覆盖断板反包——空间龙一断板日仍须在列），
     排序=当日首封最早→真连板高度→10日涨幅（v12，2026-10-28 用户再裁决）；行另带
     `gain10`（龙一 10 日涨幅，次级排序键/身位披露）与
-    `leaderSealedToday`（False=断板反包候选，streak/time 如实 None，ladderFollowers 不可算）。
+    `leaderSealedToday`（False=断板反包候选，streak/time 如实 None，ladderFollowers 不可算）、
+    `days`/`boards`（区间高度 N天M板：封板龙一=当日韭研 num，断板龙一=最近封板日 num；
+    2026-11-12 用户修复节点龙头列未封板高度展示）。
     **仅当日标注链启用**（leaders_for）；基线/历史窗口（build_rows/board_count_history/
     sector_nodes 等）维持 streak 口径——历史样本人群定义不随规则换代漂移，断板反包龙一
     无同构历史锚属如实缺位（预登记 §21.6）。TDX 拉不到涨幅（全候选 None）→ 该板块跳过
@@ -91,7 +93,8 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     `segment`（main/growth）；历史窗口径不加 segment（样本人群不随规则换代）。
     返回 `(rows, meta)`；`rows=None` 表示当日 THS 池缺失（不可二分，fail-visible，调用方自己决定跳过口径）。
     """
-    from backend.operations.jev_label_jiuyan import jiuyan_streak_map
+    from backend.operations.jev_label_jiuyan import (_jiuyan_days_boards,
+                                                       jiuyan_streak_map)
 
     sealed, info, meta = sealed_and_info(db, date, dataset_id)
     if sealed is None:
@@ -124,9 +127,13 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         for st in field.get("stocks") or []:
             code = str(st.get("code") or "")[-6:]
             if code in sealed:            # 只算真实封板股（炸板/触板未封不进梯队）
+                _d, _b = _jiuyan_days_boards(st)
                 boards_of[bname].append(
                     {"code": code, "name": st.get("name"), "time": st.get("time"),
-                     "streak": streaks.get(code)})
+                     "streak": streaks.get(code),
+                     # 区间高度（韭研 num「N天M板」，当日口径）：展示注记用，
+                     # 连板语义仍一律 streak（2026-10-16 口径修正不复活）
+                     "days": _d, "boards": _b})
             elif (info.get(code) or {}).get("zhaban"):
                 zhaban_of[bname] += 1
 
@@ -152,8 +159,12 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 for st in field.get("stocks") or []:
                     pcode = str(st.get("code") or "")[-6:]
                     if pcode in p_sealed and pcode not in have:
+                        _pd, _pb = _jiuyan_days_boards(st)
                         pool_prev[bname].append({"code": pcode, "name": st.get("name"),
                                                  "time": None, "streak": None,
+                                                 # 区间高度截至最近封板日 pd（num 当日口径）：
+                                                 # 断板龙一「N天M板」展示单源（2026-11-12 用户修复）
+                                                 "days": _pd, "boards": _pb,
                                                  "histStreak": p_streaks.get(pcode),
                                                  # v5 预登记 P1（题材周期·龙头弱转强）：最近封板日透出，
                                                  # 消费侧据此算窗位 k=T−S−1（严格 3 日回溯口径）
@@ -294,6 +305,10 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 "boardCodes": [s["code"] for s in stocks],
                 # 2026-10-27 空间龙一规则：10 日涨幅（排序依据）+ 未封板标记（断板反包候选）
                 "gain10": (leader.get("gain10") if space_mode else None),
+                # 区间高度 N天M板（封板龙一=当日 num；断板龙一=最近封板日 num）：
+                # 节点龙头列未封板时替代旧「断板反包」徽章（2026-11-12 用户裁决）
+                "days": (leader.get("days") if space_mode else None),
+                "boards": (leader.get("boards") if space_mode else None),
                 "leaderSealedToday": sealed_today,
                 # v5 预登记 P1：断板龙一最近封板日（窗位由消费侧算）；续板/默认口径为 None
                 "poolDay": (leader.get("poolDay") if space_mode else None),

@@ -41,7 +41,15 @@ def _leader_desc(leader: dict[str, Any] | None) -> str:
         return "无"
     streak = leader.get("streak")
     name = leader.get("name") or leader.get("code") or "?"
-    return f"{name}" + (f"（{streak} 板）" if isinstance(streak, int) else "（板数不可考）")
+    if isinstance(streak, int):
+        return f"{name}（{streak} 板）"
+    # 未封板龙一（断板反包候选）真连板不可考：区间高度 N天M板 如实披露
+    # （2026-11-12 用户修复：不再一律「板数不可考」掩掉可考区间高度）
+    boards, days = leader.get("boards"), leader.get("days")
+    if isinstance(boards, int):
+        return f"{name}（{days}天{boards}板）" if isinstance(days, int) \
+            else f"{name}（{boards}板）"
+    return f"{name}（板数不可考）"
 
 
 def _shape_first(shape: Any) -> int:
@@ -56,7 +64,8 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
                        prom_ge2: int | None, shape: Any,
                        prev_shape_first: int | None,
                        prev_node: str | None,
-                       agg: dict[str, Any] | None = None) -> dict[str, Any]:
+                       agg: dict[str, Any] | None = None,
+                       prev_leader: dict[str, Any] | None = None) -> dict[str, Any]:
     """单板块-日节点判定（预登记 §三判据表逐字实现；v2 起消费聚合锚）。
 
     返回 {node, basis, notes, countPct, prevCountPct, pctDegraded}。
@@ -64,6 +73,11 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
     绝不把缺料伪装成「0 家冰点」；n1/n2=None=参照日不可考（板块改名/池缺失），
     涉判据不命中；leader_state=None=龙头续断不可考（停牌/数据洞），不算断板也
     不算续板（停牌不算断板，v4 用户裁决）；prom_n=None=晋级链不可算，不伪 0。
+
+    prev_leader（2026-11-12 用户修复）：leader_state 描述的是**昨日龙一**今日
+    状态，续/断 basis 文案必须名昨日龙一（空间龙一口径下今/昨龙一常不同股，
+    旧版拿今日龙一名写昨龙一状态→「天普股份 2 板被说断板」自相矛盾）；判据本身
+    不变。缺省（旧调用方）回落 leader 名，保持向后兼容。
     """
     basis: list[str] = []
     notes: list[str] = []
@@ -73,6 +87,8 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
     first = _shape_first(shape)
     state_txt = {"sealed": "续板", "broken": "断板", "suspended": "停牌",
                  "unknown": "状态不可考", "none": "昨日无龙头"}.get(leader_state, "不可考")
+    # 续/断状态的主语=昨日龙一（leader_state 口径），不是今日龙一
+    state_leader = prev_leader if prev_leader is not None else leader
 
     if n0 is None:
         notes.append("今日封板集合不可考，节点不可判（不伪装成冰点）")
@@ -92,7 +108,7 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
             basis.append(f"昨日节点={NODE_LABELS_CN[prev_node]}")
             basis.append(f"家数 {n1}→{n0} 回升")
             basis.append(f"晋级 {prom_n} 家")
-            basis.append(f"龙头续板（{_leader_desc(leader)}）" if leader_ok
+            basis.append(f"龙头续板（{_leader_desc(state_leader)}）" if leader_ok
                          else f"首板 {first} 家 ≥ 昨日 {prev_shape_first} 家×2 且 ≥3（V2d 收紧）")
             return {"node": "wzs", "basis": basis, "notes": notes,
                     "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
@@ -123,7 +139,7 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
     if (n1 is not None and n1 >= 2 and n0 * 2 <= n1
             and leader_state == "broken" and prom_n is not None and prom_n == 0):
         basis.append(f"家数 {n1}→{n0} 腰斩")
-        basis.append(f"龙头断板（{_leader_desc(leader)}）")
+        basis.append(f"龙头断板（{_leader_desc(state_leader)}）")
         basis.append("晋级 0 家")
         _defense_note()
         return {"node": "collapse", "basis": basis, "notes": notes,
@@ -143,7 +159,7 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
 
     # 4 转弱：昨日 ≥3 家 且（龙头断板 或 家数回落）
     if n1 is not None and n1 >= 3 and (leader_state == "broken" or n0 < n1):
-        basis.append(f"龙头断板（{_leader_desc(leader)}）" if leader_state == "broken"
+        basis.append(f"龙头断板（{_leader_desc(state_leader)}）" if leader_state == "broken"
                      else f"家数 {n1}→{n0} 回落")
         return {"node": "weakening", "basis": basis, "notes": notes,
                 "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
@@ -153,7 +169,7 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
     if core and pct0 is not None and pct1 is not None \
             and pct0 >= _PCT_MAINLINE and pct1 >= _PCT_MAINLINE:
         basis.append(f"家数 {n0}（{pct0:.0%} 分位）、昨日 {n1}（{pct1:.0%} 分位）连续两日 ≥P80")
-        basis.append(f"龙头续板（{_leader_desc(leader)}）")
+        basis.append(f"龙头续板（{_leader_desc(state_leader)}）")
         basis.append(f"二板以上晋级 {prom_ge2} 家")
         return {"node": "mainline", "basis": basis, "notes": notes,
                 "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
@@ -162,7 +178,7 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
         notes.append(f"家数分位样本不足（<{_PCT_MIN_SAMPLES}），主升判据降级绝对阈 "
                      f"≥{_MAINLINE_ABS_FLOOR} 家")
         basis.append(f"家数 {n1}→{n0} 高位（分位样本不足，绝对阈降级）")
-        basis.append(f"龙头续板（{_leader_desc(leader)}）")
+        basis.append(f"龙头续板（{_leader_desc(state_leader)}）")
         basis.append(f"二板以上晋级 {prom_ge2} 家")
         return {"node": "mainline", "basis": basis, "notes": notes,
                 "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
@@ -244,11 +260,11 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
         # day_leader_rows 行形状=平铺 code/name/streak/time（非嵌套 leader），此处组装成
         # leader dict 供展示与判定；code 缺失视为无龙头行
         # v5.1 龙一台账行（2026-11-09 用户裁决三链合一）：leader dict 扩容携带空间龙一
-        # 完整事实字段（gain10/leaderSealedToday/segment/poolDay/histStreak）——龙一只
+        # 完整事实字段（gain10/leaderSealedToday/segment/poolDay/days/boards/dayStatus）——龙一只
         # 算一次落一次库，题材龙头打标/涨停打标叙事/梯队表/下游 advisory 全部消费本档，
         # 不再各自重推（缺省键不伪造，消费方自行 fail-visible）。
         _LEADER_LEDGER_KEYS = ("gain10", "leaderSealedToday", "segment",
-                               "poolDay")
+                               "poolDay", "days", "boards", "dayStatus")
 
         def _leader_of(row: dict[str, Any] | None) -> dict[str, Any] | None:
             if row and row.get("code"):
@@ -302,7 +318,7 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
             n0=n0, n1=n1, n2=n2, hist_values=hist_values, leader=leader,
             leader_state=leader_state, prom_n=prom_n, prom_ge2=prom_ge2,
             shape=shape, prev_shape_first=prev_shape_first, prev_node=prev_node,
-            agg=(agg_by_board or {}).get(b))
+            agg=(agg_by_board or {}).get(b), prev_leader=prev_leader)
         notes.extend(cls["notes"])
 
         # V4 条款 2（量能注记透出，不改档；sector-nodes-v4-criteria-preregistration）。
