@@ -213,6 +213,18 @@ def detect_tolerance(date: str, track: str, anchor: dict | None,
     return None
 
 
+def one_word_from_shape(shape: str | None) -> bool | None:
+    """板型叙事行 → 一字板三态（True/False/None 不可验）。板型单源 stock_board_shape_line。
+
+    不可验（None）：行以「板型：」起头（昨收缺失/5 分钟棒缺失/未触板）或含「不可算」——
+    历史日 5 分钟线不可得时不得伪 False（预登记 §四 E1「不可考→注，不猜」）。
+    确定非一字（False）：秒板/硬板/炸板回封/烂板/触板未封等明确板型。
+    """
+    if not shape or shape.startswith("板型：") or "不可算" in shape:
+        return None
+    return "板型=一字板" in shape
+
+
 def is_one_word_bar(bar: dict | None, code: str, prev_close: float | None) -> bool | None:
     """一字板机械判定（日线 OHLC 全等且收在涨停价）；缺高低价/前收 → None（不可验，不猜）。
 

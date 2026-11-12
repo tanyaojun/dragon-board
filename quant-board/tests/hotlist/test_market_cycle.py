@@ -191,6 +191,16 @@ def test_tolerance_stabilize_window_not_ending_today():
     assert mc.detect_tolerance(T, "main", {"code": "600111"}, None, None) is None
 
 
+# ── 一字板三态（板型叙事行）──
+def test_one_word_from_shape_three_states():
+    assert mc.one_word_from_shape("当日板型：首触 09:25 · 板型=一字板") is True
+    assert mc.one_word_from_shape("当日板型：首触 09:40 · 板型=秒板/硬板（一波封住）") is False
+    assert mc.one_word_from_shape("板型：当日 5 分钟棒缺失") is None   # 不可验不伪 False
+    assert mc.one_word_from_shape("板型：昨收缺失无法判定涨停价") is None
+    assert mc.one_word_from_shape("板型：不可算") is None
+    assert mc.one_word_from_shape(None) is None
+
+
 # ── 一字板机械判定 ──
 def test_is_one_word_bar():
     bar = {"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0}

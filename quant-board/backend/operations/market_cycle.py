@@ -193,7 +193,7 @@ def _breakthrough_stocks(db: Any, date: str, streaks_today: dict,
             out.append({"code": code, "name": names.get(code),
                         "segment": segment_of(code), "streak": sk,
                         "boardShape": shape,
-                        "oneWord": ("板型=一字板" in shape) if shape else None})
+                        "oneWord": mc.one_word_from_shape(shape)})
     return sorted(out, key=lambda r: r["code"])
 
 
