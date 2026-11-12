@@ -441,6 +441,82 @@ def get_sector_nodes(
         return {"ok": False, "degraded": True, "reason": f"sector_nodes_read_failed: {exc}"}
 
 
+@router.get("/market-cycle")
+def get_market_cycle(date: str | None = None, days: int = 60) -> dict[str, Any]:
+    """市场情绪周期读口（第4课 P2，预登记 market-cycle-preregistration-20261112.md）。
+
+    单日全文档（date 给定或最新）+ 近 N 日轻量序列（态/天花板/事件类型/转折/参照）。
+    fail-visible：降级日原样透出 status；盘中回退 < 指定日最新存档 + dateFallback。
+    零 token 确定性轨道（状态机输入=事件流，参照并列无预设权威，裁决 1A）。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        col = db["hotlist_jev_market_cycle"]
+        capped = max(1, min(int(days), 400))
+        latest = date
+        if not latest:
+            newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
+            latest = str(newest.get("tradingDate")) if newest else None
+        day_doc = col.find_one({"tradingDate": latest}) if latest else None
+        date_fallback = None
+        if day_doc is None and latest:
+            day_doc = col.find_one({"tradingDate": {"$lt": latest, "$ne": None}},
+                                   sort=[("tradingDate", -1)])
+            if day_doc:
+                date_fallback = {"requested": latest, "served": day_doc.get("tradingDate")}
+                latest = str(day_doc.get("tradingDate"))
+        series = list(col.find(
+            {"tradingDate": {"$ne": None}},
+            {"tradingDate": 1, "status": 1, "state": 1, "daysInState": 1,
+             "ceiling.maxBoard": 1, "ceiling.threePlusN": 1,
+             "events.type": 1, "transition.trigger": 1, "transition.to": 1,
+             "reference": 1}).sort("tradingDate", -1).limit(capped))
+        series.reverse()
+        for s in series:
+            s["eventTypes"] = [e.get("type") for e in s.pop("events", None) or []]
+        degraded = {str(r.get("tradingDate")) for r in [*series, day_doc]
+                    if r and r.get("status") != "ok"}
+        return {"ok": True, "date": latest, "days": capped, "series": series,
+                "doc": day_doc, "degradedCount": len(degraded),
+                **({"dateFallback": date_fallback} if date_fallback else {})}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"market_cycle_read_failed: {exc}"}
+
+
+class MarketCycleRerunPayload(BaseModel):
+    date: str
+    force: bool = False
+    datasetId: str = "dragonboard_live"
+
+
+@router.post("/market-cycle/rerun")
+def post_market_cycle_rerun(payload: MarketCycleRerunPayload) -> dict[str, Any]:
+    """市场情绪周期单日复跑（第4课 P2，**零 token 确定性**，不受 jev gate 限制）。
+
+    复用生产入口 omc.settle_day（不另写调用链）；prev_state 自动读前一日库态。降级照常
+    落痕透出（fail-visible）。注：状态机有链依赖——若复跑改变当日事件，其后各日态需
+    `--replay-state` 重放方一致（单日 rerun 不级联，与 relay-index/rerun 单日语义同）。
+    """
+    date = (payload.date or "").strip()
+    if not date:
+        return {"ok": False, "errorCode": "bad_date", "error": "date required"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.operations import market_cycle as omc
+        doc = omc.settle_day(db, date, payload.datasetId, force=bool(payload.force))
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"market_cycle_rerun_failed: {exc}"}
+    return {"ok": doc.get("status") == "ok", "date": date, "day": doc,
+            "status": doc.get("status"), "state": doc.get("state"),
+            "events": len(doc.get("events") or [])}
+
+
 @router.get("/sector-pulse")
 def get_sector_pulse(date: str | None = None) -> dict[str, Any]:
     """V2c 盘中红盘提示读口（2026-10-25，预登记 sector-nodes-v2c-intraday-preregistration.md）：
