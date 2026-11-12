@@ -1,5 +1,12 @@
 # cycle_stage v5 正式预登记（P2-4，2026-10-11 用户点头开立）
 
+> **收盘注记（2026-11-12）**：本试点已废弃归档，不转正。用户裁决见
+> `market-cycle-preregistration-20261112.md` §七（市场情绪周期预登记）：10 篇文档已导出
+> `data/backups/cycle_stage_pilot_archive_20261112.json`，集合 `hotlist_jev_cycle_stage_pilot`
+> 已 drop，cycle 专属代码（QUESTIONS_CYCLE/build_cycle_narrative/run_cycle_stage_day/
+> --cycle-stage-day/三行接线函数）已删除（git 为唯一档案）。市场级周期判定转由确定性
+> 事件流+状态机（market_cycle）继承 §十二/§十三 规则化转向；本文档保留为研究档案。
+
 > 性质：改门（判据重写 + 叙事接线）。本文件冻结 v5 设计；pilot 开火另行确认（预算极小）。
 > 依据链：menu 文档 P2-4 ROI 评估（三件套 2/3 已有存量）→ 本预登记。
 > 历史包袱：v1-v4 四轮不过 4/5 线、拐点日 100% 错不随判据迭代收敛（§十二）——v5 **不承诺修拐点**，

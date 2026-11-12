@@ -168,10 +168,6 @@ def _extract_zhaban(doc: dict) -> dict:
     return {"zhaban_cause": v for v in [blob_or_field(doc, "zhaban_cause", "zhabanCause", "zhabanCauseProbabilities")] if v}
 
 
-def _extract_cycle(doc: dict) -> dict:
-    return {"cycle_stage": v for v in [blob_or_field(doc, "cycle_stage", "cycleStage", "cycleStageProbabilities")] if v}
-
-
 COLLECTION_SPECS: list[dict[str, Any]] = [
     {"collection": "hotlist_jev_sentiment", "label": "情绪链 槽级4题+EOD 4题（v2.x）",
      "extractor": _extract_sentiment},
@@ -183,8 +179,6 @@ COLLECTION_SPECS: list[dict[str, Any]] = [
      "extractor": _extract_zhaban},
     {"collection": "hotlist_jev_crowding_pilot", "label": "拥挤连续分 2题（v3.0-pilot）",
      "extractor": _extract_crowding_pilot},
-    {"collection": "hotlist_jev_cycle_stage_pilot", "label": "情绪周期段位 单题（试点挂起）",
-     "extractor": _extract_cycle},
 ]
 
 

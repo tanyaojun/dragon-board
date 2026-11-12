@@ -21,7 +21,6 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     # 每日链 5 线 + 链外登记（vote/vote 线已于 2026-10-29 随热榜行情页删除移除）
     assert jev_state.QUESTION_SET_VERSION == "v2.6"                    # 热榜情绪（日级判据删减）
     assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"                   # 个股打标+合并相位（v3.2 freshness 分界/v3.3 depth 联动判层/v4.0 驱动+买盘兑底选项，均 2026-10-22）
-    assert drv.QUESTION_SET_VERSION_CYCLE == "v5"                      # cycle 阶段（链外）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
     assert relay.QUESTION_SET_VERSION_RELAY == "v7.1"                  # 连板指数（v7.1 边界修正：strong P80/fracture 优先序）
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
