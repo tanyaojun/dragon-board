@@ -544,7 +544,7 @@ def test_theme_ladder_lines_dragon_order():
 
 
 def test_run_relay_index_day_writes_doc(monkeypatch):
-    """run：_dispatch_jev mock → doc 落库（7 题答案抽取 + 幂等跳过）。"""
+    """run：_dispatch_jev mock → doc 落库（8 题答案抽取 + 幂等跳过）。"""
     def fake_dispatch(state, questions):
         assert set(questions) == set(QUESTIONS_RELAY)
         return ({"result": {"state": "Completed", "result": {
@@ -554,9 +554,7 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
                 "relay_momentum": {"type": "choice", "choice": "holding", "probabilities": {}},
                 "ladder_health": {"type": "choice", "choice": "pyramid", "probabilities": {}},
                 "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
-                "theme_pulse": {"type": "choice", "choice": "mainline_continue", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
-                "leader_strength": {"type": "score", "score": 8.0, "legend": list(range(11))},
                 "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
                 "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
                 "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
@@ -572,13 +570,16 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert len(col.updates) == 1
     _, doc = col.updates[0]
     assert doc["_id"] == f"{_D0}:RELAY" and doc["status"] == "ok"
-    assert doc["relayIndex"] == 65 and doc["leaderStrength"] == 80  # score 归一化 ×10
+    assert doc["relayIndex"] == 65  # score 归一化 ×10；v9 删 leaderStrength
     assert doc["relayPhase"] == "relay_heat" and doc["relayMomentum"] == "holding"
+    # v9 daysInPhase 首日/缺昨日档 → 1（后验确定性，进语料不上前端）
+    assert doc["daysInPhase"] == 1
+    assert "themePulse" not in doc and "leaderStrength" not in doc
     # F2：主锚缺位标记随叙事落库（前端徽标读口；v5 起）
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v8"
+    assert doc["questionSetVersion"] == "v9"
     # v8 市场周期融合 3 题答案抽取 + 缺语料标记（本夹具无 market_cycle 档→True）
     assert doc["turnQuality"] == "pending" and doc["cycleIntensity"] == "moderate"
     assert doc["riskAhead"] == "none" and doc["cycleCorpusMissing"] is True
@@ -591,6 +592,77 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert len(col.updates) == 1
 
 
+def _relay_doc(date, phase, dip=None, idx=50):
+    """v9 昨日相位夹具：最小 RELAY 档（relayPhase + daysInPhase + relayIndex 供序列轴）。"""
+    d = {"_id": f"{date}:RELAY", "tradingDate": date, "status": "ok",
+         "relayPhase": phase, "relayIndex": idx}
+    if dip is not None:
+        d["daysInPhase"] = dip
+    return d
+
+
+def _dispatch_phase(phase):
+    def fake_dispatch(state, questions):
+        return ({"result": {"state": "Completed", "result": {
+            "model": "jev-test", "usage": {"input_tokens": 10},
+            "answers": {
+                "relay_phase": {"type": "choice", "choice": phase, "probabilities": {}},
+                "relay_momentum": {"type": "choice", "choice": "holding", "probabilities": {}},
+                "ladder_health": {"type": "choice", "choice": "pyramid", "probabilities": {}},
+                "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
+                "relay_index": {"type": "score", "score": 5.0, "legend": list(range(11))},
+                "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
+                "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
+                "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
+            }}}}, 1)
+    return fake_dispatch
+
+
+def test_days_in_phase_continuity(monkeypatch):
+    """v9 daysInPhase 后验：同相位→昨日+1；相位变更→1；缺昨日档→1（预登记 §五）。"""
+    # 同相位延续：昨日 relay_heat 已持续 3 日 → 今日 relay_heat → 4
+    db = _db()
+    db.cols[relay.COLLECTION] = FakeCol([_relay_doc(_D1, "relay_heat", dip=3)])
+    monkeypatch.setattr(relay, "_dispatch_jev", _dispatch_phase("relay_heat"))
+    run_relay_index_day(db, [_D0])
+    _, doc = db.cols[relay.COLLECTION].updates[0]
+    assert doc["daysInPhase"] == 4
+    # 相位变更：昨日 relay_heat → 今日 divergence → 1
+    db = _db()
+    db.cols[relay.COLLECTION] = FakeCol([_relay_doc(_D1, "relay_heat", dip=3)])
+    monkeypatch.setattr(relay, "_dispatch_jev", _dispatch_phase("divergence"))
+    run_relay_index_day(db, [_D0])
+    _, doc = db.cols[relay.COLLECTION].updates[0]
+    assert doc["daysInPhase"] == 1
+    # 缺昨日档 → 1
+    db = _db()
+    monkeypatch.setattr(relay, "_dispatch_jev", _dispatch_phase("relay_heat"))
+    run_relay_index_day(db, [_D0])
+    _, doc = db.cols[relay.COLLECTION].updates[0]
+    assert doc["daysInPhase"] == 1
+
+
+def test_prev_phase_line_soft_reference(monkeypatch):
+    """v9 昨日相位软参照行：有昨日档→「昨日相位：X · 已持续 N 日」入叙事；缺档→整行缺席。"""
+    db = _db()
+    db.cols[relay.COLLECTION] = FakeCol([_relay_doc(_D1, "relay_heat", dip=3)])
+    line = relay._prev_phase_line(db, _D0)
+    assert line == "昨日相位：接力顺畅 · 已持续 3 日"
+    # 缺 daysInPhase → 仅相位名（不伪持续天数）
+    db.cols[relay.COLLECTION] = FakeCol([_relay_doc(_D1, "divergence")])
+    assert relay._prev_phase_line(db, _D0) == "昨日相位：高位分歧"
+    # 缺昨日档 → None（fail-visible 整行缺席）
+    db.cols[relay.COLLECTION] = FakeCol([])
+    assert relay._prev_phase_line(db, _D0) is None
+    # 叙事集成：有昨日档时行入叙事
+    db = _db()
+    db.cols[relay.COLLECTION] = FakeCol([_relay_doc(_D1, "relay_heat", dip=3)])
+    monkeypatch.setattr(relay, "_dispatch_jev", _dispatch_phase("relay_heat"))
+    run_relay_index_day(db, [_D0])
+    _, doc = db.cols[relay.COLLECTION].updates[0]
+    assert "昨日相位：接力顺畅 · 已持续 3 日" in doc["narrative"]
+
+
 def test_run_skips_missing_final():
     """jiuyan final 缺失日跳过不落库（fail-visible）。"""
     db = FakeDb({"snapshot_frames": _frames([_D0]), "jiuyan_action": FakeCol([])})
@@ -599,13 +671,13 @@ def test_run_skips_missing_final():
 
 
 def test_questions_schema():
-    """题目集：v8 10 题；choice 题全部带 insufficient_evidence 兜底（防超证据判读）。"""
-    assert len(QUESTIONS_RELAY) == 10
+    """题目集：v9 8 题；choice 题全部带 insufficient_evidence 兜底（防超证据判读）。"""
+    assert len(QUESTIONS_RELAY) == 8
     for qid, q in QUESTIONS_RELAY.items():
         if q["type"] == "choice":
             assert "insufficient_evidence" in q["criteria"], qid
         else:
-            assert q["type"] == "score" and qid in ("relay_index", "leader_strength")
+            assert q["type"] == "score" and qid in ("relay_index",)
 
 
 # ── 2026-10-16 code review 修复（口径自相矛盾 / fail-visible 崩溃）────────────
@@ -1550,9 +1622,7 @@ def test_question_set_v6_instructions_lock():
     from backend.analysis.hotlist.jev_state import SCORE_ANCHORS_10
 
     for q, needles in (("relay_index", ("板块接力链", "龙头结构")),
-                       ("relay_phase", ("板块接力链", "龙头结构")),
-                       ("leader_strength", ("龙头结构",)),
-                       ("theme_pulse", ("板块接力链",))):
+                       ("relay_phase", ("板块接力链", "龙头结构"))):
         txt = QUESTIONS_RELAY[q]["instructions"]
         for needle in needles:
             assert needle in txt, (q, needle)
@@ -1561,7 +1631,7 @@ def test_question_set_v6_instructions_lock():
         txt = QUESTIONS_RELAY[q]["instructions"]
         assert needle in txt, q
         assert "龙头结构" not in txt and "板块接力链" not in txt, f"{q} 不应引用新段"
-    for q in ("relay_index", "leader_strength"):
+    for q in ("relay_index",):
         assert QUESTIONS_RELAY[q]["criteria"] == list(SCORE_ANCHORS_10)
 
 
@@ -1575,9 +1645,7 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
                 "relay_momentum": {"type": "choice", "choice": "holding", "probabilities": {}},
                 "ladder_health": {"type": "choice", "choice": "pyramid", "probabilities": {}},
                 "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
-                "theme_pulse": {"type": "choice", "choice": "mainline_continue", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
-                "leader_strength": {"type": "score", "score": 8.0, "legend": list(range(11))},
                 "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
                 "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
                 "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
@@ -1594,7 +1662,7 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     assert f"主线板块：{struct['mainline']['name']}" in narrative
     assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
     assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
-    assert doc["questionSetVersion"] == "v8"
+    assert doc["questionSetVersion"] == "v9"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1907,17 +1975,16 @@ def test_money_hist_series_suspension_skips_denominator(monkeypatch):
 
 
 def test_questions_v7_criteria_revisions():
-    """D7：判据修订四处——ladder 补 balanced 过渡档、momentum 冲突消解序、
-    theme_pulse 主线双定义消歧、money_effect 线化 + relay_index 锚定句。"""
+    """D7：判据修订——ladder 补 balanced 过渡档、momentum 冲突消解序、
+    money_effect 线化 + relay_index 锚定句（v9 删 theme_pulse，其双定义消歧断言随删）。"""
     lh = QUESTIONS_RELAY["ladder_health"]["criteria"]
     assert "balanced" in lh and "0.5" in lh["balanced"] and "1.5" in lh["balanced"]
     assert "断板亏钱与炸板面证据定档" in QUESTIONS_RELAY["relay_momentum"]["instructions"]
-    assert "三日存活口径" in QUESTIONS_RELAY["theme_pulse"]["instructions"]
     assert "≤-2%" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "近20日分位" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "分位刻度" in QUESTIONS_RELAY["relay_index"]["instructions"]
-    # 版本与题数：v8 市场周期融合 7→10（2026-11-12 用户裁决，既有 7 题 criteria 零改动）
+    # 版本与题数：v9 删 theme_pulse/leader_strength 10→8（2026-11-12 用户裁决）
     from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
-    assert QUESTION_SET_VERSION_RELAY == "v8"
-    assert len(QUESTIONS_RELAY) == 10
+    assert QUESTION_SET_VERSION_RELAY == "v9"
+    assert len(QUESTIONS_RELAY) == 8
 

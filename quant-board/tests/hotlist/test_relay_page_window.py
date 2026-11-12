@@ -149,14 +149,14 @@ def test_detail_filter_bar_has_no_date_controls(js: str):
 
 # ── 需求 2：表格列 ─────────────────────────────────────────────────────────
 def test_table_columns_drop_tokens_time_add_leader(js: str):
-    """表头：去 tokens/判定时间，加龙头强度（共 9 列）。"""
+    """表头：去 tokens/判定时间；v9 删龙头强度列（共 8 列）。"""
     rt = _fn(js, "renderRelayTab")
     head = rt[rt.index('$(\'relayTable\').innerHTML'):]
     assert "tokens" not in head, "表头不应再含 tokens 列"
     assert "判定时间" not in head, "表头不应再含判定时间列"
-    assert "龙头强度" in head, "表头应含龙头强度列"
+    assert "龙头强度" not in head, "v9 删 leader_strength，表头不应再含龙头强度列"
     assert "节点" in head and "wzsB" in rt, "表头应含弱转强节点列（2026-10-21 立项）"
-    assert 'colspan="10"' in rt, "展开详情行 colspan 应为 10（加节点列后）"
+    assert 'colspan="8"' in rt, "展开详情行 colspan 应为 8（v9 删题材/龙头强度两列）"
     assert 'rWzsSel' in js, "节点筛选下拉必须接线"
     assert "'weak', '弱']" in js and "'strong', '强']" in js and "'wzs', '弱转强']" in js,         "节点筛选枚举必须三态（弱/弱转强/强，2026-10-22 用户裁决）"
     assert "w.state === 'wzs'" in rt and "w.state === 'strong'" in rt,         "节点徽标须按 state 分支（wzs/strong）"
@@ -229,18 +229,18 @@ def test_zone_filter_actually_matches_each_option(js: str, tmp_path):
 
 
 def test_two_new_filters_zone_and_leader(js: str):
-    """筛选条增加「分区」「龙头强度」两个下拉，且状态可重置。"""
+    """筛选条「分区」下拉；v9 删龙头强度筛选，状态可重置。"""
     rt = _fn(js, "renderRelayTab")
     bar = rt[rt.index("bar.innerHTML"):]
     assert "rZoneSel()" in bar, "应有分区筛选"
-    assert "rLeaderSel()" in bar, "应有龙头强度筛选"
-    assert "rZoneSel" in js and "rLeaderSel" in js
+    assert "rLeaderSel()" not in bar, "v9 删 leader_strength，不应再有龙头强度筛选"
+    assert "rZoneSel" in js and "rLeaderSel" not in js
     # 分区筛选与 zoneOf 同源（不另抄阈值）
     assert "zoneKey(zoneOf(r)) === f.zone" in rt
-    assert "leaderBandOf(r) === f.leader" in rt
+    assert "leaderBandOf" not in rt, "v9 删龙头强度分带筛选"
     # rClear 重置新字段
     clear = _fn(js, "rClear")
-    assert "zone: ''" in clear and "leader: ''" in clear
+    assert "zone: ''" in clear and "leader:" not in clear
 
 
 # ── 需求 4：标题后无大段说明、字号一致 ─────────────────────────────────────
@@ -319,8 +319,9 @@ def test_row_click_selects_only_caret_toggles_panel(html: str, js: str):
 def test_kpi_third_line_is_tier_description(js: str):
     """KPI 第三行为档位描述，不是统计口径文字。"""
     kpi = _fn(js, "renderRelayKpi")
-    for d in ("PHASE_DESC", "MOM_DESC", "LADDER_DESC", "MONEY_DESC", "THEME_DESC", "leaderDesc"):
+    for d in ("PHASE_DESC", "MOM_DESC", "LADDER_DESC", "MONEY_DESC"):
         assert d in kpi, f"KPI 应使用 {d}"
+    assert "THEME_DESC" not in kpi and "leaderDesc" not in kpi, "v9 删题材脉络/龙头强度 KPI"
     # 旧口径语义文案已删
     for stale in ("量化比率口径", "主锚三日链", "晋级/断板/溢价", "近5日榜", "最高板地位", "今日 vs 昨日"):
         assert stale not in js, f"旧统计口径文案应删除：{stale}"
@@ -387,7 +388,7 @@ def test_relay_questions_route_serves_question_set_criteria():
     # 关键阈值必须在全文里（防再次被缩略）
     assert "二板家数 ≤ 三板+的一半" in got["ladder_health"]["fracture"]
     assert "三板+/二板比率 ≥ 1" in got["ladder_health"]["inverted"]
-    assert "top3 重合 1-2" in got["theme_pulse"]["rotation"]
+    assert "theme_pulse" not in got, "v9 删 theme_pulse，读口不应再下发"
 
 
 def test_band_cuts_match_diagnostic_script(js: str, tmp_path):
@@ -439,18 +440,10 @@ def test_band_cuts_match_diagnostic_script(js: str, tmp_path):
 
 
 def test_leader_bands_single_source_and_anchored(js: str):
-    """龙头强度切口单表化（review B2）：leaderDesc 只查表，切点⊆SCORE_ANCHORS_10。"""
-    ld = _fn(js, "leaderDesc")
-    assert "LEADER_BANDS.find" in ld, "BUG: leaderDesc 应只查 LEADER_BANDS 表"
-    # 不再另写一份 if 切口链
-    assert not re.search(r"if \(v >= \d+\) return", ld), "BUG: leaderDesc 不得再内联阈值"
-    # 切点必须取自题目集锚点序（jev_state.SCORE_ANCHORS_10，字符串元素）
-    from backend.analysis.hotlist.jev_state import SCORE_ANCHORS_10
-    bands = re.findall(r"\['(\d+)-(\d+)", _const(js, "LEADER_BANDS"))
-    cuts = {int(lo) for lo, _ in bands}
-    assert cuts <= {int(a) for a in SCORE_ANCHORS_10}, \
-        f"切点 {cuts} 必须都是题目集锚点 {SCORE_ANCHORS_10}"
-    assert "0-11" in _const(js, "LEADER_BANDS") and "78-100" in _const(js, "LEADER_BANDS")
+    """v9 删 leader_strength：龙头强度分带/描述 helper 应随之移除（不留死代码）。"""
+    assert "function leaderDesc(" not in js, "v9 删 leader_strength，leaderDesc 应移除"
+    assert "LEADER_BANDS" not in js, "v9 删 leader_strength，LEADER_BANDS 应移除"
+    assert "function leaderBandOf(" not in js, "v9 删 leader_strength，leaderBandOf 应移除"
 
 
 def test_preset_buttons_highlight_and_toggle_back(html: str, js: str):
@@ -611,11 +604,12 @@ def test_phase_chart_has_hover_tooltip(js: str):
     # 命中层必须真的裱进 SVG（否则循环里拼了但不渲染）
     assert 'class="ch-hits">${hits}</g>' in dc, "命中层应拼入 SVG"
     assert "wireChartTip(id)" in dc, "应绑定悬停交互"
-    # 数据缝在 data-* 上（9 个当日档位字段，顺序与 LBL 对齐）
+    # 数据缝在 data-* 上（当日档位字段，顺序与 LBL 对齐；v9 删 THEME_CN）
     assert 'data-d="' in dc and "data-x=" in dc
     for k in ("PHASE_CN[r.relayPhase]", "MOM_CN[r.relayMomentum]", "LADDER_CN[r.ladderHealth]",
-              "MONEY_CN[r.moneyEffect]", "THEME_CN[r.themePulse]", "z.label"):
+              "MONEY_CN[r.moneyEffect]", "z.label"):
         assert k in dc, f"tooltip 数据应含 {k}"
+    assert "THEME_CN[r.themePulse]" not in dc, "v9 删 theme_pulse，tooltip 数据不应再含"
 
     wt = _fn(js, "wireChartTip")
     assert "mouseenter" in wt and "mouseleave" in wt, "应绑定 mouseenter/mouseleave"

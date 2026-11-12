@@ -656,7 +656,8 @@ def _sector_top3_streaks(db: Any, date: str, names: list[str], limit: int = 10
 
 
 def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
-    """昨日 top3 题材今日地位 + 近5日题材榜（主线持续天数证据，theme_pulse 主锚）。"""
+    """昨日 top3 题材今日地位 + 近5日题材榜（主线持续天数证据；v9 删 theme_pulse 后保留作
+    relay_index/relay_phase 的题材结构参照，删题不删叙事）。"""
     prev_dates = trading_dates_before(db, date, 1)
     if not prev_dates:
         return "题材演化：无昨日交易日"
@@ -2046,6 +2047,9 @@ def anchor_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
 _MC_STATE_CN = {"loss": "亏钱效应", "gain": "赚钱效应", "ice": "冰点", "wzs": "弱转强修复"}
 _MC_EVENT_CN = {"spaceBreakthrough": "空间突破↑", "spaceCompress": "空间压缩↓",
                 "highCollapse": "高位崩塌✗", "highTolerance": "高位宽容✓"}
+# v9 相位中文映射（昨日相位软参照行用）
+_PHASE_CN = {"launch": "启动", "relay_heat": "接力顺畅", "divergence": "高位分歧",
+             "collapse": "退潮崩塌", "bottoming": "冰点出清", "insufficient_evidence": "证据不足"}
 
 
 def _mc_event_text(e: dict) -> str:
@@ -2095,6 +2099,26 @@ def market_cycle_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID)
         lines.append(f"空间龙一·{seg_cn}：{a.get('name')}({a.get('code')}) 高度{a.get('height')}板 · "
                      f"{pool_txt}{sealed}")
     return lines
+
+
+def _prev_phase_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str | None:
+    """v9 昨日相位软参照行（预登记 relay-v9 §五）：读前一 RELAY 档 relayPhase+daysInPhase。
+
+    缺昨日档/缺相位 → None（整行缺席 fail-visible，不伪占位）。供 relay_phase 判读作惯性参照，
+    非硬约束（jev 可背离）。daysInPhase 由判后后验计算落库，此处只读昨日已落库值。
+    """
+    prev = _prev_relay_date(db, date, dataset_id)
+    if prev is None:
+        return None
+    d = db[COLLECTION].find_one({"_id": f"{prev}:RELAY"}) or {}
+    ph = d.get("relayPhase")
+    if not ph:
+        return None
+    cn = _PHASE_CN.get(ph, ph)
+    dip = d.get("daysInPhase")
+    if isinstance(dip, int) and dip >= 1:
+        return f"昨日相位：{cn} · 已持续 {dip} 日"
+    return f"昨日相位：{cn}"
 
 
 # ── 组装与 run ──────────────────────────────────────────────────────────────
@@ -2148,6 +2172,10 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     lines.extend(anchor_lines(db, date, dataset_id, money_hist=money_hist))
     # 段7 市场情绪周期（v8 融合，2026-11-12）：状态机态/事件/天花板/两轨龙一命运，供新增3题
     lines.extend(market_cycle_lines(db, date, dataset_id))
+    # v9 昨日相位软参照行（相位惯性，jev 可背离；缺档整行缺席）
+    _pp = _prev_phase_line(db, date, dataset_id)
+    if _pp:
+        lines.append(_pp)
     return "\n".join(lines)
 
 
@@ -2194,6 +2222,15 @@ def run_relay_index_day(db: Any, dates: list[str], *,
         answers = parsed.get("answers") or {}
         scores = parsed.get("scores") or {}
         usage = parsed.get("usage") or {}
+        # v9 daysInPhase 后验确定性计算（预登记 relay-v9 §五）：今日相位==昨日相位→昨日+1，否则 1。
+        # 零 token；首日/缺昨日档/相位变更→1。供次日叙事软参照行读取（不上前端）。
+        _today_phase = (answers.get("relay_phase") or {}).get("choice")
+        _prev_d = _prev_relay_date(db, date, dataset_id)
+        _prev_doc = db[COLLECTION].find_one({"_id": f"{_prev_d}:RELAY"}) if _prev_d else None
+        _prev_phase = (_prev_doc or {}).get("relayPhase")
+        _prev_dip = (_prev_doc or {}).get("daysInPhase")
+        days_in_phase = (_prev_dip + 1) if (_today_phase and _today_phase == _prev_phase
+                                           and isinstance(_prev_dip, int) and _prev_dip >= 1) else 1
         doc = {"_id": f"{date}:RELAY", "origin": "relay_index_daily", "tradingDate": date,
                "status": "ok" if parsed["ok"] else "degraded",
                "questionSetVersion": QUESTION_SET_VERSION_RELAY,
@@ -2216,9 +2253,9 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "relayPhaseProbabilities": (answers.get("relay_phase") or {}).get("probabilities"),
                "relayMomentum": (answers.get("relay_momentum") or {}).get("choice"),
                "ladderHealth": (answers.get("ladder_health") or {}).get("choice"),
-               "leaderStrength": scores.get("leader_strength"),
                "moneyEffect": (answers.get("money_effect") or {}).get("choice"),
-               "themePulse": (answers.get("theme_pulse") or {}).get("choice"),
+               # v9：删 leaderStrength/themePulse（删题）；daysInPhase 相位持续（后验，进语料不上前端）
+               "daysInPhase": days_in_phase,
                # v8 市场周期融合 3 题（2026-11-12）：补维度，状态机仍唯一权威；缺语料→insufficient_evidence
                "turnQuality": (answers.get("turn_quality") or {}).get("choice"),
                "cycleIntensity": (answers.get("cycle_intensity") or {}).get("choice"),
@@ -2234,7 +2271,7 @@ def run_relay_index_day(db: Any, dates: list[str], *,
         col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         print(f"[relay] {date} → index={doc['relayIndex']} phase={doc['relayPhase']} "
               f"momentum={doc['relayMomentum']} ladder={doc['ladderHealth']} "
-              f"money={doc['moneyEffect']} theme={doc['themePulse']} ok={parsed['ok']} "
+              f"money={doc['moneyEffect']} daysInPhase={doc['daysInPhase']} ok={parsed['ok']} "
               f"tokens={(usage.get('input_tokens') or 0) + (usage.get('output_tokens') or 0)}")
 
 

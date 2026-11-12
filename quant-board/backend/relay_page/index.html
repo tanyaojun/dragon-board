@@ -921,7 +921,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   diebanFilter: { q: '', board: '', scope: 'neg', streak: '', draw: '' },
   riseFilter: { q: '', board: '', scope: 'neg', streak: '' },
-  relayFilter: { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' },
+  relayFilter: { phase: '', momentum: '', wzs: '', ladder: '', money: '', zone: '' },
   // 判定明细行选中（2026-10-18）：点行 → 页头 KPI 卡跟随该日联动；null=用日期框当日
   relayFocus: null,
   hitFilter: 'toxic',  // 「分区命中清单」筛选：all|toxic|ice|green（默认毒带=用户关注点）
@@ -943,7 +943,6 @@ const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
 const LADDER_CN = {pyramid:'金字塔', balanced:'中位偏薄', fracture:'中位断层', inverted:'高位倒挂', sparse:'稀疏', insufficient_evidence:'证据不足'};
 const MONEY_CN = {strong:'赚钱', neutral:'中性', losing:'亏钱', insufficient_evidence:'证据不足'};
-const THEME_CN = {mainline_continue:'主线延续', rotation:'轮动', scattered:'散乱', insufficient_evidence:'证据不足'};
 // 档位描述（KPI 卡第三行，2026-10-18 用户裁决）：不用「统计口径」语义，直接说该档位意味着什么。
 // 以下为题目集 criteria 的**摘要**（非逐字；量化判据有删节，如 fracture 的「二板家数≤三板+一半」、
 // inverted 的「三板+/二板比率≥1」、rotation 的「top3 重合1-2」）。权威全文单一事实源 =
@@ -957,11 +956,11 @@ const LADDER_DESC = {
   sparse:'全面稀疏：各级家数均处参照低位，梯队整体萎缩',
   insufficient_evidence:'梯队证据缺失，无法判断' };
 const PHASE_DESC = {
-  launch:'启动/首板堆积：首板占梯队比例明显升高、新题材批量出现，晋级率尚低但断板亏钱与炸板面可控',
-  relay_heat:'接力顺畅：晋级率处参照带中高位、梯队金字塔完整、断板亏钱可控、炸板面健康，龙头封板质量稳固',
-  divergence:'高位分歧：最高梯队仍在但晋级率明显回落、断板亏钱扩散、中位梯队断层，或炸板面恶化',
-  collapse:'退潮崩塌：龙头断板/大面、高位批量断板、亏钱效应主导，或炸板面极端',
-  bottoming:'冰点出清：高度压平、梯队以首板为主、接力近乎停滞但亏钱效应收敛',
+  launch:'启动/首板堆积：首板占比≥75%（或较昨日+10pct）、新题材批量，晋级率≤P50 但断板/炸板可控，高度低位',
+  relay_heat:'接力顺畅：晋级率≥P50、梯队不断层、断板可控且大面<10%、炸板健康，龙头封板稳固',
+  divergence:'高位分歧：最高梯队仍在但晋级率<P50（或较昨日−5pct）、断板亏钱扩散/中位断层/炸板恶化',
+  collapse:'退潮崩塌：龙头断板/大面+高位批量断+亏钱主导，或炸板极端；涨停家数与高度同步回落',
+  bottoming:'冰点出清：高度压平（最高板≤P20）、首板为主（≥80%）、接力近停滞（晋级率≤P20）、亏钱收敛',
   insufficient_evidence:'证据缺失，无法判断' };
 const MOM_DESC = {
   accelerating:'晋级率/涨停家数/高度较昨日明显抬升，断板亏钱收窄，炸板面收敛',
@@ -974,32 +973,6 @@ const MONEY_DESC = {
   neutral:'中性：晋级与断板大致平衡，中位数在零附近，无明显亏钱扩散',
   losing:'接力亏钱：断板股中位数明显为负、大面家数多或隔日溢价转负，亏钱效应扩散',
   insufficient_evidence:'证据缺失，无法判断' };
-const THEME_DESC = {
-  mainline_continue:'主线延续：同一题材连续 ≥3 日位居 top3，或当日 top3 与昨日重合 ≥2 且板内高度未塔',
-  rotation:'轮动换线：昨日前排题材今日退潮、新题材接棒，或主线昨日为主今日明显缩容',
-  scattered:'散乱一日游：题材多而杂、单题材家数少、无明确梯队与主线',
-  insufficient_evidence:'证据缺失，无法判断' };
-// 龙头强度分带（展示/筛选共用，2026-10-18 SSOT 收敛：切口与描述同表，leaderDesc 只查表）。
-// 切点取题目集锚点序 SCORE_ANCHORS_10（jev_state.py）的隔档锚 11/33/56/78；
-// 档名与描述为**展示层语义**，非判据（题目集 _LEADER_INSTR 只有 0/100 两端，无分段）。
-const LEADER_BANDS = [
-  ['0-11', '极弱', v => v < 11, '龙头高度不足或封板不稳，带动有限（高度处参照极低位）'],
-  ['11-33', '偏弱', v => v >= 11 && v < 33, '龙头高度不足或封板不稳，带动有限'],
-  ['33-56', '一般', v => v >= 33 && v < 56, '龙头地位一般，封板质量或带动偏弱'],
-  ['56-78', '稳固', v => v >= 56 && v < 78, '龙头地位稳固，封板质量与带动尚可'],
-  ['78-100', '强势', v => v >= 78, '高度稀缺且封板稳固，带动强劲']];
-function leaderBandOf(r){
-  const v = r && r.leaderStrength;
-  if (v == null || !isFinite(v)) return 'na';
-  const b = LEADER_BANDS.find(x => x[2](v));
-  return b ? b[0] : 'na';
-}
-// 档位描述只查表（与 LEADER_BANDS 同源，不再另写一份切口）
-function leaderDesc(v){
-  if (v == null || !isFinite(v)) return '无有效龙头';
-  const b = LEADER_BANDS.find(x => x[2](v));
-  return b ? b[3] : '无有效龙头';
-}
 const STAGE_CN = {ice:'冰点', start:'启动', ferment:'发酵', climax:'高潮', retreat:'退潮'};
 const CROWD_CN = {no_crowding:'无拥挤', top_acceleration:'高位加速', late_seal_weakness:'封板弱化', breadth_climax:'广度高潮', crowd_clearing:'拥挤解除', insufficient_evidence:'证据不足'};
 const PATTERN_CN = {low_recover:'低开修复', high_fade:'冲高回落', steady_strong:'全天强势', steady_weak:'全天弱势', rally_fade:'冲高回落', late_rescue:'尾盘偷袭', one_way_down:'单边走弱', wide_swing:'剧烈反复', narrow_range:'窄幅平淡', unclear:'证据不足'};
@@ -1028,7 +1001,6 @@ const phaseB = v => badge(PHASE_CN[v]||v, v==='relay_heat'?'b-green':v==='diverg
 const momB = v => badge(MOM_CN[v]||v, v==='accelerating'?'b-green':v==='holding'?'b-gray':v==='weakening'?'b-amber':'b-purple');
 const ladderB = v => badge(LADDER_CN[v]||v, v==='pyramid'||v==='balanced'?'b-green':v==='fracture'?'b-amber':v==='inverted'?'b-red':'b-gray');
 const moneyB = v => badge(MONEY_CN[v]||v, v==='strong'?'b-green':v==='neutral'?'b-gray':'b-red');
-const themeB = v => badge(THEME_CN[v]||v, v==='mainline_continue'?'b-purple':v==='rotation'?'b-blue':'b-gray');
 const gapDetailCell = d => {
   const p = (d && d.anchorGaps) || [], dv = (d && d.anchorGapsDerived) || [];
   if (!p.length && !dv.length) return '';
@@ -1471,7 +1443,7 @@ function renderKpis(){
     <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}${confChip(tempAns.confidence)}</div><div class="s">${stamp === '收盘数据' ? '0-100 · 参照20日' : stamp}</div></div>
     <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}${confChip(crowdAns.confidence)}</div><div class="s">${stamp}</div></div>
     <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">${intraday ? 'sequence_stage' : 'day_stage'}</div></div>
-    ${relayCard('连板情绪指数', `<span style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</span>`, relaySub)}
+    ${relayCard('连板情绪指数（观察）', `<span style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</span>`, relaySub)}
     ${relayCard('接力相位', `${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}`, relaySub)}
     ${relayCard('接力边际', `${momB(d.relayMomentum)}${confChip(((d.answers||{}).relay_momentum||{}).confidence)}`, relaySub)}
     ${relayCard('梯队 / 钱效', `${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}`, relaySub)}
@@ -1622,12 +1594,12 @@ function renderRelayMini(){
     return;
   }
   $('relayMini').innerHTML = `<div class="phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex}</div>
-    <div class="flex" style="margin-top:8px">${phaseB(d.relayPhase)}${momB(d.relayMomentum)}${ladderB(d.ladderHealth)}${moneyB(d.moneyEffect)}${themeB(d.themePulse)}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:8px">龙头强度 ${d.leaderStrength ?? '-'} · ${esc(d.model||'')}</div>`;
+    <div class="flex" style="margin-top:8px">${phaseB(d.relayPhase)}${momB(d.relayMomentum)}${ladderB(d.ladderHealth)}${moneyB(d.moneyEffect)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">${esc(d.model||'')}</div>`;
 }
 
 const RELAY_ENUM = { phase: Object.entries(PHASE_CN), momentum: Object.entries(MOM_CN),
-  ladder: Object.entries(LADDER_CN), money: Object.entries(MONEY_CN), theme: Object.entries(THEME_CN) };
+  ladder: Object.entries(LADDER_CN), money: Object.entries(MONEY_CN) };
 function rSel(label, key){
   const cur = STATE.relayFilter[key];
   const list = [['', label + ' · 全部']].concat(RELAY_ENUM[key]);
@@ -1635,7 +1607,7 @@ function rSel(label, key){
     + list.map(([v, t2]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t2)}</option>`).join('') + '</select>';
 }
 function rSet(k, v){ STATE.relayFilter[k] = v; STATE.relayPage = 1; renderRelayTab(); }
-function rClear(){ STATE.relayFilter = { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' };
+function rClear(){ STATE.relayFilter = { phase: '', momentum: '', wzs: '', ladder: '', money: '', zone: '' };
   STATE.relayPage = 1; renderRelayTab(); }
 // ── 连板情绪表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
 // 每页上限 20 条；只影响本表行切片，KPI/分带/相位等仍吃全量筛选集（口径不变）。
@@ -1784,10 +1756,8 @@ function renderRelayTab(){
     && (!f.momentum || (r.relayMomentum || '') === f.momentum)
     && (!f.ladder || (r.ladderHealth || '') === f.ladder)
     && (!f.money || (r.moneyEffect || '') === f.money)
-    && (!f.theme || (r.themePulse || '') === f.theme)
     && (!f.wzs || (r.wzs && r.wzs.state === f.wzs))
-    && (!f.zone || zoneKey(zoneOf(r)) === f.zone)
-    && (!f.leader || leaderBandOf(r) === f.leader));
+    && (!f.zone || zoneKey(zoneOf(r)) === f.zone));
   renderRelayKpi(shown);
   renderLeaders();
   const s = STATE.relaySort;
@@ -1809,7 +1779,6 @@ function renderRelayTab(){
   };
   const wzsKey = r => ({ wzs: 3, strong: 2, weak: 1 }[(r.wzs || {}).state] || 0);
   const kv = { date: r => r.tradingDate || '', idx: r => r.relayIndex == null ? -1 : r.relayIndex,
-    leader: r => r.leaderStrength == null ? -1 : r.leaderStrength,
     zone: r => zoneOf(r).label || '', wzs: wzsKey };
   const rows = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
@@ -1833,10 +1802,8 @@ function renderRelayTab(){
     <td><span${critTip('relay_momentum', r.relayMomentum, '边际', MOM_DESC[r.relayMomentum])}>${momB(r.relayMomentum)}${confChip(((r.answers||{}).relay_momentum||{}).confidence)}</span></td>
     <td>${wzsB(r)}</td>
     <td><span${critTip('ladder_health', r.ladderHealth, '梯队', LADDER_DESC[r.ladderHealth])}>${ladderB(r.ladderHealth)}${confChip(((r.answers||{}).ladder_health||{}).confidence)}</span></td>
-    <td><span${critTip('money_effect', r.moneyEffect, '钱效', MONEY_DESC[r.moneyEffect])}>${moneyB(r.moneyEffect)}${confChip(((r.answers||{}).money_effect||{}).confidence)}</span></td>
-    <td><span${critTip('theme_pulse', r.themePulse, '题材', THEME_DESC[r.themePulse])}>${themeB(r.themePulse)}${confChip(((r.answers||{}).theme_pulse||{}).confidence)}</span></td>
-    <td class="num" style="color:${tempColor(r.leaderStrength)};font-weight:600">${r.leaderStrength ?? '-'}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="10">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
+    <td><span${critTip('money_effect', r.moneyEffect, '钱效', MONEY_DESC[r.moneyEffect])}>${moneyB(r.moneyEffect)}${confChip(((r.answers||{}).money_effect||{}).confidence)}</span></td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="8">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
   }).join('');
   STATE.relayEntries = shown.map(r => relayEntryOf(r));
   const bar = $('relayFilterBar');
@@ -1849,16 +1816,16 @@ function renderRelayTab(){
   if (!(ae && bar.contains(ae) && ae.tagName === 'SELECT' && !ae.classList.contains('pgjump')))
     bar.innerHTML = rSel('相位', 'phase') + rSel('边际', 'momentum')
       + rWzsSel() + rSel('梯队', 'ladder')
-      + rSel('钱效', 'money') + rSel('题材', 'theme')
-      + rZoneSel() + rLeaderSel()
+      + rSel('钱效', 'money')
+      + rZoneSel()
       + `<button onclick="rClear()">清除筛选</button>` + relayPager(pg.page, pg.total);
   else {
     // 筛选 select 持焦时整条 bar 不重建（防夺焦，见上）；但分页必须单独刷新：
     // rSet/rClear 已把页码重置回 1，若不同步，pager 会停在旧页码/旧禁用态（评审 F-minor-1）。
     const pgEl = $('relayPager'); if (pgEl) pgEl.innerHTML = relayPager(pg.page, pg.total);
   }
-  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th><th>题材</th>${th('龙头强度', 'leader')}</tr>`
-    + (body || '<tr><td colspan="10" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th></tr>`
+    + (body || '<tr><td colspan="8" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   renderRelayAnalysis();
 }
 // 分区筛选枚举（与 zoneOf 同源，不另抄阈值）
@@ -1893,13 +1860,6 @@ const critTip = (qid, choice, label, fallback) => {
   const t = critText(qid, choice) || fallback;
   return t ? ` title="${esc(label + '判据：' + t)}"` : '';
 };
-function rLeaderSel(){
-  const cur = STATE.relayFilter.leader;
-  const L = [['', '龙头强度 · 全部']].concat(LEADER_BANDS.map(b => [b[0], `${b[0]} ${b[1]}`])).concat([['na', '缺']]);
-  return `<select title="龙头强度筛选" onchange="rSet('leader', this.value)">`
-    + L.map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('')
-    + `</select>`;
-}
 // 页头 KPI（2026-10-18 用户裁决）：点行 → 该行日期；否则用日期框当日；
 // 当日无存档（非交易日/未生成）时回落区间内最新一日，并在卡上明示实际日期（fail-visible，不置空）。
 // 第三行改为「档位描述」（该档位意味着什么），不再显示「统计口径」文字。
@@ -1919,15 +1879,13 @@ function renderRelayKpi(shown){
   const aOf = k => ((d.answers || {})[k] || {});
   const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v" style="font-size:16px">${v}</div><div class="s kpi-desc" title="${esc(sub)}">${esc(sub)}</div></div>`;
   $('relayKpi').innerHTML =
-    `<div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}${confChip(aOf('relay_index').confidence)}</div>`
+    `<div class="kpi"><div class="k">连板情绪指数（观察）</div><div class="v phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}${confChip(aOf('relay_index').confidence)}</div>`
     + `<div class="kpi-day">${dateBig ? `${dateBig}${src ? ` <span class="kpi-src-tag">${src}</span>` : ''}` : ''}</div>`
     + `<div class="s kpi-desc">${d.relayIndex == null ? '无指数存档' : `0-100 · ${esc(zoneOf(d).label)} · ${esc(label || '当日存档')}`}</div></div>`
     + card('接力相位', `${phaseB(d.relayPhase)}${confChip(aOf('relay_phase').confidence)}`, tierDesc('relay_phase', d.relayPhase, PHASE_DESC[d.relayPhase]))
     + card('边际方向', `${momB(d.relayMomentum)}${confChip(aOf('relay_momentum').confidence)}`, tierDesc('relay_momentum', d.relayMomentum, MOM_DESC[d.relayMomentum]))
     + card('梯队结构', `${ladderB(d.ladderHealth)}${confChip(aOf('ladder_health').confidence)}`, tierDesc('ladder_health', d.ladderHealth, LADDER_DESC[d.ladderHealth]))
     + card('接力钱效', `${moneyB(d.moneyEffect)}${confChip(aOf('money_effect').confidence)}`, tierDesc('money_effect', d.moneyEffect, MONEY_DESC[d.moneyEffect]))
-    + card('题材脉络', `${themeB(d.themePulse)}${confChip(aOf('theme_pulse').confidence)}`, tierDesc('theme_pulse', d.themePulse, THEME_DESC[d.themePulse]))
-    + `<div class="kpi"><div class="k">龙头强度</div><div class="v phase-big" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}${confChip(aOf('leader_strength').confidence)}</div><div class="s kpi-desc">${esc(leaderDesc(d.leaderStrength))}</div></div>`
     + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`
     + (d.turnQuality != null ? card('转折质量', `<span style="color:${MC_TURN_COLOR[d.turnQuality]||'#94a3b8'}">${MC_TURN_CN[d.turnQuality]||d.turnQuality}</span>${confChip(aOf('turn_quality').confidence)}`, tierDesc('turn_quality', d.turnQuality, MC_TURN_CN[d.turnQuality])) : '')
     + (d.cycleIntensity != null ? card('周期强度', `${MC_INTENSITY_CN[d.cycleIntensity]||d.cycleIntensity}${confChip(aOf('cycle_intensity').confidence)}`, tierDesc('cycle_intensity', d.cycleIntensity, MC_INTENSITY_CN[d.cycleIntensity])) : '')
@@ -3167,38 +3125,6 @@ function tlDetailHtml(r){
     + esc(st) + '</div></div>'
     + '<div><div class="k">版本</div><div class="v" title="本次判定使用的题目集版本；不同版本判据不同，结果不宜直接对比">'
     + esc(r.questionSetVersion || '旧代') + '</div></div>'
-    + '<div><div class="k">续板档位</div><div class="v" title="列表只显高/中/低/极低；概率区间在此披露">'
-    + esc(TL_CHOICE_CN[r.choice] || r.choice || '-')
-    + (TL_CHOICE_RANGE[r.choice] ? '（' + TL_CHOICE_RANGE[r.choice] + '）' : '') + '</div></div>'
-    // v17 两新题 + 板块判答注入状态（旧代档无字段时不出项，不伪造）
-    + (r.leaderCatalystHardness
-      ? '<div><div class="k">催化硬度</div><div class="v" title="v17 新题：驱动涨停的催化可证实性（硬事实/板块叙事/软催化）">'
-        + esc(TL_HARD_CN[r.leaderCatalystHardness] || r.leaderCatalystHardness)
-        + (r.leaderCatalystHardnessConfidence != null
-          ? '（置信 ' + r.leaderCatalystHardnessConfidence + '）' : '') + '</div></div>' : '')
-    + (r.leaderSeatDurability
-      ? '<div><div class="k">身位稳固度</div><div class="v" title="v17 新题：板块内身位稳固/被挑战/可替代接力位">'
-        + esc(TL_SEAT_CN[r.leaderSeatDurability] || r.leaderSeatDurability)
-        + (r.leaderSeatDurabilityConfidence != null
-          ? '（置信 ' + r.leaderSeatDurabilityConfidence + '）' : '') + '</div></div>' : '')
-    + (r.sectorJudgmentState
-      ? '<div><div class="k">板块判答</div><div class="v" title="v17：板块级深度/延续判答注入个股叙事的状态（空间题跨题一致性原料）">'
-        + esc(TL_SJ_STATE_CN[r.sectorJudgmentState] || r.sectorJudgmentState) + '</div></div>' : '')
-    + '<div><div class="k">结局</div><div class="v" style="color:' + outColor + '">'
-    + esc(outTxt) + '</div></div>'
-    + (outKey === 'sealed'
-      ? '<div><div class="k">T+2 溢价</div><div class="v" title="次日收盘 vs 当日收盘">'
-        + (((r.outcomeDay2 || {}).closePct != null)
-          ? (r.outcomeDay2.closePct > 0 ? '+' : '') + r.outcomeDay2.closePct + '%'
-          : '待回填') + '</div></div>'
-      : '')
-    // 板内解析摘要（2026-11-12 自列表徽章迁卡常显）：叙事原文板内解析节（龙头驱动标签+
-    // 解析摘录+同伴驱动全文，读口 evidenceBoardDigest）；旧档无摘要显式说明（不伪造内容）
-    + (r.evidenceBoardResolved
-      ? '<div><div class="k">板内解析</div><div class="v" style="white-space:pre-wrap;font-size:13px;font-weight:400">'
-        + esc(r.evidenceBoardDigest
-          || '板内解析在场但摘要未存档（旧档无叙事原文，原始 JSON 可查看投喂语料）') + '</div></div>'
-      : '')
     + (gated ? '<div><div class="k">证据门</div><div class="v" style="color:#a16207">'
         + esc(TL_GATE_CN[(r.gate || {}).reason] || (r.gate || {}).reason || '-')
         + '</div></div>' : '')
@@ -4272,8 +4198,8 @@ function entryResp(e){
   if (d.responseRaw) return d.responseRaw;
   if (e.kind === 'relay') return { _note: 'responseRaw 未存档（成功路径仅存解析结果；envelope 原文见 CF AI Gateway 日志）',
     relayIndex: d.relayIndex, relayPhase: d.relayPhase, relayPhaseProbabilities: d.relayPhaseProbabilities,
-    relayMomentum: d.relayMomentum, ladderHealth: d.ladderHealth, leaderStrength: d.leaderStrength,
-    moneyEffect: d.moneyEffect, themePulse: d.themePulse, model: d.model, usage: d.usage };
+    relayMomentum: d.relayMomentum, ladderHealth: d.ladderHealth,
+    moneyEffect: d.moneyEffect, model: d.model, usage: d.usage };
   if (e.kind === 'labels') return { _note: 'responseRaw 未存档（成功路径仅存解析结果；envelope 原文见 CF AI Gateway 日志）',
     label: d.label, labelProbabilities: d.labelProbabilities,
     catalystDepth: d.catalystDepth, catalystDepthProbabilities: d.catalystDepthProbabilities,
@@ -5472,8 +5398,7 @@ function drawRelayChart(id, pts, temps){
     const d = [r.tradingDate, r.relayIndex ?? '', r.dayTemperature ?? '',
       PHASE_CN[r.relayPhase] || '', MOM_CN[r.relayMomentum] || '',
       LADDER_CN[r.ladderHealth] || '', MONEY_CN[r.moneyEffect] || '',
-      THEME_CN[r.themePulse] || '', z.label,
-      r.leaderStrength ?? ''].map(v => String(v).replace(/"/g, '&quot;')).join('|');
+      z.label].map(v => String(v).replace(/"/g, '&quot;')).join('|');
     const cx = x(i);
     return `<g class="ch-hit" data-i="${i}" data-x="${cx}" data-y="${y(r.relayIndex)}"`
       + ` data-ty="${t == null ? '' : y(t)}" data-d="${esc(d)}">`

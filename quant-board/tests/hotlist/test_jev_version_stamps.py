@@ -22,7 +22,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     assert jev_state.QUESTION_SET_VERSION == "v2.6"                    # 热榜情绪（日级判据删减）
     assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"                   # 个股打标+合并相位（v3.2 freshness 分界/v3.3 depth 联动判层/v4.0 驱动+买盘兑底选项，均 2026-10-22）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
-    assert relay.QUESTION_SET_VERSION_RELAY == "v8"                    # 连板指数（v8 市场周期融合 +3 题；v7.1 边界修正保留）
+    assert relay.QUESTION_SET_VERSION_RELAY == "v9"                    # 连板指数（v9 删 theme_pulse/leader_strength + 相位状态机化；relay_index 降观察）
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
     assert daily.QUESTION_SET_VERSION_DAILY_LINE == "v1"               # 日线一句话（复盘修复起戳）
 
@@ -92,10 +92,9 @@ def test_relay_v7_1_criteria_wording():
     assert "两分支均不满足时不得判 strong" in strong
     assert "fracture > inverted > balanced" in q["ladder_health"]["instructions"]
     assert "比率恰=0.5 时 fracture 优先于 balanced" in q["ladder_health"]["instructions"]
-    # v8：既有 7 题 criteria 零改动 + 市场周期融合 3 题（2026-11-12，补维度等同加语料）
+    # v9：删 theme_pulse/leader_strength（与题材龙头/周期锚重复）；保留 ladder_health；8 题
     assert list(q) == ["relay_index", "relay_phase", "relay_momentum", "ladder_health",
-                       "leader_strength", "money_effect", "theme_pulse",
-                       "turn_quality", "cycle_intensity", "risk_ahead"]
+                       "money_effect", "turn_quality", "cycle_intensity", "risk_ahead"]
 
 
 def test_relay_v8_market_cycle_fusion_questions():
@@ -113,3 +112,26 @@ def test_relay_v8_market_cycle_fusion_questions():
         "high_collapse", "space_compress", "none", "insufficient_evidence"}
     assert set(q["cycle_intensity"]["criteria"]) == {
         "strong", "moderate", "weak", "insufficient_evidence"}
+
+
+def test_relay_v9_phase_state_machine_criteria():
+    """v9 相位状态机化（预登记 relay-v9 §四/五，2026-11-12 用户裁决方案 D/软参照）：
+    量化分位判据 + 消歧序 collapse>divergence>relay_heat + 昨日相位软参照 + 周期态背景。"""
+    from backend.analysis.hotlist import jev_relay_ammo as relay
+    q = relay.QUESTIONS_RELAY["relay_phase"]
+    ins = q["instructions"]
+    # 消歧序（保守优先）+ 软参照 + 周期态背景 + 分位锚定
+    assert "collapse > divergence > relay_heat" in ins
+    assert "软参照" in ins and "可背离" in ins
+    assert "【市场情绪周期】" in ins and "允许背离" in ins
+    assert "P20/P50/P80" in ins
+    c = q["criteria"]
+    # 量化阈值（去模糊词）：各态锚定分位/百分比
+    assert "≥75%" in c["launch"] and "≤P50" in c["launch"]
+    assert "≥P50" in c["relay_heat"] and "<10%" in c["relay_heat"]
+    assert "−5pct" in c["divergence"] and "<0.5" in c["divergence"]
+    assert "≥30%" in c["collapse"] and "≤P20" in c["collapse"]
+    assert "≤P20" in c["bottoming"] and "≥80%" in c["bottoming"]
+    # 删题不删叙事：theme_evolution/leader_profile 仍在 ops（此处仅锁题集已删）
+    assert "theme_pulse" not in relay.QUESTIONS_RELAY
+    assert "leader_strength" not in relay.QUESTIONS_RELAY

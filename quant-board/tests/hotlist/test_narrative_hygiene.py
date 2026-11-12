@@ -127,6 +127,15 @@ def test_hygiene_market_cycle_lines_all_event_variants():
     assert R.market_cycle_lines(_McDb(None), "2026-11-11") == []
 
 
+def test_hygiene_prev_phase_line_all_variants():
+    """v9 昨日相位软参照行（relay-v9 §五）：全相位中文变体过黑名单；无开发注释。"""
+    from backend.operations import jev_relay_index as R
+    for ph, cn in R._PHASE_CN.items():
+        for dip in (1, 3, 12):
+            _assert_clean(f"昨日相位：{cn} · 已持续 {dip} 日", f"prev_phase({ph},{dip})")
+        _assert_clean(f"昨日相位：{cn}", f"prev_phase({ph},no_dip)")
+
+
 # ── 个股画像行族（theme_leader_ammo） ────────────────────────────────
 
 GENE_ITEM = {"stock_id": "000525", "gene": {"zt_count": 4, "premium5_count": 1,

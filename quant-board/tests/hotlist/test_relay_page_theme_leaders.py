@@ -394,9 +394,9 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
     assert "esc(r.evidenceIndustry)" not in row, \
         "题材名称不得以文本渲染进事件列（只许徽章）"
     assert "+板内解析" not in row and "l2Tag" not in row, \
-        "板内解析徽章已删（2026-11-12 用户截图需求），迁详情卡常显"
-    assert "r.evidenceBoardDigest" in _fn(html, "tlDetailHtml"), \
-        "板内解析摘要迁详情卡必须接读口摘要（完整题材驱动内容，非「在场」占位话）"
+        "板内解析徽章已删（2026-11-12 用户截图需求）"
+    assert "r.evidenceBoardDigest" not in _fn(html, "tlDetailHtml"), \
+        "板内解析摘要随详情卡 meta 精简移除（2026-11-12 用户裁决；原始 JSON 仍可查）"
     assert "见投喂语料抽屉" not in row, "旧静态占位 tooltip 不得残留"
     assert "tl-evtxt" not in row and "tl-evtags" not in html, \
         "首版铺文截断样式必须删除（防溢出回潮）"
@@ -404,14 +404,14 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
 
 def test_premium_column_removed_to_detail_card(html: str) -> None:
     """③溢价列下线（2026-11-12 用户截图需求：列表缩紧）：表头/行/排序键三处同删；
-    T+2 溢价保留在详情卡 meta（fail-visible 出口；读口 outcomeDay2 合同不变）。"""
+    T+2 溢价随详情卡 meta 精简一并移除（2026-11-12 用户裁决；读口 outcomeDay2 合同不变，原始 JSON 可查）。"""
     rows_fn = _fn(html, "tlRenderRows")
     assert "th('溢价'" not in rows_fn and "溢价" not in rows_fn, "溢价表头必须删除"
     row = _fn(html, "tlRowHtml")
     assert "premHtml" not in row and "outcomeDay2" not in row, "溢价单元格/死变量不得残留"
     detail = _fn(html, "tlDetailHtml")
-    assert "T+2 溢价" in detail and "outcomeDay2" in detail, "详情卡必须保留 T+2 溢价（fail-visible）"
-    assert "待回填" in detail, "续板但溢价未回填必须显式（fail-visible）"
+    assert "T+2 溢价" not in detail and "outcomeDay2" not in detail, "详情卡 meta 精简移除 T+2 溢价（用户裁决）"
+    assert "待回填" not in detail, "溢价占位随移除不再出现"
     kv = _fn(html, "tlSorted")
     assert "day2" not in kv, "溢价排序键随列删除"
 
@@ -466,16 +466,16 @@ def test_continue_probability_is_midpoint_weighted_expectation(html: str) -> Non
 
 def test_l2_digest_moved_to_detail_card(html: str) -> None:
     """板内 L2 解析徽章下线（2026-11-12 用户截图需求：列表缩紧）：事件列只留
-    事件/新闻/题材窄徽章；摘要迁详情卡 meta 常显（evidenceBoardResolved 消费不变，
-    旧档无摘要显式说明不伪造——原 2026-10-26/27 裁决的 fail-visible 语义保留）。"""
+    事件/新闻/题材窄徽章；摘要随详情卡 meta 精简移除（2026-11-12 用户裁决；
+    evidenceBoardResolved 行内兜底判定消费不变，原始 JSON 仍可查）。"""
     row = _fn(html, "tlRowHtml")
     assert "+板内解析" not in row and "l2Tag" not in row and "l2Digest" not in row, \
         "列表徽章/死变量不得残留"
     assert "evidenceBoardResolved" in row, "事件列兜底判定仍消费 evidenceBoardResolved 出参"
     detail = _fn(html, "tlDetailHtml")
-    assert "evidenceBoardResolved" in detail and "r.evidenceBoardDigest" in detail, \
-        "详情卡必须常显板内解析摘要（完整驱动内容）"
-    assert "摘要未存档" in detail, "旧档无摘要显式说明（不伪造内容）"
+    assert "evidenceBoardResolved" not in detail and "r.evidenceBoardDigest" not in detail, \
+        "板内解析摘要随详情卡 meta 精简移除（用户裁决）"
+    assert "摘要未存档" not in detail, "摘要占位说明随移除不再出现"
 
 
 def test_unsealed_leader_streak_cell_blank(html: str) -> None:
@@ -604,10 +604,14 @@ def test_v17_new_question_maps_and_conf_chips(html: str) -> None:
 
 
 def test_v17_detail_meta_and_sector_judgment_state(html: str) -> None:
-    """详情卡 meta 区：两新题判答+置信、板块判答注入状态（缺席/降级可辨）。"""
+    """详情卡 meta 精简（2026-11-12 用户裁决）：两新题判答/板块判答注入状态不再在详情卡展示；
+    行内徽章（hardCell/seatCell）与 TL_SJ_STATE_CN 译名常量保留（原始 JSON 可查）。"""
     detail = _fn(html, "tlDetailHtml")
-    assert "催化硬度" in detail and "身位稳固度" in detail
-    assert "r.sectorJudgmentState" in detail, "板块判答注入状态必须可见（fail-visible）"
+    assert "催化硬度" not in detail and "身位稳固度" not in detail, "两新题判答随详情卡 meta 精简移除"
+    assert "r.sectorJudgmentState" not in detail, "板块判答注入状态随详情卡 meta 精简移除"
+    # 行内徽章仍在（列表缩紧只删详情卡 meta，不删行徽章）
+    row = _fn(html, "tlRowHtml")
+    assert "leaderCatalystHardness" in row and "leaderSeatDurability" in row, "行内催化硬度/身位徽章保留"
     assert "TL_SJ_STATE_CN" in html
     for state in ("injected", "sector_degraded", "sector_insufficient", "sector_missing"):
-        assert state in html, f"注入状态 {state} 必须有可读译名"
+        assert state in html, f"注入状态 {state} 译名常量保留（原始 JSON 可查）"
