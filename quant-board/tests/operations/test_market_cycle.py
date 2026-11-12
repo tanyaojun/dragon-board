@@ -70,6 +70,33 @@ def test_compute_anchor_degraded_when_ths_missing(monkeypatch):
     assert "THS" in meta["reason"]
 
 
+def test_compute_anchor_histstreak_newest_seal_day(monkeypatch):
+    # v13(甲)：断板候选 histStreak=最近封板日真连板，非近3日峰值。
+    # 600222 三日封板 streak 5/6/3 → 取最近封板日 P_NEW 的 3（乙会误取峰值6）。
+    P_OLD, P_MID, P_NEW = "2026-11-06", "2026-11-09", "2026-11-10"
+    sealed = {T: {"600111"}, P_OLD: {"600222"}, P_MID: {"600222"}, P_NEW: {"600222"}}
+    streaks = {T: {"600111": 2}, P_OLD: {"600222": 5},
+               P_MID: {"600222": 6}, P_NEW: {"600222": 3}}
+    stocks = {T: [{"code": "600111", "name": "今封", "time": "09:30"}],
+              P_OLD: [{"code": "600222", "name": "断板龙头"}],
+              P_MID: [{"code": "600222", "name": "断板龙头"}],
+              P_NEW: [{"code": "600222", "name": "断板龙头"}]}
+    monkeypatch.setattr(omc, "sealed_and_info",
+                        lambda db, d, ds=None: (sealed.get(d, set()), {}, {}))
+    monkeypatch.setattr(omc, "jiuyan_streak_map", lambda db, d, ds=None: streaks.get(d, {}))
+    monkeypatch.setattr(omc, "_final_stocks", lambda db, d: stocks.get(d, []))
+    monkeypatch.setattr(omc, "_jiuyan_days_boards", lambda st: (12, 8))
+    anchors, meta = omc.compute_anchor(
+        FakeDb(), T, pool_dates=[P_OLD, P_MID, P_NEW],
+        gain_fetcher=lambda codes, d: {},
+        day_change_fetcher=lambda codes, d: {c: None for c in codes})
+    a = anchors["main"]
+    assert a["code"] == "600222"                 # 最近封板日3板龙头，非今封2板股
+    assert a["height"] == 3                      # 最近封板日 streak，非峰值6
+    assert a["poolDay"] == P_NEW                 # E4 窗起点=最近封板日
+    assert a["leaderSealedToday"] is False and a["streak"] is None
+
+
 def _patch_gather(monkeypatch, *, fates):
     def fake_anchor(db, d, ds=None, **kw):
         if d == T:
@@ -109,7 +136,7 @@ def test_settle_day_collects_events_and_idempotent(monkeypatch):
     assert "spaceCompress" not in types        # 今日 maxBoard=5>4，空间已打开不压缩
     assert doc["ceiling"]["maxBoard"] == 5 and doc["ceiling"]["prevCeiling20"] == 4
     assert doc["anchor"]["main"]["code"] == "600111"
-    assert doc["version"] == "v2"
+    assert doc["version"] == "v3"
     # 幂等：重跑保留首次 generatedAt，落库可查
     g1 = doc["generatedAt"]
     doc2 = omc.settle_day(db, T)
@@ -355,5 +382,5 @@ def test_recompress_and_replay_from_stored_ceiling():
     assert [r["state"] for r in rows] == ["loss", "loss", "ice", "loss"]
     assert [r["e2"] for r in rows] == [False, False, True, False]
     d3 = db[omc.COLLECTION].find_one({"_id": "d3:MARKET_CYCLE"})
-    assert d3["state"] == "ice" and d3["version"] == "v2"
+    assert d3["state"] == "ice" and d3["version"] == "v3"
     assert any(e["type"] == "spaceCompress" for e in d3["events"])

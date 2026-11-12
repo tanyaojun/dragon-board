@@ -45,6 +45,7 @@ from backend.operations.jev_label_jiuyan import (
     _jiuyan_ladder,
     _prev_close_of_date,
     _range_height_text,
+    _sealed_codes as _label_sealed_codes,
     _ths_failed_items,
     _ths_pool_counts,
     day_status_of,
@@ -1507,19 +1508,22 @@ def relay_trajectory_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
 
 
 def _sealed_codes(db: Any, date: str, touch: set[str], dataset_id: str) -> tuple[set[str], bool]:
-    """触板 − THS 15:00 炸板池 = 收盘涨停池（方案A 二分，与 jiuyan_board_info 同口径）。
+    """触板 − THS 15:00 炸板池 + 尾盘回封补证 = 收盘涨停池（与 jiuyan_board_info 同口径）。
 
     2026-10-10 review C2 口径修正：韭研 final fields.stocks 是触板名单（封板+炸板），
     直接当「涨停/晋级」会把昨日封板今日炸板股计成晋级、低估断板亏钱面。
     返回 (codes, ths_found)：ths_found=False = 池缺失/降级，回退触板口径，
     调用方必须在叙述中注记降级（不得静默混用两种口径）。
     2026-10-16：本体委托 jev_label_jiuyan 同名单源（原双实现，消漂移）。
+    2026-11-12 真正落实委托：旧实现仍就地 touch-failed、漏尾盘回封补证，与 label 侧
+    漂移（闽发铝业 002578 11-09 15:00 回封被错杀同款，relay 晋级/断板同样误判）。改委托
+    label `_sealed_codes`（含同一 `_reseal_verdict` 回封补证单源）；label None（final/THS
+    池缺失）→ 回退触板口径 + found=False。touch 参数仅作降级回退集（正常路径 label 同源重算）。
     """
-    items, found = _ths_failed_items(db, date, dataset_id)
-    if not found:
+    sealed = _label_sealed_codes(db, date, dataset_id)
+    if sealed is None:
         return set(touch), False
-    failed = set(items)
-    return set(touch) - failed, True
+    return sealed, True
 
 
 def _ths_sealed_codes(db: Any, date: str, dataset_id: str) -> set[str] | None:

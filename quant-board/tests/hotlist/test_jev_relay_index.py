@@ -160,6 +160,62 @@ def test_pool_of_uses_num_board_count():
     assert pool["600001"]["boards"] == 4
 
 
+def test_sealed_codes_delegates_reseal_single_source(monkeypatch):
+    """relay _sealed_codes 委托 label 单源（含尾盘回封补证）——回封股不得被 THS 炸板池错杀。
+
+    2026-11-12 闽发铝业 002578 同款：15:00 集合竞价回封仍带 LIMIT_FAILED 标，旧 relay
+    就地 touch-failed 错杀 → 晋级/断板误判。委托后与 label `_sealed_codes` 完全一致。
+    """
+    import backend.operations.jev_label_jiuyan as label
+    d = _D0
+    db = FakeDb({
+        "snapshot_frames": _frames([d], failed_by_date={d: ["002578"]}),
+        "jiuyan_action": FakeCol([_final(d, [
+            {"code": "600001", "name": "A", "num": "2天2板"},
+            {"code": "002578", "name": "闽发铝业", "num": "11天7板"},
+        ])]),
+    })
+    monkeypatch.setattr(label, "_reseal_verdict",
+                        lambda date, code: "sealed" if code == "002578" else "broken")
+    pool = relay._pool_of(db, d)
+    sealed, found = relay._sealed_codes(db, d, set(pool), relay.DEFAULT_DATASET_ID)
+    assert found is True
+    assert "002578" in sealed  # 回封补证：不得错杀
+    assert "600001" in sealed
+    assert sealed == label._sealed_codes(db, d, relay.DEFAULT_DATASET_ID)  # 单源一致
+
+
+def test_sealed_codes_ths_missing_degrades_to_touch():
+    """THS 炸板池缺失 → 回退触板口径 + found=False（调用方注记降级，不静默混口径）。"""
+    d = _D0
+    db = FakeDb({
+        "snapshot_frames": _frames([d], ths_missing=(d,)),
+        "jiuyan_action": FakeCol([_final(d, [
+            {"code": "600001", "name": "A", "num": "2天2板"},
+            {"code": "002578", "name": "闽发铝业", "num": "11天7板"},
+        ])]),
+    })
+    pool = relay._pool_of(db, d)
+    sealed, found = relay._sealed_codes(db, d, set(pool), relay.DEFAULT_DATASET_ID)
+    assert found is False
+    assert sealed == set(pool)  # 降级回退触板全集
+
+
+def test_sealed_codes_final_missing_degrades_empty():
+    """韭研 final 缺失（THS 帧在）→ label None → 回退触板口径 found=False、封板集空。
+
+    锁定 label None 的第二成因（final 缺失）映射降级契约，不误造空权威集（fail-visible）。
+    """
+    d = _D0
+    db = FakeDb({
+        "snapshot_frames": _frames([d]),  # THS 炸板池在（空池）
+        "jiuyan_action": FakeCol([]),      # final 缺失
+    })
+    sealed, found = relay._sealed_codes(db, d, set(), relay.DEFAULT_DATASET_ID)
+    assert found is False
+    assert sealed == set()
+
+
 def test_narrative_context_anchor_includes_today():
     """近20日锚必须含今日：今日创新高时锚显示旧峰值会与事实行自相矛盾。
 

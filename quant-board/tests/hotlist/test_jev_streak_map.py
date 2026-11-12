@@ -133,6 +133,28 @@ def test_broken_streak_walks_seal_chain():
     assert streaks["601811"] == 2     # 昨日封板、前日不在池 → 2 连板
 
 
+def test_reseal_day_in_chain_does_not_break_streak(monkeypatch):
+    """回封日在封板链上不误断（2026-11-12 闽发铝业 002578）：11-09 尾盘回封（THS 炸板池
+    快照命中、_reseal_verdict 收盘证实回封）→ _sealed_codes 回封补证算封板 → 链续算 3 板。
+    修复前只做 touch-failed 把回封日错杀成断板 → 链在 11-09 误断、真连板重置 1。"""
+    monkeypatch.setattr(runner, "_reseal_verdict",
+                        lambda date, code: "sealed" if code == "002578" else "broken")
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: [])
+    db = FakeDb({
+        "snapshot_frames": FakeCol([
+            _frame("2026-11-06"),
+            _frame("2026-11-09", failed_codes=["002578"]),   # 尾盘回封：炸板池快照命中
+            _frame("2026-11-10"),
+        ]),
+        "jiuyan_action": FakeCol([
+            _final("2026-11-06", [{"code": "002578", "name": "闽发铝业", "num": "2天1板"}]),
+            _final("2026-11-09", [{"code": "002578", "name": "闽发铝业", "num": "3天2板"}]),
+            _final("2026-11-10", [{"code": "002578", "name": "闽发铝业", "num": "4天3板"}]),
+        ]),
+    })
+    assert jiuyan_streak_map(db, "2026-11-10")["002578"] == 3
+
+
 def test_streak_capped_at_m():
     """回溯链长于区间板数 M 时封顶 M（连续高度不可能超区间总板数）。"""
     db = FakeDb({

@@ -37,21 +37,41 @@
 
 ## 三、锚点与单源复用（裁决 2/3 落地）
 
-### 3.1 市场空间龙一（本模块唯一权威锚）
+### 3.1 市场空间龙一（本模块唯一权威锚；v13 市场接力口径）
 
 - 候选池 = 当日封板池 ∪ 近 3 个交易日封板池（全市场，覆盖断板反包/断板不反包；与 `day_leader_rows(space_mode=True)` 候选构建同构，作用域从板块扩到全市场）。
-- 分轨 = `segment_of`（main/growth）；轨内排序 = `rank_board_stocks_seal`（v12 复合键单源，`analysis/hotlist/theme_leader_ammo.py`）；每轨取首位（`space_leaders_by_segment` 同构）。
-- height/gain10/poolDay 构建复用 `theme_leader_baseline` 原语链（`sealed_and_info`/`jiuyan_streak_map`/TDX gain fetcher/近3日高度新→旧遍历）；**排序键不新造第二份**。
-- 剔除「断板不反包且今日跌停」候选（v12 规则④，跌停 = `is_limit_down_pct`）。
-- 整轨 TDX gain10 全缺 → 该轨龙一**按首封时间降级选出** + `meta.spaceTrackGaps` 披露（fail-visible；镜像题材链 `theme_leader_baseline` P2-6 现行行为，排序键单源共享。**2026-11-12 P1 评审 finding#3 裁决**：采用 P2-6 镜像而非整轨跳过，与题材链单一事实源对齐；原文「不可算+spaceErrors」描述的是整板 TDX 失败旧行为，与 per-track gain10 全缺是两回事，特此更正）。
+- 分轨 = `segment_of`（main/growth）；轨内排序 = **`rank_market_space`（v13 市场接力口径单源，本模块）**：空间板组（height≥2）按 `-height → 首封时间 → -gain10`，首板组按 `首封时间 → -gain10 → -height`；每轨取首位（`pick_market_leaders`）。
+- **height = max(当日 streak, 最近封板日真连板)（甲口径）**；**断板高高度龙头在锚内，不收紧到当日封板**（用户裁决：龙头往往高高在上不封板，如闽发铝业 2026-11-11 height7 当日未封）。断板候选 histStreak 取**最近封板日**的真连板（新→旧遍历首现日），非近3日峰值。
+- height/gain10/poolDay 构建复用 `theme_leader_baseline` 原语链（`sealed_and_info`/`jiuyan_streak_map`/TDX gain fetcher/近3日高度新→旧遍历）；共享原语 `segment_of`/`_time_key` 只 import 不复制。
+- 剔除「断板不反包且今日跌停」候选（跌停 = `is_limit_down_pct`）；断板候选高度<2/不可考剔除。
+- **gain10 仅作锚展示 + 可忽略次级键**（首封时间已唯一确定），选取与 gain10 无关；gain10 全缺不降级（锚 gain10=None 自明，fail-visible）。v12 的「整轨 gain10 全缺按首封时间降级 + spaceTrackGaps」随 v13 废弃（height 主键不依赖 gain10）。
 
-### 3.2 与存量龙头口径的关系登记（红线 §1.2#1）
+#### 3.1.1 v13 改门记录（2026-11-12，用户裁决方案B）
+
+- **起因**：用户复盘「空间板高度定义」——接力情绪必须用连板高度，10日涨幅反映「涨了多少」非「接力打到哪」。
+- **只读对比实证（零 token）**：全窗 126 日，市场级 gain10(v12) vs height 两口径 **60/252 轨日差异（23.8%）**；差异中 70% height 选更高连板、63% v12 龙一是断板低板股（典型：06-26 艾华集团 2板 gain10 83 vs 兴业科技 6板 gain10 82）。忠实性核对 252 轨日 v12 复现与落库锚 0 不一致。
+- **题材链/sector_nodes 对比**：2204 龙一槽位 296 差异（13.4%），52% 仅次级键差；**断板龙一是第3课弱转强观察窗开启前提**（theme_cycle 用 leaderSealedToday=False 触发 weakening），v12 gain10 恰好服务此目的 → **题材口径保留 v12**。
+- **裁决（方案B）**：排序单源**显式拆两套口径**——市场接力口径（height 主键，`rank_market_space`，本模块）供 market_cycle；题材龙头口径（v12 gain10，`rank_board_stocks_seal`，theme_leader_ammo）原样供 theme_cycle/sector_nodes/kpl_lead_service/kpl_proxy_routes。两套各自单一事实源，禁互相复制；市场级不再收紧到当日封板。
+- **版本**：MARKET_CYCLE_VERSION v2→v3；E1/E2 判据不变（天花板口径），E3/E4 随锚变化；全窗回填重算。
+
+#### 3.1.2 真连板回封补证修复（2026-11-12，闽发铝业 002578 细查；共享连板单源 bug）
+
+- **起因**：用户质疑「闽发铝业 11-09 未断板、11-10 才断，为何 streak 在 11-10 重置 1」。细查证实**非断板反包，是 streak 计算 bug**。
+- **事实**：TDX 日线闽发铝业 11-02→11-10 连续 7 日 +10% 涨停，11-11 才断板；11-10 真连板应=7，`jiuyan_streak_map` 却返回 1。
+- **根因**：两个封板池函数口径不一致——`jiuyan_board_info`（→`sealed_and_info`）有 `zhabanResealed` 尾盘回封补证（2026-10-29 光洋股份修复），而封板链回溯用的 `_sealed_codes` 只做 `韭研触板 − THS炸板池`、**漏了回封补证**。闽发铝业 11-09 炸板回封（首封 15:00:00），THS 15:00 炸板池快照仍带 LIMIT_FAILED 标 → `_sealed_codes` 错杀为炸板 → 封板链在 11-09 误断 → 11-10 streak 重置 1。
+- **修复**：`_sealed_codes` 对 `failed∩touch` 复用 `jiuyan_board_info` 同一 `_reseal_verdict` 收盘价权威补证（回封→加回封板集），禁双实现、单源对齐。回归测试 `test_sealed_codes_reseal_fallback` + `test_reseal_day_in_chain_does_not_break_streak`。
+- **影响面**：`_sealed_codes` 喂 `jiuyan_consecutive_streaks`→`jiuyan_streak_map`（真连板唯一源）→ maxBoard/天花板（E1/E2）、relay 晋级链、题材梯队、market_metrics。凡链上含炸板回封日的股真连板都被错杀重置；修复后这些股高度恢复，maxBoard 可能上修 → E1/E2 命中随之变化（全窗回填重算）。
+- **口径裁决**：用户「退回甲验证」——histStreak 仍取最近封板日真连板（非乙峰值）；回封补证修复后甲口径即正确锚住闽发铝业（11-11 main 锚 002578 height7 poolDay11-10），乙 peak 改动回退。
+- **relay 同源修复（2026-11-12 用户「请修复」）**：`jev_relay_index._sealed_codes` 同样只做 touch-failed、漏回封补证（docstring 声称 2026-10-16 已委托 label 单源，实际仍是第二套实现=漂移）。改**真正委托** `jev_label_jiuyan._sealed_codes`（含回封补证）恢复单源；label None→回退触板口径+found=False 降级契约不变。回归 `test_sealed_codes_delegates_reseal_single_source` + `test_sealed_codes_ths_missing_degrades_to_touch`；真数据验证 relay(11-09)==label(11-09)（58=58，含 002578）。**relay 历史档 `hotlist_jev_relay_index` 晋级/断板为旧口径，需另回填**；market_cycle 锚/事件不依赖 relay，已回填 v13 不受影响。
+
+### 3.2 与存量龙头口径的关系登记（红线 §1.2#1；v13 分口径）
 
 | 口径 | 所在 | 本次处置 |
 |---|---|---|
 | relay totalLeader（区间高度 `_day_eff`）/ sentimentLeader（真连板最高） | relay 叙事段 4a | **不动**（改动 = relay 题集改门，另裁决）；与本锚并列披露差异 |
-| 题材链板块级空间龙一（v12） | theme_leader_baseline / sector_nodes v5 | 同口径不同作用域（板块 vs 全市场），排序键单源共享 |
-| **市场空间龙一（v12 全市场）** | 本模块 | 第4课事件唯一权威锚 |
+| 题材链板块级空间龙一（**v12 gain10 题材口径**） | theme_leader_baseline / sector_nodes / theme_cycle | **保留 v12**（断板反包龙一=弱转强观察窗前提）；排序单源 `rank_board_stocks_seal` |
+| kpl 龙头身位序列（**v12 题材口径**） | kpl_lead_service / kpl_proxy_routes | **保留 v12**（用户裁决归题材口径）；排序单源 `rank_board_stocks_seal` |
+| **市场空间龙一（v13 市场接力口径 height 主键，全市场）** | 本模块 `rank_market_space` | 第4课事件唯一权威锚；与题材口径分口径（方案B） |
 
 ### 3.3 其余单源清单
 

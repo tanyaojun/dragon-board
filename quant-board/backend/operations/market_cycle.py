@@ -8,7 +8,7 @@
 3. 深历史回填复用 `leader_wzs.bars_covering`/`covering_*_fetcher`（覆盖式日线单源）。
 
 命运计算单源 = `jev_relay_index._pool_of/_status_map/_close_pct`（池权威 + 日线补洞，
-停牌不算断板 v4）；排序键单源 = `theme_leader_ammo.space_leaders_by_segment`。
+停牌不算断板 v4）；排序键单源 = `analysis/hotlist/market_cycle.rank_market_space`（v13 市场接力口径 height 主键；题材链仍 v12 `theme_leader_ammo.space_leaders_by_segment`）。
 生产写库只入 `dragon_board_quant`；pytest 只入 `dragon_board_test`（conftest 护栏）。
 P1 产事件流（anchor/ceiling/events）；P2 增状态机（state/transition/daysInState，输入=事件流
 only）与并列参照（reference：relayPhase/relayIndex/大盘wzs/规则五档同日只读快照，不进判据）。
@@ -52,8 +52,10 @@ def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                    pool_dates: list[str] | None = None) -> tuple[dict | None, dict]:
     """当日市场空间龙一（两轨）+ meta。THS 池缺失 → (None, degraded meta)。
 
-    候选池 = 今日封板 ∪ 近 3 日封板（全市场，断板龙一在锚内）；enrichment 与排序
-    走纯函数层（prepare_market_candidates / pick_market_leaders，排序键单源）。
+    候选池 = 今日封板 ∪ 近 3 日封板（全市场，断板高高度龙头在锚内）；断板候选 histStreak=
+    最近封板日真连板（甲口径），poolDay=最近封板日。enrichment 与排序走纯函数层
+    （prepare_market_candidates / pick_market_leaders，v13 市场接力口径 height 主键单源
+    rank_market_space；gain10 仅作锚展示，选取与之无关）。
     """
     today_sealed, _info, _meta = sealed_and_info(db, date, dataset_id)
     if today_sealed is None:
@@ -72,7 +74,11 @@ def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
             cands.append({"code": c6, "name": st.get("name"), "time": st.get("time"),
                           "streak": streaks_today.get(c6), "days": d, "boards": b})
             have.add(c6)
-    # 近 3 日封板池（新→旧：最近封板日优先，断板反包入口；同 theme_leader_baseline）
+    # 近 3 日封板池（断板反包入口）：v13(甲) histStreak=最近封板日真连板，
+    # poolDay=最近封板日（E4 窗起点）；days/boards 区间高度截至最近封板日（展示单源）。
+    # 新→旧遍历，首个出现日=最近封板日，取该日 streak（更早封板日不覆盖）。
+    # 真连板含尾盘回封补证（_sealed_codes 2026-11-12 修复），回封日不误断链、不高估重置。
+    pool_seen: dict[str, dict] = {}
     for pd in reversed(pool_dates):
         if not pd or pd == date:
             continue
@@ -82,12 +88,16 @@ def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
         p_streaks = jiuyan_streak_map(db, pd, dataset_id) or {}
         for st in _final_stocks(db, pd):
             c6 = str(st.get("code") or "")[-6:]
-            if c6 in p_sealed and c6 not in have:
-                d, b = _jiuyan_days_boards(st)
-                cands.append({"code": c6, "name": st.get("name"), "time": None,
-                              "streak": None, "days": d, "boards": b,
-                              "histStreak": p_streaks.get(c6), "poolDay": pd})
-                have.add(c6)
+            if c6 not in p_sealed or c6 in have or c6 in pool_seen:
+                continue
+            d, b = _jiuyan_days_boards(st)
+            pool_seen[c6] = {"name": st.get("name"), "days": d, "boards": b,
+                             "poolDay": pd, "histStreak": p_streaks.get(c6)}
+    for c6, info in pool_seen.items():
+        cands.append({"code": c6, "name": info["name"], "time": None,
+                      "streak": None, "days": info["days"], "boards": info["boards"],
+                      "histStreak": info["histStreak"], "poolDay": info["poolDay"]})
+        have.add(c6)
 
     meta: dict[str, Any] = {"status": "ok", "poolDays": list(pool_dates)}
     if not cands:
@@ -96,12 +106,8 @@ def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
     gains = (gain_fetcher or fetch_gains10)([c["code"] for c in cands], date)
     for c in cands:
         c["gain10"] = gains.get(c["code"])
-    # 整轨 gain10 全缺 → 按首封时间降级选出 + 披露（同题材链 P2-6）
-    for seg in ("main", "growth"):
-        seg_c = [c for c in cands if segment_of(c["code"]) == seg]
-        if seg_c and not any(isinstance(c.get("gain10"), (int, float)) for c in seg_c):
-            meta.setdefault("spaceTrackGaps", []).append(
-                f"{seg}轨10日涨幅全缺，龙一按首封时间降级选出（fail-visible）")
+    # v13 市场接力口径：龙一按 height 主键选出，与 gain10 无关（gain10 仅作锚展示+可忽略
+    # 次级键）；gain10 全缺不降级、无需 spaceTrackGaps 披露（锚 gain10=None 自明，fail-visible）。
     unsealed = [c["code"] for c in cands if c["code"] not in today_sealed]
     changes = (day_change_fetcher or covering_day_change_fetcher)(unsealed, date) \
         if unsealed else {}

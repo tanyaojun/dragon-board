@@ -524,6 +524,37 @@ def test_board_info_reseal_fallback(monkeypatch):
     assert "zhabanResealed" not in info["600005"]
 
 
+def test_sealed_codes_reseal_fallback(monkeypatch):
+    """_sealed_codes 回封补证（2026-11-12 闽发铝业 002578）：与 jiuyan_board_info 同口径、
+    同一 _reseal_verdict 单源——炸板池命中但日线证实回封 → 加回封板集；真炸板 → 维持剔除。
+    修复前只做 touch-failed，回封股被错杀 → 封板链在回封日误断、真连板重置
+    （11-09 闽发铝业 15:00 回封被错杀，11-10 真连板 7 误判 1，市场空间龙一漏锚）。"""
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+
+    def fake_verdict(date, code):
+        return "sealed" if code == "600004" else "broken"
+
+    monkeypatch.setattr(jiuyan_mod, "_reseal_verdict", fake_verdict)
+    today = [
+        {"code": "600004", "name": "尾盘回封", "num": "4天4板", "time": "15:00:00"},
+        {"code": "600005", "name": "真炸板", "num": None, "time": "13:00:00"},
+        {"code": "600006", "name": "干净封板", "num": "2天2板", "time": "09:30:00"},
+    ]
+    cols = {
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("机器人", today)]),
+            _final("2026-10-08", [("X", [])]),
+        ]),
+        "snapshot_frames": FramesCol([
+            _pool_frame("2026-10-09", [], failed_items=[
+                {"code": "600004", "open_num": 29}, {"code": "600005", "open_num": 3}]),
+            _pool_frame("2026-10-08", []),
+        ]),
+    }
+    sealed = jiuyan_mod._sealed_codes(MultiFakeDb(cols), "2026-10-09")
+    assert sealed == {"600004", "600006"}
+
+
 def test_reseal_verdict_reads_daily_bars(monkeypatch):
     """_reseal_verdict 走日线收盘复核：收在涨停价 → sealed；未封 → broken；
     无棒（离线护栏打空棒/新上市）→ unknown → 调用方维持旧口径不动。"""

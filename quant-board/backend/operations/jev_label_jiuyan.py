@@ -555,17 +555,27 @@ def _touch_codes(db, date: str) -> set[str] | None:
 
 
 def _sealed_codes(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> set[str] | None:
-    """date 当日真实封板集合（韭研触板 − THS 炸板池二分，与 jiuyan_board_info 同口径）。
+    """date 当日真实封板集合（韭研触板 − THS 炸板池二分 + 尾盘回封补证，与
+    jiuyan_board_info 的 zhaban 判定同口径、同一 `_reseal_verdict` 单源，禁双实现）。
 
-    韱研 final 缺失或 THS 池缺失 → None（不可验证，调用方宁缺毋猜，不得把炸板当封板）。
-    2026-10-16：补 dataset_id 参数（默认不变），relay 侧同口径函数改委托本函数。"""
+    韭研 final 缺失或 THS 池缺失 → None（不可验证，调用方宁缺毋猜，不得把炸板当封板）。
+    2026-10-16：补 dataset_id 参数（默认不变），relay 侧同口径函数改委托本函数。
+    2026-11-12 回封补证修复（闽发铝业 002578）：THS 15:00 炸板池是快照时点口径，尾盘
+    集合竞价（14:57-15:00）回封股仍带 LIMIT_FAILED 标；旧实现只做 touch-failed 会把
+    真涨停错杀成炸板 → 封板链在回封日误断、真连板重置（11-09 闽发铝业 15:00:00 回封
+    被错杀，11-10 真连板 7 误判 1，市场空间龙一漏锚）。与 jiuyan_board_info 的
+    zhabanResealed 同一 `_reseal_verdict` 收盘价权威补证：回封 → 加回封板集。"""
     touch = _touch_codes(db, date)
     if touch is None:
         return None
-    failed, found = _ths_failed_codes(db, date)
+    failed, found = _ths_failed_codes(db, date, dataset_id)
     if not found:
         return None
-    return touch - failed
+    sealed = touch - failed
+    for code in (failed & touch):
+        if _reseal_verdict(date, code) == "sealed":
+            sealed.add(code)
+    return sealed
 
 
 def _bar_verdict(code: str, date: str, bars: list[dict],

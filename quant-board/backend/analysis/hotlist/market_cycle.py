@@ -7,9 +7,11 @@
 以及 P2 市场级状态机（loss/ice/wzs/gain，`step_day`/`replay`，输入=事件流 only，零 token
 全历史可重放）。
 
-锚点（裁决 2）：市场空间龙一 = v12 复合口径作用于**全市场**候选池（今日封板 ∪ 近 3 日
-封板，断板龙一在锚内）。排序键单源 = `theme_leader_ammo.rank_board_stocks_seal` /
-`space_leaders_by_segment`（本模块只调用，不新造排序）；候选 enrichment 镜像
+锚点（裁决 2；v13 改门 2026-11-12 用户裁决方案B）：市场空间龙一 = **市场接力口径**作用
+于**全市场**候选池（今日封板 ∪ 近 3 日封板，断板高高度龙头在锚内）。排序单源 =
+`rank_market_space`（本模块，连板空间高度 height 主键）；与题材龙头口径
+（`theme_leader_ammo.rank_board_stocks_seal` v12 gain10 主键）**分口径**——后者原样保留
+供题材链/sector_nodes/kpl 消费。候选 enrichment 镜像
 `theme_leader_baseline.day_leader_rows(space_mode=True)` 的构建步骤（height/跌停剔除/
 低高度断板剔除），作用域从板块扩到全市场。
 
@@ -29,11 +31,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.hotlist.theme_leader_ammo import space_leaders_by_segment
+from backend.analysis.hotlist.theme_leader_ammo import _time_key, segment_of
 from backend.core.limit_rules import is_limit_down_pct, limit_up_price
 
 # ── 冻结口径常量（预登记 §三/§四，裁决 3）──
-MARKET_CYCLE_VERSION = "v2"
+MARKET_CYCLE_VERSION = "v3"
 CEILING_WINDOW = 20          # 空间天花板回看交易日数（N=20 冻结）
 BIG_FACE_PCT = -5.0          # 大面口径：收盘较昨收 ≤-5%（_broken_stats 同源）
 TOLERANCE_WINDOW = 2         # 企稳型观察窗：断板后 2 个交易日（原文「震荡两天」）
@@ -60,7 +62,7 @@ def prepare_market_candidates(cands: list[dict], today_codes: set[str],
     入参 cands 每股已带 code/name/time/streak/days/boards/histStreak/poolDay（operations
     单源取齐）；today_codes=今日封板集；changes={code: 当日涨跌幅%|None}（断板候选用）。
     步骤（与题材链同序）：①断板不反包且今日跌停剔除（is_limit_down_pct 权威）；
-    ②height=当日 streak 与近 3 日历史高度取大；③断板候选高度<2/不可考剔除（v12 龙头
+    ②height=当日 streak 与最近封板日真连板取大；③断板候选高度<2/不可考剔除（v12 龙头
     弱转强口径，首板断板=跟风不入锚）。返回 (kept, meta)；meta 披露剔除清单。
     涨跌幅不可考（None）→ 不剔除（不猜，fail-visible）。
     """
@@ -108,13 +110,43 @@ def prepare_market_candidates(cands: list[dict], today_codes: set[str],
     return final, meta
 
 
-def pick_market_leaders(cands: list[dict]) -> dict[str, dict]:
-    """分轨市场空间龙一（v12 排序键单源 space_leaders_by_segment）。
+def rank_market_space(cands: list[dict]) -> list[dict]:
+    """市场接力口径排序（v13，2026-11-12 用户裁决方案B；本函数=该口径唯一权威源）。
 
-    返回 {segment: leader}（main/growth，某轨无候选则不出）。gain10 全缺的轨由
-    operations 层披露降级（按首封时间选出），本函数只排序不降级。
+    与题材龙头口径（`theme_leader_ammo.rank_board_stocks_seal` v12 gain10 主键）**分口径**：
+    市场级接力情绪以**连板空间高度**定最高——空间板组（height≥2）按 `-height → 首封时间
+    → -gain10`；首板组按 `首封时间 → -gain10 → -height`。height=max(当日 streak, 最近封板日
+    真连板)，**断板高高度龙头在锚内**（用户裁决：龙头往往高高在上不封板，如
+    闽发铝业；不收紧到当日封板——甲口径；真连板含尾盘回封补证，回封日不误断链）。gain10 仅作可忽略次级键（首封时间已唯一）+ 锚展示，选取与 gain10
+    无关。共享原语 segment_of/_time_key 只 import 不复制；题材口径 v12 原样保留供题材链/
+    sector_nodes/kpl 消费（预登记 §3.1/3.2 v13）。纯排序不改输入。
     """
-    return {seg: ld for seg, ld in space_leaders_by_segment(cands)}
+    def _h(s: dict) -> int:
+        h = s.get("height")
+        return h if isinstance(h, int) and not isinstance(h, bool) else 0
+
+    def _gain(s: dict) -> float:
+        return s["gain10"] if s.get("gain10") is not None else float("-inf")
+
+    highs = [s for s in cands if _h(s) >= 2]
+    rest = [s for s in cands if _h(s) < 2]
+    highs.sort(key=lambda s: (-_h(s), _time_key(s.get("time")), -_gain(s)))
+    rest.sort(key=lambda s: (_time_key(s.get("time")), -_gain(s), -_h(s)))
+    return highs + rest
+
+
+def pick_market_leaders(cands: list[dict]) -> dict[str, dict]:
+    """分轨市场空间龙一（v13 市场接力口径，排序单源 rank_market_space）。
+
+    返回 {segment: leader}（main/growth，某轨无候选则不出；键序恒 main→growth，跨日落库/展示稳定）。
+    height 主键选取与 gain10 无关（gain10 全缺仍按高度选出，不降级）；gain10 仅作锚展示字段。
+    """
+    picked: dict[str, dict] = {}
+    for s in rank_market_space(cands):
+        seg = segment_of(s.get("code"))
+        if seg and seg not in picked:
+            picked[seg] = s
+    return {seg: picked[seg] for seg in ("main", "growth") if seg in picked}
 
 
 def detect_breakthrough(date: str, today_max: int | None,

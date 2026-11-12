@@ -69,17 +69,77 @@ def test_prepare_height_takes_max_today_vs_hist():
     assert kept[0]["height"] == 5                   # 当日2 与 历史5 取大
 
 
-# ── 分轨龙一（排序键单源）──
-def test_pick_market_leaders_segment_and_gain10():
+# ── 分轨龙一（v13 市场接力口径：height 主键，与 gain10 无关）──
+def test_pick_market_leaders_height_primary_over_gain10():
+    # v12 陷阱复现：gain10 最高的是 2板股，真接力标杆是 6板股 → height 主键选 6板
+    cands = [
+        {"code": "600111", "name": "高涨幅2板", "height": 2, "gain10": 90.0, "time": "09:30"},
+        {"code": "600222", "name": "接力6板", "height": 6, "gain10": 40.0, "time": "10:00"},
+    ]
+    leaders = mc.pick_market_leaders(cands)
+    assert leaders["main"]["code"] == "600222"      # 连板高度定最高，非 gain10
+
+
+def test_pick_market_leaders_broken_high_height_leader():
+    # 闽发铝业式：龙头高高在上不封板（断板、历史高度6）仍是龙一，不收紧到当日封板
+    cands = [
+        {"code": "600111", "name": "封板3板", "height": 3, "gain10": 50.0, "time": "09:30"},
+        {"code": "600222", "name": "断板6板龙头", "height": 6, "gain10": 30.0, "time": None},
+    ]
+    leaders = mc.pick_market_leaders(cands)
+    assert leaders["main"]["code"] == "600222"      # 断板高高度龙头在锚内
+
+
+def test_pick_market_leaders_gain10_all_none_no_degrade():
+    # gain10 全缺仍按 height 选出（不降级；gain10 仅展示）
+    cands = [
+        {"code": "600111", "name": "A", "height": 2, "gain10": None, "time": "09:40"},
+        {"code": "600222", "name": "B", "height": 5, "gain10": None, "time": "10:00"},
+    ]
+    leaders = mc.pick_market_leaders(cands)
+    assert leaders["main"]["code"] == "600222"
+
+
+def test_pick_market_leaders_same_height_earliest_seal():
+    # 同高度 → 首封时间最早（gain10 高低不影响）
+    cands = [
+        {"code": "600111", "name": "晚封高gain", "height": 4, "gain10": 90.0, "time": "10:00"},
+        {"code": "600222", "name": "早封低gain", "height": 4, "gain10": 10.0, "time": "09:30"},
+    ]
+    leaders = mc.pick_market_leaders(cands)
+    assert leaders["main"]["code"] == "600222"
+
+
+def test_pick_market_leaders_first_board_group_time_primary():
+    # 无空间板组（全首板）→ 首板组按首封时间
+    cands = [
+        {"code": "600111", "name": "晚首板", "height": 1, "gain10": 90.0, "time": "10:00"},
+        {"code": "600222", "name": "早首板", "height": 1, "gain10": 10.0, "time": "09:30"},
+    ]
+    leaders = mc.pick_market_leaders(cands)
+    assert leaders["main"]["code"] == "600222"
+
+
+def test_pick_market_leaders_segment_split():
     cands = [
         {"code": "600111", "name": "主板A", "height": 3, "gain10": 30.0, "time": "09:40"},
         {"code": "600222", "name": "主板B", "height": 4, "gain10": 45.0, "time": "10:00"},
         {"code": "300111", "name": "双创A", "height": 3, "gain10": 50.0, "time": "09:35"},
     ]
     leaders = mc.pick_market_leaders(cands)
-    assert leaders["main"]["code"] == "600222"      # 空间板组内 gain10 最高
+    assert leaders["main"]["code"] == "600222"      # 主板 height 最高
     assert leaders["growth"]["code"] == "300111"
     assert segment_of("600222") == "main" and segment_of("300111") == "growth"
+
+
+def test_rank_market_space_space_group_before_first_board():
+    # 空间板组整体优先：晚封 2板 仍排在早封首板之前
+    cands = [
+        {"code": "600111", "name": "首板早", "height": 1, "gain10": 99.0, "time": "09:25"},
+        {"code": "600222", "name": "空间2板", "height": 2, "gain10": 10.0, "time": "14:00"},
+    ]
+    ordered = mc.rank_market_space(cands)
+    assert [s["code"] for s in ordered] == ["600222", "600111"]
 
 
 # ── E1 空间突破 ──
