@@ -327,3 +327,41 @@ def test_replay_warmup_and_empty():
     rows = mc.replay([{"date": "d1", "events": [], "warmup": True}])
     assert rows[0]["state"] == "loss" and rows[0]["warmup"] is True
     assert rows[0]["transition"]["evidence"]["warmup"] is True
+
+
+# ══ 评审 E 节纯层边界缺口 ══
+def test_collapse_yesterday_limitdown_not_2day():
+    # 昨日跌停+今日大面 → 不命中 2日型（not is_limit_down_pct(py) 护栏）；今日非跌停→非1日
+    a = {"code": "600111", "name": "x"}
+    assert mc.detect_collapse(T, "main", a, {"pct": -6.0, "status": "broken"},
+                              {"pct": -10.0, "status": "broken"}) is None
+
+
+def test_collapse_today_limitdown_1day_priority():
+    a = {"code": "600111", "name": "x"}
+    e = mc.detect_collapse(T, "main", a, {"pct": -10.0, "status": "broken"},
+                           {"pct": -6.0, "status": "broken"})
+    assert e and e["subtype"] == "1day"
+
+
+def test_collapse_missing_fate_none():
+    a = {"code": "600111", "name": "x"}
+    assert mc.detect_collapse(T, "main", a, None, {"pct": -6.0, "status": "broken"}) is None
+    assert mc.detect_collapse(T, "main", a, {"pct": -6.0, "status": "broken"}, None) is None
+
+
+def test_tolerance_stabilize_window_sealed_day_not():
+    a = {"code": "600111", "name": "x", "statusYesterday": "broken"}
+    win = [{"date": "d1", "pct": 1.0, "status": "sealed"},
+           {"date": T, "pct": 1.0, "status": "broken"}]
+    assert mc.detect_tolerance(T, "main", a, {"pct": 1.0, "status": "broken"}, win) is None
+
+
+def test_tolerance_stabilize_window_len_not_2():
+    a = {"code": "600111", "name": "x", "statusYesterday": "broken"}
+    win = [{"date": T, "pct": 1.0, "status": "broken"}]
+    assert mc.detect_tolerance(T, "main", a, {"pct": 1.0, "status": "broken"}, win) is None
+
+
+def test_breakthrough_bool_today_max_none():
+    assert mc.detect_breakthrough(T, True, [{"date": "x", "maxBoard": 4}], []) is None

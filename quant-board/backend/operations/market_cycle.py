@@ -25,7 +25,7 @@ from backend.operations.jev_label_jiuyan import (_jiuyan_days_boards,
                                                  jiuyan_streak_map,
                                                  trading_dates_before)
 from backend.operations.jev_relay_index import _close_pct, _pool_of, _status_map
-from backend.operations.leader_wzs import (bars_covering, covering_day_change_fetcher,
+from backend.operations.leader_wzs import (covering_day_change_fetcher,
                                            covering_gain_fetcher)
 from backend.operations.theme_leader_baseline import (DEFAULT_DATASET_ID,
                                                       sealed_and_info)
@@ -132,8 +132,10 @@ def _ceiling_window(db: Any, date: str, dataset_id: str) -> tuple[list[dict], in
         window.append({"date": d, "maxBoard": cb["maxBoard"]})
     prev_3plus = None
     if window_dates:
-        prev_3plus = mc.ceiling_from_streaks(
-            jiuyan_streak_map(db, window_dates[-1], dataset_id) or {})["threePlusN"]
+        last = mc.ceiling_from_streaks(
+            jiuyan_streak_map(db, window_dates[-1], dataset_id) or {})
+        # 伪0守卫（评审#2）：韭研缺→maxBoard None→threePlusN 不可信→None（不伪 0）
+        prev_3plus = last["threePlusN"] if last["maxBoard"] is not None else None
     return window, prev_3plus
 
 
@@ -249,17 +251,27 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
 
     events: list[dict] = []
     meta: dict[str, Any] = {"status": ameta.get("status"), "anchorMeta": ameta}
+    # E1/E2 只依赖韭研真连板（与 THS 池无关）→ THS 降级时仍产出可算部分（评审#1，§4.0
+    # 部分来源失败不得连带阻断可计算部分）；E3/E4 需锚+命运，THS 缺时不可判。
+    bt_stocks = (_breakthrough_stocks(db, date, streaks_today, ceiling_today["maxBoard"])
+                 if isinstance(ceiling_today["maxBoard"], int) else [])
+    e1 = mc.detect_breakthrough(date, ceiling_today["maxBoard"], window, bt_stocks)
+    if e1:
+        events.append(e1)
+    # E2 伪0守卫（评审#2）：韭研缺→maxBoard None→today_3plus 不可信→传 None 不命中。
+    today_3plus = (ceiling_today["threePlusN"]
+                   if ceiling_today["maxBoard"] is not None else None)
+    e2 = mc.detect_compress(date, today_3plus, prev_3plus)
+    if e2:
+        events.append(e2)
     if ameta.get("status") == "degraded":
         meta["reason"] = ameta.get("reason")
+        meta.setdefault("dataGaps", []).append(
+            "THS 池缺失，E3/E4 锚不可判（E1/E2 独立韭研仍产出，fail-visible）")
     else:
-        bt_stocks = (_breakthrough_stocks(db, date, streaks_today, ceiling_today["maxBoard"])
-                     if isinstance(ceiling_today["maxBoard"], int) else [])
-        e1 = mc.detect_breakthrough(date, ceiling_today["maxBoard"], window, bt_stocks)
-        if e1:
-            events.append(e1)
-        e2 = mc.detect_compress(date, ceiling_today["threePlusN"], prev_3plus)
-        if e2:
-            events.append(e2)
+        if not prev_anchors:
+            meta.setdefault("dataGaps", []).append(
+                "昨日锚不可得，E3/E4 不可判（fail-visible）")   # 评审#5
         for track, f in fates.items():
             e3 = mc.detect_collapse(date, track, f["anchor"],
                                     f["fate_today"], f["fate_yesterday"])
@@ -269,13 +281,15 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                                      f["fate_today"], f["stabilize_window"])
             if e4:
                 events.append(e4)
-    if len(window) < mc.CEILING_WINDOW:
+    # 暖机 keyed on 有效参照数（评审#4）：日历窗可能深于韭研史，有效 refs 才决定参照完整度。
+    valid_refs = sum(1 for w in window if isinstance(w["maxBoard"], int))
+    if valid_refs < mc.CEILING_WINDOW:
         meta.setdefault("dataGaps", []).append(
-            f"天花板回看窗不足 {mc.CEILING_WINDOW} 日（实得 {len(window)}）：早期历史如实缩短")
+            f"天花板有效参照不足 {mc.CEILING_WINDOW} 日（实得 {valid_refs}）：暖机期如实披露")
 
     # P2 状态机（输入=事件流 only；参照不进判据，裁决 1A）。单日运行缺 prev_state →
     # 读前一交易日库态；回填逐日携带（首日前无库态 → step_day 首日 init，Q6=A）。
-    warmup = len(window) < mc.CEILING_WINDOW
+    warmup = valid_refs < mc.CEILING_WINDOW
     if prev_state is None and len(axis) >= 2:
         pdoc = db[COLLECTION].find_one({"_id": f"{axis[-2]}:MARKET_CYCLE"},
                                        {"state": 1, "daysInState": 1})
@@ -293,7 +307,8 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                                                     (w["maxBoard"] for w in window
                                                      if isinstance(w["maxBoard"], int)),
                                                     default=None),
-                                                "windowDays": len(window)},
+                                                "windowDays": len(window),
+                                                "prevWindowValidDays": valid_refs},
            "events": events, "state": new_state, "transition": transition,
            "daysInState": days_in_state, "reference": reference, "meta": meta,
            "generatedAt": datetime.now(timezone.utc).isoformat()}
@@ -347,7 +362,9 @@ def replay_state(db: Any, start: str, end: str,
                    if d.get("tradingDate") and start <= str(d["tradingDate"]) <= end),
                   key=lambda d: str(d["tradingDate"]))
     days = [{"date": str(d["tradingDate"]), "events": d.get("events") or [],
-             "warmup": (d.get("ceiling") or {}).get("windowDays", 0) < mc.CEILING_WINDOW}
+             "warmup": ((d.get("ceiling") or {}).get("prevWindowValidDays")
+                        if (d.get("ceiling") or {}).get("prevWindowValidDays") is not None
+                        else (d.get("ceiling") or {}).get("windowDays", 0)) < mc.CEILING_WINDOW}
             for d in docs]
     rows = mc.replay(days)
     for d, row in zip(docs, rows):

@@ -243,3 +243,62 @@ def test_replay_state_over_stored_events():
     assert d2["state"] == "wzs" and d2["daysInState"] == 1
     assert d2["events"] == [{"type": "highTolerance"}]
     assert "reference" in d2
+
+
+# ══ 评审 fail-visible 边界（major#1/#2）══
+def test_ths_degraded_still_produces_e1_e2(monkeypatch):
+    # major#1：THS 池缺（锚不可算）但韭研在场 → E1/E2 独立可算仍产出，不连带阻断
+    monkeypatch.setattr(omc, "compute_anchor",
+                        lambda db, d, ds=None, **kw: (None, {"status": "degraded",
+                                                             "reason": "THS 池缺失"}))
+    monkeypatch.setattr(omc, "jiuyan_streak_map",
+                        lambda db, d, ds=None: {"600111": 5, "600222": 3})
+    monkeypatch.setattr(omc, "_ceiling_window",
+                        lambda db, d, ds=None: ([{"date": "x", "maxBoard": 4}], 3))
+    monkeypatch.setattr(omc, "trading_dates_before", lambda db, d, n, ds=None: [Y])
+    monkeypatch.setattr(omc, "_anchor_fates", lambda db, d, ap, axis, ds=None: {})
+    monkeypatch.setattr(omc, "_breakthrough_stocks", lambda db, d, st, mx: [])
+    doc = omc.settle_day(FakeDb(), T)
+    assert doc["status"] == "degraded"
+    assert "spaceBreakthrough" in {e["type"] for e in doc["events"]}   # E1 仍产出
+    assert any("E3/E4" in g for g in doc["meta"].get("dataGaps", []))
+
+
+def test_jiuyan_missing_no_false_compress(monkeypatch):
+    # major#2：韭研缺（streaks={}）但 THS 在场 → today_3plus 不可信→None，E2 不伪 0 误命中
+    monkeypatch.setattr(omc, "compute_anchor",
+                        lambda db, d, ds=None, **kw: ({"main": {"code": "600111"}},
+                                                      {"status": "ok"}))
+    monkeypatch.setattr(omc, "jiuyan_streak_map", lambda db, d, ds=None: {})
+    monkeypatch.setattr(omc, "_ceiling_window",
+                        lambda db, d, ds=None: ([{"date": "x", "maxBoard": 4}], 3))
+    monkeypatch.setattr(omc, "trading_dates_before", lambda db, d, n, ds=None: [Y])
+    monkeypatch.setattr(omc, "_anchor_fates", lambda db, d, ap, axis, ds=None: {})
+    doc = omc.settle_day(FakeDb(), T)
+    assert "spaceCompress" not in {e["type"] for e in doc["events"]}   # 不伪 0
+    assert doc["ceiling"]["maxBoard"] is None
+
+
+def test_compress_real_zero_fires(monkeypatch):
+    # E2 真实命中：今日 maxBoard 在场但 ≥3板=0（真零）且昨日≥1 → 命中
+    monkeypatch.setattr(omc, "compute_anchor",
+                        lambda db, d, ds=None, **kw: ({"main": {"code": "600111"}},
+                                                      {"status": "ok"}))
+    monkeypatch.setattr(omc, "jiuyan_streak_map", lambda db, d, ds=None: {"600111": 2})
+    monkeypatch.setattr(omc, "_ceiling_window",
+                        lambda db, d, ds=None: ([{"date": "x", "maxBoard": 4}], 3))
+    monkeypatch.setattr(omc, "trading_dates_before", lambda db, d, n, ds=None: [Y])
+    monkeypatch.setattr(omc, "_anchor_fates", lambda db, d, ap, axis, ds=None: {})
+    doc = omc.settle_day(FakeDb(), T)
+    assert "spaceCompress" in {e["type"] for e in doc["events"]}
+
+
+def test_warmup_keyed_on_valid_refs(monkeypatch):
+    # minor#4：日历窗 20 但有效参照不足 → 暖机旗标按有效 refs，落库 prevWindowValidDays
+    _patch_gather(monkeypatch, fates={})
+    win = [{"date": f"d{i}", "maxBoard": (4 if i < 3 else None)} for i in range(20)]
+    monkeypatch.setattr(omc, "_ceiling_window", lambda db, d, ds=None: (win, 3))
+    doc = omc.settle_day(FakeDb(), T)
+    assert doc["ceiling"]["windowDays"] == 20
+    assert doc["ceiling"]["prevWindowValidDays"] == 3
+    assert doc["transition"]["evidence"]["warmup"] is True   # 有效 refs<20 → 暖机

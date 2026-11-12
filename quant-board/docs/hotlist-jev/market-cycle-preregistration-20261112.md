@@ -43,7 +43,7 @@
 - 分轨 = `segment_of`（main/growth）；轨内排序 = `rank_board_stocks_seal`（v12 复合键单源，`analysis/hotlist/theme_leader_ammo.py`）；每轨取首位（`space_leaders_by_segment` 同构）。
 - height/gain10/poolDay 构建复用 `theme_leader_baseline` 原语链（`sealed_and_info`/`jiuyan_streak_map`/TDX gain fetcher/近3日高度新→旧遍历）；**排序键不新造第二份**。
 - 剔除「断板不反包且今日跌停」候选（v12 规则④，跌停 = `is_limit_down_pct`）。
-- TDX 涨幅全缺 → 该轨锚不可算 + `meta.spaceErrors` 披露（fail-visible，不降级旧规则，沿 v12 既定行为）。
+- 整轨 TDX gain10 全缺 → 该轨龙一**按首封时间降级选出** + `meta.spaceTrackGaps` 披露（fail-visible；镜像题材链 `theme_leader_baseline` P2-6 现行行为，排序键单源共享。**2026-11-12 P1 评审 finding#3 裁决**：采用 P2-6 镜像而非整轨跳过，与题材链单一事实源对齐；原文「不可算+spaceErrors」描述的是整板 TDX 失败旧行为，与 per-track gain10 全缺是两回事，特此更正）。
 
 ### 3.2 与存量龙头口径的关系登记（红线 §1.2#1）
 
