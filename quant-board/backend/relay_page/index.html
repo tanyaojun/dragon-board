@@ -1066,6 +1066,16 @@ const MONEY_COLOR = {strong:'#16a34a', neutral:'#94a3b8', losing:'#dc2626',
 const MONEY_ORDER = ['strong','neutral','losing','insufficient_evidence'];
 const BAND_ORDER = ['0-25','25-40','40-60','≥60'];
 const BAND_COLOR = {'0-25':'#38bdf8','25-40':'#94a3b8','40-60':'#f59e0b','≥60':'#16a34a'};
+// ── v8 市场周期融合 3 题（2026-11-12）：choice→中文 + 色；仅 v8 档有值（代际区分，旧档不出）──
+const MC_TURN_CN = {confirmed:'真转折', pending:'待确认', false:'假信号',
+                    not_in_window:'非窗口', insufficient_evidence:'证据不足'};
+const MC_INTENSITY_CN = {strong:'强', moderate:'中', weak:'弱', insufficient_evidence:'证据不足'};
+const MC_RISK_CN = {high_collapse:'高位崩塌', space_compress:'空间压缩', none:'无显著',
+                    insufficient_evidence:'证据不足'};
+const MC_TURN_COLOR = {confirmed:'#16a34a', pending:'#f59e0b', false:'#dc2626',
+                       not_in_window:'#94a3b8', insufficient_evidence:'#cbd5e1'};
+const MC_RISK_COLOR = {high_collapse:'#dc2626', space_compress:'#f59e0b', none:'#16a34a',
+                       insufficient_evidence:'#cbd5e1'};
 // ══ 判定分区（ZONE_DEF）══ 用于：判定明细「分区」列与表头筛选 / KPI 分区定位 / 毒带命中清单。
 // **与分带观察页的「五区赔率分区」不是同一套切口**（那套见下方 ZONES_DEF，与脚本
 // ZONE_* 逐字同源：绿灯≥60 / 半绿55-60 / 黄灯25-55 / 回避40-60∧T≥56 / 红灯<25）；
@@ -1918,7 +1928,10 @@ function renderRelayKpi(shown){
     + card('接力钱效', `${moneyB(d.moneyEffect)}${confChip(aOf('money_effect').confidence)}`, tierDesc('money_effect', d.moneyEffect, MONEY_DESC[d.moneyEffect]))
     + card('题材脉络', `${themeB(d.themePulse)}${confChip(aOf('theme_pulse').confidence)}`, tierDesc('theme_pulse', d.themePulse, THEME_DESC[d.themePulse]))
     + `<div class="kpi"><div class="k">龙头强度</div><div class="v phase-big" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}${confChip(aOf('leader_strength').confidence)}</div><div class="s kpi-desc">${esc(leaderDesc(d.leaderStrength))}</div></div>`
-    + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`;
+    + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`
+    + (d.turnQuality != null ? card('转折质量', `<span style="color:${MC_TURN_COLOR[d.turnQuality]||'#94a3b8'}">${MC_TURN_CN[d.turnQuality]||d.turnQuality}</span>${confChip(aOf('turn_quality').confidence)}`, tierDesc('turn_quality', d.turnQuality, MC_TURN_CN[d.turnQuality])) : '')
+    + (d.cycleIntensity != null ? card('周期强度', `${MC_INTENSITY_CN[d.cycleIntensity]||d.cycleIntensity}${confChip(aOf('cycle_intensity').confidence)}`, tierDesc('cycle_intensity', d.cycleIntensity, MC_INTENSITY_CN[d.cycleIntensity])) : '')
+    + (d.riskAhead != null ? card('前瞻风险', `<span style="color:${MC_RISK_COLOR[d.riskAhead]||'#94a3b8'}">${MC_RISK_CN[d.riskAhead]||d.riskAhead}</span>${confChip(aOf('risk_ahead').confidence)}`, tierDesc('risk_ahead', d.riskAhead, MC_RISK_CN[d.riskAhead])) : '');
 }
 
 // ---------- 板块龙头（v6，2026-10-19）----------

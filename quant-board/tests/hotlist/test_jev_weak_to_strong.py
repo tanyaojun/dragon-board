@@ -304,7 +304,7 @@ def test_settlement_records_generation():
     """定档条目必须带 gen=当前题集代（跨代可审计的前提）。"""
     db = _mk_db()
     e = W.settle_day(db, "2026-03-04")
-    assert e["gen"] == "v7.1"
+    assert e["gen"] == W.QUESTION_SET_VERSION_RELAY   # v8（2026-11-12 市场周期融合升代）
 
 
 def test_stale_generation_stamp_ignored(monkeypatch):

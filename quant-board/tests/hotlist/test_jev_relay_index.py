@@ -557,6 +557,9 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
                 "theme_pulse": {"type": "choice", "choice": "mainline_continue", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
                 "leader_strength": {"type": "score", "score": 8.0, "legend": list(range(11))},
+                "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
+                "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
+                "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
             }}}}, 123)
 
     monkeypatch.setattr(relay, "_dispatch_jev", fake_dispatch)
@@ -575,7 +578,10 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v7.1"
+    assert doc["questionSetVersion"] == "v8"
+    # v8 市场周期融合 3 题答案抽取 + 缺语料标记（本夹具无 market_cycle 档→True）
+    assert doc["turnQuality"] == "pending" and doc["cycleIntensity"] == "moderate"
+    assert doc["riskAhead"] == "none" and doc["cycleCorpusMissing"] is True
     # v6：板块/龙头结构随文档落库（前端同源读取，无需二次计算）
     assert isinstance(doc.get("relayStructure"), dict)
     assert doc["relayStructure"]["mainline"] is not None
@@ -593,8 +599,8 @@ def test_run_skips_missing_final():
 
 
 def test_questions_schema():
-    """题目集：7 题；choice 题全部带 insufficient_evidence 兜底（防超证据判读）。"""
-    assert len(QUESTIONS_RELAY) == 7
+    """题目集：v8 10 题；choice 题全部带 insufficient_evidence 兜底（防超证据判读）。"""
+    assert len(QUESTIONS_RELAY) == 10
     for qid, q in QUESTIONS_RELAY.items():
         if q["type"] == "choice":
             assert "insufficient_evidence" in q["criteria"], qid
@@ -1572,6 +1578,9 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
                 "theme_pulse": {"type": "choice", "choice": "mainline_continue", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
                 "leader_strength": {"type": "score", "score": 8.0, "legend": list(range(11))},
+                "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
+                "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
+                "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
             }}}}, 100)
 
     monkeypatch.setattr(relay, "_dispatch_jev", fake_dispatch)
@@ -1585,7 +1594,7 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     assert f"主线板块：{struct['mainline']['name']}" in narrative
     assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
     assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
-    assert doc["questionSetVersion"] == "v7.1"
+    assert doc["questionSetVersion"] == "v8"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1907,8 +1916,8 @@ def test_questions_v7_criteria_revisions():
     assert "≤-2%" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "近20日分位" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "分位刻度" in QUESTIONS_RELAY["relay_index"]["instructions"]
-    # 版本与题数：v7 仍七题一 call（第八题暂缓，门=theme-leader pilot 过验收）
+    # 版本与题数：v8 市场周期融合 7→10（2026-11-12 用户裁决，既有 7 题 criteria 零改动）
     from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
-    assert QUESTION_SET_VERSION_RELAY == "v7.1"
-    assert len(QUESTIONS_RELAY) == 7
+    assert QUESTION_SET_VERSION_RELAY == "v8"
+    assert len(QUESTIONS_RELAY) == 10
 

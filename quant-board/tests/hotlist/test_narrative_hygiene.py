@@ -80,6 +80,53 @@ def _assert_absent(text: str | None, ctx: str) -> None:
     assert text is None, f"{ctx}: 缺数据应整行缺席，实际出行：\n---\n{text}\n---"
 
 
+# ── 市场情绪周期语料段（relay v8 融合，2026-11-12）────────────────────
+
+class _McCol:
+    def __init__(self, doc):
+        self._doc = doc
+
+    def find_one(self, q, projection=None):
+        return self._doc
+
+
+class _McDb:
+    def __init__(self, doc):
+        self._c = _McCol(doc)
+
+    def __getitem__(self, k):
+        return self._c
+
+
+def _mc_doc(events):
+    return {"_id": "2026-11-11:MARKET_CYCLE", "state": "wzs", "daysInState": 2,
+            "transition": {"from": "ice", "to": "wzs"}, "events": events,
+            "ceiling": {"maxBoard": 7, "threePlusN": 6, "prevCeiling20": 11},
+            "anchor": {"main": {"code": "002578", "name": "闽发铝业", "height": 7,
+                                "poolDay": "2026-11-10", "leaderSealedToday": False},
+                       "growth": {"code": "301697", "name": "贝特利", "height": 3,
+                                  "poolDay": "2026-11-06", "leaderSealedToday": True}}}
+
+
+def test_hygiene_market_cycle_lines_all_event_variants():
+    from backend.operations import jev_relay_index as R
+    variants = [
+        [],
+        [{"type": "highTolerance", "code": "002578", "name": "闽发铝业", "subtype": "rebound"}],
+        [{"type": "highCollapse", "code": "600111", "name": "昨龙", "subtype": "1day"}],
+        [{"type": "spaceBreakthrough", "maxBoard": 8, "prevCeiling": 7,
+          "stocks": [{"code": "600825", "name": "新华传媒"}]}],
+        [{"type": "spaceCompress", "maxBoard": 3, "lowStreak": 2, "maxBoardThreshold": 4}],
+    ]
+    for evs in variants:
+        lines = R.market_cycle_lines(_McDb(_mc_doc(evs)), "2026-11-11")
+        assert lines and lines[0] == "【市场情绪周期】"
+        for ln in lines:
+            _assert_clean(ln, f"market_cycle_lines(events={evs})")
+    # 缺档 → 整段缺席（fail-visible，3 题落 insufficient_evidence）
+    assert R.market_cycle_lines(_McDb(None), "2026-11-11") == []
+
+
 # ── 个股画像行族（theme_leader_ammo） ────────────────────────────────
 
 GENE_ITEM = {"stock_id": "000525", "gene": {"zt_count": 4, "premium5_count": 1,

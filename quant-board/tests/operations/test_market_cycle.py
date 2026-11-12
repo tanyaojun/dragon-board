@@ -235,6 +235,45 @@ def test_reference_snapshot_reads_relay_and_rule():
     assert ref["ruleStage"] == "高潮" and ref["ruleScore"] == 76.5
 
 
+# ── v8 解环（Option A，2026-11-12）：确定性步在 relay 前，reference 后置补刷 ──────────
+
+
+_V8_FATES = {"main": {
+    "anchor": {"code": "600999", "name": "昨龙", "statusYesterday": "broken",
+               "poolDay": "2026-11-09"},
+    "fate_today": {"pct": 2.0, "status": "sealed"},
+    "fate_yesterday": {"pct": 10.0, "status": "sealed"},
+    "stabilize_window": None}}
+
+
+def test_settle_day_defer_reference_leaves_relay_none(monkeypatch):
+    """defer_reference=True（确定性步在 relay 前）→ relay 参照留 None，事件/态照常产出。"""
+    _patch_gather(monkeypatch, fates=_V8_FATES)
+    db = FakeDb()
+    doc = omc.settle_day(db, T, defer_reference=True)   # relay 档尚未落库
+    assert doc["status"] == "ok" and doc["state"]
+    assert doc["reference"]["relayIndex"] is None
+    assert doc["reference"]["relayPhase"] is None
+    assert doc["reference"]["marketWzs"] is None
+
+
+def test_refresh_reference_fills_relay_after(monkeypatch):
+    """relay 落库后 refresh_reference 补刷并列参照（事件/锚/态不动）；doc 缺→None 不阻断。"""
+    _patch_gather(monkeypatch, fates=_V8_FATES)
+    db = FakeDb()
+    doc = omc.settle_day(db, T, defer_reference=True)
+    assert doc["reference"]["relayIndex"] is None
+    db["hotlist_jev_relay_index"].docs[f"{T}:RELAY"] = {
+        "_id": f"{T}:RELAY", "relayPhase": "relay_heat", "relayIndex": 67.3,
+        "wzs": {"hit": False, "state": "strong"}}
+    ref = omc.refresh_reference(db, T)
+    assert ref["relayIndex"] == 67.3 and ref["relayPhase"] == "relay_heat"
+    stored = db[omc.COLLECTION].find_one({"_id": f"{T}:MARKET_CYCLE"})
+    assert stored["reference"]["relayIndex"] == 67.3
+    assert stored["state"] == doc["state"]              # 态不动（只补参照）
+    assert omc.refresh_reference(db, "2026-01-01") is None
+
+
 def test_backfill_carries_state(monkeypatch):
     calls = []
     states = {"d1": ("loss", 1), "d2": ("wzs", 1), "d3": ("gain", 1)}

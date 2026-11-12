@@ -1044,17 +1044,20 @@ def _run_theme_cycle_step(today: str, dry_run: bool = False) -> dict[str, Any]:
 _MARKET_CYCLE_TIMEOUT_SECONDS = 600   # 事件流+状态机单日步进（TDX 日线缓存大部分命中）
 
 
-def _run_market_cycle_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+def _run_market_cycle_step(today: str, dry_run: bool = False,
+                           defer_reference: bool = False) -> dict[str, Any]:
     """市场情绪周期单日步进（advisory 步，第4课 P2 挂链）。
 
-    - 链序硬约束：在 themeCycle 之后且 relayIndex 之后（reference 需当日 relay 档）；
+    - v8 解环（Option A）：确定性步在 relayIndex 之前（relay v8 叙事需当日 market_cycle 语料）；
+      defer_reference=True 时 relay 参照留 None，relay 后由 _run_market_cycle_reference_step 补刷；
     - 纯本地确定性（零 token，hotlist_jev_market_cycle，事件流+状态机，读前一日库态）；
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok。"""
     if dry_run:
         return {"ok": True, "skipped": True, "reason": "dry_run"}
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "backend.operations.market_cycle", "--day", today],
+            [sys.executable, "-m", "backend.operations.market_cycle", "--day", today]
+            + (["--defer-reference"] if defer_reference else []),
             cwd=str(Path(__file__).resolve().parents[2]),
             capture_output=True, text=True, timeout=_MARKET_CYCLE_TIMEOUT_SECONDS,
         )
@@ -1063,6 +1066,33 @@ def _run_market_cycle_step(today: str, dry_run: bool = False) -> dict[str, Any]:
                                        "message": f"timeout {_MARKET_CYCLE_TIMEOUT_SECONDS}s"}}
     if proc.returncode != 0:
         return {"ok": False, "error": {"code": "market_cycle_failed",
+                                       "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    try:
+        summary = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001 — 摘要解析失败不影响步成功（advisory）
+        summary = {"ok": True, "parseWarning": "stdout 摘要不可解析"}
+    return {"ok": True, "date": today, "summary": summary}
+
+
+def _run_market_cycle_reference_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """市场情绪周期 reference 补刷（v8 解环 Option A，advisory 步）。
+
+    链序硬约束：在 relayIndex 之后——读当日 relay 档补 market_cycle 并列参照（事件/锚/态不动）。
+    纯本地确定性（零 token）；失败/跳过不翻转 after-market 整体 ok。"""
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.market_cycle",
+             "--day", today, "--refresh-reference"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_MARKET_CYCLE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "market_cycle_ref_timeout",
+                                       "message": f"timeout {_MARKET_CYCLE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "market_cycle_ref_failed",
                                        "message": (proc.stderr or proc.stdout or "")[-400:]}}
     try:
         summary = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
@@ -1539,13 +1569,16 @@ def run_after_market_once(
         # 叙事组装（2026-10-14/10-15 实证：relay 16:18-16:27 出数、归因 16:20-16:36 才落库，
         # 叙事恒写「未覆盖（0/N，归因证据缺失）」，zhabanLabel 步的补全目的被顺序抵消）。
         zhaban_label_result = _run_zhaban_label_step(today, dry_run=dry_run)
+        # 市场情绪周期·确定性步（v8 解环 Option A）：在 relayIndex 之前——relay v8 叙事需当日
+        # market_cycle 语料；reference 暂缺（defer），relay 后补刷。纯确定性零 token。
+        market_cycle_result = _run_market_cycle_step(today, dry_run=dry_run, defer_reference=True)
         relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
+        # 市场情绪周期·reference 补刷（v8 解环）：relay 落库后读当日 relay 档补并列参照
+        market_cycle_ref_result = _run_market_cycle_reference_step(today, dry_run=dry_run)
         # 龙头弱转强（advisory，P2 Q6:A）：观察池+①②事件流单日落库（零 token）
         leader_wzs_result = _run_leader_wzs_step(today, dry_run=dry_run)
         # 题材周期状态机（advisory，P2）：链序在 sectorNodes/leaderWzs 之后
         theme_cycle_result = _run_theme_cycle_step(today, dry_run=dry_run)
-        # 市场情绪周期（advisory，第4课 P2）：链序在 themeCycle/relayIndex 之后（reference 需 relay 档）
-        market_cycle_result = _run_market_cycle_step(today, dry_run=dry_run)
         # 分带表重算（advisory）：链序在 relayIndex 之后——门控比对「最新 ok 判定日」与
         # 产物 window.end，当日新判定刚落库时自愈补齐（零模型调用，产物原子替换）
         relay_band_result = _run_relay_band_step(today, dry_run=dry_run)
@@ -1558,7 +1591,7 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "leaderWzs", "themeCycle", "marketCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "marketCycle", "relayIndex", "marketCycleRef", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -1571,6 +1604,7 @@ def run_after_market_once(
                 "leaderWzs": leader_wzs_result,
                 "themeCycle": theme_cycle_result,
                 "marketCycle": market_cycle_result,
+                "marketCycleRef": market_cycle_ref_result,
                 "relayBand": relay_band_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,

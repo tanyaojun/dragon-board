@@ -2039,6 +2039,64 @@ def anchor_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     return lines
 
 
+# ── v8 市场周期融合语料段（2026-11-12，预登记 market-cycle-p3-narrative-preregistration）──
+# 单源 hotlist_jev_market_cycle；只放数据事实（态/事件/天花板/两轨龙一命运），供新增 3 题
+# （turn_quality/cycle_intensity/risk_ahead）消费。缺档整段缺席（fail-visible），3 题落
+# insufficient_evidence；状态机是离散态+事件唯一权威，本段不改判、不重算。
+_MC_STATE_CN = {"loss": "亏钱效应", "gain": "赚钱效应", "ice": "冰点", "wzs": "弱转强修复"}
+_MC_EVENT_CN = {"spaceBreakthrough": "空间突破↑", "spaceCompress": "空间压缩↓",
+                "highCollapse": "高位崩塌✗", "highTolerance": "高位宽容✓"}
+
+
+def _mc_event_text(e: dict) -> str:
+    t = e.get("type")
+    label = _MC_EVENT_CN.get(t, t or "未知事件")
+    if t == "spaceBreakthrough":
+        names = "、".join(s.get("name") or s.get("code") or "?"
+                          for s in (e.get("stocks") or []))
+        txt = f"{label} {e.get('prevCeiling')}→{e.get('maxBoard')}板"
+        return txt + (f"（{names}）" if names else "")
+    if t == "spaceCompress":
+        return (f"{label} 最高{e.get('maxBoard')}板 "
+                f"连续{e.get('lowStreak')}日≤{e.get('maxBoardThreshold')}板")
+    name = e.get("name") or e.get("code") or ""
+    sub = e.get("subtype")
+    tail = f"（{name}{'·' + sub if sub else ''}）" if name else ""
+    return label + tail
+
+
+def market_cycle_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> list[str]:
+    """【市场情绪周期】语料段（v8，单源 hotlist_jev_market_cycle）。缺档→[]（整段缺席）。"""
+    doc = db["hotlist_jev_market_cycle"].find_one({"_id": f"{date}:MARKET_CYCLE"})
+    if not doc:
+        return []
+    lines = ["【市场情绪周期】"]
+    state = doc.get("state")
+    head = f"当前态：{_MC_STATE_CN.get(state, state or '未知')} · 已持续 {doc.get('daysInState')} 日"
+    tr = doc.get("transition")
+    if isinstance(tr, dict) and tr.get("from") and tr.get("to"):
+        head += (f" · 今日由 {_MC_STATE_CN.get(tr['from'], tr['from'])} "
+                 f"转入 {_MC_STATE_CN.get(tr['to'], tr['to'])}")
+    lines.append(head)
+    evs = doc.get("events") or []
+    lines.append("当日事件：" + ("、".join(_mc_event_text(e) for e in evs) if evs else "无"))
+    ceil = doc.get("ceiling") or {}
+    mb = ceil.get("maxBoard")
+    lines.append(f"空间天花板：最高 {mb if mb is not None else '不可算'} 板 · "
+                 f"≥3板 {ceil.get('threePlusN')} 家 · 近20日最高 {ceil.get('prevCeiling20')} 板")
+    anchor = doc.get("anchor") or {}
+    for seg, seg_cn in (("main", "主板"), ("growth", "创业板")):
+        a = anchor.get(seg)
+        if not a:
+            continue
+        sealed = "今日封板" if a.get("leaderSealedToday") else "今日未封板"
+        pool_day = a.get("poolDay")
+        pool_txt = f"最近封板日 {pool_day} · " if pool_day else ""
+        lines.append(f"空间龙一·{seg_cn}：{a.get('name')}({a.get('code')}) 高度{a.get('height')}板 · "
+                     f"{pool_txt}{sealed}")
+    return lines
+
+
 # ── 组装与 run ──────────────────────────────────────────────────────────────
 
 
@@ -2088,6 +2146,8 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     lines.append(relay_trajectory_line(db, date, dataset_id))
     # 段6 近20日参照锚（v7 D1 删热榜叙事两行；D4 扩分位刻度）
     lines.extend(anchor_lines(db, date, dataset_id, money_hist=money_hist))
+    # 段7 市场情绪周期（v8 融合，2026-11-12）：状态机态/事件/天花板/两轨龙一命运，供新增3题
+    lines.extend(market_cycle_lines(db, date, dataset_id))
     return "\n".join(lines)
 
 
@@ -2159,6 +2219,12 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "leaderStrength": scores.get("leader_strength"),
                "moneyEffect": (answers.get("money_effect") or {}).get("choice"),
                "themePulse": (answers.get("theme_pulse") or {}).get("choice"),
+               # v8 市场周期融合 3 题（2026-11-12）：补维度，状态机仍唯一权威；缺语料→insufficient_evidence
+               "turnQuality": (answers.get("turn_quality") or {}).get("choice"),
+               "cycleIntensity": (answers.get("cycle_intensity") or {}).get("choice"),
+               "riskAhead": (answers.get("risk_ahead") or {}).get("choice"),
+               "cycleCorpusMissing": db["hotlist_jev_market_cycle"].find_one(
+                   {"_id": f"{date}:MARKET_CYCLE"}) is None,
                "model": parsed.get("model"), "usage": usage, "latencyMs": ms,
                "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
                "responseRaw": None if parsed["ok"] else env,

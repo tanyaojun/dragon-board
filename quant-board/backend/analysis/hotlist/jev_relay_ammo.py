@@ -35,7 +35,7 @@ from backend.analysis.hotlist.jev_state import SCORE_ANCHORS_10
 # 消解序 / theme_pulse 主线双定义消歧 / money_effect 线化 + relay_index 锚定句）。
 # 题数不变（第八题暂缓，门=theme-leader pilot 过其预注册 §6 验收）。
 # 旧代已判 relay_index 不回改；新旧代序列对比与判定卡须注记代际（questionSetVersion 落库）。
-QUESTION_SET_VERSION_RELAY = "v7.1"
+QUESTION_SET_VERSION_RELAY = "v8"
 
 _RELAY_INSTR = ("连板情绪指数（0=接力生态彻底冰点，100=接力极度亢奋）。"
                 "以【近10日连板轨迹】与【近20日参照】为坐标系：接力意愿（晋级率位置）、"
@@ -136,6 +136,44 @@ QUESTIONS_RELAY: dict[str, dict] = {
             "rotation": "轮动换线：昨日前排题材今日退潮、新题材接棒（top3 重合 1-2 且无高度递进），或主线昨日为主今日明显缩容",
             "scattered": "散乱一日游：题材多而杂、单题材家数少、无明确梯队与主线（各题材家数均小且龙一高度 ≤2板）",
             "insufficient_evidence": "题材梯队证据缺失，无法判断",
+        },
+    },
+    # ── v8 市场周期融合 3 题（2026-11-12 用户裁决 Q-A/B/C，预登记 market-cycle-p3-narrative-preregistration）──
+    # 补维度等同加语料：主锚=【市场情绪周期】段（状态机态/事件/锚命运/天花板，单源 hotlist_jev_market_cycle）。
+    # 状态机是离散态+事件唯一权威；本 3 题只补状态机不产的维度（质量/强度/前瞻），不改判 state/事件。
+    "turn_quality": {
+        "type": "choice",
+        "instructions": ("当前市场情绪弱转强的转折质量？主锚=【市场情绪周期】段（状态机态/事件/两轨龙一命运）。"
+                         "状态机已判是否处 wzs/突破窗口，本题只评转折质量，不重复判态、不预测后市；"
+                         "判据只引用该段已给证据（高位宽容/空间突破/龙一命运），缺料选 insufficient_evidence"),
+        "criteria": {
+            "confirmed": "真转折：高位龙一断板后企稳/反包（宽容已现）且伴随空间突破或高度递进，最激进接力资金被宽容以待",
+            "pending": "待确认：仅高位宽容初现（断板后震荡/企稳），尚无空间突破，需后续1–2日确认（高位缓和看2天）",
+            "false": "假信号：表面宽容但高位仍崩塌/大面，或空间压缩未解除，亏钱效应未止",
+            "not_in_window": "状态机未判 wzs/突破（非弱转强窗口，如仍处亏钱/冰点或已高潮）",
+            "insufficient_evidence": "【市场情绪周期】段缺失或态/事件/龙一命运证据不足",
+        },
+    },
+    "cycle_intensity": {
+        "type": "choice",
+        "instructions": ("当前市场情绪周期态的强度/程度？主锚=【市场情绪周期】段。状态机给离散态（亏钱/赚钱/冰点/弱转强），"
+                         "本题只补该态的强度维度，不改判态；只判当下强度，不预测后市；缺料选 insufficient_evidence"),
+        "criteria": {
+            "strong": "强：赚钱效应勇猛精进（空间持续打开/高位批量封板）或亏钱效应极端（高位批量崩塌/空间持续压缩）",
+            "moderate": "中：态已确立但强度温和（空间刚打开/高位个别宽容，或亏钱效应收敛中）",
+            "weak": "弱：态边缘/暖机期，证据不足以言强度",
+            "insufficient_evidence": "【市场情绪周期】段缺失或态/天花板证据不足",
+        },
+    },
+    "risk_ahead": {
+        "type": "choice",
+        "instructions": ("未来1–2日最需警惕的市场周期风险？主锚=【市场情绪周期】段（事件/天花板）与【高位股多日轨迹】。"
+                         "状态机判当下事件，本题只补前瞻风险维度；判据只引用已给证据，不预测具体涨跌，缺料选 insufficient_evidence"),
+        "criteria": {
+            "high_collapse": "高位崩塌风险：空间突破波段约2日后（第3日易崩）或高位龙一已显疲态/炸板/大面（崩塌看1天或2天）",
+            "space_compress": "空间压缩风险：高度持续打不开（天花板低位）且无突破迹象，亏钱效应可能蔓延",
+            "none": "无显著风险：周期健康延续，无明显崩塌/压缩前兆",
+            "insufficient_evidence": "【市场情绪周期】段缺失或事件/天花板/高位轨迹证据不足",
         },
     },
 }

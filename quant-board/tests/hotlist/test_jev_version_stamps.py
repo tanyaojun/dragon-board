@@ -22,7 +22,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     assert jev_state.QUESTION_SET_VERSION == "v2.6"                    # 热榜情绪（日级判据删减）
     assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"                   # 个股打标+合并相位（v3.2 freshness 分界/v3.3 depth 联动判层/v4.0 驱动+买盘兑底选项，均 2026-10-22）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
-    assert relay.QUESTION_SET_VERSION_RELAY == "v7.1"                  # 连板指数（v7.1 边界修正：strong P80/fracture 优先序）
+    assert relay.QUESTION_SET_VERSION_RELAY == "v8"                    # 连板指数（v8 市场周期融合 +3 题；v7.1 边界修正保留）
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
     assert daily.QUESTION_SET_VERSION_DAILY_LINE == "v1"               # 日线一句话（复盘修复起戳）
 
@@ -92,6 +92,24 @@ def test_relay_v7_1_criteria_wording():
     assert "两分支均不满足时不得判 strong" in strong
     assert "fracture > inverted > balanced" in q["ladder_health"]["instructions"]
     assert "比率恰=0.5 时 fracture 优先于 balanced" in q["ladder_health"]["instructions"]
-    # 叙事零改动：判据外的题目集结构不变（七题、score/choice 类型）
+    # v8：既有 7 题 criteria 零改动 + 市场周期融合 3 题（2026-11-12，补维度等同加语料）
     assert list(q) == ["relay_index", "relay_phase", "relay_momentum", "ladder_health",
-                       "leader_strength", "money_effect", "theme_pulse"]
+                       "leader_strength", "money_effect", "theme_pulse",
+                       "turn_quality", "cycle_intensity", "risk_ahead"]
+
+
+def test_relay_v8_market_cycle_fusion_questions():
+    """v8 市场周期融合 3 题（2026-11-12 用户裁决 Q-A/B/C）：补维度等同加语料，
+    主锚=【市场情绪周期】段；choice 题带 insufficient_evidence；状态机仍唯一权威（不改判）。"""
+    from backend.analysis.hotlist import jev_relay_ammo as relay
+    q = relay.QUESTIONS_RELAY
+    for qid in ("turn_quality", "cycle_intensity", "risk_ahead"):
+        assert q[qid]["type"] == "choice", qid
+        assert "insufficient_evidence" in q[qid]["criteria"], qid
+        assert "【市场情绪周期】" in q[qid]["instructions"], qid
+    assert set(q["turn_quality"]["criteria"]) == {
+        "confirmed", "pending", "false", "not_in_window", "insufficient_evidence"}
+    assert set(q["risk_ahead"]["criteria"]) == {
+        "high_collapse", "space_compress", "none", "insufficient_evidence"}
+    assert set(q["cycle_intensity"]["criteria"]) == {
+        "strong", "moderate", "weak", "insufficient_evidence"}

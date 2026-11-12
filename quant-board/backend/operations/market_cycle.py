@@ -200,7 +200,7 @@ def _breakthrough_stocks(db: Any, date: str, streaks_today: dict,
     return sorted(out, key=lambda r: r["code"])
 
 
-def _reference_snapshot(db: Any, date: str, dataset_id: str) -> dict:
+def _reference_snapshot(db: Any, date: str, dataset_id: str, *, include_relay: bool = True) -> dict:
     """并列参照同日只读快照（裁决 1A：无预设权威，不进判据，仅前端对照）。
 
     relayPhase/relayIndex/大盘wzs 单源 hotlist_jev_relay_index {date}:RELAY；规则五档单源
@@ -209,13 +209,14 @@ def _reference_snapshot(db: Any, date: str, dataset_id: str) -> dict:
     """
     ref: dict[str, Any] = {"relayPhase": None, "relayIndex": None,
                            "marketWzs": None, "ruleStage": None, "ruleScore": None}
-    try:
-        rdoc = db["hotlist_jev_relay_index"].find_one({"_id": f"{date}:RELAY"}) or {}
-        ref["relayPhase"] = rdoc.get("relayPhase")
-        ref["relayIndex"] = rdoc.get("relayIndex")
-        ref["marketWzs"] = rdoc.get("wzs")
-    except Exception:  # noqa: BLE001 — 参照辅助，缺失不阻断
-        pass
+    if include_relay:
+        try:
+            rdoc = db["hotlist_jev_relay_index"].find_one({"_id": f"{date}:RELAY"}) or {}
+            ref["relayPhase"] = rdoc.get("relayPhase")
+            ref["relayIndex"] = rdoc.get("relayIndex")
+            ref["marketWzs"] = rdoc.get("wzs")
+        except Exception:  # noqa: BLE001 — 参照辅助，缺失不阻断
+            pass
     try:
         sdoc = db["hotlist_sentiment"].find_one(
             {"datasetId": dataset_id, "snapshotType": "half_hour",
@@ -227,10 +228,25 @@ def _reference_snapshot(db: Any, date: str, dataset_id: str) -> dict:
     return ref
 
 
+def refresh_reference(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict | None:
+    """v8 解环（Option A）：relay 落库后补刷 market_cycle 并列参照（单日轻量）。
+
+    market_cycle 确定性步在 relay 之前（defer_reference），relay 参照暂缺；本函数在 relay
+    之后读当日 relay 档 + EOD，$set reference（事件/锚/天花板/态不动）。doc 缺失→None（不阻断）。
+    """
+    doc = db[COLLECTION].find_one({"_id": f"{date}:MARKET_CYCLE"})
+    if not doc:
+        return None
+    ref = _reference_snapshot(db, date, dataset_id)
+    db[COLLECTION].update_one({"_id": doc["_id"]}, {"$set": {"reference": ref}})
+    return ref
+
+
 def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                gain_fetcher=None, day_change_fetcher=None,
                prev_anchors: dict | None = None, prev_state: str | None = None,
-               prev_days_in_state: int = 0, force: bool = False) -> dict:
+               prev_days_in_state: int = 0, force: bool = False,
+               defer_reference: bool = False) -> dict:
     """计算 + upsert 单集合文档（每交易日一文档，重跑幂等）；返回落库文档。
 
     prev_anchors 缺省 → 现算昨日龙一（单日运行）；回填逐日携带前一日 anchor 省重算。
@@ -299,7 +315,9 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
             prev_days_in_state = pdoc.get("daysInState") or 0
     new_state, transition = mc.step_day(prev_state, events=events, date=date, warmup=warmup)
     days_in_state = 1 if transition is not None else prev_days_in_state + 1
-    reference = _reference_snapshot(db, date, dataset_id)
+    # v8 解环（Option A）：defer_reference=True 时 relay 尚未落库（market_cycle 确定性步在
+    # relay 之前），relay 参照留 None，盘后链 relay 后由 refresh_reference 补刷。
+    reference = _reference_snapshot(db, date, dataset_id, include_relay=not defer_reference)
 
     doc = {"_id": f"{date}:MARKET_CYCLE", "tradingDate": date,
            "version": mc.MARKET_CYCLE_VERSION, "status": meta.get("status"),
@@ -431,11 +449,23 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
     _ap.add_argument("--offset", type=int, default=None,
                      help="深历史日线单档 offset（如 250≈近一年；缺省阶梯式）")
     _ap.add_argument("--force", action="store_true", help="幂等覆盖（重算已 ok 日）")
+    _ap.add_argument("--defer-reference", dest="defer_reference", action="store_true",
+                     help="v8 解环：确定性步在 relay 前，relay 参照留 None 待补刷（单日）")
+    _ap.add_argument("--refresh-reference", dest="refresh_reference", action="store_true",
+                     help="v8 解环：relay 落库后补刷当日 reference（须 --day）")
     _ap.add_argument("--dataset-id", dest="dataset_id", default=DEFAULT_DATASET_ID)
     _args = _ap.parse_args()
     _db = get_runtime_mongodb_database()
     _offsets = (_args.offset,) if _args.offset else None
-    if _args.recompress:
+    if _args.refresh_reference:
+        if not _args.day:
+            print(_json.dumps({"ok": False, "error": "--refresh-reference 须 --day"}))
+            _sys.exit(1)
+        _ref = refresh_reference(_db, _args.day, _args.dataset_id)
+        print(_json.dumps({"ok": _ref is not None, "date": _args.day,
+                           "refreshed": _ref is not None,
+                           "relayIndex": (_ref or {}).get("relayIndex")}, ensure_ascii=False))
+    elif _args.recompress:
         if not (_args.start and _args.end):
             print(_json.dumps({"ok": False, "error": "--recompress 须 --from --to"}))
             _sys.exit(1)
@@ -472,7 +502,8 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
         if not _day:
             print(_json.dumps({"ok": False, "error": "无韭研 final，且未给 --day"}))
             _sys.exit(1)
-        _doc = settle_day(_db, _day, _args.dataset_id, force=_args.force)
+        _doc = settle_day(_db, _day, _args.dataset_id, force=_args.force,
+                          defer_reference=_args.defer_reference)
         print(_json.dumps({"ok": True, "date": _day, "status": _doc.get("status"),
                            "events": len(_doc.get("events") or []),
                            "anchor": {k: v.get("name") for k, v in
