@@ -30,6 +30,29 @@ class _Col:
                 return dict(d)
         return None
 
+    def find(self, q=None, projection=None):
+        import re
+        out = []
+        for d in self.docs.values():
+            ok = True
+            for k, v in (q or {}).items():
+                if isinstance(v, dict) and "$regex" in v:
+                    if not re.search(v["$regex"], str(d.get(k, ""))):
+                        ok = False
+                        break
+                elif d.get(k) != v:
+                    ok = False
+                    break
+            if ok:
+                out.append(dict(d))
+        return out
+
+    def update_one(self, q, update, upsert=False):
+        for d in self.docs.values():
+            if all(d.get(k) == v for k, v in q.items()):
+                d.update(update.get("$set", {}))
+                return
+
 
 class FakeDb:
     def __init__(self):
@@ -119,3 +142,104 @@ def test_settle_day_tolerance_rebound_event(monkeypatch):
     doc = omc.settle_day(FakeDb(), T)
     tol = [e for e in doc["events"] if e["type"] == "highTolerance"]
     assert len(tol) == 1 and tol[0]["subtype"] == "rebound"
+
+
+# ══ P2 状态机集成（state/transition/daysInState/reference）══
+def _no_bt(monkeypatch):
+    # 抬高天花板 → 无突破，隔离 E3/E4/无事件场景
+    monkeypatch.setattr(omc, "_ceiling_window",
+                        lambda db, d, ds=None: ([{"date": "2026-10-01", "maxBoard": 10}], 3))
+
+
+def test_settle_day_state_fields_present(monkeypatch):
+    _patch_gather(monkeypatch, fates={})
+    _no_bt(monkeypatch)
+    doc = omc.settle_day(FakeDb(), T)
+    assert doc["state"] == "loss"                 # 首日无事件 init（Q6=A）
+    assert doc["transition"]["from"] is None and doc["daysInState"] == 1
+    assert "reference" in doc and doc["reference"]["relayPhase"] is None  # 缺→None
+
+
+def test_settle_day_state_migration_with_prev(monkeypatch):
+    fates = {"main": {
+        "anchor": {"code": "600999", "name": "昨龙", "statusYesterday": "broken",
+                   "poolDay": "2026-11-10"},
+        "fate_today": {"pct": 10.0, "status": "sealed"},
+        "fate_yesterday": {"pct": -2.0, "status": "broken"},
+        "stabilize_window": None}}
+    _patch_gather(monkeypatch, fates=fates)
+    _no_bt(monkeypatch)
+    doc = omc.settle_day(FakeDb(), T, prev_state="loss", prev_days_in_state=3)
+    assert {e["type"] for e in doc["events"]} == {"highTolerance"}
+    assert doc["state"] == "wzs" and doc["transition"]["from"] == "loss"
+    assert doc["daysInState"] == 1               # 迁移重置
+
+
+def test_settle_day_no_event_self_hold_days(monkeypatch):
+    _patch_gather(monkeypatch, fates={})
+    _no_bt(monkeypatch)
+    doc = omc.settle_day(FakeDb(), T, prev_state="gain", prev_days_in_state=4)
+    assert doc["events"] == [] and doc["state"] == "gain" and doc["transition"] is None
+    assert doc["daysInState"] == 5               # 自持累加
+
+
+def test_settle_day_single_day_reads_prev_doc(monkeypatch):
+    _patch_gather(monkeypatch, fates={})
+    _no_bt(monkeypatch)
+    db = FakeDb()
+    db[omc.COLLECTION].docs[f"{Y}:MARKET_CYCLE"] = {
+        "_id": f"{Y}:MARKET_CYCLE", "state": "ice", "daysInState": 2}
+    doc = omc.settle_day(db, T)                  # prev_state=None → 读前一日库态
+    assert doc["state"] == "ice" and doc["daysInState"] == 3
+
+
+def test_reference_snapshot_reads_relay_and_rule():
+    db = FakeDb()
+    db["hotlist_jev_relay_index"].docs[f"{T}:RELAY"] = {
+        "_id": f"{T}:RELAY", "relayPhase": "divergence", "relayIndex": 52.6,
+        "wzs": {"hit": False, "state": "strong"}}
+    db["hotlist_sentiment"].docs["r1"] = {
+        "datasetId": omc.DEFAULT_DATASET_ID, "snapshotType": "half_hour",
+        "slotTime": "EOD", "tradingDate": T, "stage": "高潮",
+        "emotionScore": {"score": 76.5}}
+    ref = omc._reference_snapshot(db, T, omc.DEFAULT_DATASET_ID)
+    assert ref["relayPhase"] == "divergence" and ref["relayIndex"] == 52.6
+    assert ref["marketWzs"]["state"] == "strong"
+    assert ref["ruleStage"] == "高潮" and ref["ruleScore"] == 76.5
+
+
+def test_backfill_carries_state(monkeypatch):
+    calls = []
+    states = {"d1": ("loss", 1), "d2": ("wzs", 1), "d3": ("gain", 1)}
+
+    def fake_settle(db, d, ds=None, **kw):
+        calls.append((d, kw.get("prev_state"), kw.get("prev_days_in_state")))
+        st, dy = states[d]
+        return {"anchor": {}, "state": st, "daysInState": dy, "events": [],
+                "status": "ok", "ceiling": {}}
+
+    monkeypatch.setattr(omc, "settle_day", fake_settle)
+    db = FakeDb()
+    for d in ("d1", "d2", "d3"):
+        db["jiuyan_action"].docs[f"{d}:final"] = {"_id": f"{d}:final", "tradingDate": d}
+    omc.backfill(db, "d1", "d3")
+    assert [c[1] for c in calls] == [None, "loss", "wzs"]   # prev_state 逐日携带
+    assert [c[2] for c in calls] == [0, 1, 1]
+
+
+def test_replay_state_over_stored_events():
+    db = FakeDb()
+    # 已落库事件流：d1 无事件 / d2 宽容 / d3 突破（不重取 TDX）
+    seed = [("d1", [], 20), ("d2", [{"type": "highTolerance"}], 20),
+            ("d3", [{"type": "spaceBreakthrough"}], 20)]
+    for d, ev, wd in seed:
+        db[omc.COLLECTION].docs[f"{d}:MARKET_CYCLE"] = {
+            "_id": f"{d}:MARKET_CYCLE", "tradingDate": d, "events": ev,
+            "ceiling": {"windowDays": wd}}
+    rows = omc.replay_state(db, "d1", "d3")
+    assert [r["state"] for r in rows] == ["loss", "wzs", "gain"]
+    # 补写进既有 doc（事件不动）
+    d2 = db[omc.COLLECTION].find_one({"_id": "d2:MARKET_CYCLE"})
+    assert d2["state"] == "wzs" and d2["daysInState"] == 1
+    assert d2["events"] == [{"type": "highTolerance"}]
+    assert "reference" in d2

@@ -10,7 +10,8 @@
 命运计算单源 = `jev_relay_index._pool_of/_status_map/_close_pct`（池权威 + 日线补洞，
 停牌不算断板 v4）；排序键单源 = `theme_leader_ammo.space_leaders_by_segment`。
 生产写库只入 `dragon_board_quant`；pytest 只入 `dragon_board_test`（conftest 护栏）。
-P1 只产事件流（anchor/ceiling/events）；状态机与并列参照（reference）属 P2。
+P1 产事件流（anchor/ceiling/events）；P2 增状态机（state/transition/daysInState，输入=事件流
+only）与并列参照（reference：relayPhase/relayIndex/大盘wzs/规则五档同日只读快照，不进判据）。
 """
 from __future__ import annotations
 
@@ -197,9 +198,37 @@ def _breakthrough_stocks(db: Any, date: str, streaks_today: dict,
     return sorted(out, key=lambda r: r["code"])
 
 
+def _reference_snapshot(db: Any, date: str, dataset_id: str) -> dict:
+    """并列参照同日只读快照（裁决 1A：无预设权威，不进判据，仅前端对照）。
+
+    relayPhase/relayIndex/大盘wzs 单源 hotlist_jev_relay_index {date}:RELAY；规则五档单源
+    hotlist_sentiment EOD（stage/emotionScore.score）。缺→None（fail-visible）。参照属辅助
+    观测，读取异常不得阻断核心周期计算（不阻断红线），故容错留 None。
+    """
+    ref: dict[str, Any] = {"relayPhase": None, "relayIndex": None,
+                           "marketWzs": None, "ruleStage": None, "ruleScore": None}
+    try:
+        rdoc = db["hotlist_jev_relay_index"].find_one({"_id": f"{date}:RELAY"}) or {}
+        ref["relayPhase"] = rdoc.get("relayPhase")
+        ref["relayIndex"] = rdoc.get("relayIndex")
+        ref["marketWzs"] = rdoc.get("wzs")
+    except Exception:  # noqa: BLE001 — 参照辅助，缺失不阻断
+        pass
+    try:
+        sdoc = db["hotlist_sentiment"].find_one(
+            {"datasetId": dataset_id, "snapshotType": "half_hour",
+             "slotTime": "EOD", "tradingDate": date}) or {}
+        ref["ruleStage"] = sdoc.get("stage")
+        ref["ruleScore"] = (sdoc.get("emotionScore") or {}).get("score")
+    except Exception:  # noqa: BLE001
+        pass
+    return ref
+
+
 def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                gain_fetcher=None, day_change_fetcher=None,
-               prev_anchors: dict | None = None, force: bool = False) -> dict:
+               prev_anchors: dict | None = None, prev_state: str | None = None,
+               prev_days_in_state: int = 0, force: bool = False) -> dict:
     """计算 + upsert 单集合文档（每交易日一文档，重跑幂等）；返回落库文档。
 
     prev_anchors 缺省 → 现算昨日龙一（单日运行）；回填逐日携带前一日 anchor 省重算。
@@ -244,6 +273,19 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
         meta.setdefault("dataGaps", []).append(
             f"天花板回看窗不足 {mc.CEILING_WINDOW} 日（实得 {len(window)}）：早期历史如实缩短")
 
+    # P2 状态机（输入=事件流 only；参照不进判据，裁决 1A）。单日运行缺 prev_state →
+    # 读前一交易日库态；回填逐日携带（首日前无库态 → step_day 首日 init，Q6=A）。
+    warmup = len(window) < mc.CEILING_WINDOW
+    if prev_state is None and len(axis) >= 2:
+        pdoc = db[COLLECTION].find_one({"_id": f"{axis[-2]}:MARKET_CYCLE"},
+                                       {"state": 1, "daysInState": 1})
+        if pdoc and pdoc.get("state"):
+            prev_state = pdoc["state"]
+            prev_days_in_state = pdoc.get("daysInState") or 0
+    new_state, transition = mc.step_day(prev_state, events=events, date=date, warmup=warmup)
+    days_in_state = 1 if transition is not None else prev_days_in_state + 1
+    reference = _reference_snapshot(db, date, dataset_id)
+
     doc = {"_id": f"{date}:MARKET_CYCLE", "tradingDate": date,
            "version": mc.MARKET_CYCLE_VERSION, "status": meta.get("status"),
            "anchor": anchors or {}, "ceiling": {**ceiling_today,
@@ -252,7 +294,8 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                                                      if isinstance(w["maxBoard"], int)),
                                                     default=None),
                                                 "windowDays": len(window)},
-           "events": events, "meta": meta,
+           "events": events, "state": new_state, "transition": transition,
+           "daysInState": days_in_state, "reference": reference, "meta": meta,
            "generatedAt": datetime.now(timezone.utc).isoformat()}
     old = None if force else db[COLLECTION].find_one({"_id": doc["_id"]},
                                                      {"generatedAt": 1, "events": 1})
@@ -274,16 +317,45 @@ def backfill(db: Any, start: str, end: str, dataset_id: str = DEFAULT_DATASET_ID
     gf = lambda codes, d: covering_gain_fetcher(codes, d, offsets=offsets)  # noqa: E731
     cf = lambda codes, d: covering_day_change_fetcher(codes, d, offsets=offsets)  # noqa: E731
     prev_anchors: dict | None = None
+    prev_state: str | None = None
+    prev_days = 0
     docs: list[dict] = []
     for d in dates:
         doc = settle_day(db, d, dataset_id, gain_fetcher=gf, day_change_fetcher=cf,
-                         prev_anchors=prev_anchors, force=force)
+                         prev_anchors=prev_anchors, prev_state=prev_state,
+                         prev_days_in_state=prev_days, force=force)
         prev_anchors = doc.get("anchor") or None
+        prev_state = doc.get("state")
+        prev_days = doc.get("daysInState") or 0
         docs.append(doc)
         print(f"[market-cycle] {d} status={doc.get('status')} "
+              f"state={doc.get('state')} days={doc.get('daysInState')} "
               f"events={len(doc.get('events') or [])} "
               f"maxBoard={doc.get('ceiling', {}).get('maxBoard')}")
     return docs
+
+
+def replay_state(db: Any, start: str, end: str,
+                 dataset_id: str = DEFAULT_DATASET_ID) -> list[dict]:
+    """P2 历史态重放：对已落库事件流跑状态机（不重取 TDX，秒级）。
+
+    状态机是事件流的纯函数（mc.replay），与 settle_day 内联计算同源同果；本通道仅把
+    state/transition/daysInState/reference 补写进既有 doc（事件/锚/天花板不动）。升序全量
+    重放保证首日起链一致；warmup=天花板窗<20（Q6 披露）。
+    """
+    docs = sorted((d for d in db[COLLECTION].find({})
+                   if d.get("tradingDate") and start <= str(d["tradingDate"]) <= end),
+                  key=lambda d: str(d["tradingDate"]))
+    days = [{"date": str(d["tradingDate"]), "events": d.get("events") or [],
+             "warmup": (d.get("ceiling") or {}).get("windowDays", 0) < mc.CEILING_WINDOW}
+            for d in docs]
+    rows = mc.replay(days)
+    for d, row in zip(docs, rows):
+        ref = _reference_snapshot(db, str(d["tradingDate"]), dataset_id)
+        db[COLLECTION].update_one({"_id": d["_id"]}, {"$set": {
+            "state": row["state"], "transition": row["transition"],
+            "daysInState": row["daysInState"], "reference": ref}})
+    return rows
 
 
 if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前的手动/回填入口）
@@ -291,9 +363,11 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
     import json as _json
     import sys as _sys
 
-    _ap = argparse.ArgumentParser(description="市场情绪周期事件流（第4课 P1，盘后口径）")
+    _ap = argparse.ArgumentParser(description="市场情绪周期（第4课 P1 事件流 + P2 状态机，盘后口径）")
     _ap.add_argument("--day", help="YYYY-MM-DD 单日落库（缺省=最近韭研 final 日）")
     _ap.add_argument("--backfill", action="store_true", help="区间回填（须 --from --to）")
+    _ap.add_argument("--replay-state", dest="replay_state", action="store_true",
+                     help="P2：对已落库事件流重放状态机（不重取 TDX，须 --from --to）")
     _ap.add_argument("--from", dest="start", help="回填起日 YYYY-MM-DD")
     _ap.add_argument("--to", dest="end", help="回填止日 YYYY-MM-DD")
     _ap.add_argument("--offset", type=int, default=None,
@@ -303,7 +377,16 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
     _args = _ap.parse_args()
     _db = get_runtime_mongodb_database()
     _offsets = (_args.offset,) if _args.offset else None
-    if _args.backfill:
+    if _args.replay_state:
+        if not (_args.start and _args.end):
+            print(_json.dumps({"ok": False, "error": "--replay-state 须 --from --to"}))
+            _sys.exit(1)
+        from collections import Counter as _Counter
+        _rows = replay_state(_db, _args.start, _args.end, _args.dataset_id)
+        print(_json.dumps({"ok": True, "days": len(_rows),
+                           "states": dict(_Counter(r["state"] for r in _rows))},
+                          ensure_ascii=False))
+    elif _args.backfill:
         if not (_args.start and _args.end):
             print(_json.dumps({"ok": False, "error": "--backfill 须 --from --to"}))
             _sys.exit(1)

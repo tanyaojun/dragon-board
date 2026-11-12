@@ -3,8 +3,9 @@
 
 预登记：`docs/hotlist-jev/market-cycle-preregistration-20261112.md`（2026-11-12 用户
 七项裁决 + Q1–Q7 全批准冻结）。本模块只做确定性口径：市场空间龙一候选 enrichment、
-分轨龙一选取、空间天花板、四大特征事件检测（E1 突破 / E2 压缩 / E3 崩塌 / E4 宽容）。
-状态机（loss/ice/wzs/gain）属 P2，本层不涉及。
+分轨龙一选取、空间天花板、四大特征事件检测（E1 突破 / E2 压缩 / E3 崩塌 / E4 宽容），
+以及 P2 市场级状态机（loss/ice/wzs/gain，`step_day`/`replay`，输入=事件流 only，零 token
+全历史可重放）。
 
 锚点（裁决 2）：市场空间龙一 = v12 复合口径作用于**全市场**候选池（今日封板 ∪ 近 3 日
 封板，断板龙一在锚内）。排序键单源 = `theme_leader_ammo.rank_board_stocks_seal` /
@@ -240,3 +241,88 @@ def is_one_word_bar(bar: dict | None, code: str, prev_close: float | None) -> bo
     if not (o == h == l == c):
         return False
     return abs(c - limit_up_price(code, prev_close)) < 0.001
+
+
+# ── P2 市场级状态机（预登记 §五；裁决 1A 输入=事件流 only / Q5=B 优先级 / Q6=A 首日）──
+# 四态无吸收态（市场周期永续轮回，全态可逆，与 theme_cycle terminal 不同）。
+STATES = ("loss", "ice", "wzs", "gain")
+STATE_LABELS_CN = {"loss": "亏钱", "ice": "冰点", "wzs": "弱转强", "gain": "赚钱"}
+
+# 迁移触发词（落痕用，预登记 §5.2）
+TRIG_BREAKTHROUGH = "space_breakthrough"   # E1 → gain（赚钱效应标杆诞生）
+TRIG_COLLAPSE = "high_collapse"            # E3 → loss（亏钱效应）
+TRIG_COMPRESS = "space_compress"           # E2 → loss→ice / gain·wzs→loss / ice 自持
+TRIG_TOLERANCE = "high_tolerance"          # E4 → loss·ice→wzs / gain·wzs 自持
+TRIG_INIT = "init_default"                 # 首日无事件保守默认 loss（Q6=A）
+
+# 事件优先级序（Q5=B 冻结：E1 > E3 > E2 > E4；同日 E3+E1 龙头更替判 gain）
+_EVENT_PRIORITY = ("spaceBreakthrough", "highCollapse", "spaceCompress", "highTolerance")
+
+
+def initial_state() -> str:
+    """Q6=A：回填首日无事件 → loss（保守默认，非判据判定）+ warmup 披露。"""
+    return "loss"
+
+
+def step_day(prev_state: str | None, *, events: list[dict] | None,
+             date: str | None = None, warmup: bool = False) -> tuple[str, dict | None]:
+    """单日市场级状态迁移（纯函数）。输入=事件流 E1–E4 only（裁决 1A，参照不进判据）。
+
+    优先级 E1>E3>E2>E4（Q5=B）；取当日最高优先级命中。无吸收态全态可逆；wzs 无超时
+    （Q3=A）无事件自持。prev_state=None=首日（Q6 默认 loss 基底再套事件）。两轨聚合
+    Q1=A：任一轨命中即计入（events 已含两轨，类型去重即可）。返回 (new_state, transition)；
+    transition=None=自持（含 E2 ice 自持 / E4 gain·wzs 自持 / 无事件）。迁移落痕
+    {from,to,trigger,evidence,date}（theme_cycle 同构）。
+    """
+    events = events or []
+    types = {e.get("type") for e in events if e.get("type")}
+    is_init = prev_state is None
+    base = initial_state() if is_init else prev_state
+
+    target, trigger, trig_event = base, None, None
+    if "spaceBreakthrough" in types:
+        target, trigger = "gain", TRIG_BREAKTHROUGH
+        trig_event = next(e for e in events if e.get("type") == "spaceBreakthrough")
+    elif "highCollapse" in types:
+        target, trigger = "loss", TRIG_COLLAPSE
+        trig_event = next(e for e in events if e.get("type") == "highCollapse")
+    elif "spaceCompress" in types:
+        trigger = TRIG_COMPRESS
+        trig_event = next(e for e in events if e.get("type") == "spaceCompress")
+        target = "ice" if base == "loss" else ("loss" if base in ("gain", "wzs") else "ice")
+    elif "highTolerance" in types:
+        trigger = TRIG_TOLERANCE
+        trig_event = next(e for e in events if e.get("type") == "highTolerance")
+        target = "wzs" if base in ("loss", "ice") else base
+
+    evidence = {"eventTypes": sorted(types), "triggerEvent": trig_event}
+    if is_init:
+        return target, {"from": None, "to": target, "trigger": trigger or TRIG_INIT,
+                        "evidence": {**evidence, "warmup": warmup}, "date": date}
+    if target != base:
+        return target, {"from": base, "to": target, "trigger": trigger,
+                        "evidence": evidence, "date": date}
+    return base, None
+
+
+def replay(days: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """全历史重放（升序日期）。days 每元素 {"date", "events": [...], "warmup": bool}。
+
+    单一市场级状态（非逐板块×轨，与 theme_cycle 不同）。返回逐日记录：
+    {date,state,prev,migrated,transition,daysInState,warmup}。daysInState 自持累加、
+    迁移/首日重置 1（Q3=A wzs 无超时，days-in-state 披露供后续裁决是否加窗）。
+    """
+    state: str | None = None
+    days_in_state = 0
+    out: list[dict[str, Any]] = []
+    for day in days:
+        new_state, transition = step_day(state, events=day.get("events") or [],
+                                         date=day.get("date"),
+                                         warmup=bool(day.get("warmup")))
+        days_in_state = 1 if transition is not None else days_in_state + 1
+        out.append({"date": day.get("date"), "state": new_state,
+                    "prev": transition["from"] if transition else state,
+                    "migrated": transition is not None, "transition": transition,
+                    "daysInState": days_in_state, "warmup": bool(day.get("warmup"))})
+        state = new_state
+    return out
