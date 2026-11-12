@@ -123,20 +123,14 @@ def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
     return anchors, meta
 
 
-def _ceiling_window(db: Any, date: str, dataset_id: str) -> tuple[list[dict], int | None]:
-    """近 N 日天花板序列（升序，不含今日）+ 昨日 ≥3板家数。"""
+def _ceiling_window(db: Any, date: str, dataset_id: str) -> list[dict]:
+    """近 N 日天花板序列（升序，不含今日）。供 E1 参照 + E2 v2 持续段判定。"""
     window_dates = trading_dates_before(db, date, mc.CEILING_WINDOW, dataset_id)
     window: list[dict] = []
     for d in window_dates:
         cb = mc.ceiling_from_streaks(jiuyan_streak_map(db, d, dataset_id) or {})
         window.append({"date": d, "maxBoard": cb["maxBoard"]})
-    prev_3plus = None
-    if window_dates:
-        last = mc.ceiling_from_streaks(
-            jiuyan_streak_map(db, window_dates[-1], dataset_id) or {})
-        # 伪0守卫（评审#2）：韭研缺→maxBoard None→threePlusN 不可信→None（不伪 0）
-        prev_3plus = last["threePlusN"] if last["maxBoard"] is not None else None
-    return window, prev_3plus
+    return window
 
 
 def _fate(db: Any, code: str, day: str, prev_day: str | None,
@@ -241,7 +235,7 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
                                     day_change_fetcher=day_change_fetcher)
     streaks_today = jiuyan_streak_map(db, date, dataset_id) or {}
     ceiling_today = mc.ceiling_from_streaks(streaks_today)
-    window, prev_3plus = _ceiling_window(db, date, dataset_id)
+    window = _ceiling_window(db, date, dataset_id)
     axis = trading_dates_before(db, date, 30, dataset_id) + [date]
     if prev_anchors is None and len(axis) >= 2:
         prev_anchors, _pm = compute_anchor(db, axis[-2], dataset_id,
@@ -258,10 +252,11 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
     e1 = mc.detect_breakthrough(date, ceiling_today["maxBoard"], window, bt_stocks)
     if e1:
         events.append(e1)
-    # E2 伪0守卫（评审#2）：韭研缺→maxBoard None→today_3plus 不可信→传 None 不命中。
-    today_3plus = (ceiling_today["threePlusN"]
-                   if ceiling_today["maxBoard"] is not None else None)
-    e2 = mc.detect_compress(date, today_3plus, prev_3plus)
+    # E2 v2（用户裁决 2026-11-12 改门）：空间高度持续打不开（maxBoard≤4 连续≥2日）。
+    # 持续段从天花板序列算（window 升序不含今日 + 今日）；maxBoard None 断链 fail-visible。
+    maxboards = [w["maxBoard"] for w in window] + [ceiling_today["maxBoard"]]
+    e2 = mc.detect_compress(date, ceiling_today["maxBoard"],
+                            mc.compress_low_streak(maxboards))
     if e2:
         events.append(e2)
     if ameta.get("status") == "degraded":
@@ -375,6 +370,44 @@ def replay_state(db: Any, start: str, end: str,
     return rows
 
 
+def recompress_and_replay(db: Any, start: str, end: str,
+                          dataset_id: str = DEFAULT_DATASET_ID) -> list[dict]:
+    """E2 v2 改门历史重算（用户裁决 2026-11-12）：从已落库 ceiling.maxBoard 序列重算空间
+    压缩事件 + 全量重放状态机（不重取 TDX/韭研，秒级）。
+
+    与 settle_day 的 E2 v2 同源（同调 mc.compress_low_streak + mc.detect_compress）；数据源
+    为已落库天花板事实（=jiuyan 派生），E1/E3/E4 事件不动。须从区间首日起全量重放保证
+    持续段与首日起链一致。逐日补写 events/state/transition/daysInState/reference/version。
+    """
+    docs = sorted((d for d in db[COLLECTION].find({})
+                   if d.get("tradingDate") and start <= str(d["tradingDate"]) <= end),
+                  key=lambda d: str(d["tradingDate"]))
+    maxboards: list = []
+    state: str | None = None
+    days_in = 0
+    rows: list[dict] = []
+    for d in docs:
+        dt = str(d["tradingDate"])
+        mb = (d.get("ceiling") or {}).get("maxBoard")
+        maxboards.append(mb)
+        e2 = mc.detect_compress(dt, mb, mc.compress_low_streak(maxboards))
+        events = [e for e in (d.get("events") or []) if e.get("type") != "spaceCompress"]
+        if e2:
+            events.append(e2)
+        ceil = d.get("ceiling") or {}
+        valid = ceil.get("prevWindowValidDays")
+        warmup = (valid if valid is not None else ceil.get("windowDays", 0)) < mc.CEILING_WINDOW
+        new_state, transition = mc.step_day(state, events=events, date=dt, warmup=warmup)
+        days_in = 1 if transition is not None else days_in + 1
+        ref = _reference_snapshot(db, dt, dataset_id)
+        db[COLLECTION].update_one({"_id": d["_id"]}, {"$set": {
+            "events": events, "state": new_state, "transition": transition,
+            "daysInState": days_in, "reference": ref, "version": mc.MARKET_CYCLE_VERSION}})
+        rows.append({"date": dt, "state": new_state, "e2": bool(e2), "maxBoard": mb})
+        state = new_state
+    return rows
+
+
 if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前的手动/回填入口）
     import argparse
     import json as _json
@@ -385,6 +418,8 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
     _ap.add_argument("--backfill", action="store_true", help="区间回填（须 --from --to）")
     _ap.add_argument("--replay-state", dest="replay_state", action="store_true",
                      help="P2：对已落库事件流重放状态机（不重取 TDX，须 --from --to）")
+    _ap.add_argument("--recompress", action="store_true",
+                     help="E2 v2 改门：从已落库天花板重算压缩事件+重放态（不重取 TDX，须 --from --to）")
     _ap.add_argument("--from", dest="start", help="回填起日 YYYY-MM-DD")
     _ap.add_argument("--to", dest="end", help="回填止日 YYYY-MM-DD")
     _ap.add_argument("--offset", type=int, default=None,
@@ -394,7 +429,17 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
     _args = _ap.parse_args()
     _db = get_runtime_mongodb_database()
     _offsets = (_args.offset,) if _args.offset else None
-    if _args.replay_state:
+    if _args.recompress:
+        if not (_args.start and _args.end):
+            print(_json.dumps({"ok": False, "error": "--recompress 须 --from --to"}))
+            _sys.exit(1)
+        from collections import Counter as _Counter
+        _rows = recompress_and_replay(_db, _args.start, _args.end, _args.dataset_id)
+        print(_json.dumps({"ok": True, "days": len(_rows),
+                           "states": dict(_Counter(r["state"] for r in _rows)),
+                           "compressDays": sum(1 for r in _rows if r["e2"])},
+                          ensure_ascii=False))
+    elif _args.replay_state:
         if not (_args.start and _args.end):
             print(_json.dumps({"ok": False, "error": "--replay-state 须 --from --to"}))
             _sys.exit(1)

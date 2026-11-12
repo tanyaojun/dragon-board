@@ -103,17 +103,29 @@ def test_breakthrough_missing_inputs():
     assert mc.detect_breakthrough(T, 5, [], []) is None                # 无参照
 
 
-# ── E2 空间压缩 ──
-def test_compress_positive():
-    e = mc.detect_compress(T, 0, 3)
-    assert e["type"] == "spaceCompress" and e["prevThreePlusN"] == 3
+# ── E2 v2 空间压缩（冰点 regime：空间高度持续打不开，用户裁决 2026-11-12 改门）──
+def test_compress_low_streak():
+    assert mc.compress_low_streak([4, 3, 4]) == 3       # 全低位
+    assert mc.compress_low_streak([5, 4, 3]) == 2       # 尾部连续低位
+    assert mc.compress_low_streak([3, 5, 4]) == 1       # 高位断链
+    assert mc.compress_low_streak([3, None, 4]) == 1    # None 断链（fail-visible）
+    assert mc.compress_low_streak([5]) == 0
+    assert mc.compress_low_streak([]) == 0
 
 
-def test_compress_negatives():
-    assert mc.detect_compress(T, 0, 0) is None      # 昨亦无=非转折
-    assert mc.detect_compress(T, 2, 3) is None      # 今仍有3板+
-    assert mc.detect_compress(T, None, 3) is None
-    assert mc.detect_compress(T, 0, None) is None
+def test_compress_v2_positive():
+    # maxBoard≤4 持续≥2日 → 命中（自第2个连续低位日起）
+    e = mc.detect_compress(T, 3, 2)
+    assert e["type"] == "spaceCompress" and e["lowStreak"] == 2
+    assert e["maxBoardThreshold"] == mc.COMPRESS_MAX_BOARD == 4
+    assert mc.detect_compress(T, 4, 6)["lowStreak"] == 6   # 长压缩段
+
+
+def test_compress_v2_negatives():
+    assert mc.detect_compress(T, 3, 1) is None      # 仅1日低位=未持续（regime 非单日）
+    assert mc.detect_compress(T, 5, 3) is None      # 今日>阈值（空间已打开）
+    assert mc.detect_compress(T, None, 3) is None   # maxBoard 缺失 fail-visible
+    assert mc.detect_compress(T, 4, 0) is None
 
 
 # ── E3 高位崩塌 ──
@@ -220,9 +232,9 @@ def _ev(typ, **kw):
 _MATRIX = {
     #          E1突破    E3崩塌   E2压缩   E4宽容   无事件
     "loss":  ("gain",  "loss",  "ice",   "wzs",   "loss"),
-    "ice":   ("gain",  "loss",  "ice",   "wzs",   "ice"),
-    "wzs":   ("gain",  "loss",  "loss",  "wzs",   "wzs"),
-    "gain":  ("gain",  "loss",  "loss",  "gain",  "gain"),
+    "ice":   ("gain",  "loss",  "ice",   "wzs",   "loss"),   # v2：无事件=压缩解除退loss
+    "wzs":   ("gain",  "loss",  "ice",   "wzs",   "wzs"),    # v2：E2 直入 ice
+    "gain":  ("gain",  "loss",  "ice",   "gain",  "gain"),   # v2：E2 直入 ice
 }
 _EVENTS = ["spaceBreakthrough", "highCollapse", "spaceCompress", "highTolerance", None]
 
@@ -266,14 +278,27 @@ def test_state_priority_q5b():
 
 
 def test_state_self_hold_no_transition():
-    # 无事件各态自持
-    for s in mc.STATES:
+    # 无事件：loss/gain/wzs 自持；ice 因压缩解除退 loss（v2 regime，不再永久自持）
+    for s in ("loss", "gain", "wzs"):
         st, tr = mc.step_day(s, events=[])
         assert st == s and tr is None
+    st, tr = mc.step_day("ice", events=[])
+    assert st == "loss" and tr["trigger"] == mc.TRIG_COMPRESS_LIFT
     # E2 ice 自持 / E4 gain·wzs 自持（事件在场但不改态）
     assert mc.step_day("ice", events=[_ev("spaceCompress")]) == ("ice", None)
     assert mc.step_day("gain", events=[_ev("highTolerance")]) == ("gain", None)
     assert mc.step_day("wzs", events=[_ev("highTolerance")]) == ("wzs", None)
+
+
+def test_state_ice_regime_direct_entry_and_lift():
+    # v2：E2 任何态直入 ice（gain/wzs/loss → ice）
+    for s in ("gain", "wzs", "loss"):
+        st, tr = mc.step_day(s, events=[_ev("spaceCompress")])
+        assert st == "ice" and tr["trigger"] == mc.TRIG_COMPRESS
+    # ice 压缩解除（无事件）退 loss；次日再压缩重新入 ice
+    st, tr = mc.step_day("ice", events=[])
+    assert st == "loss" and tr["trigger"] == mc.TRIG_COMPRESS_LIFT
+    assert mc.step_day("loss", events=[_ev("spaceCompress")])[0] == "ice"
 
 
 def test_state_no_absorbing_reachability():

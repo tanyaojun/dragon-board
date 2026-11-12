@@ -33,10 +33,12 @@ from backend.analysis.hotlist.theme_leader_ammo import space_leaders_by_segment
 from backend.core.limit_rules import is_limit_down_pct, limit_up_price
 
 # ── 冻结口径常量（预登记 §三/§四，裁决 3）──
-MARKET_CYCLE_VERSION = "v1"
+MARKET_CYCLE_VERSION = "v2"
 CEILING_WINDOW = 20          # 空间天花板回看交易日数（N=20 冻结）
 BIG_FACE_PCT = -5.0          # 大面口径：收盘较昨收 ≤-5%（_broken_stats 同源）
 TOLERANCE_WINDOW = 2         # 企稳型观察窗：断板后 2 个交易日（原文「震荡两天」）
+COMPRESS_MAX_BOARD = 4       # E2 v2：空间高度打不开阈值（maxBoard≤4=突破不到5板，用户裁决2026-11-12）
+COMPRESS_MIN_DAYS = 2        # E2 v2：持续≥2日（regime 非单日转折，用户裁决2026-11-12）
 
 
 def ceiling_from_streaks(streaks: dict[str, Any]) -> dict[str, Any]:
@@ -136,18 +138,36 @@ def detect_breakthrough(date: str, today_max: int | None,
             "prevCeiling": ceiling, "windowDays": len(refs), "stocks": stocks}
 
 
-def detect_compress(date: str, today_3plus: int | None,
-                    prev_3plus: int | None) -> dict | None:
-    """E2 空间压缩：今日 ≥3板家数=0 且昨日 ≥1（3板以上归零转折，原文明确判据）。
+def compress_low_streak(maxboards: list) -> int:
+    """尾部连续 maxBoard≤COMPRESS_MAX_BOARD 的交易日数（None/不可算即断链）。
 
-    天花板下移不作事件（不发明阈值，预登记 §四 E2）；任一读数缺失 → None。
+    供 E2 v2 持续性判定（空间高度持续打不开）。序列升序、末位=今日；fail-visible：
+    任一高位或缺失即重置，不伪压缩。
     """
-    if not isinstance(today_3plus, int) or not isinstance(prev_3plus, int):
+    streak = 0
+    for mb in reversed(maxboards):
+        if isinstance(mb, int) and not isinstance(mb, bool) and mb <= COMPRESS_MAX_BOARD:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def detect_compress(date: str, max_board: int | None, low_streak: int) -> dict | None:
+    """E2 v2 空间压缩（冰点 regime，用户裁决 2026-11-12 改门）：连板空间高度持续打不开。
+
+    maxBoard≤COMPRESS_MAX_BOARD(4) 连续≥COMPRESS_MIN_DAYS(2) 日 → 命中（自第 2 个连续低位日起）。
+    旧「昨有≥3板今归零」骤降口径废弃：本窗 maxBoard 最低=3 从未归零→0 命中，不贴合冰点
+    regime（6月趋势行情连板情绪低=天花板卡 3-4 板持续多日）。low_streak 由 compress_low_streak
+    从天花板序列算；maxBoard 缺失/今日>阈值 → 不命中（fail-visible 不伪压缩）。
+    """
+    if not isinstance(max_board, int) or isinstance(max_board, bool):
         return None
-    if today_3plus == 0 and prev_3plus >= 1:
-        return {"type": "spaceCompress", "date": date,
-                "threePlusN": 0, "prevThreePlusN": prev_3plus}
-    return None
+    if max_board > COMPRESS_MAX_BOARD or low_streak < COMPRESS_MIN_DAYS:
+        return None
+    return {"type": "spaceCompress", "date": date, "maxBoard": max_board,
+            "lowStreak": low_streak, "maxBoardThreshold": COMPRESS_MAX_BOARD,
+            "minDays": COMPRESS_MIN_DAYS}
 
 
 def detect_collapse(date: str, track: str, anchor: dict | None,
@@ -251,7 +271,8 @@ STATE_LABELS_CN = {"loss": "亏钱", "ice": "冰点", "wzs": "弱转强", "gain"
 # 迁移触发词（落痕用，预登记 §5.2）
 TRIG_BREAKTHROUGH = "space_breakthrough"   # E1 → gain（赚钱效应标杆诞生）
 TRIG_COLLAPSE = "high_collapse"            # E3 → loss（亏钱效应）
-TRIG_COMPRESS = "space_compress"           # E2 → loss→ice / gain·wzs→loss / ice 自持
+TRIG_COMPRESS = "space_compress"           # E2 v2 → 任何态直入 ice（regime）
+TRIG_COMPRESS_LIFT = "space_compress_lift"  # E2 解除且无其他事件 → ice 退 loss
 TRIG_TOLERANCE = "high_tolerance"          # E4 → loss·ice→wzs / gain·wzs 自持
 TRIG_INIT = "init_default"                 # 首日无事件保守默认 loss（Q6=A）
 
@@ -271,7 +292,8 @@ def step_day(prev_state: str | None, *, events: list[dict] | None,
     优先级 E1>E3>E2>E4（Q5=B）；取当日最高优先级命中。无吸收态全态可逆；wzs 无超时
     （Q3=A）无事件自持。prev_state=None=首日（Q6 默认 loss 基底再套事件）。两轨聚合
     Q1=A：任一轨命中即计入（events 已含两轨，类型去重即可）。返回 (new_state, transition)；
-    transition=None=自持（含 E2 ice 自持 / E4 gain·wzs 自持 / 无事件）。迁移落痕
+    transition=None=自持（E2 ice 自持 / E4 gain·wzs 自持 / loss·gain·wzs 无事件；ice 无事件
+    =压缩解除退 loss，E2 v2 regime）。迁移落痕
     {from,to,trigger,evidence,date}（theme_cycle 同构）。
     """
     events = events or []
@@ -289,11 +311,15 @@ def step_day(prev_state: str | None, *, events: list[dict] | None,
     elif "spaceCompress" in types:
         trigger = TRIG_COMPRESS
         trig_event = next(e for e in events if e.get("type") == "spaceCompress")
-        target = "ice" if base == "loss" else ("loss" if base in ("gain", "wzs") else "ice")
+        target = "ice"   # E2 v2 regime：任何态直入 ice（用户裁决 2026-11-12）
     elif "highTolerance" in types:
         trigger = TRIG_TOLERANCE
         trig_event = next(e for e in events if e.get("type") == "highTolerance")
         target = "wzs" if base in ("loss", "ice") else base
+
+    # E2 v2 regime 退出：压缩解除且无其他事件 → ice 退 loss（不再永久自持，用户裁决 2026-11-12）
+    if trigger is None and base == "ice":
+        target, trigger = "loss", TRIG_COMPRESS_LIFT
 
     evidence = {"eventTypes": sorted(types), "triggerEvent": trig_event}
     if is_init:

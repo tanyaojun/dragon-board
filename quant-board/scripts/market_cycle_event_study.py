@@ -76,6 +76,17 @@ def run(start=None, end=None):
                 "median": round(median(xs), 2) if xs else None,
                 "posRate": round(sum(1 for x in xs if x > 0) / len(xs), 3) if xs else None}
 
+    # 4) E2 v2 空间压缩 / ice 冰点 regime（用户裁决 2026-11-12 改门）
+    ice_days = [d["tradingDate"] for d in docs if d.get("state") == "ice"]
+    compress_days = [d["tradingDate"] for d in docs
+                     if any(e.get("type") == "spaceCompress" for e in (d.get("events") or []))]
+    ice_bym: dict = {}
+    for dt in ice_days:
+        ice_bym.setdefault(dt[:7], []).append(dt[8:])
+    state_dist: dict = {}
+    for d in docs:
+        state_dist[d.get("state")] = state_dist.get(d.get("state"), 0) + 1
+
     return {"days": len(docs), "range": [dates[0], dates[-1]] if dates else None,
             "breakthrough": {"total": len(bt), "mature": len(mature), "warmup": len(warm),
                              "continuation": cont, "holdRate": round(hold_rate, 3) if hold_rate is not None else None},
@@ -83,7 +94,10 @@ def run(start=None, end=None):
                                   "wzsDays": wzs_days, "breakthroughDays": bt_days},
             "marketWzsAgreement": {"cycleWzsN": len(cyc_wzs), "marketWzsN": len(mkt_wzs),
                                    "agreeN": len(agree), "agree": agree,
-                                   "divergeCycleOnly": div_cyc, "divergeMarketOnly": div_mkt}}
+                                   "divergeCycleOnly": div_cyc, "divergeMarketOnly": div_mkt},
+            "compressIce": {"stateDist": state_dist, "iceN": len(ice_days),
+                            "compressConditionN": len(compress_days),
+                            "iceByMonth": ice_bym, "iceDays": ice_days}}
 
 
 if __name__ == "__main__":
