@@ -21,7 +21,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA1"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-13a"
+AMMO_VERSION_AUCTION_LEADER = "2026-11-13b"   # 板块映射裁决：推送概念→韭研板块名（供给换代）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -239,12 +239,20 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    reason_line: str | None = None,
                                    notice_count_line: str | None = None,
                                    lhb_facts_line: str | None = None,
+                                   push_board: str | None = None,
                                    evidence_block: str) -> str:
-    """个股级晨间叙事（顺序固定，便于逐字复现与回归比对）。"""
+    """个股级晨间叙事（顺序固定，便于逐字复现与回归比对）。
+
+    push_board：KPL 推送的题材炒作概念（2026-11-13 裁决：板块归属取韭研板块名，
+    推送概念仅作事实并列披露，供 jev 交叉理解推送语境）。
+    """
+    belong = f"板块归属：{board or '不可考'}"
+    if push_board and push_board != board:
+        belong += f"（竞价推送概念：{push_board}）"
     lines = [f"{date} 交易日 · 竞价龙头盘前投喂",
              f"昨日（{prev_date}）{market_line}",
              f"待判龙头：{leader_name}（{leader_code}）",
-             f"板块归属：{board or '不可考'}"]
+             belong]
     for ln in (push_line, bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
                notice_count_line, lhb_facts_line):

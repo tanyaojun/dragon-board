@@ -477,3 +477,16 @@ def test_hygiene_auction_leader_vA1_lines():
             [{"streak": 2, "sealedPrev": True}], prev_date="2026-11-12"),
         evidence_block="题材证据块：测试")
     _assert_clean(sec, "build_auction_sector_narrative")
+
+
+def test_hygiene_board_belong_push_concept_suffix():
+    """2026-11-13 裁决：板块归属=韭研板块名 + 推送概念事实并列（非开发注释）。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    narr = AL.build_auction_leader_narrative(
+        date="2026-11-13", prev_date="2026-11-12", market_line="盘面事实：测试",
+        leader_name="日出东方", leader_code="603366", board="寒潮",
+        push_line=None, bid_line=None, structure=None, ladder_line=None,
+        base_rate=None, sector_judgment=None, theme_heat_line=None,
+        push_board="光伏", evidence_block="【题材证据】\n测试")
+    _assert_clean(narr, "board_belong_push_suffix")
+    assert "板块归属：寒潮（竞价推送概念：光伏）" in narr

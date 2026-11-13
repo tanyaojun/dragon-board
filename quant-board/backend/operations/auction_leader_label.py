@@ -28,6 +28,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from backend.analysis.hotlist import auction_board_map as ABM
 from backend.analysis.hotlist import theme_event_digest as digest
 from backend.analysis.hotlist.auction_leader_ammo import (
     AMMO_VERSION_AUCTION_LEADER,
@@ -212,6 +213,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
     narrative = build_auction_leader_narrative(
         date=date, prev_date=prev_date or "不可考", market_line=market_line,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
+        push_board=row.get("pushBoard"),
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
         bid_line=auction_bid_line(bid_entries),
         structure=auction_structure_line(facts, prev_date=prev_date or "不可考"),
@@ -303,13 +305,18 @@ def _label_one(db, col, date: str, built: dict, *,
         doc = {"_id": f"{date}:board:{built['board']}", "origin": ORIGIN,
                "tradingDate": date, "docKind": DOC_KIND_SECTOR,
                "code": None, "name": None, "board": built["board"],
+               "boardSources": sorted({str(r.get("boardSource")) for r in rows}),
                "segmentRows": [{"code": r.get("code"), "name": r.get("name"),
-                                "pct": r.get("pct")} for r in rows]}
+                                "pct": r.get("pct"),
+                                "pushBoard": r.get("pushBoard")} for r in rows]}
     else:
         row = built["row"]
         doc = {"_id": f"{date}:{row['code']}", "origin": ORIGIN, "tradingDate": date,
                "docKind": DOC_KIND_LEADER, "code": row["code"],
                "name": row.get("name"), "board": row.get("board"),
+               "pushBoard": row.get("pushBoard"),
+               "boardSource": row.get("boardSource"),
+               "boardMapping": row.get("boardMapping"),
                "auctionPct": row.get("pct")}
     doc.update({
         "ammoVersion": AMMO_VERSION_AUCTION_LEADER,
@@ -378,6 +385,16 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     rows = [{"code": str(s.get("code")), "name": s.get("name"),
              "board": s.get("board"), "pct": s.get("pct")}
             for s in push["stocks"] if s.get("code")]
+    # 2026-11-13 用户裁决：板块归属取韭研板块名（推送概念是题材炒作概念，与证据层
+    # 口径错位致三层证据假性全缺）；无成分映射回退推送概念 + boardSource 留痕
+    bctx = ABM.load_board_context(db, date)
+    for r in rows:
+        res = ABM.resolve_leader_board(bctx, r["code"], r.get("board"))
+        r["board"] = res["board"]
+        r["pushBoard"] = res["pushBoard"]
+        r["boardSource"] = res["boardSource"]
+        r["boardMapping"] = {"pickedBy": res["pickedBy"],
+                             "candidates": res["candidates"]}
     excluded = [r for r in rows if r["board"] and digest.is_not_a_theme(r["board"])]
     if excluded:
         print(f"{date} 排除非题材行政桶 {len(excluded)} 只（{'、'.join(sorted({r['board'] for r in excluded}))}）——仅日志留痕")
@@ -464,9 +481,13 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         # 推送行注入（全日共用 entries；个股级只列自身）
         push_txt = auction_push_line(push_entries, codes=[r["code"]])
         if push_txt:
-            built["narrative"] = built["narrative"].replace(
-                f"板块归属：{r.get('board') or '不可考'}",
-                f"板块归属：{r.get('board') or '不可考'}\n" + push_txt, 1)
+            # 按行首定位插入（板块归属行可能带推送概念后缀，精确串 replace 会失配）
+            _lines = built["narrative"].split("\n")
+            for _i, _ln in enumerate(_lines):
+                if _ln.startswith("板块归属："):
+                    _lines.insert(_i + 1, push_txt)
+                    break
+            built["narrative"] = "\n".join(_lines)
         built["sectorJudgmentState"] = ("injected" if sector_answers.get(board)
                                         else "sector_missing")
         built_leaders.append(built)

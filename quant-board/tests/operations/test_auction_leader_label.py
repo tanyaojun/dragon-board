@@ -262,3 +262,23 @@ def test_codes_selfheal_degraded_sector(env):
     L.run(DATE, confirm_budget=True, codes={"603135"})
     assert col.docs[f"{DATE}:board:机器人"]["status"] == "ok"
     assert len(calls) == n + 1
+
+
+def test_board_mapping_jiuyan_override(env):
+    """2026-11-13 用户裁决：板块归属取韭研板块名；推送概念事实并列；板块档随映射改键。"""
+    db, calls = env
+    db["jiuyan_industry_stocks"].docs["0106"] = {
+        "_id": "0106", "name": "寒潮", "stocks": [{"code": "603135"}]}
+    db["jiuyan_ai_industry"].docs["0106"] = {
+        "_id": "0106", "code": "0106", "name": "寒潮", "hot": 0.29}
+    L.run(DATE, confirm_budget=True)
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert doc["board"] == "寒潮" and doc["pushBoard"] == "机器人"
+    assert doc["boardSource"] == "jiuyan_industry"
+    assert doc["boardMapping"]["pickedBy"] == "single"
+    assert "板块归属：寒潮（竞价推送概念：机器人）" in doc["narrative"]
+    assert f"{DATE}:board:寒潮" in db[L.COLLECTION].docs
+    assert f"{DATE}:board:机器人" not in db[L.COLLECTION].docs
+    sec = db[L.COLLECTION].docs[f"{DATE}:board:寒潮"]
+    assert sec["boardSources"] == ["jiuyan_industry"]
+    assert sec["segmentRows"][0]["pushBoard"] == "机器人"

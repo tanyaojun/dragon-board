@@ -144,7 +144,7 @@ def test_auction_leader_vA1_dedicated_stamps():
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
     assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA1"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-13a"
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-13b"   # 板块映射裁决：推送概念→韭研板块名
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # A2 删题锁定：空间/人气题不在晨间题集
     assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
