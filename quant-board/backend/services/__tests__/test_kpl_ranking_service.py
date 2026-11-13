@@ -947,12 +947,18 @@ def test_auction_snapshot_rate_table_and_malformed(monkeypatch):
     monkeypatch.setattr(svc, "_http_get_text", lambda url: bj2)
     it = svc.get_auction_snapshot_tencent(["920001"])["items"]["920001"]
     assert it["zt_buy_amount"] == 1387 * 100 * 17.12
-    # ST 5% 带：+5.02% 封板 → 出封单（旧逻辑 9.95 门恒漏）
+    # ST 主板（2026-09 新规无 ST 特判，主板 ST 亦 ±10%）：+5.02% 未涨停不伪造封单
     svc._AUCTION_SNAP_CACHE.clear()
-    st = base.replace("日出东方", "ST东方").replace("~5.54~14.21", "~5.02~14.21").replace("~13.90~1387~13.91", "~13.85~1387~13.91")
+    st = base.replace("日出东方", "ST东方").replace("~5.54~14.21", "~5.02~14.21")
     monkeypatch.setattr(svc, "_http_get_text", lambda url: st)
-    it2 = svc.get_auction_snapshot_tencent(["603366"])["items"]["603366"]
-    assert it2["zt_buy_amount"] == 1387 * 100 * 13.85
+    it3 = svc.get_auction_snapshot_tencent(["603366"])["items"]["603366"]
+    assert "zt_buy_amount" not in it3
+    # ST 主板真涨停（±10% 带）→ 出封单
+    svc._AUCTION_SNAP_CACHE.clear()
+    st2 = st.replace("~13.90~1387~13.91", "~14.49~1387~13.91").replace("~5.02~14.21", "~10.01~14.21")
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: st2)
+    it4 = svc.get_auction_snapshot_tencent(["603366"])["items"]["603366"]
+    assert it4["zt_buy_amount"] == 1387 * 100 * 14.49
     # 畸形短行：不抛 IndexError、不杀已成功码
     svc._AUCTION_SNAP_CACHE.clear()
     monkeypatch.setattr(svc, "_http_get_text", lambda url: 'v_pv_none_line="1";\n' + base)

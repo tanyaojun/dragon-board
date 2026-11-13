@@ -37,6 +37,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from backend.core.limit_rules import limit_threshold_pct, limit_up_price
 from backend.services.theme.mapping_refresh import KPL_APP_BASE_PARAMS
 
 REQUEST_TIMEOUT_SECONDS = 15
@@ -910,7 +911,8 @@ def get_auction_snapshot_tencent(codes: List[str]) -> Dict[str, Any]:
     09:25–09:30 内：现价=竞价匹配价、成交额=竞价成交额、换手=竞价换手、
     外盘-内盘=竞价主动净量。字段表 2026-11-13 实测：3=现价 4=昨收 7=外盘(手)
     8=内盘(手) 9/10=买一价/量(手) 32=涨跌% 37=成交额(万) 38=换手%。
-    涨停委买额仅涨停判定时出（买一量×买一价；非涨停不伪装封单）。
+    涨停委买额仅涨停判定时出（买一量×买一价；非涨停不伪装封单）；涨跌带与涨停价
+    委托 backend/core/limit_rules 权威源（无 ST 特判，主板 ST 亦 ±10%）。
     返回 {ok, items: {code: 同构字段含 source:"tencent_auction"}, missing, fetchedAt}。
     """
     uniq: List[str] = []
@@ -966,19 +968,10 @@ def get_auction_snapshot_tencent(codes: List[str]) -> Dict[str, Any]:
             item["bidding_turnover"] = turn
         if outer is not None and inner is not None:
             item["bidding_net"] = (outer - inner) * 100 * price
-        name = str(f[1] or "")
-        # 涨跌带判定（review 2026-11-13f finding-1）：北交所 30%（4/8/920 开头）、
-        # 创业板/科创 20%、ST 5%（名称含 ST）、其余 10%。北交所不判会拿买一伪装封单。
-        if code.startswith(("4", "8", "92")):
-            rate = 0.30
-        elif code.startswith(("30", "68")):
-            rate = 0.20
-        elif "ST" in name.upper():
-            rate = 0.05
-        else:
-            rate = 0.10
-        limit_price = round(prev_close * (1 + rate), 2)
-        if (pct is not None and pct >= rate * 100 - 0.05
+        # 涨跌带/涨停价委托权威源 limit_rules（2026-11-13 用户裁决：不硬编码；
+        # 2026-09 口径无 ST 特判，主板 ST 亦 ±10%）
+        limit_price = limit_up_price(code, prev_close)
+        if (pct is not None and pct >= limit_threshold_pct(code, tolerance_pct=0.05)
                 and buy1_price is not None and buy1_vol is not None
                 and buy1_price >= limit_price):
             item["zt_buy_amount"] = buy1_vol * 100 * buy1_price
