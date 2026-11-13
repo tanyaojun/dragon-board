@@ -71,6 +71,11 @@ def env(monkeypatch):
     db = FakeDb()
     _push(db)
     monkeypatch.setattr(L, "_db", lambda: db)
+    # 离线护栏（review 2026-11-13f finding-3/4）：非补源专项用例默认窗外+假 basis，
+    # 防止墙钟落在 09:25–09:30 或未 mock 时真连腾讯（qt/ifzq）；补源专项用例自行覆盖
+    monkeypatch.setattr(L, "_in_auction_window", lambda: False)
+    monkeypatch.setattr(L, "get_daban_prev_day_basis",
+                        lambda date, codes: {"basis": {}, "missing": list(codes)})
     monkeypatch.setattr(L.digest, "build_theme_evidence_block",
                         lambda *a, **k: {"text": "题材证据块：测试", "state": {},
                                          "events": [], "news": []})
@@ -209,13 +214,14 @@ def test_skip_fetch_failed_retries_vs_verified_missing(env, monkeypatch):
 
 
 def test_sealed_prev_caliber():
-    """review major-3：broken 炸板≠封板；健康查无此股=False；degraded=None。"""
+    """review major-3：broken 炸板≠封板；健康查无此股=False；degraded=None。
+    2026-11-13f：pool_empty 亦归 None（降级不得事实化成「昨日未封板」，用户裁决）。"""
     healthy = {"items": {"600001": {"item": {"pool_state": "sealed"}},
                          "600002": {"item": {"pool_state": "broken"}}}, "degraded": None}
     assert L._sealed_prev(healthy, healthy["items"]["600001"]) is True
     assert L._sealed_prev(healthy, healthy["items"]["600002"]) is False
     assert L._sealed_prev(healthy, {}) is False
-    assert L._sealed_prev({"items": {}, "degraded": "pool_empty"}, {}) is False
+    assert L._sealed_prev({"items": {}, "degraded": "pool_empty"}, {}) is None
     assert L._sealed_prev({"items": {}, "degraded": "no_archive"}, {}) is None
 
 
@@ -346,3 +352,37 @@ def test_bid_supplement_out_of_window_no_fake(env, monkeypatch):
     assert "竞价：" not in doc["narrative"]
     cs = doc["corpusState"]
     assert cs["bidIn"] is False and cs["bidSupplement"] == "skipped_out_of_window"
+
+
+def test_sealed_prev_pool_empty_not_factual():
+    """review 2026-11-13f finding-1：pool_empty 降级态不得事实化成「昨日未封板」。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    assert L._sealed_prev({"degraded": "pool_empty", "items": {}}, {}) is None
+    assert L._sealed_prev({"degraded": "fetch_failed:x", "items": {}}, {}) is None
+    assert L._sealed_prev({}, {"item": {"pool_state": "sealed"}}) is True
+    assert L._sealed_prev({}, {"item": {"pool_state": "sealed_not"}}) is False
+    # 降级态下结构行只缺封板段（若有 streak 可算仍出行）
+    ln = AL.auction_structure_line({"streak": 2, "sealedPrev": None}, prev_date="2026-11-12")
+    assert ln is not None and "昨日封板" not in ln and "昨日未封板" not in ln and "连板 2 板" in ln
+
+
+def test_auction_ladder_line_filters_uncomputable():
+    """review 2026-11-13f finding-2：theme 共享梯队行的「不可算」段在竞价叙事剔除。"""
+    from backend.analysis.hotlist.theme_leader_ammo import board_ladder_line
+    # unknown>0 → 该段整段剔除
+    row = {"ladderShape": {"first": 3, "two": 1, "threePlus": 1, "unknown": 2},
+           "streak": 4, "secondStreak": 2}
+    ln = L._auction_ladder_line(row, "2026-11-12")
+    assert "不可算" not in ln and "另有" not in ln and "龙头 4 板" in ln
+    # 次高缺位 → 仅保龙头段；unknown 缺省 0
+    ln2 = L._auction_ladder_line({"ladderShape": {"first": 2, "two": 0, "threePlus": 0},
+                                  "streak": 3, "secondStreak": None}, "2026-11-12")
+    assert "不可算" not in ln2 and "龙头 3 板" in ln2
+    # 龙头高度也缺 → 形态段仍在（纯事实）但无不可算；ladderShape 缺 → None
+    ln3 = L._auction_ladder_line({"ladderShape": {"first": 1, "two": 0, "threePlus": 0}}, "2026-11-12")
+    assert "不可算" not in ln3 and "首板 1 家" in ln3
+    assert L._auction_ladder_line({"ladderShape": None}, "2026-11-12") is None
+    assert L._auction_ladder_line(None, "2026-11-12") is None
+    # 原共享函数保留「不可算」（theme 链裁决不动），仅竞价消费点过滤
+    assert "不可算" in board_ladder_line({"ladderShape": {"first": 1, "two": 0, "threePlus": 0, "unknown": 1},
+                                          "streak": None})

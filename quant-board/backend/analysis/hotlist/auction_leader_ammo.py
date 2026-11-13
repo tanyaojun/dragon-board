@@ -21,7 +21,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA1"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-13e"   # 竞价榜外腾讯补源（供给换代）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-13f"   # review 修复（卫生/渲染/缺席口径，供给换代）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -165,14 +165,17 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
             # 身位题硬规则②引用「高开幅度与竞价额均落后」→ peers 额可读必须入叙事
             #（2026-11-13 review minor：判据不得引用叙事没有的证据）
             def _peer_txt(p: dict) -> str:
-                txt = str(p.get("name") or "?")
+                # 名称缺位用代码兑底（review 2026-11-13f finding-5），名码全缺不列
+                txt = str(p.get("name") or p.get("code") or "")
+                if not txt:
+                    return ""
                 if isinstance(p.get("pct"), (int, float)):
                     txt += f" {p['pct']:+.2f}%"
                 amt = _qnum(p.get("amount"))
                 if amt is not None:
                     txt += f" 额 {_fmt_amount_yuan(amt)}"
                 return txt
-            cmp_txt = "、".join(_peer_txt(p) for p in peers[:3])
+            cmp_txt = "、".join(t for t in (_peer_txt(p) for p in peers[:3]) if t)
             seg += f"；同板竞价对比 {cmp_txt}"
         parts.append(seg.strip())
     return "竞价：" + "；".join(parts) if parts else None

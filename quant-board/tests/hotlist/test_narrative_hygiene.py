@@ -518,3 +518,46 @@ def test_hygiene_auction_no_unverifiable_noise():
     # 题面属题材链裁决范围，本轮不动，保持 is 同一对象身份）
     for qk in ("auction_leader_seal_today", "leader_catalyst_hardness", "auction_seat_durability"):
         assert "不可考" not in _json.dumps(AL.QUESTIONS_AUCTION_LEADER[qk], ensure_ascii=False)
+    # 2026-11-13f review G1/G4：竞价专项禁词集（全局 FORBIDDEN 属 theme 链裁决不动）：
+    # 「不可算」（theme 共享梯队行占位段经消费点过滤，见 test_auction_leader_label），
+    # 补源/来源注类新词（只在 corpusState/代码注释，禁渗叙事）。
+    # G3（记录裁决）：基础率锚行「窗 {start}~{end}」是锚样本人群日期=数据事实，
+    # 与 v17 base_rate_line 同款先例，不入禁词；若未来加严需用户显式裁决。
+    auction_forbidden = ("不可算", "补源", "腾讯", "tencent_auction", "榜外补")
+    narr2 = AL.build_auction_leader_narrative(
+        date="2026-11-13", prev_date="2026-11-12", market_line=None,
+        leader_name="中重科技", leader_code="603135", board="机器人",
+        push_board="机器人",
+        push_line="竞价看龙头推送：09:15 中重科技 +3.00%",
+        bid_line="竞价：中重科技 竞价涨幅 +3.05% 竞价成交额 0.10亿",
+        structure="昨日（2026-11-12）结构：连板 2 板，昨日封板",
+        ladder_line="昨日（2026-11-12）板块梯队形态：首板 3 家 / 2板 1 家",
+        base_rate="竞价封板基础率：历史竞价龙头当日封板率 50.0%（2 样本，窗 2026-11-06~2026-11-12）",
+        sector_judgment=None, theme_heat_line=None,
+        evidence_block="题材证据块：测试")
+    for w in auction_forbidden:
+        assert w not in narr2, f"竞价叙事含禁词 {w}"
+    assert "板块归属：机器人" in narr2
+
+
+def test_hygiene_review_20261113f_fixes():
+    """2026-11-13f review 修复回归：evidence 空名不掏占位、负额渲染量级一致。"""
+    from backend.analysis.hotlist import theme_event_digest as TD
+    from backend.analysis.hotlist import theme_leader_ammo as TA
+
+    class _EmptyDb:
+        def __getitem__(self, name):
+            class _C:
+                def find(self, *a, **k):
+                    return []
+                def find_one(self, *a, **k):
+                    return None
+            return _C()
+
+    blk = TD.build_theme_evidence_block(_EmptyDb(), board_name="", date="2026-11-13",
+                                        leader_code="603135", sealed_codes=None)
+    assert "产业树未映射" not in blk["text"], "空名段 = 整段缺席（finding-4）"
+    # 负额渲染（finding-3）：负亿/负万与正额同口径判门
+    assert TA._fmt_amount_yuan(-2.5e8) == "-2.50亿"
+    assert TA._fmt_amount_yuan(-5e5) == "-50.0万"
+    assert TA._fmt_amount_yuan(2.5e8) == "2.50亿"

@@ -522,7 +522,8 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     if not state.get("ok"):
         pass                                   # 未采集行已在前面给出，不再伪造 L3 明细
     elif not match.get("matched"):
-        lines.append(f"板块级催化：产业树未映射（「{board_name}」）")
+        if board_name:                        # 空名（未归属股）不掏空占位（review 2026-11-13f）
+            lines.append(f"板块级催化：产业树未映射（「{board_name}」）")
     elif not (node or {}).get("content"):
         lines.append(f"板块级催化：产业树节点「{node.get('name')}」无催化正文")
     else:

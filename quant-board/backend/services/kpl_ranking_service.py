@@ -928,7 +928,7 @@ def get_auction_snapshot_tencent(codes: List[str]) -> Dict[str, Any]:
         hit = _AUCTION_SNAP_CACHE.get(key)
         if hit and now - hit["ts"] < _AUCTION_SNAP_TTL_SECONDS:
             return hit["payload"]
-    q = ",".join(("sh" if c.startswith(("6", "9")) else "sz" if c.startswith(("0", "2", "3")) else "bj" if c.startswith(("4", "8")) else "sh") + c
+    q = ",".join(("bj" if c.startswith(("4", "8", "92")) else "sz" if c.startswith(("0", "2", "3")) else "sh") + c
                  for c in uniq)
     raw = _http_get_text("https://qt.gtimg.cn/q=" + q)
     items: Dict[str, Dict[str, Any]] = {}
@@ -936,6 +936,8 @@ def get_auction_snapshot_tencent(codes: List[str]) -> Dict[str, Any]:
         if "~" not in line:
             continue
         f = line.split("~")
+        if len(f) < 3:
+            continue                             # 畸形短行（v_pv_none_line=...）不杀整批
         code = str(f[2]).strip()
         if code not in seen:
             continue
@@ -964,8 +966,17 @@ def get_auction_snapshot_tencent(codes: List[str]) -> Dict[str, Any]:
             item["bidding_turnover"] = turn
         if outer is not None and inner is not None:
             item["bidding_net"] = (outer - inner) * 100 * price
-        # 涨停判定：主板 10%/创业板科创 20%（代码前缀；涨停价=昨收×(1+幅)四舍五入）
-        rate = 0.20 if code.startswith(("30", "68")) else 0.10
+        name = str(f[1] or "")
+        # 涨跌带判定（review 2026-11-13f finding-1）：北交所 30%（4/8/920 开头）、
+        # 创业板/科创 20%、ST 5%（名称含 ST）、其余 10%。北交所不判会拿买一伪装封单。
+        if code.startswith(("4", "8", "92")):
+            rate = 0.30
+        elif code.startswith(("30", "68")):
+            rate = 0.20
+        elif "ST" in name.upper():
+            rate = 0.05
+        else:
+            rate = 0.10
         limit_price = round(prev_close * (1 + rate), 2)
         if (pct is not None and pct >= rate * 100 - 0.05
                 and buy1_price is not None and buy1_vol is not None

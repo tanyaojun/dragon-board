@@ -172,18 +172,36 @@ def _inject_auction_sector_judgment(narrative: str, line: str) -> str:
 def _sealed_prev(pool_prev: dict, hit: dict) -> bool | None:
     """昨日封板事实（2026-11-13 review major-3）：池档健康 → 命中且 pool_state=sealed
     （炸板 broken 不算封板，与 kpl_lead_service 权威口径同）；健康查无此股=真不在池
-    → False；pool_empty → False；其余 degraded → None（不伪装）。"""
+    → False；任何降级态（含 pool_empty，review 2026-11-13f：降级不得事实化成
+    「昨日未封板」）→ None 不判，段缺席；留痕在 corpusState.prevPool。"""
     deg = pool_prev.get("degraded")
-    if deg == "pool_empty":
-        return False
     if deg is not None:
         return None
     return bool(hit) and (hit.get("item") or {}).get("pool_state") == "sealed"
 
 
 def _in_auction_window() -> bool:
-    """竞价补源有效窗 09:25–09:30：窗外现价已非竞价冻结值，不补（fail-visible）。"""
-    return "09:25" <= time.strftime("%H:%M") <= "09:30"
+    """竞价补源有效窗 [09:25, 09:30)：09:30 起连续竞价，现价已非竞价冻结值，不补。"""
+    return "09:25" <= time.strftime("%H:%M") < "09:30"
+
+
+def _auction_ladder_line(t1_row: dict | None, prev_date: str | None) -> str | None:
+    """梯队行消费点卫生（2026-11-13 用户竞价链加严裁决，review 2026-11-13f finding-2）：
+    theme 共享 board_ladder_line 的「不可算」占位段在竞价叙事剔除（缺数据段不出现），
+    可算事实段保留（龙头高度可算、次高缺位 → 仅保龙头段）。"""
+    if not t1_row:
+        return None
+    line = board_ladder_line(t1_row)
+    if not line:
+        return None
+    segs = []
+    for seg in line.split("；"):
+        if "不可算" not in seg:
+            segs.append(seg)
+        elif "龙头" in seg and "次高" in seg:
+            segs.append(seg.split("，")[0])
+    out = "；".join(segs)
+    return f"昨日（{prev_date}）{out}" if out else None
 
 
 def build_one(db: Any, date: str, prev_date: str | None, row: dict,
@@ -209,7 +227,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
     }
     bid_items = lanes.get("bid") or {}
     # board=None（未归属）不出 peers：「同板竞价对比」名不副实（review nit）
-    peers = [{"name": r.get("name"), "pct": (bid_items.get(str(r.get("code"))) or {}).get("bidding_pct"),
+    peers = [{"name": r.get("name"), "code": r.get("code"), "pct": (bid_items.get(str(r.get("code"))) or {}).get("bidding_pct"),
               "amount": (bid_items.get(str(r.get("code"))) or {}).get("bidding_amount")}
              for r in board_codes if str(r.get("code")) != code] if board else []
     bid_item = bid_items.get(code)
@@ -235,8 +253,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
         bid_line=auction_bid_line(bid_entries),
         structure=auction_structure_line(facts, prev_date=prev_date),
-        ladder_line=(f"昨日（{prev_date}）" + board_ladder_line(t1_row))
-        if t1_row else None,
+        ladder_line=_auction_ladder_line(t1_row, prev_date),
         base_rate=auction_base_rate_line(base_rate_stats),
         sector_judgment=sector_judgment_line(sector_judgment),
         theme_heat_line=theme_heat_line(theme_heat_entries_for_leaders(rows, heat_corpus)),
@@ -301,7 +318,9 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
             "narrative": narrative, "evidence": block,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
-                            "bidIn": code in bid_items, "basisState": basis_state,
+                            "bidIn": any(str(r.get("code") or "") in bid_items
+                                         for r in rows),   # review 2026-11-13f：板块级=任一成员在榜
+                            "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"), "lhbDate": prev_date},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 

@@ -930,3 +930,31 @@ def test_auction_snapshot_tencent_parse(monkeypatch):
     monkeypatch.setattr(svc, "_http_get_text", lambda url: raw2)
     it2 = svc.get_auction_snapshot_tencent(["603366"])["items"]["603366"]
     assert it2["zt_buy_amount"] == 1387 * 100 * 14.49
+
+
+def test_auction_snapshot_rate_table_and_malformed(monkeypatch):
+    """review 2026-11-13f finding-1/6：北交所 30%、ST 5%、畸形短行不杀整批。"""
+    base = 'v_sh600000="1~日出东方~603366~13.90~13.17~12.77~2187624~1038404~1149219~13.90~1387~13.91~1228~13.92~83~13.93~68~13.94~52~13.89~810~13.88~1131~13.87~2412~13.86~496~13.85~1854~~20261113161441~0.73~5.54~14.21~11.86~13.90/2187624/2844975660~2187624~284498~26.91~50.69~~14.21~11.86~17.84~113.01~113.01~2.59~14.49~11.85~4.58";\n'
+    # 北交所 92 开头 → 30% 带：+15% 未封板不得伪造涨停委买额（旧逻辑 10% 带会误判）
+    bj = base.replace("v_sh600000", "v_bj920001").replace("~日出东方~603366~", "~艾融软件~920001~").replace("~5.54~14.21", "~15.00~14.21")
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: bj)
+    out = svc.get_auction_snapshot_tencent(["920001"])
+    assert out["items"]["920001"]["bidding_pct"] == 15.0
+    assert "zt_buy_amount" not in out["items"]["920001"]
+    # 北交所真涨停（pct≥29.95 且买一价≥涨停价）→ 出封单
+    svc._AUCTION_SNAP_CACHE.clear()
+    bj2 = bj.replace("~15.00~14.21", "~29.98~14.21").replace("~13.90~1387~13.91", "~17.12~1387~13.91")
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: bj2)
+    it = svc.get_auction_snapshot_tencent(["920001"])["items"]["920001"]
+    assert it["zt_buy_amount"] == 1387 * 100 * 17.12
+    # ST 5% 带：+5.02% 封板 → 出封单（旧逻辑 9.95 门恒漏）
+    svc._AUCTION_SNAP_CACHE.clear()
+    st = base.replace("日出东方", "ST东方").replace("~5.54~14.21", "~5.02~14.21").replace("~13.90~1387~13.91", "~13.85~1387~13.91")
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: st)
+    it2 = svc.get_auction_snapshot_tencent(["603366"])["items"]["603366"]
+    assert it2["zt_buy_amount"] == 1387 * 100 * 13.85
+    # 畸形短行：不抛 IndexError、不杀已成功码
+    svc._AUCTION_SNAP_CACHE.clear()
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: 'v_pv_none_line="1";\n' + base)
+    out3 = svc.get_auction_snapshot_tencent(["603366"])
+    assert out3["ok"] and "603366" in out3["items"]
