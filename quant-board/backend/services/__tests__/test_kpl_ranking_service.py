@@ -897,3 +897,17 @@ def test_live_meta_real_failure_still_disclosed(monkeypatch):
     assert entry.get("failed_plates") == ["801574"], "真失败必须照旧透出"
     assert entry.get("empty_plates") == []
     svc._stocks_meta_cache.clear()
+
+
+def test_live_page_max_clamps_100(monkeypatch):
+    """2026-11-13 用户裁决 st=100：上限钳制同步换代（覆盖 09:15 竞价播报）。"""
+    captured = {}
+
+    def fake_post(url, params, ua):
+        captured["st"] = params["st"]
+        return {"List": [], "errcode": 0}
+
+    monkeypatch.setattr(svc, "_post_form", fake_post)
+    svc._cache.clear()
+    svc.get_live_commentary(st=999)
+    assert captured["st"] == 100

@@ -431,3 +431,49 @@ def test_hygiene_v17_sector_judgment_and_base_rate_lines():
          "theme_continuation": {"choice": "insufficient"}}),
         "sector_judgment_line(双侧 insufficient)")
     _assert_absent(A.base_rate_line(None), "base_rate_line(无已结算行)")
+
+
+def test_hygiene_auction_leader_vA1_lines():
+    """竞价龙头 vA1 新叙事行接入 §1.2-8 强制黑名单回归（预登记 auction-leader-vA1）。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    push = [{"time": "09:15", "comment": "竞价看龙头：机器人中重科技",
+             "stocks": [{"code": "603135", "name": "中重科技", "pct": 3.05,
+                         "board": "机器人", "boardRaw": "机器人"}]}]
+    _assert_clean(AL.auction_push_line(push), "auction_push_line")
+    _assert_clean(AL.auction_push_line(push, codes=["603135"]), "auction_push_line(个股)")
+    _assert_absent(AL.auction_push_line([]), "auction_push_line(无推送)")
+    bid = [{"label": "中重科技", "item": {"bidding_pct": 3.05, "bidding_amount": 1.2e8,
+                                          "bidding_turnover": 1.8, "bidding_net": 2e7},
+            "peers": [{"name": "天普股份", "pct": 10.0, "amount": 1.2e8}]}]
+    _assert_clean(AL.auction_bid_line(bid), "auction_bid_line")
+    assert "额 1.20亿" in AL.auction_bid_line(bid), "peers 竞价额入叙事（身位题判据证据）"
+    _assert_absent(AL.auction_bid_line([{"label": "X", "item": None}]), "auction_bid_line(缺竞价)")
+    _assert_clean(AL.auction_structure_line(
+        {"streak": 2, "sealedPrev": True, "ztTime": "09:41", "gain10": 21.5},
+        prev_date="2026-11-12"), "auction_structure_line")
+    _assert_absent(AL.auction_structure_line(None, prev_date="2026-11-12"),
+                   "auction_structure_line(全缺)")
+    _assert_clean(AL.auction_board_structure_line(
+        [{"streak": 2, "sealedPrev": True}, {"streak": 1, "sealedPrev": True}],
+        prev_date="2026-11-12"), "auction_board_structure_line")
+    _assert_clean(AL.auction_base_rate_line(
+        {"n": 40, "rate": 32.5, "start": "2026-11-13", "end": "2026-11-20"}),
+        "auction_base_rate_line")
+    _assert_absent(AL.auction_base_rate_line(None), "auction_base_rate_line(无已结算)")
+    narr = AL.build_auction_leader_narrative(
+        date="2026-11-13", prev_date="2026-11-12", market_line="盘面事实：测试",
+        leader_name="中重科技", leader_code="603135", board="机器人",
+        push_line=AL.auction_push_line(push, codes=["603135"]),
+        bid_line=AL.auction_bid_line(bid),
+        structure=AL.auction_structure_line({"streak": 2, "sealedPrev": True},
+                                            prev_date="2026-11-12"),
+        base_rate=AL.auction_base_rate_line({"n": 40, "rate": 32.5}),
+        evidence_block="题材证据块：测试")
+    _assert_clean(narr, "build_auction_leader_narrative")
+    sec = AL.build_auction_sector_narrative(
+        date="2026-11-13", prev_date="2026-11-12", market_line="盘面事实：测试",
+        board="机器人", push_line=AL.auction_push_line(push),
+        board_structure=AL.auction_board_structure_line(
+            [{"streak": 2, "sealedPrev": True}], prev_date="2026-11-12"),
+        evidence_block="题材证据块：测试")
+    _assert_clean(sec, "build_auction_sector_narrative")

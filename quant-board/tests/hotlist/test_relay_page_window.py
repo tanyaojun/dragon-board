@@ -1777,8 +1777,11 @@ def test_banner_errors_routed_to_status_bar(js: str):
         assert 'sbLog(' in body and tag in body, f"{fn_name} 未挂接状态栏（缺 {tag} 前缀）"
     # render 类错误分支（读口异常/降级）同样透出（下跌/上涨复盘用 tag 常量 + sbLog 变量调用）
     # 2026-11-01 V4-E2：盘中红盘卡（[盘中红盘]）已迁入连板行情表，降级路由走 [连板行情] tag
-    for tag in ('[题材龙头]', '[板块节点]'):
-        assert f"sbLog('error', '{tag}" in js or f"sbLog('warn', '{tag}" in js, f"{tag} 报错分支未挂状态栏"
+    assert "sbLog('error', '[板块节点]" in js or "sbLog('warn', '[板块节点]" in js, \
+        "[板块节点] 报错分支未挂状态栏"
+    # 2026-11-13 用户裁决：龙头两视图告警收 leaderStatusNotice 单实现（tag 传参 + sbLog(level, msg)）
+    assert "leaderStatusNotice('[题材龙头] '" in js and "leaderStatusNotice('[竞价龙头] '" in js
+    assert "sbLog(level, msg)" in _fn(js, "leaderStatusNotice")
     assert "[连板行情] 盘中读数读口失败" in js, "pulse 读口失败须随 lbLoad 挂状态栏"
     for tag in ('[下跌复盘]', '[上涨复盘]'):
         assert f"'{tag} '" in js and "sbLog('error', tag" in js, f"{tag} 报错分支未挂状态栏"

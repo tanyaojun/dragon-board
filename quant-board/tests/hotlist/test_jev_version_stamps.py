@@ -135,3 +135,25 @@ def test_relay_v9_phase_state_machine_criteria():
     # 删题不删叙事：theme_evolution/leader_profile 仍在 ops（此处仅锁题集已删）
     assert "theme_pulse" not in relay.QUESTIONS_RELAY
     assert "leader_strength" not in relay.QUESTIONS_RELAY
+
+
+def test_auction_leader_vA1_dedicated_stamps():
+    """竞价龙头晨间链独立版本戳（vA1，2026-11-13 预登记 auction-leader-vA1）：
+    独立题集代际 + 独立 AMMO 戳；落档用独立戳（跨代不可比违规防范）。"""
+    import inspect
+    from backend.analysis.hotlist import auction_leader_ammo as al
+    from backend.operations import auction_leader_label as ops
+    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA1"
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-13a"
+    assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
+    # A2 删题锁定：空间/人气题不在晨间题集
+    assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
+    assert "leader_rebound_popularity" not in al.QUESTIONS_AUCTION_LEADER
+    # 板块两题与催化硬度题原文复用 v17（单一事实源）
+    from backend.analysis.hotlist import theme_leader_ammo as tl
+    assert al.QUESTIONS_AUCTION_LEADER["theme_speculation_depth"] is tl.QUESTIONS_THEME_LEADER["theme_speculation_depth"]
+    assert al.QUESTIONS_AUCTION_LEADER["leader_catalyst_hardness"] is tl.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]
+    src = inspect.getsource(ops._label_one)
+    assert "QUESTION_SET_VERSION_AUCTION_LEADER" in src
+    assert "QUESTION_SET_VERSION_THEME_LEADER" not in src
+    assert al.QUESTIONS_AUCTION_LEADER["theme_continuation"] is tl.QUESTIONS_THEME_LEADER["theme_continuation"]

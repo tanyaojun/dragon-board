@@ -211,7 +211,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v17"
     assert doc["questionSetHash"] == "8c6c94429abd"   # v17 题集×语料匹配+两新题+开火前修订 b（v1-v16 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-12b"   # v17 批次 a + 修订 b：新闻真实命中裁决→业务关联核实
+    assert doc["ammoVersion"] == "2026-11-13a"   # A7：直播归档 merge-union 供给修复（题面 hash 不动）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -1275,10 +1275,16 @@ def test_get_live_for_label_archive_roundtrip(monkeypatch):
     assert p1["ok"] and not p1.get("fromArchive") and len(sent) == 1
     assert db[L.LIVE_ARCHIVE_COLLECTION].docs[today]["itemCount"] == 1, "当日取后归档"
     p2 = L.get_live_for_label(db, today)
-    assert p2.get("fromArchive") is True and len(sent) == 1, "二次读归档零外呼"
+    assert p2["ok"] and len(sent) == 2, "当日恒再取 + merge（A7：17:30 不被晨间档吞掉）"
+    assert p2.get("fromArchive") is False
     # 历史日：无归档 → 结构化降级（不外呼不冒充）
     p3 = L.get_live_for_label(db, "2026-10-01")
-    assert p3["ok"] is False and "不可回放" in p3["reason"] and len(sent) == 1
+    assert p3["ok"] is False and "不可回放" in p3["reason"] and len(sent) == 2
+    # 历史日有归档 → 归档优先零外呼
+    db[L.LIVE_ARCHIVE_COLLECTION].docs["2026-10-01"] = {
+        "_id": "2026-10-01", "items": [{"ts": 1, "time": "09:15", "comment": "x"}]}
+    p4 = L.get_live_for_label(db, "2026-10-01")
+    assert p4["ok"] and p4["fromArchive"] is True and len(sent) == 2
 
 
 def test_fetch_plate_zt_history_filters_future(monkeypatch):
@@ -2405,3 +2411,39 @@ def test_live_base_rate_excludes_degraded():
         "structure": {"leaderSealedToday": True}}
     st = live_base_rate(db, before="2026-11-11")
     assert st["n"] == 1 and st["ratePct"] == 100.0
+
+
+def test_get_live_for_label_a7_morning_preserved(monkeypatch):
+    """A7 回归（2026-11-13 review blocker）：晨间档在场（09:15 条目 + auctionPush）→
+    17:30 仍取数 merge：09:15 与 15:00 条目并存、auctionPush 投影保留。"""
+    import time as _time
+    db = FakeDb()
+    today = _time.strftime("%Y-%m-%d")
+    ts9 = int(_time.mktime(_time.strptime(f"{today} 09:15", "%Y-%m-%d %H:%M")))
+    ts15 = int(_time.mktime(_time.strptime(f"{today} 15:00", "%Y-%m-%d %H:%M")))
+    col = db[L.LIVE_ARCHIVE_COLLECTION]
+    col.docs[today] = {
+        "_id": today, "itemCount": 1, "notice": "",
+        "items": [{"id": "zb:9", "ts": ts9, "time": "09:15",
+                   "comment": "竞价看龙头：机器人中重科技"}],
+        "auctionPush": {"stocks": [{"code": "603135", "name": "中重科技",
+                                    "board": "机器人"}]}}
+    sent: list = []
+
+    def fake_fetch(st=60):
+        sent.append(st)
+        return {"ok": True, "notice": "",
+                "items": [{"id": "zb:15", "ts": ts15, "time": "15:00",
+                           "comment": "收盘播报"}]}
+
+    monkeypatch.setattr(L, "fetch_live_commentary", fake_fetch)
+    out = L.get_live_for_label(db, today)
+    assert out["ok"] and len(sent) == 1, "晨间档在场当日仍取数（blocker 修复）"
+    assert {it["time"] for it in out["items"]} == {"09:15", "15:00"}
+    assert col.docs[today]["auctionPush"]["stocks"][0]["code"] == "603135"
+    # 取数失败 + 旧档在场 → 回退旧档 + 结构化留痕（fail-visible）
+    monkeypatch.setattr(L, "fetch_live_commentary",
+                        lambda st=60: {"ok": False, "reason": "fetch_failed: x"})
+    out2 = L.get_live_for_label(db, today)
+    assert out2["ok"] and out2["fromArchive"] is True
+    assert out2["liveFetchFailed"] == "fetch_failed: x"

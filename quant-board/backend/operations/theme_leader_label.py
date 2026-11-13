@@ -272,34 +272,42 @@ LIVE_ARCHIVE_COLLECTION = "kpl_live_daily"
 
 
 def get_live_for_label(db: Any, date: str) -> dict:
-    """标注用直播流（P1-2 日归档）：归档优先 → 当日实时（取后归档）→ 历史日缺席降级。
+    """标注用直播流（P1-2 日归档）：历史日归档优先 → 当日恒实时取数 + merge-union → 缺席降级。
 
     归档集合 `kpl_live_daily`（_id=date）：挂链（17:30，2026-10-30 改时）标注当日时实时取数并落库，此后
     回填/复盘/评估读归档——**存的是标注时点当日文本**，无 look-ahead；历史日无归档
     → {ok: False, reason}（fail-visible，不把今天直播冒充历史语料）。
+    2026-11-13 A7：落库改 merge-union（kpl_live_archive.merge_live_archive 单实现），
+    晨间 09:26 归档的 09:15 竞价推送条目不被本路径覆盖；返回 items 为合并后全量。
     """
     col = db[LIVE_ARCHIVE_COLLECTION]
     doc = col.find_one({"_id": str(date)}) or {}
-    if doc.get("items"):
-        return {"ok": True, "items": doc["items"], "notice": doc.get("notice"),
-                "fromArchive": True}
     if str(date) != time.strftime("%Y-%m-%d"):
-        # 实时流只含当日条目，历史日外呼必空——直接降级，不浪费上游请求
+        # 历史日：归档优先（零外呼）；无归档 → 结构化降级（实时流不可回放）
+        if doc.get("items"):
+            return {"ok": True, "items": doc["items"], "notice": doc.get("notice"),
+                    "fromArchive": True}
         return {"ok": False,
                 "reason": f"实时流不可回放（标注日 {date} 非当日且无直播归档，历史日无直播归档）"}
+    # 当日恒取数 + merge-union（2026-11-13 review blocker 修复）：晨间 09:26 归档只覆盖
+    # 晨间窗，若命中归档早退则盘中播报与 15:00 大盘综述静默丢失。
+    # A7 语义 = 17:30 仍取数仍写、不覆盖晨间条目（merge 单实现）。
     payload = fetch_live_commentary()
     if not payload.get("ok"):
+        if doc.get("items"):
+            return {"ok": True, "items": doc["items"], "notice": doc.get("notice"),
+                    "fromArchive": True, "liveFetchFailed": payload.get("reason")}
         return payload
     items = payload.get("items") or []
     item_today = [it for it in items
                   if time.strftime("%Y-%m-%d", time.localtime(it["ts"])) == str(date)]
     if item_today:
-        col.replace_one({"_id": str(date)},
-                        {"_id": str(date), "items": items,
-                         "notice": payload.get("notice"), "itemCount": len(items),
-                         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S")},
-                        upsert=True)
-        return payload
+        # A7（2026-11-13 预登记 auction-leader-vA1）：merge-union 共享写口——
+        # 晨间归档（09:15 竞价推送条目）不被 17:30 全量取数覆盖；单实现两调用点
+        from backend.services.kpl_live_archive import merge_live_archive
+        merged = merge_live_archive(db, str(date), payload)
+        return {"ok": True, "items": merged["items"],
+                "notice": merged.get("notice"), "fromArchive": False}
     return {"ok": False,
             "reason": f"实时流不可回放（标注日 {date} 非当日且无直播归档，历史日无直播归档）"}
 

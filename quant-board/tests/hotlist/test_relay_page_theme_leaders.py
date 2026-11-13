@@ -191,8 +191,12 @@ def test_backfill_warning_display_removed(html: str) -> None:
 def test_read_error_is_fail_visible(html: str) -> None:
     """读口异常 fail-visible（2026-10-30 新口径：报错黄条页内删除，只进底部状态栏）。"""
     banner = _fn(html, "tlRenderBanner")
-    assert "sbLog('error', '[题材龙头] '" in banner, "读口异常须进底部状态栏"
-    assert "题材龙头读口异常：" not in banner and "后台刷新失败（" not in banner, "页内报错黄条已删（8e6a507b），不得回渲染（no_data 中性提示保留）"
+    helper = _fn(html, "leaderStatusNotice")
+    assert "leaderStatusNotice('[题材龙头] '" in banner, "告警路由单实现委托"
+    assert "sbLog(level, msg)" in helper and "'error'" in helper, "读口异常须进底部状态栏"
+    assert "lf-warn" not in helper and "lf-warn" not in banner, \
+        "页内报错黄条已删（8e6a507b；2026-11-13 裁决覆盖 no_data），不得回渲染"
+    assert "no_data" in helper, "缺档提示同收状态栏（2026-11-13 用户裁决）"
     assert "theme_leaders_read_failed" in html
 
 
@@ -204,10 +208,11 @@ def test_bg_refresh_failure_has_visible_exit(html: str) -> None:
     2026-10-30 新口径：出口=底部状态栏（页内黄条已删，8e6a507b）。
     """
     fetch = _fn(html, "tlFetch")
-    banner = _fn(html, "tlRenderBanner")
+    helper = _fn(html, "leaderStatusNotice")
     assert "const bg = " in fetch, "同区间轮询走静默刷新"
-    assert "sbLog('warn', '[题材龙头] 后台刷新失败：'" in banner, "bg 失败必须进状态栏（§4.0 不得伪装成正常数据）"
-    assert "上次成功数据" in banner, "状态栏须标注展示的是上次成功数据"
+    assert "后台刷新失败：" in helper and "'warn'" in helper, "bg 失败必须进状态栏（§4.0 不得伪装成正常数据）"
+    assert "上次成功数据" in helper, "状态栏须标注展示的是上次成功数据"
+    assert "key !== STATE[sbKey]" in helper, "状态变化才记一条，防轮询刷屏"
 
 
 def test_no_reran_dead_variable(html: str) -> None:
@@ -255,6 +260,7 @@ def test_no_dangling_references(html: str) -> None:
         pass  # 占位：下方逐条精确断言
     assert "renderThemeLeaders" not in html
     for name in ("renderThemes", "tlRenderRows", "tlRenderBar", "tlRenderBanner",
+                 "leaderStatusNotice",
                  "tlFetch", "tlRow", "tlToggle", "tlClear", "tlSortBy", "tlQ", "tlBoard"):
         assert len(re.findall(rf"function {name}\(", html)) == 1, f"{name} 必须唯一定义"
 

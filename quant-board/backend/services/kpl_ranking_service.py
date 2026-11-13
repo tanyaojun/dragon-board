@@ -499,7 +499,10 @@ def get_market_radar(st: int = 60) -> Dict[str, Any]:
 # 历史变体 c=HisConceptionPoint+Date（网页版走 pchis 域）未验证——v1 仅实时，不猜数。
 # 凭据仅进请求参数（mapping_refresh 公共出口），不入库不落日志（红线 §1.2.3）。
 _LIVE_TTL_SECONDS = 15.0   # 解说频率约分钟级，15s 兑前端轮询
-_LIVE_PAGE_MAX = 60
+# 2026-11-13 用户裁决 st=100：实测 st=60 午后窗仅回溯到 09:51，覆盖不到 09:15
+# 「竞价看龙头」播报（竞价龙头链 vA1 选龙源）；请求次数不变、仅单发 payload 增大
+# （频控预算见预登记 auction-leader-vA1 §5）。
+_LIVE_PAGE_MAX = 100
 
 
 def parse_live_row(raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:

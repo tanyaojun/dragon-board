@@ -91,7 +91,7 @@ def test_question_set_frozen_hash_and_versions():
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v17"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-12b"   # a + 开火前修订 b（新闻真实命中裁决）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-13a"   # A7：直播归档 merge-union 供给修复（题面 hash 不动）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "8c6c94429abd"
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -1721,6 +1721,19 @@ def test_detail_channel_lines():
     assert "人形机器人 -1.63%" in rp and "（个股 +10.00%）" not in rp
     assert rp.endswith("人形机器人 -1.63%")
     assert A.related_plate_line([]) is None
+
+
+def test_related_plate_percent_gate(monkeypatch):
+    """2010 百分比口径单一常量源（2026-11-11 被动交叉裁决钉死 True）；
+    推翻置 False 时百分比段集体缺席、只列板块名（同 2030 kill-switch 模式）。"""
+    entries = [{"label": "主板龙一 某股", "board": "", "knownThemes": [],
+                "item": {"plates": [{"plate_name": "光通信",
+                                     "plate_inc_rate": 4.04,
+                                     "stock_inc_rate": 20.0}]}}]
+    assert "光通信 +4.04%" in A.related_plate_line(entries)
+    assert "（个股 +20.00%）" in A.related_plate_line(entries)
+    monkeypatch.setattr(A, "RPLATE_INC_IS_PERCENT", False)
+    assert A.related_plate_line(entries) == "板块归属：主板龙一 某股 光通信"
 
 
 def test_narrative_20261111_line_placements():

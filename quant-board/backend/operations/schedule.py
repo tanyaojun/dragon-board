@@ -393,7 +393,8 @@ def theme_leader_label_enabled() -> bool:
     return os.environ.get("THEME_LEADER_LABEL_ENABLED", "1") != "0"
 
 
-def _parse_theme_leader_stdout(stdout: str | None) -> tuple[dict | None, str]:
+def _parse_theme_leader_stdout(stdout: str | None,
+                               marker: str | None = None) -> tuple[dict | None, str]:
     """结果 JSON 提取（2026-11-02 修复；2026-11-11 抽出供补齐链复用）。
 
     子进程以 `THEME_LEADER_RESULT_JSON:` 标记行输出结果（单行）；旧逻辑「首个 { 截取」
@@ -405,8 +406,9 @@ def _parse_theme_leader_stdout(stdout: str | None) -> tuple[dict | None, str]:
     parse_error = "result JSON line not found in stdout"
     for line in reversed((stdout or "").splitlines()):
         cand = line.strip()
-        if cand.startswith(_THEME_LEADER_RESULT_MARKER):
-            cand = cand[len(_THEME_LEADER_RESULT_MARKER):].strip()
+        _marker = marker or _THEME_LEADER_RESULT_MARKER
+        if cand.startswith(_marker):
+            cand = cand[len(_marker):].strip()
         if not cand.startswith("{"):
             continue
         try:
@@ -550,6 +552,103 @@ def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict
     except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
         results.append({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
     return results
+
+
+# ── 竞价龙头晨间链（vA1，2026-11-13 预登记 auction-leader-vA1；09:26 挂链） ──
+_AUCTION_LEADER_TIMEOUT_SECONDS = 900
+_AUCTION_LEADER_SETTLE_TIMEOUT_SECONDS = 300
+
+
+def auction_leader_label_enabled() -> bool:
+    """竞价龙头晨间投喂开关（A5：默认开，镜像 THEME_LEADER_LABEL_ENABLED）。"""
+    return os.environ.get("AUCTION_LEADER_LABEL_ENABLED", "1") != "0"
+
+
+def run_auction_leader_label_once(today: str | None = None, *,
+                                  dry_run: bool = False) -> dict[str, Any]:
+    """竞价龙头晨间投喂（09:26 调度；9:25 竞价冻结 + archiver ≤60s 轮询 lag）。
+
+    门控：开关 → 交易日 → 子进程幂等；预算语义同 17:30 链（预登记日包络挂链
+    直接带 --confirm-budget；无包络的路走 CLI 人工批准）。advisory：失败不翻转调用方 ok。
+    """
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run", "date": today}
+    if not auction_leader_label_enabled():
+        return {"ok": True, "skipped": True, "reason": "disabled", "date": today}
+    try:
+        trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        return {"ok": False, "date": today,
+                "error": {"code": "auction_leader_gate_failed",
+                          "message": f"{type(exc).__name__}: {exc}"}}
+    if not trading:
+        return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
+                "calendarSource": cal_source}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.auction_leader_label",
+             "--date", today, "--confirm-budget"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_AUCTION_LEADER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "date": today,
+                "error": {"code": "auction_leader_timeout",
+                          "message": f"timeout {_AUCTION_LEADER_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "date": today,
+                "error": {"code": "auction_leader_failed",
+                          "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    from backend.operations.auction_leader_label import RESULT_MARKER
+    result, parse_error = _parse_theme_leader_stdout(proc.stdout, marker=RESULT_MARKER)
+    if result is None:
+        return {"ok": False, "date": today,
+                "error": {"code": "auction_leader_parse_failed", "message": parse_error}}
+    return {"ok": bool(result.get("ok")), "date": today,
+            "leaders": result.get("leaders"), "okCount": result.get("okCount"),
+            "degraded": result.get("degraded"), "tokensUsed": result.get("tokensUsed"),
+            "estimatedTokensBudgetGuard": result.get("estimatedTokensBudgetGuard"),
+            "skippedReason": result.get("skippedReason"),
+            "questionSetVersion": result.get("questionSetVersion")}
+
+
+def run_auction_leader_settle_once(today: str | None = None) -> dict[str, Any]:
+    """竞价龙头当日结局回填（16:10 挂链，零 token；lookback 5 日自愈）。
+
+    outcomeSealedToday = 当日 daban pool 封板成员（THS 交叉披露）；当日 + 历史
+    pending 日都补（进程重启/采集中断自愈）；单日失败只记该日结果（advisory）。
+    """
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    results: list[dict[str, Any]] = []
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        from backend.operations.theme_leader_baseline import trading_dates
+        days = [d for d in trading_dates(db, "2000-01-01", today) if d <= today][-5:]
+        col = db["hotlist_jev_auction_leader_labels"]
+        for day in days:
+            pending = col.count_documents({"tradingDate": day, "docKind": "leader",
+                                           "outcomeSealedToday": None})
+            if not pending:
+                continue
+            proc = subprocess.run(
+                [sys.executable, "scripts/auction_leader_pilot_eval.py",
+                 "--date", day, "--write-outcome"],
+                cwd=str(Path(__file__).resolve().parents[2]),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=_AUCTION_LEADER_SETTLE_TIMEOUT_SECONDS,
+            )
+            lines_ = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            head = [ln for ln in lines_ if "→ 当日" in ln] or lines_[-1:]
+            results.append({"ok": proc.returncode == 0, "date": day, "pending": pending,
+                            "summary": head[0] if head else "",
+                            "error": ((proc.stderr or "")[-200:] or None)
+                            if proc.returncode else None})
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        results.append({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    return {"ok": all(r.get("ok") for r in results) if results else True,
+            "date": today, "settledDays": results}
 
 
 def theme_leader_lhb_backfill_enabled() -> bool:

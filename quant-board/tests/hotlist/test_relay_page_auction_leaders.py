@@ -1,0 +1,99 @@
+# -*- coding: utf-8 -*-
+"""relay_page【竞价龙头】子视图静态守卫（vA1；无浏览器零网络零 jev）。
+
+需求（预登记 auction-leader-vA1 §6）：竞价龙头为连板指数子视图 rv-auction（不是独立页），
+与 rv-themes 同构：共用页头 KPI 与时间范围控件、60s 静默轮询、叙事抽屉、重跑按钮、
+推送缺席/竞价缺徽章；行源 = labels ∪ 推送 roster（labelMissing 不进表）。
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+_PAGE = Path(__file__).resolve().parents[2] / "backend" / "relay_page" / "index.html"
+
+
+@pytest.fixture(scope="module")
+def html() -> str:
+    return _PAGE.read_text(encoding="utf-8")
+
+
+def _fn(html: str, name: str) -> str:
+    start = html.index("function " + name + "(")
+    i = html.index("{", start)
+    depth = 0
+    while i < len(html):
+        if html[i] == "{":
+            depth += 1
+        elif html[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start:i + 1]
+        i += 1
+    raise AssertionError(f"function {name} unbalanced")
+
+
+def test_subview_section_and_tab(html):
+    assert '<div class="rv" id="rv-auction">' in html
+    assert "['auction', '竞价龙头', '⚡']" in html
+    for el in ("alBoardRow", "alFilterBar", "alTable"):
+        assert f'id="{el}"' in html
+    # 2026-11-13 用户裁决：报错/缺档信息不打页内横幅，收底部状态栏
+    assert 'id="alBanner"' not in html and 'id="tlBanner"' not in html
+    assert "leaderStatusNotice('[竞价龙头] '" in _fn(html, "alRenderBanner")
+    helper = _fn(html, "leaderStatusNotice")
+    assert "sbLog(level, msg)" in helper and "no_data" in helper
+    assert "lf-warn" not in helper, "状态栏路由不得回渲染页内黄条"
+
+
+def test_fetch_wired_to_range_and_loadall(html):
+    assert html.count("alFetch();") >= 2          # loadAll + rangeRefresh
+    body = _fn(html, "alFetch")
+    assert "/api/hotlist-jev/auction-leaders" in body
+    assert "STATE.relayRange" in body             # 共用时间范围
+    assert "_alSeq" in body                       # seq 守卫防过期响应
+
+
+def test_labelmissing_rows_not_in_table(html):
+    body = _fn(html, "alRows")
+    assert "labelMissing" in body
+
+
+def test_detail_card_and_rerun(html):
+    detail = _fn(html, "alDetailHtml")
+    assert "lg-card" in detail and "alRerun" in detail
+    rerun = _fn(html, "alRerun")
+    assert "/api/hotlist-jev/auction-leaders/rerun" in rerun
+    assert "STATE.rerunBusy" in rerun             # 全局防并发烧 token
+    narr = _fn(html, "alLoadNarrative")
+    assert "with_narrative=1" in narr
+
+
+def test_absence_badges_fail_visible(html):
+    row = _fn(html, "alRowHtml")
+    assert "推送缺席" in row and "竞价缺" in row
+    assert "待结算" in row                        # 结局 null=待结算，不伪装未封
+
+
+def test_choice_cn_and_midpoints(html):
+    assert "AL_CHOICE_CN" in html and "AL_MIDPOINTS" in html
+    m = re.search(r"const AL_MIDPOINTS = \{([^}]+)\}", html)
+    assert m, "AL_MIDPOINTS 常量必须在场"
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location(
+        "al_eval", Path(__file__).resolve().parents[2] / "scripts" / "auction_leader_pilot_eval.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    front = json.loads("{" + re.sub(r"([A-Za-z_][A-Za-z0-9_]*):", r'"\1":', m.group(1)) + "}")
+    assert front == mod.MIDPOINTS, "前端中值与后端 Brier 中值逐键全等（防漂移）"
+    assert "AL_MIDPOINTS" in _fn(html, "alProb")
+
+
+def test_status_bar_routing_and_nits(html):
+    """2026-11-13 裁决 + review nits：报错收状态栏 / 页码重置 / 门中文 / 重跑预算披露。"""
+    assert "STATE.alUi.page = 1" in _fn(html, "rangeRefresh")
+    assert "TL_GATE_CN" in _fn(html, "alDetailHtml")
+    assert "2 次 jev 调用" in _fn(html, "alRerun"), "confirm 须披露板块连带重烧"

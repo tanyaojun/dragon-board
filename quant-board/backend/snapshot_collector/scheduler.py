@@ -81,6 +81,9 @@ class SnapshotCollectorScheduler:
         self._theme_leader_last: dict[str, Any] | None = None
         # 龙虎榜补齐（B，2026-11-11 用户裁决：00:30 凌晨/07:10 次晨两时点，零 token 探针+定向重跑）
         self._theme_leader_lhb_backfill_last: dict[str, Any] | None = None
+        # 竞价龙头晨间链（vA1，2026-11-13 预登记：09:26 投喂 + 16:10 结局回填）
+        self._auction_leader_last: dict[str, Any] | None = None
+        self._auction_leader_settle_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -153,6 +156,8 @@ class SnapshotCollectorScheduler:
             "jiuyanTheme": self._jiuyan_theme_last,
             "themeLeader": self._theme_leader_last,
             "themeLeaderLhbBackfill": self._theme_leader_lhb_backfill_last,
+            "auctionLeader": self._auction_leader_last,
+            "auctionLeaderSettle": self._auction_leader_settle_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -546,6 +551,14 @@ _THEME_LEADER_LHB_BACKFILL_SLOTS = (
     (datetime.time(7, 10), "morning"),
 )
 
+# 竞价龙头晨间投喂时点（vA1，2026-11-13 预登记 A1）：09:26 = 9:25 集合竞价冻结
+# + :8000 archiver ≤60s 轮询 lag 保障；失败重试每日最多 3 次、间隔 ≥5 分钟。
+_AUCTION_LEADER_LABEL_AT = datetime.time(9, 26)
+_AUCTION_LEADER_MAX_ATTEMPTS = 3
+_AUCTION_LEADER_RETRY_AFTER = datetime.timedelta(minutes=5)
+# 当日结局回填时点（16:10 盘后：daban pool 日档已收全；零 token，lookback 自愈）
+_AUCTION_LEADER_SETTLE_AT = datetime.time(16, 10)
+
 
 def _parse_iso(v: Any) -> datetime.datetime | None:
     try:
@@ -625,6 +638,36 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                                         json.dumps(theme_result, ensure_ascii=False,
                                                    default=str)[:200])
                             break
+                # 竞价龙头晨间投喂（09:26，vA1 预登记 A1）：独立集合/独立题集代际；
+                # 限次退避重试镜像 17:30 链（防一次通道抖动吃掉整天样本）。
+                if now.time() >= _AUCTION_LEADER_LABEL_AT:
+                    from backend.operations.schedule import (
+                        run_auction_leader_label_once, auction_leader_label_enabled)
+                    if auction_leader_label_enabled():
+                        attempts = int(state.get("auction_leader_attempts") or 0)
+                        prev = sched._auction_leader_last or {}
+                        prev_at = _parse_iso(prev.get("at"))
+                        retry_due = (
+                            not prev.get("ok")
+                            and attempts < _AUCTION_LEADER_MAX_ATTEMPTS
+                            and (prev_at is None
+                                 or (now - prev_at).total_seconds() >= _AUCTION_LEADER_RETRY_AFTER.total_seconds()))
+                        first_run = "auction_leader_label" not in state["done"]
+                        if first_run or retry_due:
+                            if first_run:
+                                state["done"].add("auction_leader_label")
+                            state["auction_leader_attempts"] = attempts + 1
+                            if attempts and not first_run:
+                                logger.info("auction leader label 重试第 %s 次（%s）",
+                                            attempts + 1, trading_date)
+                            auction_result = await asyncio.to_thread(
+                                run_auction_leader_label_once, trading_date)
+                            sched._auction_leader_last = {
+                                **auction_result, "attempt": attempts + 1,
+                                "at": now.isoformat(timespec="seconds")}
+                            logger.info("auction leader label %s: %s", trading_date,
+                                        json.dumps(auction_result, ensure_ascii=False,
+                                                   default=str)[:200])
                 # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时）：独立集合/独立题集代际。
                 # **限次退避重试**：失败（通道/取数/子进程）不一次判死——否则 8001 重启撞上
                 # 通道短暂不可用就会让那一天永远补不上（2026-10-20 实测：代理挂 → 9/9 degraded）。
@@ -677,6 +720,21 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                     logger.info("theme leader lhb backfill %s %s: %s", bf_slot, trading_date,
                                 json.dumps(bf_result, ensure_ascii=False, default=str)[:300])
                     break
+                # 竞价龙头当日结局回填（16:10，零 token；lookback 5 日自愈）
+                if now.time() >= _AUCTION_LEADER_SETTLE_AT:
+                    st_key = "auction_leader_settle"
+                    if st_key not in state["done"]:
+                        state["done"].add(st_key)
+                        from backend.operations.schedule import (
+                            run_auction_leader_settle_once, auction_leader_label_enabled)
+                        if auction_leader_label_enabled():
+                            st_result = await asyncio.to_thread(
+                                run_auction_leader_settle_once, trading_date)
+                            sched._auction_leader_settle_last = {
+                                **st_result, "at": now.isoformat(timespec="seconds")}
+                            logger.info("auction leader settle %s: %s", trading_date,
+                                        json.dumps(st_result, ensure_ascii=False,
+                                                   default=str)[:300])
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             raise

@@ -604,10 +604,21 @@
         KPI 卡不另建（删除初版 tlKpi：与连板情绪并排两套 KPI 是重复视觉）。 -->
     <div class="rv" id="rv-themes">
       <div class="card" style="margin-top:18px">
-        <div id="tlBanner"></div>
         <div class="board-row" id="tlBoardRow"></div>
         <div class="lf-bar" id="tlFilterBar" style="margin-top:2px"></div>
         <div class="tl-wrap"><table id="tlTable"></table></div>
+      </div>
+    </div>
+
+    <!-- ⑥b 竞价龙头（vA1，2026-11-13 预登记 auction-leader-vA1）：晨间 09:26 投喂台账。
+        与题材龙头同构——共用页头 #relayKpi 与 tabbar 时间范围控件；行=区间内全部
+        竞价龙头-日（labels ∪ 09:15 推送 roster，缺档行 labelMissing 披露）；
+        左侧三角展开 jev 调用日志卡（lg-card 范式）。 -->
+    <div class="rv" id="rv-auction">
+      <div class="card" style="margin-top:18px">
+        <div class="board-row" id="alBoardRow"></div>
+        <div class="lf-bar" id="alFilterBar" style="margin-top:2px"></div>
+        <div class="tl-wrap"><table id="alTable"></table></div>
       </div>
     </div>
 
@@ -907,6 +918,12 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
           mode: 'detail', q1: '', q2: '' },
   tlSort: { key: 'date', dir: -1 },   // 区间台账默认最新在前（同 relay/detail 的日期列）
   tlNarr: {},           // code → {narrative, questionsRaw}（懒拉；null=请求中）
+  // 竞价龙头（rv-auction，vA1）：与 tl 三分法同构
+  alData: { loading: false, error: null, doc: null, rows: [] },
+  alUi: { q: '', board: '', choice: '', outcome: '', hard: '', seat: '',
+          openKey: null, page: 1, mode: 'detail', q1: '', q2: '' },
+  alSort: { key: 'date', dir: -1 },
+  alNarr: {},
   diebanEntries: [], diebanUi: { openKey: null },
   riseEntries: [], riseUi: { openKey: null },
   slotEntries: [], relayEntries: [],
@@ -1383,6 +1400,7 @@ async function loadAll(){
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
   renderRelayTab(); renderLabels(); renderDieban(); renderRise();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
+  alFetch();   // 竞价龙头（rv-auction 子视图，vA1）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
   cycleFetch(date);   // 市场情绪周期（rv-cycle 子视图，第4课 P2）：同上
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
@@ -1652,9 +1670,10 @@ function rangedSeries(){
 // 2026-10-18 用户需求：区间控件虽挂在判定明细页头，但是**全局**筛选条件，
 // 相位分线 / 钱效分带 / 毒带观察 / 分带实测 全部跟随联动（四个子页都吃 bandAgg→winBandDays）。
 function rangeRefresh(){
-  STATE.relayPage = 1; STATE.tlUi.page = 1;
+  STATE.relayPage = 1; STATE.tlUi.page = 1; STATE.alUi.page = 1;
   renderRelayTab(); renderCharts(); renderRelayAnalysis();
   tlFetch();   // 题材龙头行源 = 区间内全部龙头-日，跟随区间重拉（2026-10-20 用户裁决共用时间范围）
+  alFetch();   // 竞价龙头同区间重拉（vA1）
 }
 function rRange(k, v){
   if (!STATE.relayRange) STATE.relayRange = {};
@@ -2762,28 +2781,29 @@ function tlRefresh(){
 }
 
 // 区间级告警（混代际 / 含回填）：fail-visible，不与连板情绪 KPI 混放
-function tlRenderBanner(){
-  const el = $('tlBanner'); if (!el) return;
-  const d = STATE.tlData;
-  if (!d){ el.innerHTML = ''; return; }
-  if (d.error && !(d.rows || []).length){
-    if (window.sbLog) sbLog('error', '[题材龙头] ' + d.error);
-    el.innerHTML = '';   // 2026-10-30 用户裁决：报错横幅删除，读口异常只进底部状态栏
-    return;
+// 龙头两视图（题材/竞价）区间级告警单实现（2026-11-13 用户裁决：报错/缺档信息
+// 不打页内横幅，统一收底部状态栏 sbLog；延续 2026-10-30 读口异常裁决并覆盖 no_data）。
+// 状态变化才记一条，防 60s 轮询刷屏；表内中性空态盒保留（非报错横幅）。
+// 历史裁决留档：多代际黄牌结项（2026-10-22）/来源警示下线（2026-10-26）/
+// 未打标行不进表+计数横幅否决（2026-11-10），均不得回潮。
+function leaderStatusNotice(tag, d, emptyMsg, sbKey){
+  let level = '', msg = '';
+  if (d){
+    const hasRows = (d.rows || []).length > 0;
+    if (d.error){
+      level = hasRows ? 'warn' : 'error';
+      msg = tag + (hasRows ? '后台刷新失败：' + d.error + '（展示上次成功数据）' : d.error);
+    } else if ((d.doc || {}).no_data){
+      level = 'warn'; msg = tag + emptyMsg;
+    }
   }
-  // 后台静默刷新失败 + 旧数据仍可见（§4.0）：出口=底部状态栏（页内黄条已删，2026-10-30）
-  if (d.error && (d.rows || []).length && window.sbLog)
-    sbLog('warn', '[题材龙头] 后台刷新失败：' + d.error + '（展示上次成功数据）');
-  const doc = d.doc || {};
-  if (doc.no_data){ el.innerHTML = '<div class="lf-warn">区间内无题材龙头投喂记录'
-    + '（17:30 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
-  // 多代际警示已结项（用户 2026-10-22 裁决）：v1/v2/v3 历史档不回改是设计内常态，
-  // 行级版本徽章已可见，长期挂黄牌无增量信息。样本来源警示横幅同步下线
-  //（2026-10-26 用户裁决：来源语义在「来源」筛选与明细卡页脚已可考，横幅常驻属视觉噪音）。
-  // 未打标行已在 tlRows 过滤不进表（2026-11-10 用户裁决）；计数横幅同日否决——
-  // 跨区间累计数挂常驻黄条无增量信息（同 2026-10-30 横幅删除裁决），后端
-  // nodeFilter.labelMissingRows 数据留存可考
-  el.innerHTML = '';
+  const key = level + '\n' + msg;
+  if (msg && key !== STATE[sbKey] && window.sbLog) sbLog(level, msg);
+  STATE[sbKey] = key;
+}
+function tlRenderBanner(){
+  leaderStatusNotice('[题材龙头] ', STATE.tlData,
+    '区间内无题材龙头投喂记录（17:30 槽位未跑，或区间早于投产日 2026-10-08）', '_tlSbKey');
 }
 function tlRenderBoards(){
   const el = $('tlBoardRow'); if (!el) return;
@@ -3248,6 +3268,476 @@ async function tlLoadNarrative(r){
     STATE.tlNarr[key] = { error: String(e) };
   }
   if (STATE.tlUi.openKey === key) tlRenderRows();
+}
+
+// ---------- 竞价龙头（连板指数子视图 rv-auction，vA1 2026-11-13） ----------
+// 与 rv-themes 同构（预登记 auction-leader-vA1 §6）：行源 = 区间内 labels ∪ 09:15
+// 推送 roster（缺档行 labelMissing 不进表，计数由 nodeFilter 披露）；共用页头 KPI
+// 与时间范围；60s 静默轮询；落库口径为准（模型原答仅展开卡审计）；结局 null=待结算。
+const AL_CHOICE_CN = { high_ge65: '高', mid_45_65: '中', low_25_45: '低',
+                       verylow_lt25: '极低', insufficient: '证据不足' };
+const AL_CHOICE_RANGE = { high_ge65: '≥65%', mid_45_65: '45-65%', low_25_45: '25-45%',
+                          verylow_lt25: '<25%' };
+const AL_HARD_CN = { hard_fact: '硬催化', sector_story: '板块叙事', soft_meme: '软催化',
+                     insufficient: '证据不足' };
+const AL_HARD_BADGE = { hard_fact: 'b-red', sector_story: 'b-amber', soft_meme: 'b-blue',
+                        insufficient: 'b-gray' };
+const AL_SEAT_CN = { core_seat: '稳固', contested_seat: '被挑战', relay_seat: '接力位',
+                     insufficient: '证据不足' };
+const AL_SEAT_BADGE = { core_seat: 'b-red', contested_seat: 'b-amber', relay_seat: 'b-blue',
+                        insufficient: 'b-gray' };
+const AL_DEPTH_CN = { igniting: '启动期', fermenting: '发酵期', climax: '高潮期',
+                      ebbing: '退潮期', insufficient: '证据不足' };
+const AL_DEPTH_BADGE = { igniting: 'b-blue', fermenting: 'b-amber', climax: 'b-red',
+                         ebbing: 'b-gray', insufficient: 'b-gray' };
+const AL_CONT_CN = { strong_extend: '强延续', weak_extend: '弱延续', ending: '临近结束',
+                     insufficient: '证据不足' };
+const AL_CONT_BADGE = { strong_extend: 'b-red', weak_extend: 'b-amber', ending: 'b-blue',
+                        insufficient: 'b-gray' };
+const AL_MIDPOINTS = { high_ge65: 0.75, mid_45_65: 0.55, low_25_45: 0.35, verylow_lt25: 0.125 };
+function alRows(){
+  const all = (STATE.alData && STATE.alData.rows) || [];
+  return all.filter(r => !r.labelMissing);
+}
+function alKey(r){ return (r.tradingDate || '') + ':' + (r.code || ''); }
+function alProb(row){
+  const p = row.probabilities || {};
+  const parts = Object.entries(AL_MIDPOINTS).map(kv => [Number(p[kv[0]] || 0), kv[1]]);
+  const total = parts.reduce((a, kv) => a + kv[0], 0);
+  if (total <= 0.0001) return { text: '-' };
+  const est = parts.reduce((a, kv) => a + kv[0] * kv[1], 0) / total;
+  return { text: Math.round(est * 100) + '%' };
+}
+function alConfTip(r, key){
+  if (r.gate && r.gate.applied && (r.gate.forcedKeys || []).includes(key))
+    return '证据门强制 insufficient（程序覆盖，非模型置信）';
+  const a = { auction_leader_seal_today: r.choiceConfidence,
+              leader_catalyst_hardness: r.leaderCatalystHardnessConfidence,
+              auction_seat_durability: r.auctionSeatDurabilityConfidence }[key];
+  if (a == null || typeof a !== 'number' || !isFinite(a)) return '';
+  const p = Math.round(a * 100);
+  return '模型置信度 P' + p + (a < 0.35 ? '（两可，勿当结论）' : a < 0.6 ? '（存疑）' : '');
+}
+function alOutcomeKey(row){
+  if (row.outcomeSealedToday === null || row.outcomeSealedToday === undefined) return 'pending';
+  return row.outcomeSealedToday ? 'sealed' : 'broken';
+}
+function alMatches(row, f){
+  if (f.board && (row.board || '未归属') !== f.board) return false;
+  if (f.choice && (row.choice || '') !== f.choice) return false;
+  if (f.hard && (row.leaderCatalystHardness || '') !== f.hard) return false;
+  if (f.seat && (row.auctionSeatDurability || '') !== f.seat) return false;
+  if (f.outcome && alOutcomeKey(row) !== f.outcome) return false;
+  if (f.q){
+    const q = f.q.toLowerCase();
+    const hay = String(row.code || '') + String(row.name || '') + String(row.board || '');
+    if (!hay.toLowerCase().includes(q)) return false;
+  }
+  return true;
+}
+function alFiltered(){ return alRows().filter(r => alMatches(r, STATE.alUi)); }
+function alSorted(list){
+  const st = STATE.alSort;
+  const kv = { date: r => r.tradingDate || '', code: r => r.code || '', name: r => r.name || '',
+    board: r => r.board || '', pct: r => r.auctionPct == null ? -999 : r.auctionPct };
+  if (!kv[st.key]) return list;
+  return list.slice().sort((a, b) => { const va = kv[st.key](a), vb = kv[st.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * st.dir; });
+}
+function alSet(key, value){ STATE.alUi[key] = value;
+  if (key !== 'page') STATE.alUi.page = 1; alRefresh(); }
+function alBoard(name){ STATE.alUi.board = (STATE.alUi.board === name ? '' : name);
+  STATE.alUi.page = 1; alRefresh(); }
+function alPage(v){ STATE.alUi.page = v; alRefresh(); }
+function alSortBy(key){
+  const st = STATE.alSort;
+  if (st.key === key) st.dir = -st.dir; else { st.key = key; st.dir = key === 'date' ? -1 : 1; }
+  STATE.alUi.page = 1; alRefresh();
+}
+function alClear(){
+  STATE.alUi = { q: '', board: '', choice: '', outcome: '', hard: '', seat: '',
+                 openKey: null, page: 1, mode: STATE.alUi.mode, q1: '', q2: '' };
+  alRefresh();
+}
+function alQ(v){ STATE.alUi.q = v; STATE.alUi.page = 1; alRenderRows(); }
+let _alSeq = 0;
+function alRangeKey(){
+  const rg = STATE.relayRange || { start: null, end: null };
+  return (rg.start || '') + '~' + (rg.end || '');
+}
+async function alFetch(){
+  if (!STATE.series || !STATE.series.length) return;
+  const seq = ++_alSeq;
+  if (!STATE.relayRange) rangedSeries();
+  const rg = STATE.relayRange || { start: null, end: null };
+  const qs = [];
+  if (rg.start) qs.push('start=' + encodeURIComponent(rg.start));
+  if (rg.end) qs.push('end=' + encodeURIComponent(rg.end));
+  const key = alRangeKey();
+  const bg = STATE.alData && STATE.alData.rangeKey === key && (STATE.alData.rows || []).length > 0;
+  STATE.alData = { loading: !bg, error: null, rangeKey: key,
+                   doc: bg ? STATE.alData.doc : null, rows: STATE.alData.rows || [] };
+  alRefresh();
+  try {
+    const doc = await jget('/api/hotlist-jev/auction-leaders' + (qs.length ? '?' + qs.join('&') : ''));
+    if (seq !== _alSeq) return;
+    STATE.alData = { loading: false, rangeKey: key,
+                     error: (doc && doc.ok === false) ? (doc.reason || '读库降级') : null,
+                     doc: doc, rows: (doc && doc.leaders) || [] };
+  } catch (e) {
+    if (seq !== _alSeq) return;
+    if (bg){
+      STATE.alData = { loading: false, rangeKey: key, error: 'auction_leaders_read_failed: '
+        + (e && e.message ? e.message : e), doc: STATE.alData.doc, rows: STATE.alData.rows };
+    } else {
+      STATE.alData = { loading: false, rangeKey: key, error: 'auction_leaders_read_failed: '
+        + (e && e.message ? e.message : e), doc: null, rows: [] };
+    }
+  }
+  alRefresh();
+}
+function alRefresh(){ alRenderBanner(); alRenderBoards(); alRenderBar(); alRenderRows(); }
+function alRenderBanner(){
+  leaderStatusNotice('[竞价龙头] ', STATE.alData,
+    '区间内无竞价龙头投喂记录（09:26 槽位未跑 / 当日推送缺席，或区间早于投产日 2026-11-13）', '_alSbKey');
+}
+function alRenderBoards(){
+  const el = $('alBoardRow'); if (!el) return;
+  const f = STATE.alUi;
+  const pool = alRows().filter(r => alMatches(r, Object.assign({}, f, { board: '' })));
+  const dist = {};
+  for (const r of pool){ const b = r.board || '未归属'; dist[b] = (dist[b] || 0) + 1; }
+  const arr = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+  const top = arr.slice(0, 10), rest = arr.length - top.length;
+  el.innerHTML = '<span class="k">板块分布</span>'
+    + top.map(kv => '<span class="chip' + (f.board === kv[0] ? ' on' : '')
+        + '" title="点击筛选该板块" onclick="alBoard(' + JSON.stringify(kv[0]).replace(/"/g, '&quot;')
+        + ')">' + esc(kv[0]) + ' ' + kv[1] + '</span>').join('')
+    + (rest > 0 ? '<span class="chip plain">其他 ' + rest + ' 类</span>' : '');
+}
+function alSel(label, key, opts){
+  const cur = STATE.alUi[key];
+  const list = [['', label + ' · 全部']].concat(opts);
+  return '<select title="' + esc(label) + '筛选" onchange="alSet(\'' + key + '\', this.value)">'
+    + list.map(kv => '<option value="' + esc(kv[0]) + '"' + (cur === kv[0] ? ' selected' : '')
+      + '>' + esc(kv[1]) + '</option>').join('') + '</select>';
+}
+function alRenderBar(){
+  const bar = $('alFilterBar'); if (!bar) return;
+  const ae = document.activeElement;
+  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
+  const rows = alRows();
+  if (!rows.length){ bar.innerHTML = ''; return; }
+  const boards = Array.from(new Set(rows.map(r => r.board || '未归属')))
+    .sort((a, b) => a.localeCompare(b)).map(v => [v, v]);
+  bar.innerHTML =
+    '<input class="lf-q" placeholder="搜代码 / 名称 / 板块…" value="' + esc(STATE.alUi.q)
+      + '" oninput="alQ(this.value)">'
+    + alSel('板块', 'board', boards)
+    + alSel('档位', 'choice', Object.entries(AL_CHOICE_CN))
+    + alSel('催化', 'hard', Object.entries(AL_HARD_CN))
+    + alSel('身位', 'seat', Object.entries(AL_SEAT_CN))
+    + alSel('结局', 'outcome', [['sealed', '当日封板'], ['broken', '未封'], ['pending', '待结算']])
+    + '<button onclick="alClear()">清除筛选</button>'
+    + '<span id="alPagerHost" style="margin-left:auto;display:inline-flex;align-items:center;gap:10px"></span>';
+}
+function alRenderRows(){
+  const el = $('alTable'); if (!el) return;
+  const d = STATE.alData || {};
+  const f = STATE.alUi;
+  if (d.loading && !(d.rows || []).length){
+    el.innerHTML = '<tr><td class="empty">竞价龙头投喂加载中…</td></tr>';
+    const ph0 = $('alPagerHost'); if (ph0) ph0.innerHTML = ''; return;
+  }
+  if (d.error && !(d.rows || []).length){
+    el.innerHTML = '<tr><td class="empty">数据加载失败（并非区间内没有记录）</td></tr>';
+    const ph1 = $('alPagerHost'); if (ph1) ph1.innerHTML = ''; return;
+  }
+  const doc = d.doc || {};
+  if (doc.no_data){
+    el.innerHTML = '<tr><td class="empty">'
+      + esc((STATE.relayRange || {}).start || '最早') + ' ~ '
+      + esc((STATE.relayRange || {}).end || '最新')
+      + ' 无竞价龙头判定记录（当日 09:26 任务未运行 / 推送缺席，或区间早于功能上线）</td></tr>';
+    const ph2 = $('alPagerHost'); if (ph2) ph2.innerHTML = ''; return;
+  }
+  const rows = alSorted(alFiltered());
+  const pg = relayPageSlice(rows, f.page);
+  f.page = pg.page;
+  const th = (label, key) => '<th class="sortable" onclick="alSortBy(\'' + key + '\')">'
+    + esc(label) + sortMark(STATE.alSort, key) + '</th>';
+  el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
+    + th('板块', 'board') + th('竞价涨幅', 'pct')
+    + '<th>封板概率</th><th>档位</th><th>催化</th><th>身位</th>'
+    + '<th>题材深度</th><th>延续性</th><th>结局</th></tr>'
+    + (pg.rows.length ? pg.rows.map(r => alRowHtml(r, f)).join('')
+      : '<tr><td class="empty" colspan="12">无匹配竞价龙头（调整区间或筛选条件）</td></tr>');
+  const ph = $('alPagerHost'); if (ph) ph.innerHTML = alPager(pg.page, pg.total);
+}
+function alPager(page, total){
+  const nav = total > 1
+    ? '<button onclick="alPage(' + (page - 1) + ')"' + (page <= 1 ? ' disabled' : '') + '>‹ 上一页</button>'
+      + '<select class="pgjump" title="跳页" onchange="alPage(parseInt(this.value,10))">'
+      + Array.from({length: total}, (_, i) => '<option value="' + (i + 1) + '"'
+        + (page === i + 1 ? ' selected' : '') + '>第 ' + (i + 1) + ' / ' + total + ' 页</option>').join('')
+      + '</select>'
+      + '<button onclick="alPage(' + (page + 1) + ')"' + (page >= total ? ' disabled' : '') + '>下一页 ›</button>'
+    : '';
+  return '<span class="pager" id="alPagerEl">' + nav + '<span class="cnt">共 ' + total + ' 页</span></span>';
+}
+function alRowHtml(r, f){
+  const p = alProb(r);
+  const open = f.openKey === alKey(r);
+  const outKey = alOutcomeKey(r);
+  const outcome = (outKey === 'pending' ? badge('待结算', 'b-gray')
+    : (outKey === 'sealed' ? badge('当日封板', 'b-green') : badge('未封', 'b-red')));
+  const choiceTip = [AL_CHOICE_RANGE[r.choice] ? '当日封板概率区间 ' + AL_CHOICE_RANGE[r.choice] : '',
+    alConfTip(r, 'auction_leader_seal_today')].filter(Boolean).join('；');
+  const choice = badge(AL_CHOICE_CN[r.choice] || r.choice || '-',
+    r.choice === 'high_ge65' ? 'b-red' : r.choice === 'mid_45_65' ? 'b-amber'
+      : r.choice === 'insufficient' ? 'b-gray' : 'b-blue', choiceTip);
+  const hardCell = badge(AL_HARD_CN[r.leaderCatalystHardness] || r.leaderCatalystHardness || '-',
+    AL_HARD_BADGE[r.leaderCatalystHardness] || 'b-gray', alConfTip(r, 'leader_catalyst_hardness'));
+  const seatCell = badge(AL_SEAT_CN[r.auctionSeatDurability] || r.auctionSeatDurability || '-',
+    AL_SEAT_BADGE[r.auctionSeatDurability] || 'b-gray', alConfTip(r, 'auction_seat_durability'));
+  const depthCell = badge(AL_DEPTH_CN[r.themeSpeculationDepth] || r.themeSpeculationDepth || '-',
+    AL_DEPTH_BADGE[r.themeSpeculationDepth] || 'b-gray');
+  const contCell = badge(AL_CONT_CN[r.themeContinuation] || r.themeContinuation || '-',
+    AL_CONT_BADGE[r.themeContinuation] || 'b-gray');
+  const pct = r.auctionPct;
+  const pctTxt = (pct == null || typeof pct !== 'number') ? '-'
+    : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
+  const pushBad = (r.auctionPushState && r.auctionPushState.entryN === 0)
+    ? ' <span class="badge b-amber" title="当日 09:15 推送缺席（结构化留痕）">推送缺席</span>' : '';
+  const bidBad = (r.corpusState && String(r.corpusState.bidLane || '').startsWith('missing'))
+    ? ' <span class="badge b-amber" title="竞价通道日档缺席：' + esc(String(r.corpusState.bidLane)) + '">竞价缺</span>' : '';
+  const dkey = js(r.tradingDate || '');
+  return '<tr class="lg-row' + (open ? ' open' : '')
+      + (STATE.relayFocus === r.tradingDate ? ' focus' : '')
+      + '" onclick="alRow(\'' + dkey + '\')">'
+    + '<td class="num"><span class="lg-caret" title="展开/收敛 JEV 调用日志"'
+      + ' onclick="event.stopPropagation(); alToggle(\'' + js(alKey(r)) + '\')">▶</span>'
+      + esc((r.tradingDate || '').slice(5)) + '</td>'
+    + '<td>' + esc(r.code) + '</td>'
+    + '<td>' + esc(r.name || '') + '</td>'
+    + '<td>' + esc(r.board || '未归属') + pushBad + bidBad + '</td>'
+    + '<td class="num">' + pctTxt + '</td>'
+    + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
+    + '<td>' + choice + '</td><td>' + hardCell + '</td><td>' + seatCell + '</td>'
+    + '<td>' + depthCell + '</td><td>' + contCell + '</td><td>' + outcome + '</td></tr>'
+    + (open ? '<tr class="lg-detail"><td colspan="12">' + alDetailHtml(r) + '</td></tr>' : '');
+}
+function alOpenRow(){
+  const k = STATE.alUi.openKey;
+  if (!k) return null;
+  return alRows().find(r => alKey(r) === k) || null;
+}
+function alNarrOf(key){
+  const store = STATE.alNarr || {};
+  return store[key] && store[key] !== null ? store[key] : null;
+}
+function alEntryReq(r){
+  const got = alNarrOf(alKey(r)) || {};
+  if (got.error != null) return { state: null, model: r.model != null ? r.model : null,
+    questions: { _err: '语料拉取失败：' + got.error + '（收起后重开该行可重试）' } };
+  return { state: got.narrative != null ? got.narrative : null,
+           model: r.model != null ? r.model : null,
+           questions: got.questionsRaw != null ? got.questionsRaw
+             : { _note: '该存档未落 questionsRaw（旧文档）' } };
+}
+function alEntryResp(r){
+  const got = alNarrOf(alKey(r)) || {};
+  if (got.responseRaw) return got.responseRaw;
+  return { _note: 'responseRaw 未存档（成功路径仅存解析结果）',
+           answers: { auction_leader_seal_today: { choice: r.choice, probabilities: r.probabilities } },
+           modelAnswers: { auction_leader_seal_today: { choice: r.modelChoice,
+             probabilities: r.modelProbabilities } },
+           gate: r.gate || null, evidenceMissing: r.evidenceMissing,
+           evidenceMissingReason: r.evidenceMissingReason,
+           model: r.model, usage: r.usage };
+}
+function alDetailDoc(r){
+  const got = alNarrOf(alKey(r)) || {};
+  const doc = Object.assign({}, r);
+  if (got.narrative != null) doc.narrative = got.narrative;
+  if (got.questionsRaw != null) doc.questionsRaw = got.questionsRaw;
+  if (got.responseRaw != null) doc.responseRaw = got.responseRaw;
+  return doc;
+}
+function alMode(m, ev){ if (ev) ev.stopPropagation(); STATE.alUi.mode = m; alRenderRows(); }
+function alFilter(side, v){
+  const ui = STATE.alUi;
+  if (side === 'req') ui.q1 = v; else ui.q2 = v;
+  alRedrawTrees();
+}
+function alRedrawTrees(){
+  const r = alOpenRow(); if (!r) return;
+  const ui = STATE.alUi;
+  const a = $('alReqTree'), b = $('alRespTree');
+  if (a) a.innerHTML = treeHtml(alEntryReq(r), ui.q1 || '');
+  if (b) b.innerHTML = treeHtml(alEntryResp(r), ui.q2 || '');
+}
+function alCopy(what, ev){
+  if (ev) ev.stopPropagation();
+  const r = alOpenRow(); if (!r) return;
+  const txt = JSON.stringify(what === 'doc' ? alDetailDoc(r)
+    : what === 'req' ? alEntryReq(r) : alEntryResp(r), null, 2);
+  copyText(txt, ev.currentTarget);
+}
+function alDetailHtml(r){
+  const ui = STATE.alUi;
+  const mode = ui.mode || 'detail';
+  const loading = alNarrOf(alKey(r)) === null;
+  const st = r.status || '-';
+  const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
+  const u = r.usage || {};
+  const outKey = alOutcomeKey(r);
+  const outTxt = outKey === 'pending' ? '待结算' : (outKey === 'sealed' ? '当日封板' : '未封');
+  const gated = r.gate && r.gate.applied;
+  const aKey = alKey(r);
+  const anyBusy = !!STATE.rerunBusy;
+  const busy = STATE.rerunBusy === aKey;
+  const rerunBtnHtml = '<button class="rerun"'
+    + (busy ? ' disabled' : anyBusy ? ' disabled title="另有重跑进行中，防并发烧 token"'
+        : ' title="调用 jev 模型重判该竞价龙头"')
+    + ' onclick="event.stopPropagation(); alRerun(\'' + js(aKey) + '\')">'
+    + (busy ? '重跑中…' : '重跑') + '</button>';
+  const rm = (STATE.rerunMsg && STATE.rerunMsg.key === aKey)
+    ? '<div class="prov" style="margin:10px 0 0;color:'
+      + (STATE.rerunMsg.ok ? 'var(--green)' : 'var(--amber)') + '">'
+      + esc(STATE.rerunMsg.text) + '</div>' : '';
+  const head = '<div class="lg-head"><div class="lg-title">⚡'
+    + esc(r.tradingDate || '') + ' · ' + esc(r.name || '') + '（' + esc(r.code) + '）· '
+    + esc(r.board || '未归属')
+    + '<span class="lg-asof">' + esc(r.computedAt || '') + '</span></div>'
+    + '<div class="lg-toggle">' + rerunBtnHtml
+    + '<button class="' + (mode === 'detail' ? 'on' : '')
+    + '" onclick="alMode(\'detail\', event)">详细信息</button>'
+    + '<button class="' + (mode === 'raw' ? 'on' : '')
+    + '" onclick="alMode(\'raw\', event)">原始 JSON</button></div></div>';
+  const cs = r.corpusState || {};
+  const meta = '<div class="lg-meta">'
+    + '<div><div class="k">持续时间</div><div class="v">'
+    + (r.latencyMs != null ? esc(String(r.latencyMs)) + ' ms' : '-') + '</div></div>'
+    + '<div><div class="k">输入 tokens</div><div class="v">'
+    + (u.input_tokens != null ? Number(u.input_tokens).toLocaleString() : '-') + '</div></div>'
+    + '<div><div class="k">输出 tokens</div><div class="v">'
+    + (u.output_tokens != null ? Number(u.output_tokens).toLocaleString() : '-') + '</div></div>'
+    + '<div><div class="k">状态</div><div class="v" style="color:' + stColor + '">'
+    + esc(st) + '</div></div>'
+    + '<div><div class="k">版本</div><div class="v">' + esc(r.questionSetVersion || '旧代') + '</div></div>'
+    + '<div><div class="k">结局</div><div class="v">' + esc(outTxt)
+    + (r.outcomeSource ? '（' + esc(r.outcomeSource) + '）' : '') + '</div></div>'
+    + '<div><div class="k">竞价通道</div><div class="v">' + esc(cs.bidLane || '-') + '</div></div>'
+    + '<div><div class="k">龙虎榜日期</div><div class="v">' + esc(cs.lhbDate || '-') + '</div></div>'
+    + (gated ? '<div><div class="k">证据门</div><div class="v" style="color:#a16207">'
+        + esc(TL_GATE_CN[(r.gate || {}).reason] || (r.gate || {}).reason || '-') + '</div></div>' : '')
+    + (r.errorCode ? '<div><div class="k">错误码</div><div class="v" style="color:#dc2626">'
+        + esc(r.errorCode) + '</div></div>' : '')
+    + '</div>';
+  let body;
+  if (mode === 'raw'){
+    body = '<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0">'
+      + '<b>存档文档 JSON（原始）</b>'
+      + '<button class="lg-copy" onclick="alCopy(\'doc\', event)">⧉ 复制</button></div>'
+      + '<pre>' + esc(JSON.stringify(alDetailDoc(r), null, 2)) + '</pre></div>';
+  } else if (loading){
+    body = '<div class="lg-empty" style="padding:18px">投喂语料载入中…</div>';
+  } else {
+    body = '<div class="lg-panels">'
+      + '<div class="lg-panel"><div class="lg-phead"><b>请求</b>'
+      + '<span class="st">state+model+questions</span>'
+      + '<button class="lg-copy" onclick="alCopy(\'req\', event)">⧉ 复制</button></div>'
+      + '<input class="lg-filter" placeholder="筛选 JSON..." value="' + esc(ui.q1 || '')
+      + '" oninput="alFilter(\'req\', this.value)">'
+      + '<div class="lg-tree" id="alReqTree">' + treeHtml(alEntryReq(r), ui.q1 || '') + '</div></div>'
+      + '<div class="lg-panel"><div class="lg-phead"><b>响应</b>'
+      + '<span class="dot" style="background:' + stColor + '"></span>'
+      + '<span class="st">' + esc(st) + '</span>'
+      + '<button class="lg-copy" onclick="alCopy(\'resp\', event)">⧉ 复制</button></div>'
+      + '<input class="lg-filter" placeholder="筛选 JSON..." value="' + esc(ui.q2 || '')
+      + '" oninput="alFilter(\'resp\', this.value)">'
+      + '<div class="lg-tree" id="alRespTree">' + treeHtml(alEntryResp(r), ui.q2 || '') + '</div></div>'
+      + '</div>';
+  }
+  const overridden = r.modelChoice && r.modelChoice !== r.choice;
+  const warn = overridden
+    ? '<div class="prov" style="margin:10px 0 0;color:var(--amber)">证据门覆盖：模型原答 '
+      + esc(AL_CHOICE_CN[r.modelChoice] || r.modelChoice) + ' → 落库 '
+      + esc(AL_CHOICE_CN[r.choice] || r.choice) + '；原始答案已存档备查</div>' : '';
+  const err = r.errorCode
+    ? '<div class="prov" style="margin:10px 0 0;color:var(--red)">调用异常 '
+      + esc(r.errorCode) + '：' + esc(r.errorDetail || '') + '</div>' : '';
+  const foot = '<div class="lg-foot">'
+    + '<span><span class="k">模型</span> <code>' + esc(r.model || '-') + '</code></span>'
+    + '<span><span class="k">来源</span> <code>'
+    + esc(({ live: '前瞻', backfill: '回填' })[r.sampleOrigin] || r.sampleOrigin || '-') + '</code></span>'
+    + '<span><span class="k">题集版本</span> <code>' + esc(r.questionSetVersion || '-') + '</code></span>'
+    + '</div>';
+  return '<div class="lg-card" onclick="event.stopPropagation()">' + head + meta + rm + warn + err
+    + body + foot + '</div>';
+}
+function alRow(date){ relayRow(date); alRenderRows(); }
+function alToggle(key){
+  const ui = STATE.alUi;
+  if (ui.openKey === key){ ui.openKey = null; ui.q1 = ''; ui.q2 = ''; alRenderRows(); return; }
+  ui.openKey = key; ui.q1 = ''; ui.q2 = '';
+  alRenderRows();
+  const r = alRows().find(x => alKey(x) === key);
+  if (r && !STATE.alNarr[key]) void alLoadNarrative(r);
+}
+function alRerun(key){
+  if (STATE.rerunBusy) return;
+  const idx = key.indexOf(':');
+  const date = key.slice(0, idx), code = key.slice(idx + 1);
+  const ok = window.confirm(`重跑 ${date} ${code} 竞价龙头判定？\n\n将真实调用 jev 模型重新判定并覆盖当前存档；同板块板块级档将一并重判（共 2 次 jev 调用）。\n结局字段保留（当日收盘后自动补）。建议仅在数据异常或需要更新时使用。`);
+  if (!ok) return;
+  STATE.rerunBusy = key;
+  STATE.rerunMsg = null;
+  alRenderRows();
+  jpost('/api/hotlist-jev/auction-leaders/rerun', { date: date, code: code })
+    .then(r => {
+      STATE.rerunBusy = null;
+      const d = (r && r.doc) || {};
+      STATE.rerunMsg = { key: key, ok: !!(r && r.ok),
+        text: (r && r.ok)
+          ? ('重跑完成：状态 ' + (d.status || '-') + ' · 档位 ' + (AL_CHOICE_CN[d.choice] || d.choice || '-')
+             + ' · tokens ' + JSON.stringify(d.usage || {}))
+          : ('重跑未成功（' + rerunErrHead(r) + '）：' + rerunErrBody(r)) };
+      delete STATE.alNarr[key];
+      return loadAll();
+    })
+    .then(() => {
+      const r = alOpenRow();
+      if (r && STATE.alUi.openKey === key) void alLoadNarrative(r);
+      alRenderRows();
+    })
+    .catch(err => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: false,
+        text: '重跑请求失败：' + (err && err.message ? err.message : err) };
+      alRenderRows();
+    });
+}
+async function alLoadNarrative(r){
+  const key = alKey(r);
+  if (!r.tradingDate) return;
+  STATE.alNarr = STATE.alNarr || {};
+  if (STATE.alNarr[key] === null) return;
+  STATE.alNarr[key] = null;
+  const gen = r.computedAt || '';
+  try {
+    const doc = await jget('/api/hotlist-jev/auction-leaders?with_narrative=1&date='
+      + encodeURIComponent(r.tradingDate));
+    const row = ((doc && doc.leaders) || []).find(x => x.code === r.code);
+    const cur = alOpenRow();
+    if (gen && cur && cur.computedAt && cur.computedAt !== gen) return;
+    STATE.alNarr[key] = row ? { narrative: row.narrative, questionsRaw: row.questionsRaw,
+                                responseRaw: row.responseRaw } : {};
+  } catch (e) {
+    STATE.alNarr[key] = { error: String(e) };
+  }
+  if (STATE.alUi.openKey === key) alRenderRows();
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
@@ -4326,6 +4816,7 @@ function lgCopy(view, what, ev){
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
   ['nodes', '板块节点', '🧭'],
                      ['leaders', '板块龙头', '🐉'], ['themes', '题材龙头', '👑'],
+                     ['auction', '竞价龙头', '⚡'],
                      // 2026-10-19 用户裁决：页名由「判定明细」改为「连板情绪」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
                      ['cycle', '情绪周期', '🌡️'],
@@ -6454,7 +6945,7 @@ const LIVE = {timer: null, src: 'zb', zb: [], zbSeen: new Set(),
               // on=开关（localStorage 持久）；online=端口探测结果；armed=冷启动已过（首轮流不播历史积压）
               voice: {on: localStorage.getItem('kplLiveVoice') !== '0', online: null, armed: false, probing: false}};
 const LIVE_SRCS = {
-  zb:    {label: '解说', url: KPL_API + '/live?st=30',  cap: 400, interval: 15000},
+  zb:    {label: '解说', url: KPL_API + '/live?st=100', cap: 400, interval: 15000},  // 2026-11-13 裁决：首屏须覆盖 09:15 竞价播报
   radar: {label: '雷达', url: KPL_API + '/radar?st=60', cap: 400, interval: 8000},
 };
 

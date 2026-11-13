@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
-from backend.services.kpl_socket_protocol import bdo_item_yuan
+from backend.services.kpl_socket_protocol import RPLATE_INC_IS_PERCENT, bdo_item_yuan
 
 # ── 代际戳 ──
 # 题集/口径任何一字变更必须换代（跨代不可比）。v1 = 2026-10-20 定版（龙头隔日连板两题）；
@@ -246,7 +246,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v17"
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-12b"   # v17 配套 a + 开火前修订 b：新闻真实命中裁决→业务关联核实
+AMMO_VERSION_THEME_LEADER = "2026-11-13a"   # A7：直播归档 merge-union（晨间归档不被 17:30 覆盖，09:15 竞价推送进供给）；题面 hash 不动
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -712,7 +712,8 @@ GATE_REASON_LABELS = {
 
 
 def apply_evidence_gate(answers: Any, evidence: Any,
-                        keys: tuple[str, ...] | None = None) -> tuple[Any, dict]:
+                        keys: tuple[str, ...] | None = None,
+                        prob_key: str = "leader_nextday_continue") -> tuple[Any, dict]:
     """证据缺失 → **全部判定题**强制 insufficient（原答原样存 gate 元数据）。
 
     v1 单日 pilot 实测缺口：未映射板块的催化题判了 insufficient，但同一份证据下
@@ -727,8 +728,8 @@ def apply_evidence_gate(answers: Any, evidence: Any,
     if not isinstance(answers, dict) or not ev.get("evidenceMissing"):
         return answers, gate
     reason = str(ev.get("evidenceMissingReason") or "unknown")
-    prev_prob = answers.get("leader_nextday_continue") if isinstance(
-        answers.get("leader_nextday_continue"), dict) else {}
+    prev_prob = answers.get(prob_key) if isinstance(
+        answers.get(prob_key), dict) else {}
     gate.update({"applied": True, "reason": reason,
                  "label": GATE_REASON_LABELS.get(reason, reason),
                  "modelChoice": prev_prob.get("choice"),
@@ -741,7 +742,7 @@ def apply_evidence_gate(answers: Any, evidence: Any,
             continue                      # 模型已自判不足，无须覆盖
         forced = {"type": "choice", "choice": "insufficient", "confidence": 1.0,
                   "gateReason": reason}
-        if key == "leader_nextday_continue":
+        if key == prob_key:
             forced["probabilities"] = {"insufficient": 1.0}
         out[key] = forced
         gate["forcedKeys"].append(key)
@@ -2190,7 +2191,10 @@ def related_plate_line(entries: list[dict]) -> str | None:
     - 仅列主题板块之外的新增板块（plateName 与已知题材/待判板块去重，避免与
       题材热度行重复）；全部被剔/无条目 → None（不出行）；
     - plateIncRate/stockIncRate 可读才带百分比；涨幅贡献=个股涨幅（qzType 原样
-      落库不渲染，语义未定不猜）。
+      落库不渲染，语义未定不猜）。百分比口径 2026-11-11 被动交叉校准钉死
+      （35/35 封板成分股与板别涨停幅吻合、266 板块值合理百分比带，见
+      detail-scaling-verification.md §四），单一常量源 RPLATE_INC_IS_PERCENT；
+      推翻时百分比段集体缺席（只列板块名，不伪精度）。
     """
     if not entries:
         return None
@@ -2211,9 +2215,11 @@ def related_plate_line(entries: list[dict]) -> str | None:
                 continue
             inc = p.get("plate_inc_rate")
             sinc = p.get("stock_inc_rate")
-            seg = pname + (f" {inc:+.2f}%" if isinstance(inc, (int, float))
+            seg = pname + (f" {inc:+.2f}%" if RPLATE_INC_IS_PERCENT
+                           and isinstance(inc, (int, float))
                            and not isinstance(inc, bool) else "")
-            if isinstance(sinc, (int, float)) and not isinstance(sinc, bool):
+            if (RPLATE_INC_IS_PERCENT and isinstance(sinc, (int, float))
+                    and not isinstance(sinc, bool)):
                 seg += f"（个股 {sinc:+.2f}%）"
             segs.append(seg)
         if segs:
