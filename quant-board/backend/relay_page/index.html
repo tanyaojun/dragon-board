@@ -149,7 +149,7 @@
   .lf-bar input[type=date]{width:116px;padding:6px 8px;font-size:12px}  /* 区间日期控件收窄：原生默认宽右侧留白（2026-10-10 用户指出瑕疵） */
   .lf-bar .sep{font-size:12px;color:var(--muted2)}  /* 区间分隔符：勿用 .cnt（其 margin-left:auto 会吞空白） */
   .lf-bar .cnt{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
-  /* 连板情绪表分页（2026-10-19 用户需求：原计数改为分页，每页上限 20 条） */
+  /* 情绪周期表分页（原连板情绪，2026-11 改名；2026-10-19 用户需求：原计数改为分页，每页上限 20 条） */
   .lf-bar .pager{margin-left:auto;display:flex;gap:6px;align-items:center;white-space:nowrap}
   .lf-bar .pager button{border:1px solid var(--border2);border-radius:8px;background:#fff;color:var(--text);
                         padding:4px 9px;font-size:12px;cursor:pointer}
@@ -219,7 +219,7 @@
   /* ---------- 题材龙头台账（2026-10-20；面板/表格/展开完全复用涨停复盘样式） ---------- */
   /* 只补涨停复盘没有的增量：证据门/证据徽章/早报段/明细卡内标题。
      右三角、行展开、明细卡底、板块 chip、筛选条、KPI 条**一律复用**原样式，
-     不另造并行类（用户 2026-10-20：样式风格须与连板情绪一致）。
+     不另造并行类（用户 2026-10-20：样式风格须与情绪周期页一致）。
      回填行高亮与「回填」小标样式已随 2026-10-26 用户裁决删除；
      证据列首版的铺文截断样式已随 2026-10-27 徽章化裁决删除。 */
   .tl-ev{font-size:10px;padding:0 4px;border-radius:5px;background:#e0f2fe;color:#0369a1;
@@ -362,6 +362,12 @@
   .tl-wrap::-webkit-scrollbar-track{background:transparent}
   .tl-wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
   .tl-wrap::-webkit-scrollbar-thumb:hover{background:#94a3b8}
+  /* 情绪周期日级表（2026-11 合并周期五列后 16 列宽表）：横向滚动，滚动条与 tl-wrap 同款 */
+  .relay-wrap{overflow-x:auto}
+  .relay-wrap::-webkit-scrollbar{height:8px}
+  .relay-wrap::-webkit-scrollbar-track{background:transparent}
+  .relay-wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+  .relay-wrap::-webkit-scrollbar-thumb:hover{background:#94a3b8}
   .kpl-wrap table{margin:0}
   .kpl-wrap th{position:sticky;top:0;background:#fff;z-index:2;box-shadow:0 1px 0 var(--border)}
   /* 连板行情右栏三页签 + 板块行情双卡（2026-11）：表格高度与浏览器页面底对齐——
@@ -530,17 +536,9 @@
       </div>
     </div>
 
-    <!-- ⑧ 市场情绪周期（rv-cycle，第4课 P2）：确定性事件流+状态机，单源 analysis/hotlist/market_cycle；
-        预登记 docs/hotlist-jev/market-cycle-preregistration-20261112.md。
-        锚=市场空间龙一（v12 全市场）+空间天花板；输入=事件流 E1–E4，参照并列无预设权威（裁决1A）。 -->
-    <div class="rv" id="rv-cycle">
-      <div class="card" style="margin-top:18px">
-        <div id="cycleHead"></div>
-        <div class="tbl-h" style="margin-top:10px">市场情绪监控表（第4课核心工具：连板梯队天花板 + 高位龙一命运逐日记录）</div>
-        <div id="cycleTable"></div>
-        <div id="cycleHint" style="margin-top:8px;color:var(--muted2);font-size:12px"></div>
-      </div>
-    </div>
+    <!-- ⑧ 市场情绪周期独立子页签已删除（2026-11 用户裁决）：监控表「天花板/≥3板/主板龙一/双创龙一/事件」
+        五列迁入 ⑤ 情绪周期日级表（cycleFetch 仍读 market-cycle，按 tradingDate 合并）；
+        态/转折/参照列与 KPI 头随页面删除。单源 analysis/hotlist/market_cycle 与读口不变。 -->
 
     <!-- ② 钱效分带 -->
     <!-- ③ 分带观察（2026-10-18 用户裁决：钱效分带 + 毒带观察 + 分带实测 三页合并） -->
@@ -590,18 +588,20 @@
       </div>
     </div>
 
-    <!-- ⑤ 连板情绪（原「判定明细」，2026-10-19 改名；行内展开的判定明细卡沿用原名） -->
+    <!-- ⑤ 情绪周期（原「判定明细」→「连板情绪」，2026-11 改名并合并原 rv-cycle 监控表五列；
+        行内展开的判定明细卡沿用原名） -->
     <div class="rv" id="rv-detail">
       <div class="card" style="margin-top:18px">
         <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
-        <table id="relayTable"></table>
+        <div class="relay-wrap"><table id="relayTable"></table></div>
+        <div id="relayCycleHint" style="margin-top:8px;color:var(--muted2);font-size:12px"></div>
       </div>
     </div>
 
-    <!-- ⑥ 题材龙头（2026-10-20）：v2 题目集投喂台账。与连板情绪同构——共用页头
+    <!-- ⑥ 题材龙头（2026-10-20）：v2 题目集投喂台账。与情绪周期同构——共用页头
         #relayKpi（点行=KPI 联动该日）与 tabbar 右侧时间范围控件（rangedSeries 同一区间）；
         行=区间内全部龙头-日，左侧三角展开 jev 调用日志卡（lg-card 范式）。
-        KPI 卡不另建（删除初版 tlKpi：与连板情绪并排两套 KPI 是重复视觉）。 -->
+        KPI 卡不另建（删除初版 tlKpi：与情绪周期并排两套 KPI 是重复视觉）。 -->
     <div class="rv" id="rv-themes">
       <div class="card" style="margin-top:18px">
         <div class="board-row" id="tlBoardRow"></div>
@@ -914,7 +914,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   // tlUi=筛选+展开+分页, tlSort=表头排序, tlNarr=投喂语料懒拉缓存
   tlUi: { q: '', board: '', choice: '', stage: '',
           outcome: '', cycle: '', cont: '', head: '', openKey: null, page: 1,
-          // 明细卡（对齐连板情绪 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
+          // 明细卡（对齐情绪周期 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
           mode: 'detail', q1: '', q2: '' },
   tlSort: { key: 'date', dir: -1 },   // 区间台账默认最新在前（同 relay/detail 的日期列）
   tlNarr: {},           // code → {narrative, questionsRaw}（懒拉；null=请求中）
@@ -948,10 +948,10 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayBack: null,    // 预设按钮的回退点（“再点一次恢复上次区间”）
   relayPreset: null,  // 最近点过的预设（展示意图；高亮以区间等价判定为准）
   relaySort: { key: 'date', dir: -1 },
-  relayPage: 1,   // 连板情绪表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
+  relayPage: 1,   // 情绪周期表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
-  cycleData: null,   // 市场情绪周期（rv-cycle，第4课 P2）：单日文档 + 近 N 日监控序列
+  cycleData: null,   // 市场情绪周期数据源（2026-11 并入情绪周期日级表周期五列）：market-cycle 读口 series
   labelSort: { key: 'rank', dir: 1 },
   diebanSort: { key: 'pctChange', dir: 1 },
   riseSort: { key: 'pctChange', dir: -1 } };   // 上涨复盘默认涨幅最高在前（下跌复盘默认最弱在前）
@@ -1028,13 +1028,25 @@ const gapDetailCell = d => {
 };
 const stageColor = s => ({ice:'#38bdf8',start:'#34d399',ferment:'#f59e0b',climax:'#ef4444',retreat:'#94a3b8'}[s] || '#94a3b8');
 const tempColor = v => v>=80?'#dc2626':v>=65?'#f59e0b':v>=45?'#2563eb':'#38bdf8';
+// 置信度数值唯一出口（评审 P2-2 单源化）：百分比取整与两档阈值只此一份，
+// 芯片（confChip）与 tooltip（confTitle）共用，改一处不会漂移。
+const confPct = c => (c == null || typeof c !== 'number' || !isFinite(c)) ? null : Math.round(c * 100);
+const CONF_LOW = 0.35;   // 低于此值=模型两可（tooltip 警示 + 芯片红）
+const CONF_OK = 0.6;     // 不低于此值=正常可读（芯片灰）
+// 置信度 tooltip 文案（2026-11 用户裁决）：情绪周期页（表+页头 KPI）的置信度
+// 不再占可见 P 芯片，改悬停字段值读取；其余页保持可见芯片（confChip）。
+// 旧文档 answers 缺 confidence 时返回空串（fail-visible 缺省即不显示）。
+const confTitle = c => {
+  const p = confPct(c);
+  return p == null ? '' : `模型置信度 P${p}${c < CONF_LOW ? '（两可，勿当结论）' : ''}`;
+};
+const confAttr = c => { const t = confTitle(c); return t ? ` title="${esc(t)}"` : ''; };
 // 置信度芯片（2026-10-12 用户裁决找回）：≥P60 灰=正常可读；P35-60 琥珀=存疑；P<35 红=模型两可，勿当结论。
-// 旧文档 answers 缺 confidence 时返回空串，行样式保持不变（fail-visible 缺省即不显示）
 const confChip = c => {
-  if (c == null || typeof c !== 'number' || !isFinite(c)) return '';
-  const p = Math.round(c * 100);
-  const col = c >= 0.6 ? 'var(--muted2)' : c >= 0.35 ? '#b45309' : '#dc2626';
-  return ` <span title="模型置信度 P${p}${c < 0.35 ? '（两可，勿当结论）' : ''}" style="font-size:11px;font-weight:400;color:${col}">P${p}</span>`;
+  const p = confPct(c);
+  if (p == null) return '';
+  const col = c >= CONF_OK ? 'var(--muted2)' : c >= CONF_LOW ? '#b45309' : '#dc2626';
+  return ` <span title="${esc(confTitle(c))}" style="font-size:11px;font-weight:400;color:${col}">P${p}</span>`;
 };
 // 指数分区三色（2026-10-11 分带诊断 103 天读数，详见 docs/hotlist-jev/jev-relay-band-toxic-diagnostic.md §4.5）：
 // 绿=idx≥60（次日溢价赢:输=3.4:1）/ 红=idx<25（1:2.2 不利）/ 黄=40-60且温度≥56（两轮同向弱负）；
@@ -1362,7 +1374,7 @@ async function loadAll(){
       jget('/api/hotlist-jev/rise-review' + (date ? '?date=' + encodeURIComponent(date) : '')).catch(e => ({ ok: false, degraded: true,
         reason: 'rise_read_failed: ' + (e && e.message ? e.message : '?') })),
       // 复盘日报（纯读落库文档）：读口异常走底部状态栏（页内不打横幅），缺文档显式 missing 原因
-      // 逐日列表（区间轻量投影，与连板情绪 series 同构）
+      // 逐日列表（区间轻量投影，与情绪周期 series 同构）
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -1402,7 +1414,7 @@ async function loadAll(){
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   alFetch();   // 竞价龙头（rv-auction 子视图，vA1）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
-  cycleFetch(date);   // 市场情绪周期（rv-cycle 子视图，第4课 P2）：同上
+  cycleFetch(date);   // 市场情绪周期五列（2026-11 并入情绪周期日级表）：同上
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -1627,7 +1639,7 @@ function rSel(label, key){
 function rSet(k, v){ STATE.relayFilter[k] = v; STATE.relayPage = 1; renderRelayTab(); }
 function rClear(){ STATE.relayFilter = { phase: '', momentum: '', wzs: '', ladder: '', money: '', zone: '' };
   STATE.relayPage = 1; renderRelayTab(); }
-// ── 连板情绪表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
+// ── 情绪周期表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
 // 每页上限 20 条；只影响本表行切片，KPI/分带/相位等仍吃全量筛选集（口径不变）。
 const RELAY_PAGE_SIZE = 20;
 function relayPageTotal(n){ return Math.max(1, Math.ceil(n / RELAY_PAGE_SIZE)); }
@@ -1761,13 +1773,28 @@ function setRelaySort(key){
 }
 function sortMark(sortState, key){ return sortState.key === key ? (sortState.dir === 1 ? ' ▲' : ' ▼') : ''; }
 function renderRelayTab(){
-  // 判据代际混版守卫（fail-visible，2026-10-10 用户裁决落 v3）：series 带 questionSetVersion，
-  // 混版时逐行徽章（非最新代琥珀色），单版序列保持干净
-  const vers = [...new Set(STATE.series.map(r => r.questionSetVersion || '?'))];
-  const mixed = vers.length > 1;
-  const curVer = (STATE.series[STATE.series.length - 1] || {}).questionSetVersion;
-  const verBadge = r => (mixed && r.questionSetVersion)
-    ? badge(r.questionSetVersion, r.questionSetVersion === curVer ? 'b-gray' : 'b-amber') : '';
+  // 2026-11 用户裁决：日期列版本徽章删除，题集版本迁入行展开详情卡 title（detailHtml verTag，
+  // 混代际琥珀警示语义保留）。周期五列（天花板/≥3板/主板龙一/双创龙一/事件）数据源 =
+  // market-cycle 读口 series，按 tradingDate 合并进本表（原 rv-cycle 监控表已删，五列迁入）。
+  const cyc = (STATE.cycleData && STATE.cycleData.api && STATE.cycleData.api.series) || [];
+  const cycleMap = {};
+  for (const s of cyc) cycleMap[String(s.tradingDate)] = s;
+  // 周期列缺位披露（fail-visible）：读失败/未覆盖日显 — 并 tooltip 注明原因，不伪 0；
+  // 加载中/未取数不得提前断言「无存档」（评审 P2-1）
+  const cycMissTip = !STATE.cycleData
+    ? '周期列待取数（market-cycle 读口未启动或无日级序列）'
+    : STATE.cycleData.error
+      ? 'market-cycle 读口失败：' + STATE.cycleData.error
+      : (STATE.cycleData.loading && !STATE.cycleData.api)
+        ? '周期列加载中，覆盖度未知'
+        : '该日无 market-cycle 存档（未覆盖或不在读口窗内）';
+  const cycMiss = `<span style="color:var(--muted2)" title="${esc(cycMissTip)}">—</span>`;
+  // v8 市场周期融合三题列（转折质量/周期强度/前瞻风险）：旧代档无值显 —（代际区分非缺判）
+  const mcCell = (v, cn, colors, qid, conf) => {
+    if (v == null) return '<span style="color:var(--muted2)" title="该存档无市场周期融合三题判定（v8 前旧代）">—</span>';
+    const col = colors && colors[v] ? ` style="color:${colors[v]};font-weight:600"` : '';
+    return `<span${critConfTip(qid, v, cn[v] || v, null, conf)}${col}>${esc(cn[v] || v)}</span>`;
+  };
   const f = STATE.relayFilter;
   const all = rangedSeries();
   const shown = all.filter(r =>
@@ -1810,19 +1837,33 @@ function renderRelayTab(){
     const open = STATE.detailUi.relay.openKey === (r.tradingDate || '');
     const focused = STATE.relayFocus === r.tradingDate;
     const dkey = js(r.tradingDate || '');
+    const a = r.answers || {};
+    const cy = cycleMap[String(r.tradingDate || '')];
+    const ceil = (cy && cy.ceiling) || {};
+    const ev = cy ? ((cy.eventTypes || []).map(t => CYCLE_EV_MARK[t] || esc(t)).join(' ')
+      || '<span style="color:var(--muted2)">—</span>') : cycMiss;
     // 2026-10-18 用户裁决：点行=只选中（KPI 跟随），不再自动展开；
     // 展开/收敛只归左侧三角（stopPropagation，不触发选中切换）。
+    // 2026-11 用户裁决：置信度不再占可见 P 芯片，与判据全文合并进字段值 tooltip。
     return `<tr class="lg-row${open ? ' open' : ''}${focused ? ' focus' : ''}" onclick="relayRow('${dkey}')">
     <td class="num"><span class="lg-caret" title="展开/收敛调用日志"
-      onclick="event.stopPropagation(); relayToggle('${dkey}')">▶</span>${(r.tradingDate||'').slice(5)}${verBadge(r)}${gapBadge(r)}</td>
-    <td class="num" style="color:${zoneIdxColor(r)};font-size:14px">${r.relayIndex ?? '-'}${confChip(((r.answers||{}).relay_index||{}).confidence)}</td>
+      onclick="event.stopPropagation(); relayToggle('${dkey}')">▶</span>${(r.tradingDate||'').slice(5)}${gapBadge(r)}</td>
+    <td class="num" style="color:${zoneIdxColor(r)};font-size:14px"><span${confAttr((a.relay_index||{}).confidence)}>${r.relayIndex ?? '-'}</span></td>
     <td>${zoneBadge(r)}</td>
-    <td><span${critTip('relay_phase', r.relayPhase, '相位', PHASE_DESC[r.relayPhase])}>${phaseB(r.relayPhase)}${confChip(((r.answers||{}).relay_phase||{}).confidence)}</span></td>
-    <td><span${critTip('relay_momentum', r.relayMomentum, '边际', MOM_DESC[r.relayMomentum])}>${momB(r.relayMomentum)}${confChip(((r.answers||{}).relay_momentum||{}).confidence)}</span></td>
+    <td><span${critConfTip('relay_phase', r.relayPhase, '相位', PHASE_DESC[r.relayPhase], (a.relay_phase||{}).confidence)}>${phaseB(r.relayPhase)}</span></td>
+    <td><span${critConfTip('relay_momentum', r.relayMomentum, '边际', MOM_DESC[r.relayMomentum], (a.relay_momentum||{}).confidence)}>${momB(r.relayMomentum)}</span></td>
     <td>${wzsB(r)}</td>
-    <td><span${critTip('ladder_health', r.ladderHealth, '梯队', LADDER_DESC[r.ladderHealth])}>${ladderB(r.ladderHealth)}${confChip(((r.answers||{}).ladder_health||{}).confidence)}</span></td>
-    <td><span${critTip('money_effect', r.moneyEffect, '钱效', MONEY_DESC[r.moneyEffect])}>${moneyB(r.moneyEffect)}${confChip(((r.answers||{}).money_effect||{}).confidence)}</span></td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="8">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
+    <td><span${critConfTip('ladder_health', r.ladderHealth, '梯队', LADDER_DESC[r.ladderHealth], (a.ladder_health||{}).confidence)}>${ladderB(r.ladderHealth)}</span></td>
+    <td><span${critConfTip('money_effect', r.moneyEffect, '钱效', MONEY_DESC[r.moneyEffect], (a.money_effect||{}).confidence)}>${moneyB(r.moneyEffect)}</span></td>
+    <td>${mcCell(r.turnQuality, MC_TURN_CN, MC_TURN_COLOR, 'turn_quality', (a.turn_quality||{}).confidence)}</td>
+    <td>${mcCell(r.cycleIntensity, MC_INTENSITY_CN, null, 'cycle_intensity', (a.cycle_intensity||{}).confidence)}</td>
+    <td>${mcCell(r.riskAhead, MC_RISK_CN, MC_RISK_COLOR, 'risk_ahead', (a.risk_ahead||{}).confidence)}</td>
+    <td class="num">${ceil.maxBoard != null ? ceil.maxBoard : (cy ? '—' : cycMiss)}</td>
+    <td class="num">${ceil.threePlusN != null ? ceil.threePlusN : (cy ? '—' : cycMiss)}</td>
+    <td>${cy ? cycleAnchorCell(cy.anchor && cy.anchor.main) : cycMiss}</td>
+    <td>${cy ? cycleAnchorCell(cy.anchor && cy.anchor.growth) : cycMiss}</td>
+    <td>${ev}</td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="16">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
   }).join('');
   STATE.relayEntries = shown.map(r => relayEntryOf(r));
   const bar = $('relayFilterBar');
@@ -1843,8 +1884,17 @@ function renderRelayTab(){
     // rSet/rClear 已把页码重置回 1，若不同步，pager 会停在旧页码/旧禁用态（评审 F-minor-1）。
     const pgEl = $('relayPager'); if (pgEl) pgEl.innerHTML = relayPager(pg.page, pg.total);
   }
-  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th></tr>`
-    + (body || '<tr><td colspan="8" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th><th>转折质量</th><th>周期强度</th><th>前瞻风险</th><th>天花板</th><th>≥3板</th><th>主板龙一</th><th>双创龙一</th><th>事件</th></tr>`
+    + (body || '<tr><td colspan="16" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  // 周期五列覆盖度/降级披露（fail-visible：读失败原因进页内小注 + 底部状态栏，不阻断其余列）
+  const ch = $('relayCycleHint');
+  if (ch){
+    const cd = STATE.cycleData;
+    if (cd && cd.error) ch.textContent = '周期五列读口降级：' + cd.error + '（其余列不受影响，顶栏刷新可重试）';
+    else if (cd && cd.api) ch.textContent = `周期五列源 market-cycle：覆盖 ${cyc.length} 交易日 · 降级 ${cd.api.degradedCount || 0} 日 · 未覆盖日显 —（状态机输入=事件流 E1–E4，零 token 确定性轨道）`;
+    else if (cd && cd.loading) ch.textContent = '周期五列（market-cycle）加载中…';
+    else ch.textContent = '周期五列待取数（market-cycle 读口未启动或无日级序列）';
+  }
   renderRelayAnalysis();
 }
 // 分区筛选枚举（与 zoneOf 同源，不另抄阈值）
@@ -1874,10 +1924,16 @@ const critText = (qid, choice) => {
 };
 // KPI 第三行档位描述：criteria 全文优先（SSOT），读口未就绪/失败回落本页摘要
 const tierDesc = (qid, choice, fallback) => critText(qid, choice) || fallback || '—';
-// 列表行字段 tooltip（2026-10-18 用户需求：题目文案全文显示在 tooltip 上）
-const critTip = (qid, choice, label, fallback) => {
+// 列表行字段 tooltip（2026-10-18 用户需求：题目文案全文显示在 tooltip 上；
+// 2026-11 用户裁决：置信度并入同一 tooltip，不再占可见芯片）：判据全文 + 模型置信度
+// 两段都有时以「；」拼接，缺任一段只出在场段
+const critConfTip = (qid, choice, label, fallback, conf) => {
+  const parts = [];
   const t = critText(qid, choice) || fallback;
-  return t ? ` title="${esc(label + '判据：' + t)}"` : '';
+  if (t) parts.push(label + '判据：' + t);
+  const ct = confTitle(conf);
+  if (ct) parts.push(ct);
+  return parts.length ? ` title="${esc(parts.join('；'))}"` : '';
 };
 // 页头 KPI（2026-10-18 用户裁决）：点行 → 该行日期；否则用日期框当日；
 // 当日无存档（非交易日/未生成）时回落区间内最新一日，并在卡上明示实际日期（fail-visible，不置空）。
@@ -1896,19 +1952,24 @@ function renderRelayKpi(shown){
   const dateBig = focus || fallback ? String(d.tradingDate || '').slice(5) : '';
   const src = focus ? '行选' : fallback ? '最新' : '';
   const aOf = k => ((d.answers || {})[k] || {});
-  const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v" style="font-size:16px">${v}</div><div class="s kpi-desc" title="${esc(sub)}">${esc(sub)}</div></div>`;
+  // 2026-11 用户裁决：情绪周期页（detail 子视图）字段置信度改 tooltip，不再占可见 P 芯片；
+  // 其余子视图共用本页头 KPI，保持可见芯片（confChip）不变。
+  const tipMode = STATE.relayView === 'detail';
+  const cf = c => tipMode ? '' : confChip(c);
+  const cv = c => tipMode ? confAttr(c) : '';
+  const card = (k, v, sub, conf) => `<div class="kpi"><div class="k">${k}</div><div class="v" style="font-size:16px"${cv(conf)}>${v}</div><div class="s kpi-desc" title="${esc(sub)}">${esc(sub)}</div></div>`;
   $('relayKpi').innerHTML =
-    `<div class="kpi"><div class="k">连板情绪指数（观察）</div><div class="v phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}${confChip(aOf('relay_index').confidence)}</div>`
+    `<div class="kpi"><div class="k">连板情绪指数（观察）</div><div class="v phase-big" style="color:${zoneIdxColor(d)}"${cv(aOf('relay_index').confidence)}>${d.relayIndex ?? '-'}${cf(aOf('relay_index').confidence)}</div>`
     + `<div class="kpi-day">${dateBig ? `${dateBig}${src ? ` <span class="kpi-src-tag">${src}</span>` : ''}` : ''}</div>`
     + `<div class="s kpi-desc">${d.relayIndex == null ? '无指数存档' : `0-100 · ${esc(zoneOf(d).label)} · ${esc(label || '当日存档')}`}</div></div>`
-    + card('接力相位', `${phaseB(d.relayPhase)}${confChip(aOf('relay_phase').confidence)}`, tierDesc('relay_phase', d.relayPhase, PHASE_DESC[d.relayPhase]))
-    + card('边际方向', `${momB(d.relayMomentum)}${confChip(aOf('relay_momentum').confidence)}`, tierDesc('relay_momentum', d.relayMomentum, MOM_DESC[d.relayMomentum]))
-    + card('梯队结构', `${ladderB(d.ladderHealth)}${confChip(aOf('ladder_health').confidence)}`, tierDesc('ladder_health', d.ladderHealth, LADDER_DESC[d.ladderHealth]))
-    + card('接力钱效', `${moneyB(d.moneyEffect)}${confChip(aOf('money_effect').confidence)}`, tierDesc('money_effect', d.moneyEffect, MONEY_DESC[d.moneyEffect]))
+    + card('接力相位', `${phaseB(d.relayPhase)}${cf(aOf('relay_phase').confidence)}`, tierDesc('relay_phase', d.relayPhase, PHASE_DESC[d.relayPhase]), aOf('relay_phase').confidence)
+    + card('边际方向', `${momB(d.relayMomentum)}${cf(aOf('relay_momentum').confidence)}`, tierDesc('relay_momentum', d.relayMomentum, MOM_DESC[d.relayMomentum]), aOf('relay_momentum').confidence)
+    + card('梯队结构', `${ladderB(d.ladderHealth)}${cf(aOf('ladder_health').confidence)}`, tierDesc('ladder_health', d.ladderHealth, LADDER_DESC[d.ladderHealth]), aOf('ladder_health').confidence)
+    + card('接力钱效', `${moneyB(d.moneyEffect)}${cf(aOf('money_effect').confidence)}`, tierDesc('money_effect', d.moneyEffect, MONEY_DESC[d.moneyEffect]), aOf('money_effect').confidence)
     + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`
-    + (d.turnQuality != null ? card('转折质量', `<span style="color:${MC_TURN_COLOR[d.turnQuality]||'#94a3b8'}">${MC_TURN_CN[d.turnQuality]||d.turnQuality}</span>${confChip(aOf('turn_quality').confidence)}`, tierDesc('turn_quality', d.turnQuality, MC_TURN_CN[d.turnQuality])) : '')
-    + (d.cycleIntensity != null ? card('周期强度', `${MC_INTENSITY_CN[d.cycleIntensity]||d.cycleIntensity}${confChip(aOf('cycle_intensity').confidence)}`, tierDesc('cycle_intensity', d.cycleIntensity, MC_INTENSITY_CN[d.cycleIntensity])) : '')
-    + (d.riskAhead != null ? card('前瞻风险', `<span style="color:${MC_RISK_COLOR[d.riskAhead]||'#94a3b8'}">${MC_RISK_CN[d.riskAhead]||d.riskAhead}</span>${confChip(aOf('risk_ahead').confidence)}`, tierDesc('risk_ahead', d.riskAhead, MC_RISK_CN[d.riskAhead])) : '');
+    + (d.turnQuality != null ? card('转折质量', `<span style="color:${MC_TURN_COLOR[d.turnQuality]||'#94a3b8'}">${MC_TURN_CN[d.turnQuality]||d.turnQuality}</span>${cf(aOf('turn_quality').confidence)}`, tierDesc('turn_quality', d.turnQuality, MC_TURN_CN[d.turnQuality]), aOf('turn_quality').confidence) : '')
+    + (d.cycleIntensity != null ? card('周期强度', `${MC_INTENSITY_CN[d.cycleIntensity]||d.cycleIntensity}${cf(aOf('cycle_intensity').confidence)}`, tierDesc('cycle_intensity', d.cycleIntensity, MC_INTENSITY_CN[d.cycleIntensity]), aOf('cycle_intensity').confidence) : '')
+    + (d.riskAhead != null ? card('前瞻风险', `<span style="color:${MC_RISK_COLOR[d.riskAhead]||'#94a3b8'}">${MC_RISK_CN[d.riskAhead]||d.riskAhead}</span>${cf(aOf('risk_ahead').confidence)}`, tierDesc('risk_ahead', d.riskAhead, MC_RISK_CN[d.riskAhead]), aOf('risk_ahead').confidence) : '');
 }
 
 // ---------- 板块龙头（v6，2026-10-19）----------
@@ -2237,7 +2298,7 @@ function labRerun(key){
 }
 
 // ---------- 题材龙头（连板指数子视图 rv-themes，2026-10-20） ----------
-// 与【连板情绪】同构（用户裁决：共用 KPI 卡与时间范围，删除初版自建 KPI）：
+// 与【情绪周期】同构（用户裁决：共用 KPI 卡与时间范围，删除初版自建 KPI）：
 //   · 行源 = **当前区间内全部龙头-日**（`/api/hotlist-jev/theme-leaders?start&end`，
 //     区间与 rangedSeries 同一 `STATE.relayRange`，rangeRefresh 联动重拉）；
 //   · 页头 KPI = 共用 `#relayKpi`（点行 = relayRow(date) 选中该日，KPI 跟随）；
@@ -2395,7 +2456,7 @@ async function tlFetch(){
   const qs = [];
   if (rg.start) qs.push('start=' + encodeURIComponent(rg.start));
   if (rg.end) qs.push('end=' + encodeURIComponent(rg.end));
-  // 刷新机制对齐连板情绪（2026-10-20 用户裁决）：60s 轮询同区间 → **后台静默刷新**，
+  // 刷新机制对齐情绪周期（2026-10-20 用户裁决）：60s 轮询同区间 → **后台静默刷新**，
   // 旧数据保持可见（不闪「加载中」、不丢焦点/展开态）；只有区间真正变化才显示加载态。
   const key = tlRangeKey();
   const bg = STATE.tlData && STATE.tlData.rangeKey === key && (STATE.tlData.rows || []).length > 0;
@@ -2446,14 +2507,10 @@ const NODE_TIP = {
 const NODE_STATE_CN = { sealed: '续板', broken: '断板', suspended: '停牌',
                         unknown: '不可考', none: '昨日无龙头' };
 let _nodesSeq = 0;
-// ── 市场情绪周期（rv-cycle，第4课 P2）：确定性事件流+状态机，零 token ──
-const CYCLE_STATE_CN = { loss: '亏钱', ice: '冰点', wzs: '弱转强', gain: '赚钱' };
-const CYCLE_STATE_CLS = { loss: 'b-red', ice: 'b-blue', wzs: 'b-amber', gain: 'b-green' };
+// ── 市场情绪周期数据源（2026-11 用户裁决：独立子页签 rv-cycle 删除，监控表五列并入
+// 情绪周期日级表；态/转折/参照列与 KPI 头随页面删除，状态机单源与读口不变）──
 const CYCLE_EV_MARK = { spaceBreakthrough: '↑突破', spaceCompress: '↓压缩',
                         highCollapse: '✗崩塌', highTolerance: '✓宽容' };
-function cycleStateBadge(s){
-  return s ? `<span class="badge ${CYCLE_STATE_CLS[s] || 'b-gray'}">${esc(CYCLE_STATE_CN[s] || s)}</span>` : '—';
-}
 function cycleAnchorCell(a){
   // 龙一命运徽章只看自身 leaderSealedToday（封/断）；缺档显—（fail-visible 不伪造）
   if (!a || !a.code) return '<span style="color:var(--muted2)">—</span>';
@@ -2462,72 +2519,37 @@ function cycleAnchorCell(a){
   return esc(a.name || a.code) + st;
 }
 let _cycleSeq = 0;
+let _cycleErrKey = '';
+// market-cycle 读口（零 token 确定性轨道）：days=400 与 relay-index 同窗，覆盖「全部」区间；
+// 成功后重绘情绪周期日级表合并周期五列；失败结构化透出（不闪断不清空，§4.0）。
 async function cycleFetch(date){
   if (!STATE.series || !STATE.series.length) return;   // 序列未定（首屏竞态）
   const seq = ++_cycleSeq;
-  const bg = !!(STATE.cycleData && STATE.cycleData.doc);
-  STATE.cycleData = { loading: !bg, error: null, api: null, doc: bg ? STATE.cycleData.doc : null };
-  renderCycle();
+  const bg = !!(STATE.cycleData && STATE.cycleData.api);
+  STATE.cycleData = { loading: !bg, error: null, api: bg ? STATE.cycleData.api : null };
+  // 评审 P2-4：后台静默刷新（bg）时形态未变，免一次全量重绘（减少展开卡焦点打断）；
+  // 首拉才预绘加载态。到货后的重绘是合并新数据的必要路径，保留。
+  if (!bg) renderRelayTab();
   try {
-    const r = await jget('/api/hotlist-jev/market-cycle?days=60'
+    const r = await jget('/api/hotlist-jev/market-cycle?days=400'
       + (date ? '&date=' + encodeURIComponent(date) : ''));
     if (seq !== _cycleSeq) return;
+    const failed = !!(r && r.ok === false);
     STATE.cycleData = { loading: false,
-      error: (r && r.ok === false) ? (r.reason || '读库降级') : null, api: r, doc: (r && r.doc) || null };
+      error: failed ? (r.reason || '读库降级') : null,
+      api: failed ? (bg ? STATE.cycleData.api : null) : r };
   } catch (e) {
     if (seq !== _cycleSeq) return;
     STATE.cycleData = { loading: false,
       error: 'market_cycle_read_failed: ' + (e && e.message ? e.message : e),
-      api: null, doc: bg ? STATE.cycleData.doc : null };
+      api: bg ? STATE.cycleData.api : null };
   }
-  renderCycle();
-}
-function renderCycle(){
-  const head = $('cycleHead'); if (!head) return;
-  const d = STATE.cycleData || {};
-  const doc = d.doc;
-  if (d.error && !doc){
-    if (window.sbLog) sbLog('error', '[情绪周期] ' + d.error);
-    head.innerHTML = ''; $('cycleTable').innerHTML = ''; $('cycleHint').textContent = '';
-    return;
+  // 读失败进底部状态栏（同错不刷屏）；页内小注由 renderRelayTab 的 relayCycleHint 披露
+  if (STATE.cycleData.error && STATE.cycleData.error !== _cycleErrKey){
+    _cycleErrKey = STATE.cycleData.error;
+    if (window.sbLog) sbLog('error', '[情绪周期] ' + STATE.cycleData.error);
   }
-  if (d.loading && !doc){ head.innerHTML = '<div class="empty">情绪周期加载中…</div>'; return; }
-  const api = d.api || {};
-  const series = (api.series || []).slice().reverse();   // 最新在上
-  if (doc){
-    const tr = doc.transition;
-    const ceil = doc.ceiling || {};
-    head.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap">
-      <div class="kpi"><div class="k">当前态</div><div class="v">${cycleStateBadge(doc.state)}</div><div class="s">已 ${doc.daysInState || 0} 交易日（wzs 无超时，Q3）</div></div>
-      <div class="kpi"><div class="k">空间天花板</div><div class="v">${ceil.maxBoard != null ? ceil.maxBoard + ' 板' : '—'}</div><div class="s">≥3板 ${ceil.threePlusN != null ? ceil.threePlusN : '—'} 家 · 20日前高 ${ceil.prevCeiling20 != null ? ceil.prevCeiling20 : '—'}</div></div>
-      <div class="kpi"><div class="k">最近转折</div><div class="v">${tr ? esc(tr.date || '') : '—'}</div><div class="s">${tr ? esc(CYCLE_STATE_CN[tr.from] || tr.from || '首日') + '→' + esc(CYCLE_STATE_CN[tr.to] || tr.to) : ''}</div></div>
-    </div>`;
-  } else head.innerHTML = '';
-  const rows = series.map(s => {
-    const ev = (s.eventTypes || []).map(t => CYCLE_EV_MARK[t] || t).join(' ')
-      || '<span style="color:var(--muted2)">—</span>';
-    const tr = (s.transition && s.transition.trigger && s.transition.trigger !== 'init_default')
-      ? `<span class="badge b-amber">→${esc(CYCLE_STATE_CN[s.transition.to] || s.transition.to)}</span>` : '';
-    const ref = s.reference || {};
-    const wzs = (ref.marketWzs && ref.marketWzs.state) ? ref.marketWzs.state : '—';
-    const refTxt = `${esc(ref.relayPhase || '—')} / wzs:${esc(wzs)} / ${esc(ref.ruleStage || '—')}`;
-    const ceil = s.ceiling || {};
-    return `<tr>
-      <td>${esc(String(s.tradingDate).slice(5))}</td>
-      <td>${ceil.maxBoard != null ? ceil.maxBoard : '—'}</td>
-      <td>${ceil.threePlusN != null ? ceil.threePlusN : '—'}</td>
-      <td>${cycleAnchorCell(s.anchor && s.anchor.main)}</td>
-      <td>${cycleAnchorCell(s.anchor && s.anchor.growth)}</td>
-      <td>${ev}</td>
-      <td>${cycleStateBadge(s.state)}${s.daysInState > 1 ? ` <span style="color:var(--muted2)">${s.daysInState}日</span>` : ''}</td>
-      <td>${tr}</td>
-      <td style="font-size:11px;color:var(--muted2)">${refTxt}</td>
-    </tr>`;
-  }).join('');
-  $('cycleTable').innerHTML = `<table><thead><tr>
-    <th>日期</th><th>天花板</th><th>≥3板</th><th>主板龙一</th><th>双创龙一</th><th>事件</th><th>态</th><th>转折</th><th>参照（relay相位/大盘wzs/规则档）</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">暂无数据</td></tr>'}</tbody></table>`;
-  $('cycleHint').textContent = `共 ${series.length} 交易日 · 降级 ${api.degradedCount || 0} 日 · 状态机输入=事件流 E1–E4，参照并列无预设权威（裁决1A）· 暖机期突破参照窗不足如实披露`;
+  renderRelayTab();
 }
 async function nodesFetch(date){
   if (!STATE.series || !STATE.series.length) return;   // 序列未定（首屏竞态）
@@ -2780,7 +2802,7 @@ function tlRefresh(){
   tlRenderRows();
 }
 
-// 区间级告警（混代际 / 含回填）：fail-visible，不与连板情绪 KPI 混放
+// 区间级告警（混代际 / 含回填）：fail-visible，不与情绪周期 KPI 混放
 // 龙头两视图（题材/竞价）区间级告警单实现（2026-11-13 用户裁决：报错/缺档信息
 // 不打页内横幅，统一收底部状态栏 sbLog；延续 2026-10-30 读口异常裁决并覆盖 no_data）。
 // 状态变化才记一条，防 60s 轮询刷屏；表内中性空态盒保留（非报错横幅）。
@@ -2852,7 +2874,7 @@ function tlRenderBar(){
 }
 
 // 表格：日期列 + 可排序表头 + 分页 20（relayPageSlice 同规格）；点行=选中该日（KPI 联动），
-// 三角=展开调用日志卡（与连板情绪的 relayRow/relayToggle 分工完全一致）。
+// 三角=展开调用日志卡（与情绪周期的 relayRow/relayToggle 分工完全一致）。
 function tlRenderRows(){
   const el = $('tlTable'); if (!el) return;
   const d = STATE.tlData || {};
@@ -3034,7 +3056,7 @@ function tlRowHtml(r, f){
     + (open ? '<tr class="lg-detail"><td colspan="17">' + tlDetailHtml(r) + '</td></tr>' : '');
 }
 
-// ── 明细卡：jev 调用日志卡（lg-card 范式，与连板情绪同构） ──
+// ── 明细卡：jev 调用日志卡（lg-card 范式，与情绪周期同构） ──
 function tlOpenRow(){
   const k = STATE.tlUi.openKey;
   if (!k) return null;
@@ -4749,7 +4771,12 @@ function detailHtml(e, view){
   const rerunBtn = rerunKind
     ? `<button class="rerun"${busy ? ' disabled' : ''} title="${rerunHint}"
         onclick="event.stopPropagation(); ${rerunCall}">${busy ? '重跑中…' : '重跑'}</button>` : '';
-  const head = `<div class="lg-head"><div class="lg-title">🕐 jev · ${esc(e.label)}<span class="lg-asof">${esc(d.asOf || fmtTime(d.computedAt))}</span></div>
+  // 题集版本迁入详情卡 title（2026-11 用户裁决：日期列版本徽章删除）：非最新代琥珀警示
+  // （混代际对比 caution，原 verBadge 语义保留）；旧档无版本不出徽（foot 仍注「未知（旧文档）」）
+  const curVer = (STATE.series[STATE.series.length - 1] || {}).questionSetVersion;
+  const verTag = (view === 'relay' && d.questionSetVersion)
+    ? ` <span class="badge ${d.questionSetVersion === curVer ? 'b-gray' : 'b-amber'}" title="题目集版本 ${esc(d.questionSetVersion)}：不同版本判据不同，结果不宜直接对比${d.questionSetVersion !== curVer ? '；非最新代存档' : ''}">${esc(d.questionSetVersion)}</span>` : '';
+  const head = `<div class="lg-head"><div class="lg-title">🕐 jev · ${esc(e.label)}${verTag}<span class="lg-asof">${esc(d.asOf || fmtTime(d.computedAt))}</span></div>
     <div class="lg-toggle">${rerunBtn}<button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="lgMode('${view}', 'detail', event)">详细信息</button>
     <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="lgMode('${view}', 'raw', event)">原始 JSON</button></div></div>`;
   const meta = `<div class="lg-meta">
@@ -4817,10 +4844,10 @@ const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察'
   ['nodes', '板块节点', '🧭'],
                      ['leaders', '板块龙头', '🐉'], ['themes', '题材龙头', '👑'],
                      ['auction', '竞价龙头', '⚡'],
-                     // 2026-10-19 用户裁决：页名由「判定明细」改为「连板情绪」（表内行展开的
-                     //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
-                     ['cycle', '情绪周期', '🌡️'],
-                     ['detail', '连板情绪', '🗓️']];
+                     // 2026-10-19 用户裁决：页名由「判定明细」改为「连板情绪」；2026-11 用户裁决：
+                     //   改名「情绪周期」并合并原 cycle 子页（监控表五列迁入本页日级表）；
+                     //   表内行展开的判定明细卡沿用原名，指单日七题判定全文，不当页名
+                     ['detail', '情绪周期', '🌡️']];
 const NAV = [
   {group: '工作台', items: [['overview', '总览', '📊'], ['lianban', '连板行情', '🔗'], ['labels', '涨停复盘', '🏷️'], ['rise', '上涨复盘', '📈'], ['dieban', '下跌复盘', '📉']]},
   // 2026-11 用户需求：板块对比/盯盘清单已并入连板行情右栏页签（【对比】【盯盘】），独立页与侧栏入口删除
@@ -5531,6 +5558,7 @@ function lbLeave(){
 }
 function setView(key){
   const [main, sub] = key.split('/');
+  const prevMain = STATE.view, prevRelayView = STATE.relayView;
   STATE.view = main;
   STATE.relayView = main === 'relay' ? (sub || 'phase') : '';
   for (const sec of document.querySelectorAll('#content > section'))
@@ -5554,6 +5582,10 @@ function setView(key){
   }
   window.scrollTo({top: 0});
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
+  // 2026-11：子视图实际切换时重绘日级表+页头 KPI——KPI 置信度 tooltip 模式
+  // 跟随 relayView（detail=悬停，其余=可见芯片），切页不得留旧模式到下次轮询；
+  // 评审 P2-4：loadAll 尾部同视图回填不重绘（轮询路径保持单次重建）
+  if (main === 'relay' && (prevMain !== 'relay' || prevRelayView !== STATE.relayView)) renderRelayTab();
   if (main === 'overview') ovIndexLoad();   // 总览：大盘分时+直播看点（30s 轮询兜底，见启动区）
   const kpiEl = $('kplMarketKpi');
   // 大盘 KPI 条=kpl 组子页公用（kpl/kpllive/个股行情；打板六模式已并入单页，2026-11-08）

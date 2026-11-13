@@ -149,14 +149,14 @@ def test_detail_filter_bar_has_no_date_controls(js: str):
 
 # ── 需求 2：表格列 ─────────────────────────────────────────────────────────
 def test_table_columns_drop_tokens_time_add_leader(js: str):
-    """表头：去 tokens/判定时间；v9 删龙头强度列（共 8 列）。"""
+    """表头：去 tokens/判定时间；v9 删龙头强度列；2026-11 合并融合三题 3 列 + 监控表迁入 5 列（共 16 列）。"""
     rt = _fn(js, "renderRelayTab")
     head = rt[rt.index('$(\'relayTable\').innerHTML'):]
     assert "tokens" not in head, "表头不应再含 tokens 列"
     assert "判定时间" not in head, "表头不应再含判定时间列"
     assert "龙头强度" not in head, "v9 删 leader_strength，表头不应再含龙头强度列"
     assert "节点" in head and "wzsB" in rt, "表头应含弱转强节点列（2026-10-21 立项）"
-    assert 'colspan="8"' in rt, "展开详情行 colspan 应为 8（v9 删题材/龙头强度两列）"
+    assert 'colspan="16"' in rt, "展开详情行 colspan 应为 16（2026-11 合并融合三题 3 列 + 监控表迁入 5 列）"
     assert 'rWzsSel' in js, "节点筛选下拉必须接线"
     assert "'weak', '弱']" in js and "'strong', '强']" in js and "'wzs', '弱转强']" in js,         "节点筛选枚举必须三态（弱/弱转强/强，2026-10-22 用户裁决）"
     assert "w.state === 'wzs'" in rt and "w.state === 'strong'" in rt,         "节点徽标须按 state 分支（wzs/strong）"
@@ -363,7 +363,7 @@ def test_desc_tables_declare_summary_not_verbatim(js: str):
     assert "relay-questions" in js, "页面应从 /relay-questions 拉取 criteria 全文"
     assert "STATE.criteria" in js, "全文应存 STATE.criteria"
     assert "tierDesc(" in js, "KPI 第三行应走 tierDesc（全文优先、摘要回落）"
-    assert "critTip(" in js, "判定明细行应有题目全文 tooltip"
+    assert "critConfTip(" in js, "情绪周期行应有题目全文+置信度合并 tooltip（2026-11 原 critTip 并入）"
 
 
 def test_relay_questions_route_serves_question_set_criteria():
@@ -1308,12 +1308,13 @@ def test_band_refresh_adopts_already_running(js: str, tmp_path):
 # ── 2026-10-19 用户裁决：页名「判定明细」→「涨停分析」+ 表计数改分页（每页 ≤20 条）──
 def test_detail_view_renamed_to_limitup_analysis(js: str, html: str):
     """子页名改名链：判定明细→涨停分析（2026-10-19）→连板情绪（2026-10-30 d0ebf5f9）
-    导航/面包屑/tab 共用 RELAY_VIEWS，故一处即全改；行内展开的判定明细卡（单日七题
-    全文）沿用最初原名：不得连卡片一起改名。"""
+    →情绪周期（2026-11 用户裁决，并合并原 cycle 子页）。导航/面包屑/tab 共用
+    RELAY_VIEWS，故一处即全改；行内展开的判定明细卡（单日七题全文）沿用最初原名。"""
     rv = _const(js, "RELAY_VIEWS")
-    assert "'detail', '连板情绪'" in rv, "子页名应为「连板情绪」"
+    assert "'detail', '情绪周期'" in rv, "子页名应为「情绪周期」"
     assert "'判定明细'" not in rv, "页名不应再叫「判定明细」"
-    assert "<!-- ⑤ 连板情绪" in html, "页区块注释应同步改名"
+    assert "'连板情绪'" not in rv, "旧页名不应残留"
+    assert "<!-- ⑤ 情绪周期" in html, "页区块注释应同步改名"
     assert "RELAY_VIEWS.map" in _const(js, "NAV") or "RELAY_VIEWS" in js
     # 行内展开的判定明细卡（单日七题全文）沿用原名：不得连卡片一起改名
     assert "判定明细" in js, "行内判定明细卡（题面/判据）应保留原名，只改页名"
