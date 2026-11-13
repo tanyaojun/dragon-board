@@ -590,3 +590,19 @@ def test_match_kpl_news_content_only_shared_substring_hits():
     hits = D.match_kpl_news([it], "商业航天")
     assert len(hits) == 1 and hits[0]["matchHow"].startswith("正文锚")
     assert hits[0]["titleHit"] is False
+
+
+def test_alias_yiliao_yiyao_anchor_innovation():
+    """2026-11-13 用户裁决：竞价链 T−1 分组名「医疗医药」锚创新药节点。
+
+    实证（002172 澳洋健康当日证据门强制全列 insufficient）：产业树无裸「医药」
+    节点可子串命中，树内仅创新药系节点；alias 通道与 board_keywords 事件链同条生效。
+    """
+    assert D.ALIASES["医疗医药"] == ("创新药",)
+    assert D.board_keywords("医疗医药") == ["医疗医药", "创新药"]
+    nodes = [{"name": "创新药", "level": 1, "content": "x"},
+             {"name": "医药-创新药", "level": 2, "content": "y"},
+             {"name": "AI医疗-AI创新药", "level": 2, "content": "z"}]
+    m = D.match_industry(nodes, "医疗医药")
+    assert m["matched"] is True and m["method"] == "alias"
+    assert (m["node"] or {}).get("name") == "创新药", "取 level 最短裸节点"
