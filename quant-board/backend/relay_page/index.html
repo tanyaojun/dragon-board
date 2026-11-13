@@ -3257,6 +3257,9 @@ const SCOPE_CN = { zt: '涨停', zhaban: '炸板', excluded: 'ST·北交所', al
 // 名单可见性与打标解偶（2026-11-04 用户需求）：后端把韭研名单未打标股以 unlabeled=True
 // 行并入 stocks（labelSlot/jiuyanFetchedAt 注记源），打标行在前、未打标行沉底；
 // KPI 首卡「名单/打标」透出名单源/抓取时刻/进度。未打标行无调用日志，不响应展开。
+// 2026-11-13 用户裁决：未打标行（午盘 jiuyan 名单）代码后端归一末 6 位（去 SZ/SH 前缀），
+// 行内不渲染「未打标」徽章与「真连板未定」注记（高度列保留事实空间高度）；
+// 覆盖度仍由 KPI「名单/打标」卡聚合透出（fail-visible 聚合层保留）。
 // 反包=反包板池命中股（昨日断板/昨日炸板，今日回封；2026-10-21 立项 jev-rewrap-factor-preregistration.md）
 const REWRAP_PRED = s => !!s.rewrap;
 const SCOPE_PRED = { zt: s => !s.zhaban && !s.excluded, zhaban: s => s.zhaban,
@@ -3313,7 +3316,8 @@ function lfRenderKpi(stocks, f){
   const b2 = base.filter(s => sv(s) === 2).length;
   const b3 = base.filter(s => sv(s) === 3).length;
   const b4p = base.filter(s => sv(s) >= 4).length;
-  const stUnknown = base.filter(s => !s.boardUnmarked && sv(s) == null && (s.boards || 0) > 1).length;
+  // 2026-11-13 用户裁决：未打标行不计「真连板未定」注记（行内同裁移除）；打标行 streak null 仍单列（fail-visible）
+  const stUnknown = base.filter(s => !s.unlabeled && !s.boardUnmarked && sv(s) == null && (s.boards || 0) > 1).length;
   const maxBoard = zt.reduce((m, s) => { const v = sv(s); return v ? Math.max(m, v) : m; }, 0);
   const leaders = zt.filter(s => sv(s) === maxBoard);
   const leaderTxt = maxBoard > 1
@@ -3418,11 +3422,12 @@ function lfRenderRows(){
     const open = ui.openKey === entry.key;
     // 高度列吃**真连板** streakOf（2026-10-19 用户裁决）：主文「K板」；断板股附空间注记「（N天M板）」；
     // streak null 且空间 M>1 = 回溯不可算 → 显空间「N天M板 · 真连板未定」（不冒充）；其余 → 首板
+    // 2026-11-13 用户裁决：未打标行（午盘 jiuyan 名单）去「· 真连板未定」后缀，保留事实空间高度
     const sv = streakOf(s);
     const spaceTxt = (s.days && s.boards && s.days > s.boards) ? `（${s.days}天${s.boards}板）` : '';
     const heightText = (sv != null && sv > 1) ? `${sv}板${spaceTxt}`
       : (sv == null && (s.boards || 0) > 1)
-        ? ((s.days ? `${s.days}天${s.boards}板` : `${s.boards}板`) + ' · 真连板未定')
+        ? ((s.days ? `${s.days}天${s.boards}板` : `${s.boards}板`) + (s.unlabeled ? '' : ' · 真连板未定'))
         : '首板';
     const hCell = s.zhaban ? badge(`炸板${s.openNum ? '·' + s.openNum + '开' : ''}`, 'b-red')
       : s.excluded ? badge(s.excluded === 'st' ? 'ST剔除' : '北交所', 'b-amber')
@@ -3440,7 +3445,7 @@ function lfRenderRows(){
       ? `<td class="lg-reason" title="${esc(reasonTxt)}">${esc(reasonTxt)}</td>`
       : '<td class="lg-reason" title="韭研异动解析首行缺失">-</td>';
     return `<tr class="lg-row${open ? ' open' : ''}"${s.unlabeled ? '' : ` onclick="lgRow('lab', '${js(entry.key)}')"`}>
-    <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}${s.unlabeled ? ' ' + badge('未打标', 'b-amber') : ''}</td><td>${esc(labelBoardOf(s))}</td>
+    <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
     <td style="font-size:12px">${dragons || '-'}</td>
     <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>${reasonCell}
     <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>

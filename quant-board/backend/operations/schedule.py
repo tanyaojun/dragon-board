@@ -825,9 +825,11 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """个股驱动打标日增量（advisory 步，2026-10-03 用户裁决挂链）。
 
     - 门控与相位哨兵同源（当日 jiuyan final + 15:00 盘面帧）；
-    - 子进程=jev_label_jiuyan --start/--end 当日（幂等：已 ok 标签自动跳过，≈21 万 tokens/交易日，用户裁决挂链）；
-    - 2026-11-03 用户裁决：午盘只采名单不投喂不打标，本步=当日唯一投喂口（final 全量）；
+    - 子进程=jev_label_jiuyan --start/--end 当日（幂等：已 ok 标签自动跳过，用户裁决挂链）；
+    - 2026-11-03 用户裁决：午盘只采名单不投喂不打标，本步=当日唯一投喂口；
       「单日每股只投喂一次」幂等判据保留，供历史 midday 档回填与手动重跑兼容。
+    - 2026-11-13 用户裁决：final 投喂收窄为各板块龙一/二/三（dragon_rows 单源 top=3），
+      跟风股不投喂（没参考价值且烧 token；≈21 万 tokens/交易日为收窄前全量历史口径）。
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（证据链积累，非生产数据链）。
     """
     if dry_run:
@@ -842,7 +844,8 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     try:
         cmd = [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
                "--start", today, "--end", today,
-               # 批次C I13：预算护栏常态确认——本步挂链本身经 2026-10-03 用户裁决批准（≈21万 tokens/日）
+               # 批次C I13：预算护栏常态确认——本步挂链本身经 2026-10-03 用户裁决批准
+               # （≈21万 tokens/日为收窄前全量历史口径；收窄后仅投喂板块龙一/二/三，2026-11-13 裁决）
                "--confirm-budget"]
         # F2 门控（融合总纲）：个股相位分线附带打标默认关，环境变量 JIUYAN_STOCK_PHASE_ENABLED=1
         # 且用户明确批准 token 成本后才可开启（≈3-5 万 tokens/日合并口径；开启前零额外调用）

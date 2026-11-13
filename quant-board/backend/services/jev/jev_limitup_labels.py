@@ -143,7 +143,11 @@ def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[s
                     if not code6 or code6 in labeled_codes:
                         continue
                     stocks.append({
-                        "code": st.get("code"), "name": st.get("name"),
+                        # 2026-11-13 用户裁决：未打标行代码去 SZ/SH 前缀（末 6 位；_strip
+                        # 仅剥小写前缀，join 层恒取末 6 位，大写前缀原料亦正确命中）；
+                        # 原料档 jiuyan_action 保留原始 code 不动（单一事实源），
+                        # join 层本就按末 6 位命中，归一不影响高度/原因/龙序 join
+                        "code": code6, "name": st.get("name"),
                         "tradingDate": date, "board": bname, "rank": list_total,
                         # rank=韭研名单序（板块段展平）；打标行 rank=投喂序，同为名单内序
                         "unlabeled": True, "labelSlot": slot,

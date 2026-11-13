@@ -88,6 +88,13 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     sector_nodes 等）维持 streak 口径——历史样本人群定义不随规则换代漂移，断板反包龙一
     无同构历史锚属如实缺位（预登记 §21.6）。TDX 拉不到涨幅（全候选 None）→ 该板块跳过
     + `meta["spaceErrors"]` 披露（用户裁决 fail-visible，不降级旧规则）。
+
+    **2026-11-13 用户裁决 B 方案（根因修）**：space_mode 候选池每股每日单板块归属
+    （首板块约定：当日首个出现板块；当日缺席取最近在池日首板块），eradicates 迁移股
+    旧/新板块同时当选龙一（一股两板块龙头、节点判据消费错误龙头、同股同日重复投喂）。
+    断板反包本意保留（断板龙一仍留归属板块在列）；classify_board_day 判据表零改动
+    （纠正的是其输入）。归属裁决落 `meta["leaderAttribution"]`（version 旗标+multiBoard+
+    boardsEmptied 清空板披露），历史档无此键=裁决前口径，不自动重放（重放另裁）。
     **v12 分轨（2026-10-28 用户裁决，预登记 theme-leader-v12 §2.1）**：space_mode 下主板/
     双创各按同一排序键独立取龙一（`space_leaders_by_segment`），每板块 ≤2 行，行带
     `segment`（main/growth）；历史窗口径不加 segment（样本人群不随规则换代）。
@@ -120,13 +127,33 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                     elif (prev_info.get(pcode) or {}).get("zhaban"):
                         prev_board_zhaban[bname] += 1
     doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
+    # 2026-11-13 用户裁决 B 方案（根因修）：每股每日单板块归属，首板块约定
+    # （_pool_of/_promotion_by_board 同源，不新造口径）：当日在池取当日首个出现
+    # 板块；当日缺席取最近在池日首板块（下方往日并集循环新→旧赋值）。 eradicates
+    # 「一股两板块龙头」：迁移股不再进旧板块候选池，旧板余下候选另选；断板反包
+    # 本意保留（断板龙一仍留归属板块在列）。仅 space_mode 启用，历史 streak 口径
+    # 不漂移；多板归属裁决落 meta 披露（fail-visible）。
+    attrib: dict[str, str] = {}
+    seen_boards: dict[str, list[str]] = {}
+    today_sealed_boards: set[str] = set()
+    if space_mode:
+        for field in doc.get("fields") or []:
+            bname = str(field.get("name") or "")
+            for st in field.get("stocks") or []:
+                code = str(st.get("code") or "")[-6:]
+                if code in sealed:
+                    today_sealed_boards.add(bname)
+                    if bname not in seen_boards.setdefault(code, []):
+                        seen_boards[code].append(bname)
+                    attrib.setdefault(code, bname)
     boards_of: dict[str, list[dict]] = defaultdict(list)
     zhaban_of: dict[str, int] = defaultdict(int)   # 板块名 → 今日触板未封家数（韭研曾触板−THS炸板二分）
     for field in doc.get("fields") or []:
         bname = str(field.get("name") or "")
         for st in field.get("stocks") or []:
             code = str(st.get("code") or "")[-6:]
-            if code in sealed:            # 只算真实封板股（炸板/触板未封不进梯队）
+            # 只算真实封板股（炸板/触板未封不进梯队）；space_mode 另按单归属过滤（B 方案）
+            if code in sealed and (not space_mode or attrib.get(code) == bname):
                 _d, _b = _jiuyan_days_boards(st)
                 boards_of[bname].append(
                     {"code": code, "name": st.get("name"), "time": st.get("time"),
@@ -158,7 +185,14 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 have = {c["code"] for c in pool_prev[bname]}
                 for st in field.get("stocks") or []:
                     pcode = str(st.get("code") or "")[-6:]
-                    if pcode in p_sealed and pcode not in have:
+                    if pcode in p_sealed:
+                        # B 方案单归属：当日缺席股取最近在池日首板块（新→旧遍历
+                        # 先见即最近）；当日封板股保持今日归属（setdefault 不覆盖）
+                        if bname not in seen_boards.setdefault(pcode, []):
+                            seen_boards[pcode].append(bname)
+                        attrib.setdefault(pcode, bname)
+                    if (pcode in p_sealed and pcode not in have
+                            and attrib.get(pcode) == bname):
                         _pd, _pb = _jiuyan_days_boards(st)
                         pool_prev[bname].append({"code": pcode, "name": st.get("name"),
                                                  "time": None, "streak": None,
@@ -170,6 +204,16 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                                                  # 消费侧据此算窗位 k=T−S−1（严格 3 日回溯口径）
                                                  "poolDay": pd})
                         have.add(pcode)
+        # B 方案归属披露（fail-visible）：多板股候选板块与单归属裁决留痕；
+        # 版本旗标区分口径代际（历史档无此键=裁决前口径，不自动重放）
+        meta["leaderAttribution"] = {
+            "version": "single-board-20261113",
+            "multiBoard": [{"code": c, "boards": bs, "chosen": attrib.get(c)}
+                           for c, bs in seen_boards.items() if len(bs) > 1],
+            # m4 审查修复：今日有封板成员但被归属过滤清空的板块如实披露
+            # （该板断板候选不被考虑=既有板块轴设计，不静默丢）
+            "boardsEmptied": sorted(b for b in today_sealed_boards
+                                    if b not in boards_of)}
 
     rows: list[dict] = []
     space_errors: dict[str, str] = {}

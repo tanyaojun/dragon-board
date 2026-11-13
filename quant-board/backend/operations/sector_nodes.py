@@ -503,7 +503,9 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                     # v5.1 空间模式缺料披露（P1-4 评审）：TDX 10日涨幅整板块不可算等
                     # 跳过行为必须落库可见（§4.0 部分失败打质量标记，不静默缺席）
                     "spaceErrors": (meta_today or {}).get("spaceErrors") or {},
-                    "spaceTrackGaps": (meta_today or {}).get("spaceTrackGaps") or {}}}
+                    "spaceTrackGaps": (meta_today or {}).get("spaceTrackGaps") or {},
+                    # 2026-11-13 B 方案：单归属口径代际旗标+多板归属裁决披露
+                    "leaderAttribution": (meta_today or {}).get("leaderAttribution")}}
     db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     dist: dict[str, int] = {}
     for r in built["rows"]:

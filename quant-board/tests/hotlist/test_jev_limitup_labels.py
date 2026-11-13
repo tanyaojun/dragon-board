@@ -257,3 +257,18 @@ def test_collect_list_read_failure_degrades_not_blocks():
     assert out["ok"] is True and len(out["stocks"]) == 1
     assert out["source"]["ok"] is False and "boom" in out["source"]["error"]
     assert out["labelCoverage"]["labeled"] == 1 and out["labelCoverage"]["fetched"] is None
+
+
+def test_collect_unlabeled_codes_strip_exchange_prefix():
+    """2026-11-13 用户裁决：午盘 jiuyan 未打标行代码去 SZ/SH 前缀（与打标行 _strip 同口径）。
+
+    原始带前缀 code 仍保留在 jiuyan_action 原料档（单一事实源不动），读口投影归一末 6 位；
+    join 层本就按末 6 位命中，归一不影响高度/原因/龙序 join。
+    """
+    jiuyan = _jiuyan_doc("2026-09-30", "midday", {
+        "机器人": [{"code": "sh600000", "name": "甲"}, {"code": "SZ300001", "name": "乙"}]})
+    out = collect_limitup_labels(FakeDb2([], [jiuyan]), "2026-09-30")
+    assert {s["code"] for s in out["stocks"]} == {"600000", "300001"}
+    assert all(s.get("unlabeled") for s in out["stocks"])
+    # 覆盖度聚合不受归一影响（fail-visible 保留）
+    assert out["labelCoverage"] == {"fetched": 2, "labeled": 0, "unlabeled": 2}

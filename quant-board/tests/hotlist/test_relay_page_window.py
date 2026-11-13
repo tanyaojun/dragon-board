@@ -1907,3 +1907,82 @@ def test_lianban_header_sort_boards_and_stocks(js: str, tmp_path):
         f"新列首击应=降序（st3 从 key:null 起）：{got['firstClick']}")
     assert got["zt"] == ["y", "x", "w", "z"], (
         f"封板 今/昨 应双键逐位比较、全缺恒末尾：{got['zt']}")
+
+
+# ── 2026-11-13 用户裁决：午盘 jiuyan 未打标行清洁展示 ─────────────────────────
+def test_review_unlabeled_rows_clean_display(js: str):
+    """未打标行（午盘 12:05 jiuyan 名单）不渲染「未打标」徽章与「真连板未定」注记；
+    高度列保留事实空间高度（N天M板）；覆盖度仍由 KPI「名单/打标」卡聚合透出
+    （fail-visible 聚合层保留，行内噪声裁决移除）。打标行口径不变。"""
+    rows = _fn(js, "lfRenderRows")
+    assert "badge('未打标'" not in rows, "「未打标」徽章已裁决移除（2026-11-13）"
+    assert "(s.unlabeled ? '' : ' · 真连板未定')" in rows, \
+        "「真连板未定」注记仅限打标行（未打标行保留事实空间高度）"
+    kpi = _fn(js, "lfRenderKpi")
+    assert "!s.unlabeled" in kpi, "KPI 最高板「真连板未定」计数排除未打标行"
+    assert "未打标 ${COV.unlabeled}" in kpi, "名单/打标卡聚合覆盖度保留（fail-visible）"
+
+
+def test_review_unlabeled_rows_render_clean_node(js: str, tmp_path):
+    """2026-11-13 裁决功能级验证：node 实渲染 lfRenderRows/lfRenderKpi——
+    未打标行（午盘 jiuyan 名单，后端已归一 6 位码）无「未打标」徽章/「真连板未定」注记、
+    保留事实空间高度；打标行断板回溯不可算仍注记（口径不变）；KPI 聚合覆盖度保留。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    parts = [_fn(js, n) for n in (
+        "esc", "sortMark", "labelBoardOf", "streakOf", "labelMatches",
+        "scopePool", "labelEntryOf", "lfRenderRows", "lfRenderKpi")]
+    # 复用既有共享 helper（m1 审查修复：不重定义模块级 _const_block 静默替换语义）；
+    # 单行 const 用 _const，对象字面量用 _const_block（花括号配平）
+    parts += [_const(js, m) for m in (
+        "badge", "js", "DRIVER_CN", "CAT_DEPTH_CN",
+        "BUY_SIDE_CN", "FRESH_CN", "REWRAP_PRED", "SCOPE_CN")]
+    parts.append(_const_block(js, "SCOPE_PRED"))
+    shim = """
+const captured = {};
+function $(id){ if (!captured[id]) captured[id] = { innerHTML: '', textContent: '' }; return captured[id]; }
+const UNLAB = [
+  {code:'600715', name:'文投控股', board:'AI影视/传媒', unlabeled:true, labelSlot:'midday',
+   days:18, boards:10, streak:null, limitUpTime:'09:30:00', reason:'AI漫剧+影视院线', rank:1},
+  {code:'002425', name:'凯撒文化', board:'AI影视/传媒', unlabeled:true, labelSlot:'midday',
+   days:4, boards:3, streak:null, limitUpTime:'09:35:00', reason:'AI游戏+游戏IP', rank:2},
+  {code:'603103', name:'横店影视', board:'AI影视/传媒', unlabeled:true, labelSlot:'midday',
+   boards:1, streak:null, limitUpTime:'09:33:00', reason:'AI漫剧+影视投资', rank:4}];
+"""
+    # 打标断板股（streak null + 空间 M>1）：行内注记口径不变
+    shim += """
+const LABB = {code:'600002', name:'断板股', board:'AI影视/传媒', label:'policy',
+  catalystDepth:'core_main_business', freshness:'continuing', buySideLogic:'sector_follow',
+  days:14, boards:8, streak:null, limitUpTime:'09:41:00', reason:'X', rank:3};
+const STATE = { labels: { date: '2026-11-13', stocks: UNLAB.concat([LABB]) },
+  labelFilter: {scope:'zt', q:'', board:'', height:'', driver:'', depth:'', fresh:'', buy:''},
+  labelUi: {openKey:null}, labelSort: {key:'rank', dir:1}, labelEntries: [] };
+lfRenderRows();
+const table = captured['labelTable'].innerHTML;
+STATE.labels = { date: '2026-11-13', stocks: UNLAB,
+  summary: {}, labelCoverage: {fetched:3, labeled:0, unlabeled:3},
+  source: {slot:'midday', fetchedAt:'2026-11-13T12:05:00', listTotal:3} };
+lfRenderKpi(UNLAB, STATE.labelFilter);
+const kpiMid = captured['labelKpi'].innerHTML;
+STATE.labels.stocks = UNLAB.concat([LABB]);
+STATE.labels.labelCoverage = {fetched:4, labeled:1, unlabeled:3};
+STATE.labels.source.listTotal = 4;
+lfRenderKpi(STATE.labels.stocks, STATE.labelFilter);
+const kpiLab = captured['labelKpi'].innerHTML;
+console.log(JSON.stringify({table, kpiMid, kpiLab}));
+"""
+    script = tmp_path / "unlabeled_render_probe.js"
+    script.write_text("\n".join(parts) + shim, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert "未打标" not in got["table"], "未打标行不得渲染「未打标」徽章"
+    assert "真连板未定" not in got["table"].replace("14天8板 · 真连板未定", ""), \
+        "未打标行不得渲染「真连板未定」（打标断板股注记保留）"
+    assert "18天10板" in got["table"], "未打标行保留事实空间高度"
+    assert "▶</span>600715" in got["table"], "代码列 6 位无前缀"
+    assert "14天8板 · 真连板未定" in got["table"], "打标行断板回溯不可算注记口径不变"
+    assert "未打标 3" in got["kpiMid"] and "真连板未定" not in got["kpiMid"], \
+        "午盘全未打标：KPI 覆盖度保留、真连板未定注记移除"
+    assert "1家真连板未定" in got["kpiLab"], "打标行断板股仍计入 KPI 注记（fail-visible）"

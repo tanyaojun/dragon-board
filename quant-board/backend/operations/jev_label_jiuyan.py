@@ -10,7 +10,8 @@
 用法（Git Bash，JEV_CF_TOKEN 取自 .env.local）：
   ./.venv/Scripts/python.exe -m backend.operations.jev_label_jiuyan \
       --start 2026-09-04 --end 2026-09-29 [--dry-run] [--workers 2]
-  # 午盘槽位（手动/回填用；12:30 调度投喂已于 2026-11-03 用户裁决移除，盘后链 final 全量投喂）：
+  # 午盘槽位（手动/回填用；12:30 调度投喂已于 2026-11-03 用户裁决移除；盘后链 final
+  # 仅投喂板块龙一/二/三，2026-11-13 用户裁决收窄，跟风不投喂）：
   ./.venv/Scripts/python.exe -m backend.operations.jev_label_jiuyan \
       --start 2026-10-20 --end 2026-10-20 --slot midday --confirm-budget
 """
@@ -2485,6 +2486,10 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
     个股在收盘运行时自动跳过（幂等），单日每股只烧一次 token。`force=True`（口径代际
     重放）是唯一例外，不受幂等约束。
 
+    2026-11-13 用户裁决：slot=final 自动投喂仅保留各板块龙一/二/三（dragon_rows 单源
+    top=3 并集），跟风股不投喂（没参考价值且烧 token），跳过数披露；显式 only_codes
+    （单股重跑路由）不受限；midday 手动/回填保留全名单口径。
+
     carry_forward（A+B，2026-10-20 用户裁决）：None=读环境开关（`JEV_CARRY_FORWARD_ENABLED`，
     默认开），True/False 显式覆盖；`force=True` 时一律全量实判（不承接、不压缩）。
     """
@@ -2531,6 +2536,22 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         for entry in pop:
             code = _strip(entry["stock"].get("code"))
             items[code] = entry
+        # 2026-11-13 用户裁决：收盘链自动投喂仅保留板块龙一/二/三（dragon_rows 单源
+        # top=3，M 降序→封板时间升序），跟风股不投喂（没参考价值且烧 token）；
+        # 跳过数披露（fail-visible）。显式 --codes（单股重跑）不受限；midday 手动/回填不限制。
+        if slot == SLOT_FINAL and not only_codes:
+            by_board: dict[str, list[dict]] = {}
+            for entry in pop:
+                by_board.setdefault(entry["board"], []).append(entry["stock"])
+            dragon_codes = {d["code"] for rows in by_board.values()
+                            for d in dragon_rows(rows, top=3) if d.get("code")}
+            # 比较口径末 6 位（M1 审查修复）：items 键保持 _strip 历史幂等口径
+            # （仅剥小写前缀），dragon_rows 恒取末 6 位（大写前缀原料是真实形态）
+            n_follow = sum(1 for c in items if c[-6:] not in dragon_codes)
+            if n_follow:
+                print(f"[{di + 1}/{len(dates)}] {date} [{slot}] 投喂仅板块龙一/二/三："
+                      f"保留 {len(items) - n_follow}，跳过跟风 {n_follow}（2026-11-13 用户裁决）")
+            items = {c: e for c, e in items.items() if c[-6:] in dragon_codes}
         codes = list(items.keys())
         done = {d["code"] for d in col.find({"tradingDate": date, "status": "ok"}, {"code": 1})
                 if d.get("code")}  # PHASE 日级文档无 code，跳过防 KeyError
@@ -2564,7 +2585,10 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             # 2026-10-03 挂链裁决的常态批准；手动多日回填必须显式确认。
             raise SystemExit(
                 f"预算护栏：本窗口（{slot} 槽位）预计至少 {len(codes)} 次 jev 真实调用"
-                f"（首日 {date}，全量口径参考 ≈21 万 tokens/交易日）。确认预算请加 --confirm-budget；"
+                f"（首日 {date}；"
+                + ("final 槽仅投喂板块龙一/二/三，跟风不投喂，2026-11-13 裁决"
+                   if slot == SLOT_FINAL else "midday 槽全名单口径")
+                + "）。确认预算请加 --confirm-budget；"
                 f"或先 --dry-run 查看叙事。")
         ranks = hotlist_ranks(db, date, list(items.keys()), dataset_id)
         # 批次C I10（顺手）：整日韭研文档只读一次，传给每只股票的叙事构造（原每股重读一次）
