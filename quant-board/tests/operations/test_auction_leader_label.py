@@ -316,3 +316,33 @@ def test_bid_six_fields_with_ratio(env, monkeypatch):
     assert "竞价涨幅 +10.00%" in n and "不可考" not in n
     cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]
     assert cs["bidIn"] is True and cs["basisState"] == "ok"
+
+
+def test_bid_supplement_tencent_in_window(env, monkeypatch):
+    """A4d：竞价榜外码 09:25–09:30 窗内经腾讯补源入叙事；bidSource/bidSupplement 留痕。"""
+    db, calls = env
+    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
+    monkeypatch.setattr(L, "get_auction_snapshot_tencent", lambda codes: {
+        "ok": True, "items": {"603135": {"source": "tencent_auction",
+                                         "bidding_pct": 10.0, "bidding_net": 1e6,
+                                         "bidding_turnover": 1.0,
+                                         "bidding_amount": 11e6,
+                                         "zt_buy_amount": 5e6}},
+        "missing": []})
+    L.run(DATE, confirm_budget=True)
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert "竞昨比" in doc["narrative"] or "竞价涨幅 +10.00%" in doc["narrative"]
+    cs = doc["corpusState"]
+    assert cs["bidIn"] is True and cs["bidSource"] == "tencent_auction"
+    assert cs["bidSupplement"] == "tencent_auction"
+
+
+def test_bid_supplement_out_of_window_no_fake(env, monkeypatch):
+    """窗外不补：榜外股竞价行整行缺席（不拿盘中最价冒充竞价）。"""
+    db, calls = env
+    monkeypatch.setattr(L, "_in_auction_window", lambda: False)
+    L.run(DATE, confirm_budget=True)
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert "竞价：" not in doc["narrative"]
+    cs = doc["corpusState"]
+    assert cs["bidIn"] is False and cs["bidSupplement"] == "skipped_out_of_window"

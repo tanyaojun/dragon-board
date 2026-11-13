@@ -48,6 +48,7 @@ from backend.analysis.hotlist.auction_leader_ammo import (
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.services.kpl_ranking_service import (
     derive_bid_ratio_prev_vol,
+    get_auction_snapshot_tencent,
     get_daban_prev_day_basis,
 )
 from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
@@ -180,13 +181,19 @@ def _sealed_prev(pool_prev: dict, hit: dict) -> bool | None:
     return bool(hit) and (hit.get("item") or {}).get("pool_state") == "sealed"
 
 
+def _in_auction_window() -> bool:
+    """竞价补源有效窗 09:25–09:30：窗外现价已非竞价冻结值，不补（fail-visible）。"""
+    return "09:25" <= time.strftime("%H:%M") <= "09:30"
+
+
 def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               *, t1_row: dict | None, pool_prev: dict, lanes: dict,
               gene_corpus: dict, notice_corpus: dict, heat_corpus: dict,
               reason_corpus: dict, lhb_facts: dict | None,
               market_line: str, base_rate_stats: dict | None,
               sector_judgment: dict | None, board_codes: list[str],
-              basis_map: dict | None = None, basis_state: str = "missing") -> dict:
+              basis_map: dict | None = None, basis_state: str = "missing",
+              bid_supplement: str | None = None) -> dict:
     """个股级投喂组装（零网络零模型）：T−1 语料 + 当日竞价 + 推送行。"""
     code = str(row.get("code") or "")
     board = row.get("board")
@@ -206,7 +213,9 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               "amount": (bid_items.get(str(r.get("code"))) or {}).get("bidding_amount")}
              for r in board_codes if str(r.get("code")) != code] if board else []
     bid_item = bid_items.get(code)
+    bid_source = None
     if bid_item is not None:
+        bid_source = str(bid_item.get("source") or "kpl_bid_lane")
         bid_item = {**bid_item, "ratio_prev_vol": derive_bid_ratio_prev_vol(
             bid_item, (basis_map or {}).get(code))}
     bid_entries = [{"label": f"{row.get('name') or code}",
@@ -240,7 +249,9 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
             "evidence": block,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
-                            "bidIn": code in bid_items, "basisState": basis_state,
+                            "bidIn": code in bid_items, "bidSource": bid_source,
+                            "bidSupplement": bid_supplement,
+                            "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"),
                             "lhbDate": prev_date},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
@@ -446,8 +457,24 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             bp = get_daban_prev_day_basis(date, [r["code"] for r in rows])
             basis_map = bp.get("basis") or {}
             basis_state = "ok" if basis_map else "missing"
-        except Exception as exc:   # noqa: BLE001 原料失败不阻断投喂（竞昨比不可考）
+        except Exception as exc:   # noqa: BLE001 原料失败不阻断投喂（竞昨比缺席）
             basis_state = f"fetch_failed:{exc}"
+    # 竞价榜外补源（2026-11-13 用户裁决：KPL 竞价榜非全市场）：腾讯竞价快照，
+    # 仅 09:25–09:30 窗口、仅榜外缺码、单条批量 URL；失败不阻断（榜外照旧缺席）
+    bid_items = lanes.get("bid") or {}
+    bid_supplement = "skipped_dry_run" if dry_run else "skipped_out_of_window"
+    if not dry_run and _in_auction_window():
+        missing = [r["code"] for r in rows if r["code"] not in bid_items]
+        if missing:
+            try:
+                sup = get_auction_snapshot_tencent(missing)
+                for c, it in (sup.get("items") or {}).items():
+                    bid_items[c] = it
+                bid_supplement = "tencent_auction" if sup.get("items") else "sup_missing"
+            except Exception as exc:   # noqa: BLE001 补源失败不阻断
+                bid_supplement = f"fetch_failed:{exc}"
+    if bid_items:
+        lanes["bid"] = bid_items   # 写回（lanes 假件可能无 bid 键：保证注入传播）
     gene_corpus = fetch_gene_corpus(db, prev_date) if prev_date else {}
     notice_corpus = fetch_notice_corpus(db, prev_date) if prev_date else {}
     heat_corpus = fetch_theme_heat(db, prev_date) if prev_date else {}
@@ -506,6 +533,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           reason_corpus=reason_corpus, lhb_facts=lhb_facts,
                           market_line=market_line, base_rate_stats=base_rate_stats,
                           basis_map=basis_map, basis_state=basis_state,
+                          bid_supplement=bid_supplement,
                           sector_judgment=sector_answers.get(board),
                           board_codes=by_board.get(board, [r]))
         built["auctionPushState"] = {"source": push_meta.get("source"),

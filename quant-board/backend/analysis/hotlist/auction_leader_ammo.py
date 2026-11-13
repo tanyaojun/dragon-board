@@ -21,7 +21,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA1"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-13d"   # 竞价六件套入叙事（供给换代）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-13e"   # 竞价榜外腾讯补源（供给换代）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -133,8 +133,9 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
     peers = 同板其他推送股 [{name, pct, amount}]（对比事实，缺省不出对比段）。
     信息量门槛：六字段任一可读且非 0 才出该股段；全缺 → None（整行缺席）。
     单字段缺位 = 缺位字段不出现（无占位符；2026-11-13 用户裁决：叙事禁「不可考」噪声）。
-    覆盖边界：bid 通道 = KPL 竞价榜 top N（max_size 百余只），榜外推送股
-    六字段不可得 → 整行缺席 + corpusState.bidIn 留痕，不伪造。
+    覆盖边界与补源：bid 通道 = KPL 竞价榜 top N（max_size 百余只）；榜外推送股由
+    runner 在 09:25–09:30 窗内经腾讯竞价快照补齐（source=tencent_auction），
+    窗外/补源失败仍缺席 → 整行缺席 + corpusState.bidIn/bidSource 留痕，不伪造。
     """
     if not entries:
         return None

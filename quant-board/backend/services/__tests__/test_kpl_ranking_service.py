@@ -911,3 +911,22 @@ def test_live_page_max_clamps_100(monkeypatch):
     svc._cache.clear()
     svc.get_live_commentary(st=999)
     assert captured["st"] == 100
+
+
+def test_auction_snapshot_tencent_parse(monkeypatch):
+    """A4d 字段表解析（2026-11-13 实测帧 fixture）：六件套同构字段 + 涨停委买门。"""
+    raw = 'v_sh603366="1~日出东方~603366~13.90~13.17~12.77~2187624~1038404~1149219~13.90~1387~13.91~1228~13.92~83~13.93~68~13.94~52~13.89~810~13.88~1131~13.87~2412~13.86~496~13.85~1854~~20261113161441~0.73~5.54~14.21~11.86~13.90/2187624/2844975660~2187624~284498~26.91~50.69~~14.21~11.86~17.84~113.01~113.01~2.59~14.49~11.85~4.58";\n'
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: raw)
+    out = svc.get_auction_snapshot_tencent(["603366"])
+    it = out["items"]["603366"]
+    assert it["bidding_pct"] == 5.54
+    assert it["bidding_amount"] == 284498 * 1e4
+    assert it["bidding_turnover"] == 26.91
+    assert abs(it["bidding_net"] - (1038404 - 1149219) * 100 * 13.90) < 1
+    assert "zt_buy_amount" not in it          # 非涨停（5.54% < 10%）不出封单
+    # 涨停判定：pct=10.01 且买一价=涨停价(13.17×1.1→14.49) → 出涨停委买额
+    svc._AUCTION_SNAP_CACHE.clear()   # 同 key TTL 缓存会吞第二帧
+    raw2 = raw.replace("~5.54~14.21", "~10.01~14.21").replace("~13.90~1387~13.91", "~14.49~1387~13.91")
+    monkeypatch.setattr(svc, "_http_get_text", lambda url: raw2)
+    it2 = svc.get_auction_snapshot_tencent(["603366"])["items"]["603366"]
+    assert it2["zt_buy_amount"] == 1387 * 100 * 14.49

@@ -92,6 +92,14 @@ def _post_form(url: str, params: Dict[str, Any], ua: str) -> dict:
         raise KplRankingError(f"upstream_unreachable: {type(exc).__name__}: {exc}", url=url) from exc
 
 
+def _http_get_text(url: str) -> str:
+    """GET 文本（腾讯行情 gbk；频控由调用方窗口门控负责）。"""
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.8"})
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
+        return resp.read().decode("gbk", "replace")
+
+
 def _cached(key: str) -> Optional[Dict[str, Any]]:
     hit = _cache.get(key)
     if hit and hit[0] > time.time():
@@ -885,6 +893,91 @@ def get_daban_prev_day_basis(date: str, codes: List[str]) -> Dict[str, Any]:
     missing = [c for c in uniq if c not in entry["map"]]
     return {"ok": True, "date": date, "basis": basis, "missing": missing,
             "source": "tencent_ifzq"}
+
+
+# 竞价补源快照（2026-11-13 用户裁决：KPL 竞价榜非全市场，榜外推送股用腾讯源补齐）。
+# 频控预算：调用方仅在 09:25–09:30 窗口内、且仅对竞价榜外缺码发起；单次 1 条批量
+# URL（qt.gtimg.cn 支持逗号合拼）；30s TTL 去重，最坏 3 批/日（重试槽）。红线 9 台账
+# 见预登记 §5。
+_AUCTION_SNAP_CACHE: Dict[str, Any] = {}
+_AUCTION_SNAP_LOCK = threading.Lock()
+_AUCTION_SNAP_TTL_SECONDS = 30.0
+
+
+def get_auction_snapshot_tencent(codes: List[str]) -> Dict[str, Any]:
+    """腾讯 qt.gtimg.cn 实时行情批量快照 → 竞价六件套同构字段（竞价窗口内语义）。
+
+    09:25–09:30 内：现价=竞价匹配价、成交额=竞价成交额、换手=竞价换手、
+    外盘-内盘=竞价主动净量。字段表 2026-11-13 实测：3=现价 4=昨收 7=外盘(手)
+    8=内盘(手) 9/10=买一价/量(手) 32=涨跌% 37=成交额(万) 38=换手%。
+    涨停委买额仅涨停判定时出（买一量×买一价；非涨停不伪装封单）。
+    返回 {ok, items: {code: 同构字段含 source:"tencent_auction"}, missing, fetchedAt}。
+    """
+    uniq: List[str] = []
+    seen = set()
+    for c in codes or []:
+        c = str(c).strip()[-6:]
+        if c and c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    if not uniq:
+        return {"ok": False, "reason": "missing_codes", "items": {}}
+    key = ",".join(sorted(uniq))
+    now = time.time()
+    with _AUCTION_SNAP_LOCK:
+        hit = _AUCTION_SNAP_CACHE.get(key)
+        if hit and now - hit["ts"] < _AUCTION_SNAP_TTL_SECONDS:
+            return hit["payload"]
+    q = ",".join(("sh" if c.startswith(("6", "9")) else "sz" if c.startswith(("0", "2", "3")) else "bj" if c.startswith(("4", "8")) else "sh") + c
+                 for c in uniq)
+    raw = _http_get_text("https://qt.gtimg.cn/q=" + q)
+    items: Dict[str, Dict[str, Any]] = {}
+    for line in raw.strip().splitlines():
+        if "~" not in line:
+            continue
+        f = line.split("~")
+        code = str(f[2]).strip()
+        if code not in seen:
+            continue
+
+        def _f(i: int) -> Optional[float]:
+            try:
+                v = float(f[i])
+            except (IndexError, ValueError):
+                return None
+            return v if v == v else None
+
+        price, prev_close = _f(3), _f(4)
+        pct = _f(32)
+        amt_wan = _f(37)                      # 成交额（万）
+        outer, inner = _f(7), _f(8)
+        buy1_price, buy1_vol = _f(9), _f(10)
+        turn = _f(38)
+        if price is None or prev_close is None or price <= 0 or prev_close <= 0:
+            continue                            # 原料残缺：不猜（fail-visible）
+        item: Dict[str, Any] = {"source": "tencent_auction"}
+        if pct is not None:
+            item["bidding_pct"] = pct
+        if amt_wan is not None:
+            item["bidding_amount"] = amt_wan * 1e4
+        if turn is not None:
+            item["bidding_turnover"] = turn
+        if outer is not None and inner is not None:
+            item["bidding_net"] = (outer - inner) * 100 * price
+        # 涨停判定：主板 10%/创业板科创 20%（代码前缀；涨停价=昨收×(1+幅)四舍五入）
+        rate = 0.20 if code.startswith(("30", "68")) else 0.10
+        limit_price = round(prev_close * (1 + rate), 2)
+        if (pct is not None and pct >= rate * 100 - 0.05
+                and buy1_price is not None and buy1_vol is not None
+                and buy1_price >= limit_price):
+            item["zt_buy_amount"] = buy1_vol * 100 * buy1_price
+        items[code] = item
+    payload = {"ok": True, "items": items,
+               "missing": [c for c in uniq if c not in items],
+               "fetchedAt": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
+    with _AUCTION_SNAP_LOCK:
+        _AUCTION_SNAP_CACHE[key] = {"ts": now, "payload": payload}
+    return payload
 
 
 def derive_bid_ratio_prev_vol(item: Any, basis_entry: Any) -> Optional[float]:
