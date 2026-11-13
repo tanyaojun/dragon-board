@@ -592,19 +592,18 @@ def test_match_kpl_news_content_only_shared_substring_hits():
     assert hits[0]["titleHit"] is False
 
 
-def test_alias_yiliao_yiyao_anchor_bci():
-    """2026-11-13 用户裁决（终锚）：竞价链 T−1 分组名「医疗医药」锚「脑机接口」。
+def test_alias_yiliao_yiyao_anchor_ai_medical():
+    """2026-11-13 用户裁决（终锚）：竞价链 T−1 分组名「医疗医药」锚「AI医疗」。
 
-    实证链：产业树无裸「医药」节点可子串命中；同日三轮裁决 创新药→医疗（落
-    医疗器械与澳洋健康脑机接口+民营医院驱动弱相关）→终锚脑机接口（树内 level1
-    裸节点，当期驱动直接对口）。字面「医药医疗」树内零命中不采用；板块级粒度
-    代价（同分组非脑机驱动股共享母链）已在 ALIASES 注释登记。
+    实证链：产业树无裸「医药」节点可子串命中；同日四轮裁决 创新药→医疗（落
+    医疗器械弱相关）→脑机接口（hot-1.79）→终锚 AI医疗（level1 hot-2.12，
+    正文在；子树 AI制药/华为/阿里同池）。字面「医药医疗」树内零命中不采用。
     """
-    assert D.ALIASES["医疗医药"] == ("脑机接口",)
-    assert D.board_keywords("医疗医药") == ["医疗医药", "脑机接口"]
-    nodes = [{"name": "脑机接口", "level": 1, "hot": -1.79, "content": "x"},
-             {"name": "脑机接口-上游硬件", "level": 2, "hot": 0.0, "content": "y"},
+    assert D.ALIASES["医疗医药"] == ("AI医疗",)
+    assert D.board_keywords("医疗医药") == ["医疗医药", "AI医疗"]
+    nodes = [{"name": "AI医疗", "level": 1, "hot": -2.12, "content": "x"},
+             {"name": "AI医疗-AI制药", "level": 2, "hot": 0.0, "content": "y"},
              {"name": "医疗器械", "level": 1, "hot": 0.7, "content": "z"}]
     m = D.match_industry(nodes, "医疗医药")
     assert m["matched"] is True and m["method"] == "alias"
-    assert (m["node"] or {}).get("name") == "脑机接口", "alias 精确命中 level1 裸节点"
+    assert (m["node"] or {}).get("name") == "AI医疗", "alias 精确命中 level1 裸节点，医疗器械不入池"
