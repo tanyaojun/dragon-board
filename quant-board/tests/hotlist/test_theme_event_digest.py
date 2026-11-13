@@ -592,17 +592,18 @@ def test_match_kpl_news_content_only_shared_substring_hits():
     assert hits[0]["titleHit"] is False
 
 
-def test_alias_yiliao_yiyao_anchor_innovation():
-    """2026-11-13 用户裁决：竞价链 T−1 分组名「医疗医药」锚创新药节点。
+def test_alias_yiliao_yiyao_anchor_medical():
+    """2026-11-13 用户裁决（二次修正）：竞价链 T−1 分组名「医疗医药」锚「医疗」。
 
     实证（002172 澳洋健康当日证据门强制全列 insufficient）：产业树无裸「医药」
-    节点可子串命中，树内仅创新药系节点；alias 通道与 board_keywords 事件链同条生效。
+    节点可子串命中；初锚创新药后用户改锚医疗（澳洋健康=脑机接口+民营医院，
+    创新药语义不符）。alias 通道与 board_keywords 事件链同条生效。
     """
-    assert D.ALIASES["医疗医药"] == ("创新药",)
-    assert D.board_keywords("医疗医药") == ["医疗医药", "创新药"]
-    nodes = [{"name": "创新药", "level": 1, "content": "x"},
-             {"name": "医药-创新药", "level": 2, "content": "y"},
-             {"name": "AI医疗-AI创新药", "level": 2, "content": "z"}]
+    assert D.ALIASES["医疗医药"] == ("医疗",)
+    assert D.board_keywords("医疗医药") == ["医疗医药", "医疗"]
+    nodes = [{"name": "医疗器械", "level": 1, "hot": 0.7, "content": "x"},
+             {"name": "AI医疗", "level": 1, "hot": 0.5, "content": "y"},
+             {"name": "医疗器械-影像设备", "level": 2, "content": "z"}]
     m = D.match_industry(nodes, "医疗医药")
     assert m["matched"] is True and m["method"] == "alias"
-    assert (m["node"] or {}).get("name") == "创新药", "取 level 最短裸节点"
+    assert (m["node"] or {}).get("name") == "医疗器械", "同层取 hot 最高"
