@@ -490,3 +490,31 @@ def test_hygiene_board_belong_push_concept_suffix():
         push_board="光伏", evidence_block="【题材证据】\n测试")
     _assert_clean(narr, "board_belong_push_suffix")
     assert "板块归属：寒潮（竞价推送概念：光伏）" in narr
+
+
+def test_hygiene_auction_no_unverifiable_noise():
+    """2026-11-13 用户裁决：竞价链叙事与题面禁「不可考」——缺位字段/整行缺席，不留噪声。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    import json as _json
+    # 叙事全参缺位（market_line/structure/bid_line/board 全 None）→ 无一行占位噪声
+    narr = AL.build_auction_leader_narrative(
+        date="2026-11-13", prev_date=None, market_line=None,
+        leader_name="中重科技", leader_code="603135", board=None,
+        push_line=None, bid_line=None, structure=None, ladder_line=None,
+        base_rate=None, sector_judgment=None, theme_heat_line=None,
+        push_board=None, evidence_block="题材证据块：测试")
+    assert "不可考" not in narr
+    assert "板块归属" not in narr, "板块缺席 = 整行缺席"
+    assert "昨日（" not in narr, "无 T−1 = 市场行缺席"
+    # 结构行缺 prev_date / 缺字段 → 缺位段不出现
+    assert AL.auction_structure_line({"sealedPrev": False}, prev_date=None) is None
+    ln = AL.auction_structure_line({"sealedPrev": False}, prev_date="2026-11-12")
+    assert "连板" not in ln and "不可考" not in ln
+    # 竞价行缺字段 → 缺位字段不出现
+    bid = [{"label": "中重科技", "item": {"bidding_pct": 3.05}}]
+    bl = AL.auction_bid_line(bid)
+    assert "不可考" not in bl and "竞价涨幅 +3.05%" in bl
+    # 题面措辞同步：竞价三新题无「不可考」（theme_continuation 为 v17 复用共享对象，
+    # 题面属题材链裁决范围，本轮不动，保持 is 同一对象身份）
+    for qk in ("auction_leader_seal_today", "leader_catalyst_hardness", "auction_seat_durability"):
+        assert "不可考" not in _json.dumps(AL.QUESTIONS_AUCTION_LEADER[qk], ensure_ascii=False)

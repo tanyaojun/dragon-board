@@ -885,3 +885,32 @@ def get_daban_prev_day_basis(date: str, codes: List[str]) -> Dict[str, Any]:
     missing = [c for c in uniq if c not in entry["map"]]
     return {"ok": True, "date": date, "basis": basis, "missing": missing,
             "source": "tencent_ifzq"}
+
+
+def derive_bid_ratio_prev_vol(item: Any, basis_entry: Any) -> Optional[float]:
+    """竞昨比＝竞价成交量(手)/昨日成交量(手)×100（2026-10-28 用户裁决口径）。
+
+    与 relay_page `kplDabanEnrichBidRatio` 逐字同口径：2103 quotas 不含量列，
+    竞价价=昨收×(1+竞价涨幅/100)，竞价量(手)=竞价成交额/(竞价价×100)。
+    原料缺（新股/拉取失败/非数）→ None，不猜数（fail-visible）。
+    """
+    if not isinstance(item, dict) or not isinstance(basis_entry, dict):
+        return None
+
+    def _num(v: Any) -> Optional[float]:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f else None   # NaN 视同缺
+
+    amt = _num(item.get("bidding_amount"))
+    pct = _num(item.get("bidding_pct"))
+    pc = _num(basis_entry.get("prev_close"))
+    pv = _num(basis_entry.get("prev_volume_shou"))
+    if amt is None or pct is None or not pc or not pv or pc <= 0 or pv <= 0:
+        return None
+    bid_price = pc * (1 + pct / 100)
+    if bid_price <= 0:
+        return None
+    return (amt / (bid_price * 100)) / pv * 100

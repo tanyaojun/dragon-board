@@ -294,3 +294,25 @@ def test_board_mapping_t1_missing_fallback(env, monkeypatch):
     assert doc["board"] == "机器人" and doc["boardSource"] == "push_concept"
     assert doc["boardMapping"]["pickedBy"] == "t1_final_missing"
     assert doc["boardMapping"]["t1Final"] is False
+
+
+def test_bid_six_fields_with_ratio(env, monkeypatch):
+    """竞价六件套入叙事（2026-11-13 用户裁决）：六字段 + 竞昨比派生 + 无占位噪声。"""
+    db, calls = env
+    db["kpl_daban_pool"].docs[DATE] = {
+        "_id": DATE, "date": DATE, "bid_empty": False,
+        "bid_items": [{"stock_id": "603135", "name": "中重科技",
+                       "bidding_pct": 10.0, "bidding_net": 1e6,
+                       "bidding_turnover": 1.0, "bidding_amount": 11e6,
+                       "zt_buy_amount": 5e6}]}
+    monkeypatch.setattr(L, "get_daban_prev_day_basis", lambda date, codes: {
+        "ok": True, "date": date,
+        "basis": {"603135": {"prev_close": 10.0, "prev_volume_shou": 20000.0}},
+        "missing": []})
+    L.run(DATE, confirm_budget=True)
+    n = db[L.COLLECTION].docs[f"{DATE}:603135"]["narrative"]
+    # 竞昨比 = (11e6/(10*1.1*100))/20000*100 = 50%
+    assert "竞昨比 50.00%" in n and "涨停委买额 0.05亿" in n
+    assert "竞价涨幅 +10.00%" in n and "不可考" not in n
+    cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]
+    assert cs["bidIn"] is True and cs["basisState"] == "ok"

@@ -46,6 +46,10 @@ from backend.analysis.hotlist.auction_leader_ammo import (
     build_auction_sector_narrative,
 )
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
+from backend.services.kpl_ranking_service import (
+    derive_bid_ratio_prev_vol,
+    get_daban_prev_day_basis,
+)
 from backend.analysis.hotlist.jev_lhb_ammo import collect_lhb_facts
 from backend.analysis.hotlist.theme_leader_ammo import (
     apply_evidence_gate,
@@ -181,7 +185,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               gene_corpus: dict, notice_corpus: dict, heat_corpus: dict,
               reason_corpus: dict, lhb_facts: dict | None,
               market_line: str, base_rate_stats: dict | None,
-              sector_judgment: dict | None, board_codes: list[str]) -> dict:
+              sector_judgment: dict | None, board_codes: list[str],
+              basis_map: dict | None = None, basis_state: str = "missing") -> dict:
     """个股级投喂组装（零网络零模型）：T−1 语料 + 当日竞价 + 推送行。"""
     code = str(row.get("code") or "")
     board = row.get("board")
@@ -200,8 +205,12 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
     peers = [{"name": r.get("name"), "pct": (bid_items.get(str(r.get("code"))) or {}).get("bidding_pct"),
               "amount": (bid_items.get(str(r.get("code"))) or {}).get("bidding_amount")}
              for r in board_codes if str(r.get("code")) != code] if board else []
+    bid_item = bid_items.get(code)
+    if bid_item is not None:
+        bid_item = {**bid_item, "ratio_prev_vol": derive_bid_ratio_prev_vol(
+            bid_item, (basis_map or {}).get(code))}
     bid_entries = [{"label": f"{row.get('name') or code}",
-                    "item": bid_items.get(code), "peers": peers}]
+                    "item": bid_item, "peers": peers}]
     lhb_codes, lhb_roles = _lhb_codes_roles(
         [str(r.get("code")) for r in board_codes], [(code, "待判龙头")])
     lhb_txt = lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles) \
@@ -211,12 +220,12 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
     block = digest.build_theme_evidence_block(
         db, board_name=board or "", date=date, leader_code=code, sealed_codes=None)
     narrative = build_auction_leader_narrative(
-        date=date, prev_date=prev_date or "不可考", market_line=market_line,
+        date=date, prev_date=prev_date, market_line=market_line,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
         push_board=row.get("pushBoard"),
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
         bid_line=auction_bid_line(bid_entries),
-        structure=auction_structure_line(facts, prev_date=prev_date or "不可考"),
+        structure=auction_structure_line(facts, prev_date=prev_date),
         ladder_line=(f"昨日（{prev_date}）" + board_ladder_line(t1_row))
         if t1_row else None,
         base_rate=auction_base_rate_line(base_rate_stats),
@@ -231,6 +240,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
             "evidence": block,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
+                            "bidIn": code in bid_items, "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"),
                             "lhbDate": prev_date},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
@@ -240,7 +250,8 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                      rows: list[dict], *, t1_rows: dict, pool_prev: dict,
                      lanes: dict, reason_corpus: dict, lhb_facts: dict | None,
                      market_line: str, base_rate_stats: dict | None,
-                     push_entries: list[dict]) -> dict:
+                     push_entries: list[dict],
+                     basis_map: dict | None = None, basis_state: str = "missing") -> dict:
     """板块级投喂组装（深度/延续两题；板内推送股并列事实）。"""
     members = []
     for r in rows:
@@ -249,8 +260,13 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         members.append({"streak": (t1_rows.get(code) or {}).get("streak"),
                         "sealedPrev": _sealed_prev(pool_prev, hit)})
     bid_items = lanes.get("bid") or {}
-    bid_entries = [{"label": str(r.get("name") or r.get("code")),
-                    "item": bid_items.get(str(r.get("code")))} for r in rows]
+    bid_entries = []
+    for r in rows:
+        _bi = bid_items.get(str(r.get("code")))
+        if _bi is not None:
+            _bi = {**_bi, "ratio_prev_vol": derive_bid_ratio_prev_vol(
+                _bi, (basis_map or {}).get(str(r.get("code"))))}
+        bid_entries.append({"label": str(r.get("name") or r.get("code")), "item": _bi})
     codes = [str(r.get("code")) for r in rows]
     lhb_codes, lhb_roles = _lhb_codes_roles(codes, [(c, "推送龙头") for c in codes])
     lhb_txt = lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles) \
@@ -261,10 +277,10 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         db, board_name=board, date=date, leader_code=codes[0] if codes else "",
         sealed_codes=None)
     narrative = build_auction_sector_narrative(
-        date=date, prev_date=prev_date or "不可考", market_line=market_line,
+        date=date, prev_date=prev_date, market_line=market_line,
         board=board,
         push_line=auction_push_line(push_entries, codes=codes),
-        board_structure=auction_board_structure_line(members, prev_date=prev_date or "不可考"),
+        board_structure=auction_board_structure_line(members, prev_date=prev_date),
         bid_line=auction_bid_line(bid_entries),
         base_rate=auction_base_rate_line(base_rate_stats),
         reason_line=limitup_reason_line(reason_entries_for_leaders(rows, reason_corpus)),
@@ -274,6 +290,7 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
             "narrative": narrative, "evidence": block,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
+                            "bidIn": code in bid_items, "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"), "lhbDate": prev_date},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 
@@ -410,7 +427,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
     # 一次取数全日共用（与题材链同哲学；T−1 语料 + 当日竞价）
     from backend.operations.jev_label_jiuyan import market_facts_line
-    market_line = market_facts_line(db, prev_date, dataset_id) if prev_date else "不可考"
+    market_line = market_facts_line(db, prev_date, dataset_id) if prev_date else None
     t1_rows: dict[str, dict] = {}
     if prev_date:
         t1_all, _meta = day_leader_rows(db, prev_date, dataset_id,
@@ -420,6 +437,17 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             t1_rows[str(r.get("code"))] = r
     pool_prev = fetch_pool_quality(db, prev_date) if prev_date else {"items": {}, "degraded": "no_prev_date"}
     lanes = fetch_daban_lanes(db, date)
+    # 竞昨比原料（腾讯日K，按日 12h 缓存与页面共享；≤推送股数/日、单股失败 10min
+    # 退避——红线 9 预算见预登记 §5）；dry-run 零外呼
+    basis_map: dict = {}
+    basis_state = "dry_run_skipped" if dry_run else "missing"
+    if not dry_run:
+        try:
+            bp = get_daban_prev_day_basis(date, [r["code"] for r in rows])
+            basis_map = bp.get("basis") or {}
+            basis_state = "ok" if basis_map else "missing"
+        except Exception as exc:   # noqa: BLE001 原料失败不阻断投喂（竞昨比不可考）
+            basis_state = f"fetch_failed:{exc}"
     gene_corpus = fetch_gene_corpus(db, prev_date) if prev_date else {}
     notice_corpus = fetch_notice_corpus(db, prev_date) if prev_date else {}
     heat_corpus = fetch_theme_heat(db, prev_date) if prev_date else {}
@@ -466,7 +494,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 db, date, prev_date, board, brows, t1_rows=t1_rows,
                 pool_prev=pool_prev, lanes=lanes, reason_corpus=reason_corpus,
                 lhb_facts=lhb_facts, market_line=market_line,
-                base_rate_stats=base_rate_stats, push_entries=push_entries))
+                base_rate_stats=base_rate_stats, push_entries=push_entries,
+                basis_map=basis_map, basis_state=basis_state))
     built_leaders: list[dict] = []
     for r in todo:
         board = str(r.get("board") or "未归属")
@@ -476,6 +505,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           notice_corpus=notice_corpus, heat_corpus=heat_corpus,
                           reason_corpus=reason_corpus, lhb_facts=lhb_facts,
                           market_line=market_line, base_rate_stats=base_rate_stats,
+                          basis_map=basis_map, basis_state=basis_state,
                           sector_judgment=sector_answers.get(board),
                           board_codes=by_board.get(board, [r]))
         built["auctionPushState"] = {"source": push_meta.get("source"),

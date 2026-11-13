@@ -6,7 +6,7 @@
 leader_rebound_popularity（A2：盘前无当日空间锚 / 事件门以收盘封板确认为前提）。
 
 叙事行只放数据事实（AGENTS §1.2-8）：口径/窗口/判据指引一律留在代码注释与 docs；
-缺数据整行缺席（None），行内个别字段缺位用最简「不可考」。全部新行过
+缺数据整行缺席（None），行内字段缺位 = 缺位字段不出现（无占位符）。全部新行过
 tests/hotlist/test_narrative_hygiene.py 黑名单。
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA1"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-13c"   # 板块映射二次裁决：T−1 涨停分组名（供给换代）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-13d"   # 竞价六件套入叙事（供给换代）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -41,7 +41,7 @@ QUESTIONS_AUCTION_LEADER = {
                         "不得以「无历史锚」判 insufficient；②量化证据：「竞价」行（高开"
                         "幅度/竞价额/竞价换手/竞价净额/同板对比）是当日承接的唯一可量化"
                         "判据源——竞价放量高开且净额为正=承接强；竞价缩量低开或净额大幅"
-                        "为负=承接弱。偏离中枢而引用时必须点名具体数字；行缺席、不可考"
+                        "为负=承接弱。偏离中枢而引用时必须点名具体数字；行缺席"
                         "时不得以该行为由调档，也不得自行补 0；③催化与身位：有明确日期"
                         "与新鲜度的题材证据（产业树/题材事件·新闻/前瞻日历/板内解析）"
                         "权重高于结构特征；引用新闻须按业务/产业链关联核实；「催化硬度」"
@@ -74,7 +74,7 @@ QUESTIONS_AUCTION_LEADER = {
                         "竞价对比高开幅度与竞价额均落后于同板其他推送股且无独立催化时"
                         "默认 relay_seat，除非昨日高度显著领先（领先差≥1 板）或热度排名"
                         "Top3；③板块判定=退潮期/临近结束时默认不得判 core_seat；④板块"
-                        "结构不可考且三层证据（产业树/题材事件·新闻/板内解析）同时缺失"
+                        "结构缺席且三层证据（产业树/题材事件·新闻/板内解析）同时缺席"
                         "才判 insufficient；证据部分缺位按在场证据判档并降低置信。",
         "criteria": {
             "core_seat": "身位稳固：昨日高度领先（领先差≥1 板）或热度/催化无可替代，"
@@ -83,7 +83,7 @@ QUESTIONS_AUCTION_LEADER = {
                               "Top3），但板块仍活跃，走向取决于开盘后卡位",
             "relay_seat": "接力位：高位卡位/情绪接力驱动、无独立催化、同板竞价对比落后，"
                           "随时可被替代",
-            "insufficient": "证据不足：板块结构不可考且三层证据同时缺失；部分缺位按在场"
+            "insufficient": "证据不足：板块结构缺席且三层证据同时缺席；部分缺位按在场"
                             "证据判档并降低置信",
         },
     },
@@ -117,19 +117,24 @@ def auction_push_line(entries: list[dict] | None, *,
             f"{s.get('name') or s.get('code')} {s['pct']:+.2f}%"
             if isinstance(s.get("pct"), (int, float)) else f"{s.get('name') or s.get('code')}"
             for s in stocks)
-        parts.append(f"{e.get('time') or '时间不可考'} {seg}")
+        parts.append((f"{e.get('time')} " if e.get('time') else "") + seg)
     if not parts:
         return None
     return "竞价看龙头推送：" + "；".join(parts)
 
 
 def auction_bid_line(entries: list[dict] | None) -> str | None:
-    """当日集合竞价五件套行（9:25 冻结）：涨幅/成交额/换手/净额 + 同板对比。
+    """当日集合竞价六件套行（9:25 冻结；2026-11-13 用户裁决补齐六字段）：
+    竞价涨幅%/竞价净额/竞价换手%/竞价成交额/竞昨比/涨停委买额 + 同板对比。
 
     entries = [{"label", "item", "peers"}]；item = bid 日档具名字段（bidding_pct/
-    bidding_amount/bidding_turnover/bidding_net）；peers = 同板其他推送股
-    [{name, pct, amount}]（对比事实，缺省不出对比段）。信息量门槛同 bid_line：
-    竞价额>0 或涨幅≠0 才出该股段；全缺 → None。
+    bidding_net/bidding_turnover/bidding_amount/zt_buy_amount）+ 派生
+    ratio_prev_vol（竞昨比，runner 经 get_daban_prev_day_basis 原料派生）；
+    peers = 同板其他推送股 [{name, pct, amount}]（对比事实，缺省不出对比段）。
+    信息量门槛：六字段任一可读且非 0 才出该股段；全缺 → None（整行缺席）。
+    单字段缺位 = 缺位字段不出现（无占位符；2026-11-13 用户裁决：叙事禁「不可考」噪声）。
+    覆盖边界：bid 通道 = KPL 竞价榜 top N（max_size 百余只），榜外推送股
+    六字段不可得 → 整行缺席 + corpusState.bidIn 留痕，不伪造。
     """
     if not entries:
         return None
@@ -139,20 +144,21 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
         if not isinstance(item, dict):
             continue
         pct = _qnum(item.get("bidding_pct"))
+        net = _qnum(item.get("bidding_net"))
+        tur = _qnum(item.get("bidding_turnover"))
         amt = _qnum(item.get("bidding_amount"))
-        has_amt = amt is not None and amt > 0
-        has_pct = pct is not None and pct != 0
-        if not (has_amt or has_pct):
+        ratio = _qnum(item.get("ratio_prev_vol"))
+        ztb = _qnum(item.get("zt_buy_amount"))
+        six = (pct, net, tur, amt, ratio, ztb)
+        if not any(v is not None and v != 0 for v in six):
             continue
         seg = f"{entry.get('label') or '该股'} "
-        seg += f"{pct:+.2f}%" if pct is not None else "竞价涨幅不可考"
-        seg += f" 竞价额 {_fmt_amount_yuan(amt)}" if has_amt else " 竞价额不可考"
-        tur = _qnum(item.get("bidding_turnover"))
-        if tur is not None:
-            seg += f" 竞价换手 {tur:g}%"
-        net = _qnum(item.get("bidding_net"))
-        if net is not None:
-            seg += f" 竞价净额 {_fmt_amount_yuan(net)}"
+        seg += f"竞价涨幅 {pct:+.2f}%" if pct is not None else ""
+        seg += f" 竞价净额 {_fmt_amount_yuan(net)}" if net is not None else ""
+        seg += f" 竞价换手 {tur:g}%" if tur is not None else ""
+        seg += f" 竞价成交额 {_fmt_amount_yuan(amt)}" if amt is not None else ""
+        seg += f" 竞昨比 {ratio:.2f}%" if ratio is not None else ""
+        seg += f" 涨停委买额 {_fmt_amount_yuan(ztb)}" if ztb is not None else ""
         peers = [p for p in (entry.get("peers") or []) if isinstance(p, dict)]
         if peers:
             # 身位题硬规则②引用「高开幅度与竞价额均落后」→ peers 额可读必须入叙事
@@ -167,17 +173,17 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
                 return txt
             cmp_txt = "、".join(_peer_txt(p) for p in peers[:3])
             seg += f"；同板竞价对比 {cmp_txt}"
-        parts.append(seg)
+        parts.append(seg.strip())
     return "竞价：" + "；".join(parts) if parts else None
 
 
 def auction_structure_line(facts: dict | None, *, prev_date: str) -> str | None:
     """昨日结构事实行（T−1 池档/龙头行直读）：高度/首封时点/昨日封板与否。
 
-    facts = {streak, ztTime, sealedPrev, gain10}；全缺 → None（整行缺席）。
-    个别字段缺位用最简「不可考」（§1.2-8 允许）。
+    facts = {streak, ztTime, sealedPrev, gain10}；全缺 → None（整行缺席）；
+    prev_date 缺 → None（事实必随 T−1）。字段缺位 = 缺位字段不出现（无占位符）。
     """
-    if not isinstance(facts, dict):
+    if not isinstance(facts, dict) or not prev_date:
         return None
     streak = facts.get("streak")
     sealed = facts.get("sealedPrev")
@@ -185,7 +191,8 @@ def auction_structure_line(facts: dict | None, *, prev_date: str) -> str | None:
     if streak is None and sealed is None and not zt:
         return None
     seg = f"昨日（{prev_date}）结构："
-    seg += (f"连板 {streak} 板" if isinstance(streak, int) else "连板高度不可考")
+    if isinstance(streak, int):
+        seg += f"连板 {streak} 板"
     if sealed is True:
         seg += "，昨日封板" + (f"（首封 {zt}）" if zt else "")
     elif sealed is False:
@@ -197,8 +204,10 @@ def auction_structure_line(facts: dict | None, *, prev_date: str) -> str | None:
 
 
 def auction_board_structure_line(members: list[dict] | None, *,
-                                 prev_date: str) -> str | None:
-    """板块级昨日结构行：板内推送股昨日封板家数 + 高度分布（纯事实）。"""
+                                 prev_date: str | None) -> str | None:
+    """板块级昨日结构行：板内推送股昨日封板家数 + 高度分布（纯事实）；prev_date 缺 → None。"""
+    if not prev_date:
+        return None
     members = [m for m in (members or []) if isinstance(m, dict)]
     if not members:
         return None
@@ -246,13 +255,15 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
     push_board：KPL 推送的题材炒作概念（2026-11-13 裁决：板块归属取韭研板块名，
     推送概念仅作事实并列披露，供 jev 交叉理解推送语境）。
     """
-    belong = f"板块归属：{board or '不可考'}"
-    if push_board and push_board != board:
-        belong += f"（竞价推送概念：{push_board}）"
-    lines = [f"{date} 交易日 · 竞价龙头盘前投喂",
-             f"昨日（{prev_date}）{market_line}",
-             f"待判龙头：{leader_name}（{leader_code}）",
-             belong]
+    belong = f"板块归属：{board}" if board else None
+    lines = [f"{date} 交易日 · 竞价龙头盘前投喂"]
+    if market_line:
+        lines.append(f"昨日（{prev_date}）{market_line}")
+    lines.append(f"待判龙头：{leader_name}（{leader_code}）")
+    if belong:
+        if push_board and push_board != board:
+            belong += f"（竞价推送概念：{push_board}）"
+        lines.append(belong)
     for ln in (push_line, bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
                notice_count_line, lhb_facts_line):
@@ -271,9 +282,10 @@ def build_auction_sector_narrative(*, date: str, prev_date: str, market_line: st
                                    reason_line: str | None = None,
                                    evidence_block: str) -> str:
     """板块级晨间叙事（深度/延续两题；双龙一/多推送股并列事实）。"""
-    lines = [f"{date} 交易日 · 竞价龙头盘前投喂",
-             f"昨日（{prev_date}）{market_line}",
-             f"待判板块：{board}"]
+    lines = [f"{date} 交易日 · 竞价龙头盘前投喂"]
+    if market_line:
+        lines.append(f"昨日（{prev_date}）{market_line}")
+    lines.append(f"待判板块：{board}")
     for ln in (push_line, board_structure, bid_line, base_rate, reason_line,
                lhb_facts_line):
         if ln:
