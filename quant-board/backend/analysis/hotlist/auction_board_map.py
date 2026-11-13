@@ -1,45 +1,45 @@
 # -*- coding: utf-8 -*-
-"""竞价龙头板块映射（2026-11-13 用户裁决）：推送概念 → 韭研板块名。
+"""竞价龙头板块映射（2026-11-13 用户裁决二次修订）：取 **jiuyan 打标链 T−1 涨停分组
+板块名**（`jiuyan_action {T−1}:final` fields 分组反查）。
 
-KPL 直播「竞价看龙头」的板块前缀是**题材炒作概念**（光伏/冰雪产业/羊年），与证据层
-口径错位：产业树精确节点、韭研异动板内解析分组（`jiuyan_action {date}:final` fields
-name 精确相等）、题材热度序列别名桥都按韭研板块名匹配——用推送概念会让三层证据
-假性全缺、jev 判 insufficient（2026-11-13 日出东方/东方海洋病案）。
+病案链：①KPL 推送板块前缀是题材炒作概念（光伏/冰雪产业/羊年），与证据层口径错位；
+②首版改韭研产业树全成分反查仍映射不上（产业树节点名/成分覆盖与涨停分组脱节，
+2026-11-13 用户裁决作废）。**涨停分组名才是证据层单一口径**：板内解析
+（board_snapshot fields name 精确相等）、产业树匹配、热度序列别名桥都消费它。
 
-裁决：龙头板块归属取**韭研板块名**——`jiuyan_industry_stocks` 全成分反查；多候选
-确定性选择序：①推送概念桥（归一双向包含/别名关键词，复用 digest 单实现）→
-②当日韭研异动分组在场 → ③产业树 hot 降序 → ④code 升序。无成分映射 → 回退推送
-概念 + `boardSource=push_concept` 结构化留痕（fail-visible，不伪造映射）。
+T−1 而非当日：09:26 晨间当日 final 尚未生成；T−1 涨停分组即昨日资金主战场。
+多候选确定性序：①推送概念桥（归一包含/别名关键词，复用 digest 单实现）→
+②分组成员数降序（主战场）→③组名升序。无命中/ T−1 final 缺席 → 回退推送概念 +
+`boardSource=push_concept` 结构化留痕（fail-visible，不伪造映射）。
 """
 from __future__ import annotations
 
 from typing import Any
 
 from backend.analysis.hotlist import theme_event_digest as digest
-from backend.operations import jiuyan_theme_store as S
 
-SOURCE_JIUYAN = "jiuyan_industry"
+SOURCE_JIUYAN = "jiuyan_action_t1"
 SOURCE_PUSH = "push_concept"
 
 
-def load_board_context(db: Any, date: str) -> dict:
-    """一次取数全日共用：成分反查索引 + 当日异动分组名 + 产业树 hot。"""
-    nodes = {str(n.get("code") or n.get("_id") or ""): n
-             for n in S.get_industry_nodes(db)}
-    index: dict[str, list[dict]] = {}
-    for d in db[S.COLLECTION_INDUSTRY_STOCKS].find({}, {"name": 1, "stocks": 1}):
-        code = str(d.get("_id") or "")
-        name = str(d.get("name") or "")
-        hot = (nodes.get(code) or {}).get("hot")
-        for s in d.get("stocks") or []:
+def load_board_context(db: Any, prev_date: str | None) -> dict:
+    """一次取数全日共用：T−1 涨停分组反查索引 + 组成员数 + final 在场旗标。"""
+    doc = (db["jiuyan_action"].find_one({"_id": f"{prev_date}:final"}, {"fields": 1})
+           if prev_date else None) or {}
+    index: dict[str, list[str]] = {}
+    group_n: dict[str, int] = {}
+    for f in doc.get("fields") or []:
+        name = str(f.get("name") or "")
+        if not name:
+            continue
+        stocks = [s for s in f.get("stocks") or [] if s]
+        group_n[name] = len(stocks)
+        for s in stocks:
             sc = str(s.get("code") or "")[-6:]
             if sc:
-                index.setdefault(sc, []).append(
-                    {"code": code, "name": name, "hot": hot})
-    act = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
-    groups = {digest.normalize_name(f.get("name"))
-              for f in act.get("fields") or [] if f.get("name")}
-    return {"index": index, "groups": groups, "nodes": nodes}
+                index.setdefault(sc, []).append(name)
+    return {"index": index, "groupN": group_n,
+            "t1Final": bool(doc.get("fields")), "prevDate": prev_date}
 
 
 def _push_bridge(push_board: str, cand_name: str) -> bool:
@@ -54,23 +54,20 @@ def _push_bridge(push_board: str, cand_name: str) -> bool:
 
 
 def resolve_leader_board(ctx: dict, code: str, push_board: str | None) -> dict:
-    """返回 {board, boardSource, pickedBy, pushBoard, candidates}（candidates 留痕审计）。"""
+    """返回 {board, boardSource, pickedBy, pushBoard, candidates, t1Final}。"""
     push = str(push_board or "").strip() or None
-    cands = list((ctx.get("index") or {}).get(str(code)[-6:], []))
-    base = {"pushBoard": push, "candidates": cands}
+    names = list((ctx.get("index") or {}).get(str(code)[-6:], []))
+    cands = [{"name": n, "n": (ctx.get("groupN") or {}).get(n, 0)} for n in names]
+    base = {"pushBoard": push, "candidates": cands,
+            "t1Final": bool(ctx.get("t1Final"))}
     if not cands:
         return {**base, "board": push, "boardSource": SOURCE_PUSH,
-                "pickedBy": "push_fallback"}
+                "pickedBy": "push_fallback" if ctx.get("t1Final") else "t1_final_missing"}
     if len(cands) == 1:
-        pick, by = cands[0], "single"
+        pick, by = cands[0], "t1_group"
     else:
         bridge = [c for c in cands if push and _push_bridge(push, c["name"])]
-        ingroup = [c for c in cands
-                   if digest.normalize_name(c["name"]) in (ctx.get("groups") or set())]
-        pool, by = ((bridge, "push_bridge") if bridge else
-                    (ingroup, "action_group") if ingroup else (cands, "hot"))
-        pick = sorted(pool, key=lambda c: (
-            -(c["hot"] if isinstance(c.get("hot"), (int, float)) else -1e9),
-            str(c["code"])))[0]
+        pool, by = ((bridge, "push_bridge") if bridge else (cands, "group_size"))
+        pick = sorted(pool, key=lambda c: (-c["n"], c["name"]))[0]
     return {**base, "board": pick["name"], "boardSource": SOURCE_JIUYAN,
             "pickedBy": by}

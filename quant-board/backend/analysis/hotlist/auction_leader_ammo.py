@@ -21,7 +21,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA1"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-13b"   # 板块映射裁决：推送概念→韭研板块名（供给换代）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-13c"   # 板块映射二次裁决：T−1 涨停分组名（供给换代）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")

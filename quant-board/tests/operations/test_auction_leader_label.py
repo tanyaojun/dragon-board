@@ -34,7 +34,7 @@ class FakeCol:
         return [dict(d) for d in self.docs.values()
                 if all(d.get(k) == v for k, v in (query or {}).items())]
 
-    def find_one(self, query=None, projection=None):
+    def find_one(self, query=None, projection=None, **kw):
         for d in self.docs.values():
             if all(d.get(k) == v for k, v in (query or {}).items()):
                 return dict(d)
@@ -264,21 +264,33 @@ def test_codes_selfheal_degraded_sector(env):
     assert len(calls) == n + 1
 
 
-def test_board_mapping_jiuyan_override(env):
-    """2026-11-13 用户裁决：板块归属取韭研板块名；推送概念事实并列；板块档随映射改键。"""
+def test_board_mapping_jiuyan_override(env, monkeypatch):
+    """2026-11-13 用户裁决（二次修订）：板块归属取 T−1 涨停分组名；推送概念事实并列。"""
     db, calls = env
-    db["jiuyan_industry_stocks"].docs["0106"] = {
-        "_id": "0106", "name": "寒潮", "stocks": [{"code": "603135"}]}
-    db["jiuyan_ai_industry"].docs["0106"] = {
-        "_id": "0106", "code": "0106", "name": "寒潮", "hot": 0.29}
+    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
+    db["jiuyan_action"].docs["2026-11-12:final"] = {
+        "_id": "2026-11-12:final",
+        "fields": [{"name": "机器人", "stocks": [{"code": "603135"}, {"code": "600001"}]},
+                   {"name": "大消费", "stocks": [{"code": "603135"}]}]}
     L.run(DATE, confirm_budget=True)
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
-    assert doc["board"] == "寒潮" and doc["pushBoard"] == "机器人"
-    assert doc["boardSource"] == "jiuyan_industry"
-    assert doc["boardMapping"]["pickedBy"] == "single"
-    assert "板块归属：寒潮（竞价推送概念：机器人）" in doc["narrative"]
-    assert f"{DATE}:board:寒潮" in db[L.COLLECTION].docs
-    assert f"{DATE}:board:机器人" not in db[L.COLLECTION].docs
-    sec = db[L.COLLECTION].docs[f"{DATE}:board:寒潮"]
-    assert sec["boardSources"] == ["jiuyan_industry"]
+    assert doc["board"] == "机器人" and doc["pushBoard"] == "机器人"
+    assert doc["boardSource"] == "jiuyan_action_t1"
+    assert doc["boardMapping"]["pickedBy"] == "push_bridge"   # 推送桥优先于组大小
+    assert doc["boardMapping"]["t1Date"] == "2026-11-12"
+    assert "板块归属：机器人" in doc["narrative"]
+    assert f"{DATE}:board:机器人" in db[L.COLLECTION].docs
+    sec = db[L.COLLECTION].docs[f"{DATE}:board:机器人"]
+    assert sec["boardSources"] == ["jiuyan_action_t1"]
     assert sec["segmentRows"][0]["pushBoard"] == "机器人"
+
+
+def test_board_mapping_t1_missing_fallback(env, monkeypatch):
+    """T−1 final 缺席 → 回退推送概念 + pickedBy=t1_final_missing 留痕（不伪造）。"""
+    db, calls = env
+    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
+    L.run(DATE, confirm_budget=True)
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert doc["board"] == "机器人" and doc["boardSource"] == "push_concept"
+    assert doc["boardMapping"]["pickedBy"] == "t1_final_missing"
+    assert doc["boardMapping"]["t1Final"] is False

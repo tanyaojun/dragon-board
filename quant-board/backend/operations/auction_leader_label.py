@@ -385,16 +385,20 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     rows = [{"code": str(s.get("code")), "name": s.get("name"),
              "board": s.get("board"), "pct": s.get("pct")}
             for s in push["stocks"] if s.get("code")]
-    # 2026-11-13 用户裁决：板块归属取韭研板块名（推送概念是题材炒作概念，与证据层
-    # 口径错位致三层证据假性全缺）；无成分映射回退推送概念 + boardSource 留痕
-    bctx = ABM.load_board_context(db, date)
+    prev_dates = trading_dates_before(db, date, 2, dataset_id)
+    prev_date = prev_dates[-1] if prev_dates else None
+    # 2026-11-13 用户裁决（二次修订）：板块归属取 jiuyan 打标链 **T−1 涨停分组**
+    # 板块名（产业树成分反查映射不上，作废）；无命中回退推送概念 + boardSource 留痕
+    bctx = ABM.load_board_context(db, prev_date)
     for r in rows:
         res = ABM.resolve_leader_board(bctx, r["code"], r.get("board"))
         r["board"] = res["board"]
         r["pushBoard"] = res["pushBoard"]
         r["boardSource"] = res["boardSource"]
         r["boardMapping"] = {"pickedBy": res["pickedBy"],
-                             "candidates": res["candidates"]}
+                             "candidates": res["candidates"],
+                             "t1Final": res["t1Final"],
+                             "t1Date": prev_date}
     excluded = [r for r in rows if r["board"] and digest.is_not_a_theme(r["board"])]
     if excluded:
         print(f"{date} 排除非题材行政桶 {len(excluded)} 只（{'、'.join(sorted({r['board'] for r in excluded}))}）——仅日志留痕")
@@ -404,8 +408,6 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if not rows:
         return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders"}
     rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
-    prev_dates = trading_dates_before(db, date, 2, dataset_id)
-    prev_date = prev_dates[-1] if prev_dates else None
     # 一次取数全日共用（与题材链同哲学；T−1 语料 + 当日竞价）
     from backend.operations.jev_label_jiuyan import market_facts_line
     market_line = market_facts_line(db, prev_date, dataset_id) if prev_date else "不可考"
