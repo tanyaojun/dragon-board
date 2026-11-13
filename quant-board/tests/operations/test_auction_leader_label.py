@@ -139,7 +139,7 @@ def test_fire_writes_docs_and_idempotent(env):
     assert leader["auctionSealToday"] == "mid_45_65"
     assert leader["questionSetVersion"] == "vA1"
     assert leader["outcomeSealedToday"] is None
-    assert "竞价看龙头推送：" in leader["narrative"]
+    assert "竞价看龙头推送（09:15 试盘价）：" in leader["narrative"]
     assert sector["docKind"] == "sector"
     assert sector["themeSpeculationDepth"] == "fermenting"
     n = len(calls)
@@ -349,7 +349,7 @@ def test_bid_supplement_out_of_window_no_fake(env, monkeypatch):
     monkeypatch.setattr(L, "_in_auction_window", lambda: False)
     L.run(DATE, confirm_budget=True)
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
-    assert "竞价：" not in doc["narrative"]
+    assert "竞价（09:25 匹配价）：" not in doc["narrative"]
     cs = doc["corpusState"]
     assert cs["bidIn"] is False and cs["bidSupplement"] == "skipped_out_of_window"
 

@@ -440,12 +440,16 @@ def test_hygiene_auction_leader_vA1_lines():
              "stocks": [{"code": "603135", "name": "中重科技", "pct": 3.05,
                          "board": "机器人", "boardRaw": "机器人"}]}]
     _assert_clean(AL.auction_push_line(push), "auction_push_line")
+    # 时点语义标注（2026-11-13 用户裁决）：双时点并存消解矛盾锚，措辞属市场机制语义
+    pl = AL.auction_push_line(push)
+    assert pl.startswith("竞价看龙头推送（09:15 试盘价）："), pl
     _assert_clean(AL.auction_push_line(push, codes=["603135"]), "auction_push_line(个股)")
     _assert_absent(AL.auction_push_line([]), "auction_push_line(无推送)")
     bid = [{"label": "中重科技", "item": {"bidding_pct": 3.05, "bidding_amount": 1.2e8,
                                           "bidding_turnover": 1.8, "bidding_net": 2e7},
             "peers": [{"name": "天普股份", "pct": 10.0, "amount": 1.2e8}]}]
     _assert_clean(AL.auction_bid_line(bid), "auction_bid_line")
+    assert AL.auction_bid_line(bid).startswith("竞价（09:25 匹配价）："), "双时点语义标注"
     assert "额 1.20亿" in AL.auction_bid_line(bid), "peers 竞价额入叙事（身位题判据证据）"
     _assert_absent(AL.auction_bid_line([{"label": "X", "item": None}]), "auction_bid_line(缺竞价)")
     _assert_clean(AL.auction_structure_line(

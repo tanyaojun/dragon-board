@@ -21,7 +21,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA1"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-13f"   # review 修复（卫生/渲染/缺席口径，供给换代）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-13g"   # 时点语义标注（09:15 试盘/09:25 匹配双时点并存，用户裁决）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -120,11 +120,14 @@ def auction_push_line(entries: list[dict] | None, *,
         parts.append((f"{e.get('time')} " if e.get('time') else "") + seg)
     if not parts:
         return None
-    return "竞价看龙头推送：" + "；".join(parts)
+    # 时点语义标注（2026-11-13 用户裁决：09:15 试盘与 09:25 匹配两时点并存，
+    # 裸并置矛盾锚致 jev 自判 insufficient——002172 当日 -10.06% vs -0.90% 实证；
+    # 市场机制语义属数据事实，非口径/采集开发注释，红线 8 用户显式裁决豁免）
+    return "竞价看龙头推送（09:15 试盘价）：" + "；".join(parts)
 
 
 def auction_bid_line(entries: list[dict] | None) -> str | None:
-    """当日集合竞价六件套行（9:25 冻结；2026-11-13 用户裁决补齐六字段）：
+    """当日集合竞价六件套行（09:25 匹配冻结；2026-11-13 用户裁决补齐六字段）：
     竞价涨幅%/竞价净额/竞价换手%/竞价成交额/竞昨比/涨停委买额 + 同板对比。
 
     entries = [{"label", "item", "peers"}]；item = bid 日档具名字段（bidding_pct/
@@ -178,7 +181,9 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
             cmp_txt = "、".join(t for t in (_peer_txt(p) for p in peers[:3]) if t)
             seg += f"；同板竞价对比 {cmp_txt}"
         parts.append(seg.strip())
-    return "竞价：" + "；".join(parts) if parts else None
+    # 时点语义标注（2026-11-13 用户裁决）：与 09:15 试盘推送行区分，消解同叙事
+    # 双竞价涨幅矛盾锚；市场机制语义属数据事实，非口径开发注释
+    return "竞价（09:25 匹配价）：" + "；".join(parts) if parts else None
 
 
 def auction_structure_line(facts: dict | None, *, prev_date: str) -> str | None:

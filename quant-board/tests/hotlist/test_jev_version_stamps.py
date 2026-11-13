@@ -144,7 +144,7 @@ def test_auction_leader_vA1_dedicated_stamps():
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
     assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA1"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-13f"   # review 修复（卫生/渲染/缺席口径）
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-13g"   # 时点语义标注换代
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # A2 删题锁定：空间/人气题不在晨间题集
     assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
