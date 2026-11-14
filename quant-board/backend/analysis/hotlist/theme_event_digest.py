@@ -482,7 +482,9 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                               window_days: int = 3, content_chars: int = CONTENT_CHARS,
                               max_events: int = MAX_EVENTS,
                               include_l2: bool = True,
-                              sealed_codes: frozenset[str] | set[str] | None = None) -> dict:
+                              sealed_codes: frozenset[str] | set[str] | None = None,
+                              l2_fallback_date: str | None = None,
+                              leader_expound_chars: int | None = None) -> dict:
     """生成题材证据块（v4：产业树 + KPL 事件/新闻/日历 + L2 板内解析）。
 
     返回 {text, industry, events, news, calendar, state, ...}（text 直接可拼进叙事）。
@@ -491,6 +493,13 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     三节改消费 `kpl_theme_*`；早报段落匹配泛化为共享子串锚）。
     `include_l2=False` = relay 兼容形状（不出板内解析/新闻流节；事件层来源标签随换源
     更新——relay 题材证据行为派生锚（不作主锚、判据未变），来源漂移已登记不重放）。
+    `l2_fallback_date`（2026-11-14b 竞价链原料修复，可选）：当日 final 未生成时
+    （晨间 09:26 槽）回退该日（T−1）final 取板内解析；回退命中时板内解析行内显式
+    标注榜单日期（数据事实），返回 l2Date/l2FallbackUsed 供 corpusState 留痕。
+    缺省 None = 旧行为（题材链零变化）。
+    `leader_expound_chars`（同上，可选）：待判龙头自身解析摘录的独立字数上限
+    （leader_code 在场时生效；同伴/板块级仍 content_chars）——防 260 字截断丢掉
+    控制权变更/公告等公司级硬事实（天普 605255 11-13 复盘）。缺省 None = 旧行为。
     """
     state = corpus_state(db, date=date)
     nodes = S.get_industry_nodes(db) if state.get("ok") else []
@@ -500,6 +509,12 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     # sealed 口径与板内解析节完全一致（boardCodes 封板名单），不引入第二个口径。
     snap = board_snapshot(db, date, board_name, leader_code,
                           sealed_codes=sealed_codes) if include_l2 else None
+    l2_date = date
+    if include_l2 and snap is None and l2_fallback_date and l2_fallback_date != date:
+        snap = board_snapshot(db, l2_fallback_date, board_name, leader_code,
+                              sealed_codes=sealed_codes)
+        if snap is not None:
+            l2_date = l2_fallback_date
     leader_tag_line = ""
     if snap is not None:
         _stocks = snap.get("stocks") or []
@@ -660,13 +675,17 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         # 不得冒称「龙头」（与双龙一结构行可能互相矛盾），显式标注身位
         # （2026-10-30g：「韭研分组序，非推导龙一」精简为「非龙一」，防误读保留）
         lead_label = "龙头" if str(leader_code or "") else "板内成员（非龙一）"
+        # 回退榜单日期显式入行（数据事实，非开发注释；AGENTS §1.2-8）
+        l2_tag = f"，{l2_date} 榜单" if l2_date != date else ""
         if lead is not None and exp:
             board_resolved = True
-            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只）："
+            lead_chars = (leader_expound_chars
+                          if leader_code and leader_expound_chars else content_chars)
+            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{l2_tag}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
-                         f"解析摘录：{_clip(body or exp, content_chars)}")
+                         f"解析摘录：{_clip(body or exp, lead_chars)}")
         elif lead is not None:
-            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只）："
+            lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{l2_tag}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析")
         peer_tags = []
         for p in [s for s in stocks if s is not lead][:5]:
@@ -708,4 +727,6 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             "heatSeries": heat,
             "evidenceMissing": missing_reason is not None,
             "evidenceMissingReason": missing_reason,
+            "l2Date": l2_date if include_l2 else None,
+            "l2FallbackUsed": bool(include_l2 and l2_date != date),
             "unmappedCandidates": match.get("candidates") or []}

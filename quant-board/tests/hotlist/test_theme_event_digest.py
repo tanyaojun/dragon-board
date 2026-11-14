@@ -607,3 +607,47 @@ def test_alias_yiliao_yiyao_anchor_ai_medical():
     m = D.match_industry(nodes, "医疗医药")
     assert m["matched"] is True and m["method"] == "alias"
     assert (m["node"] or {}).get("name") == "AI医疗", "alias 精确命中 level1 裸节点，医疗器械不入池"
+
+
+# 2026-11-14b 竞价链原料修复：L2 回退 + 龙头解析全文（天普 605255 复盘）
+LONG_EXP_CORE = "2023年6月2日互动，俄罗斯市场主机和配件供应受限是公司的市场机会，公司已布局俄语区售后服务网络。"
+LONG_ACTION = [{"_id": "2026-10-22:final", "fields": [
+    {"name": "俄乌重建", "count": 1, "stocks": [
+        {"code": "sz001360", "name": "南矿集团",
+         "expound": "金属矿山设备+金矿\n1、" + LONG_EXP_CORE * 8 + "ENDTOKEN控制权变更句。"}]}]}]
+
+
+def test_l2_fallback_date_when_today_final_missing():
+    """当日 final 未生成（晨间 09:26 槽常态）→ 回退 l2_fallback_date（T−1）final；
+    回退命中时行内显式标注榜单日期（数据事实），l2Date/l2FallbackUsed 返回供留痕。"""
+    db = _db()
+    db.cols["jiuyan_action"] = FakeCol(RUSSIA_ACTION)   # 仅 2026-10-22:final
+    res = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-23",
+                                       leader_code="001360",
+                                       l2_fallback_date="2026-10-22")
+    assert "板内解析（「俄乌重建」2 只，2026-10-22 榜单）" in res["text"]
+    assert res["l2FallbackUsed"] is True and res["l2Date"] == "2026-10-22"
+
+
+def test_l2_no_fallback_keeps_absence_line():
+    """不传回退日 = 旧行为（题材链零变化）：当日无分组行照出，l2FallbackUsed=False。"""
+    db = _db()
+    db.cols["jiuyan_action"] = FakeCol(RUSSIA_ACTION)
+    res = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-23",
+                                       leader_code="001360")
+    assert "板内解析：当日无「俄乌重建」板块分组" in res["text"]
+    assert res["l2FallbackUsed"] is False
+
+
+def test_leader_expound_not_clipped_when_budget_given():
+    """260 字截断会丢公司级硬事实（天普案：控制权变更句被截）——
+    leader_expound_chars 放行龙头自身摘录；同伴/板块级仍 content_chars。"""
+    db = _db()
+    db.cols["jiuyan_action"] = FakeCol(LONG_ACTION)
+    base = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
+                                        leader_code="001360")
+    full = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
+                                        leader_code="001360", leader_expound_chars=1200)
+    assert "ENDTOKEN" not in base["text"]      # 预设 260 截断丢尾部
+    assert "ENDTOKEN" in full["text"]          # 全文进窗
+    assert full["text"].count("解析摘录：") == 1

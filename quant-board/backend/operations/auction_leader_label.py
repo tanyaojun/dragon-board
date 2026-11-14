@@ -44,6 +44,7 @@ from backend.analysis.hotlist.auction_leader_ammo import (
     auction_dragon_line,
     auction_push_line,
     auction_structure_line,
+    auction_trial_line,
     build_auction_leader_narrative,
     build_auction_sector_narrative,
 )
@@ -64,7 +65,11 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     theme_heat_line,
     zt_gene_line,
 )
-from backend.operations.theme_leader_baseline import day_leader_rows, trading_dates
+from backend.operations.auction_trial_fetch import (
+    fetch_auction_trial, persist_trial_raw)
+from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
+                                                      trading_dates)
+from backend.operations.jev_label_jiuyan import jiuyan_streak_map
 from backend.operations.theme_leader_label import (
     DOC_KIND_LEADER,
     DOC_KIND_SECTOR,
@@ -249,15 +254,44 @@ def _inject_auction_sector_judgment(narrative: str, line: str) -> str:
     return "\n".join(lines)
 
 
-def _sealed_prev(pool_prev: dict, hit: dict) -> bool | None:
-    """昨日封板事实（2026-11-13 review major-3）：池档健康 → 命中且 pool_state=sealed
-    （炸板 broken 不算封板，与 kpl_lead_service 权威口径同）；健康查无此股=真不在池
-    → False；任何降级态（含 pool_empty，review 2026-11-13f：降级不得事实化成
-    「昨日未封板」）→ None 不判，段缺席；留痕在 corpusState.prevPool。"""
+def _sealed_prev_cross(pool_prev: dict, hit: dict, cross: dict | None,
+                       code: str) -> tuple[bool | None, str]:
+    """昨日封板事实 + 来源留痕（2026-11-14b 原料层修复 P1，天普 605255 复盘）。
+
+    KPL 池是截断排序榜（max_size 分页；11-12 档漏 605255 → 假事实「昨日未封板」）：
+    **缺席 ≠ 未封板**。交叉源 = sealed_and_info（韭研 final ∪ THS 炸板二分 + TDX
+    回封补证，题材链单一实现复用，纯 DB 读零新采集）。判定矩阵：
+    - 池降级 → None（不判，不变）；
+    - 池命中 sealed → True（pool）；
+    - 池命中 broken：交叉源证封板 → None（冲突不伪造）；否则 False（pool）；
+    - 池缺席：交叉源不可用（THS 缺/取数失败）→ False（pool_only 旧口径+留痕）；
+      交叉源证封板 → True（jiuyan_ths，池漏档）；证炸板 → False（jiuyan_ths_zhaban）；
+      全源无触板记录 → False（pool）。
+    """
     deg = pool_prev.get("degraded")
     if deg is not None:
-        return None
-    return bool(hit) and (hit.get("item") or {}).get("pool_state") == "sealed"
+        return None, "pool_degraded"
+    state = (hit.get("item") or {}).get("pool_state")
+    sealed_set = (cross or {}).get("sealed")
+    info = (cross or {}).get("info") or {}
+    if hit and state == "sealed":
+        return True, "pool"
+    if hit and state == "broken":
+        if sealed_set is not None and code in sealed_set:
+            return None, "conflict_pool_broken_cross_sealed"
+        return False, "pool"
+    if sealed_set is None:
+        return False, "pool_only"
+    if code in sealed_set:
+        return True, "jiuyan_ths"
+    if (info.get(code) or {}).get("zhaban"):
+        return False, "jiuyan_ths_zhaban"
+    return False, "pool"
+
+
+def _sealed_prev(pool_prev: dict, hit: dict) -> bool | None:
+    """旧口径兼容入口（池单源）；新代码走 _sealed_prev_cross（多源交叉+留痕）。"""
+    return _sealed_prev_cross(pool_prev, hit, None, "")[0]
 
 
 def _in_auction_window() -> bool:
@@ -291,20 +325,32 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               market_line: str, base_rate_stats: dict | None,
               sector_judgment: dict | None, board_codes: list[str],
               basis_map: dict | None = None, basis_state: str = "missing",
-              bid_supplement: str | None = None) -> dict:
-    """个股级投喂组装（零网络零模型）：T−1 语料 + 当日竞价 + 推送行。"""
+              bid_supplement: str | None = None,
+              prev_cross: dict | None = None, streak_map: dict | None = None,
+              trial: dict | None = None) -> dict:
+    """个股级投喂组装（零网络零模型）：T−1 语料 + 当日竞价 + 推送行。
+
+    trial = 试盘源载荷（增量2 骨架，合同定案前恒 None → trialState=contract_pending，
+    叙事无试盘行；定案后 = {"row": 盯盘试盘行具名字段, "source", "fetchedAt",
+    "prevPercentCross"}，由晨间窗内采集器單股传入）。"""
     code = str(row.get("code") or "")
     board = row.get("board")
     rows = [row]
-    # 昨日结构事实：T−1 龙头行命中 → 高度/10日涨幅；池档 → 昨日封板/首封时点
+    # 昨日结构事实：T−1 龙头行命中 → 高度/10日涨幅；池档+交叉源 → 昨日封板/首封时点
     hit = (pool_prev.get("items") or {}).get(code) or {}
     item = hit.get("item") or {}
+    sealed_prev, sealed_src = _sealed_prev_cross(pool_prev, hit, prev_cross, code)
     facts = {
-        "streak": (t1_row or {}).get("streak"),
+        "streak": (t1_row or {}).get("streak") or (streak_map or {}).get(code),
         "gain10": (t1_row or {}).get("gain10"),
-        "sealedPrev": _sealed_prev(pool_prev, hit),
+        "sealedPrev": sealed_prev,
         "ztTime": _hhmm(item.get("zt_time")),
     }
+    # 池漏档但交叉源证封板 → 首封时点取韭研（纯事实补全，来源留痕 prevPoolCross）
+    if not facts["ztTime"] and sealed_prev is True and prev_cross:
+        jt = ((prev_cross.get("info") or {}).get(code) or {}).get("time")
+        if isinstance(jt, str) and jt:
+            facts["ztTime"] = jt[:5]
     bid_items = lanes.get("bid") or {}
     # board=None（未归属）不出 peers：「同板竞价对比」名不副实（review nit）
     peers = [{"name": r.get("name"), "code": r.get("code"), "pct": (bid_items.get(str(r.get("code"))) or {}).get("bidding_pct"),
@@ -325,7 +371,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
     if lhb_txt and prev_date:
         lhb_txt = lhb_txt.replace("龙虎榜：", f"龙虎榜（{prev_date} 榜单）：", 1)
     block = digest.build_theme_evidence_block(
-        db, board_name=board or "", date=date, leader_code=code, sealed_codes=None)
+        db, board_name=board or "", date=date, leader_code=code, sealed_codes=None,
+        l2_fallback_date=prev_date, leader_expound_chars=1200)
     narrative = build_auction_leader_narrative(
         date=date, prev_date=prev_date, market_line=market_line,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
@@ -333,6 +380,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
         dragon_line=auction_dragon_line(row.get("dragonRoles"), prev_date=prev_date),
         bid_line=auction_bid_line(bid_entries),
+        trial_line=auction_trial_line((trial or {}).get("row")),
         structure=auction_structure_line(facts, prev_date=prev_date),
         ladder_line=_auction_ladder_line(t1_row, prev_date),
         base_rate=auction_base_rate_line(base_rate_stats),
@@ -354,7 +402,15 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
                             "bidSupplement": bid_supplement,
                             "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"),
-                            "lhbDate": prev_date},
+                            "prevPoolCross": sealed_src,
+                            "l2Date": block.get("l2Date"),
+                            "l2FallbackUsed": block.get("l2FallbackUsed"),
+                            "lhbDate": prev_date,
+                            "trialState": ({"state": "ok",
+                                            "source": trial.get("source"),
+                                            "fetchedAt": trial.get("fetchedAt"),
+                                            "prevPercentCross": trial.get("prevPercentCross")}
+                                           if trial else {"state": "contract_pending"})},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 
 
@@ -363,14 +419,15 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                      lanes: dict, reason_corpus: dict, lhb_facts: dict | None,
                      market_line: str, base_rate_stats: dict | None,
                      push_entries: list[dict],
-                     basis_map: dict | None = None, basis_state: str = "missing") -> dict:
+                     basis_map: dict | None = None, basis_state: str = "missing",
+                     prev_cross: dict | None = None) -> dict:
     """板块级投喂组装（深度/延续两题；板内推送股并列事实）。"""
     members = []
     for r in rows:
         code = str(r.get("code") or "")
         hit = (pool_prev.get("items") or {}).get(code) or {}
         members.append({"streak": (t1_rows.get(code) or {}).get("streak"),
-                        "sealedPrev": _sealed_prev(pool_prev, hit)})
+                        "sealedPrev": _sealed_prev_cross(pool_prev, hit, prev_cross, code)[0]})
     bid_items = lanes.get("bid") or {}
     bid_entries = []
     for r in rows:
@@ -389,7 +446,7 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         lhb_txt = lhb_txt.replace("龙虎榜：", f"龙虎榜（{prev_date} 榜单）：", 1)
     block = digest.build_theme_evidence_block(
         db, board_name=board, date=date, leader_code=codes[0] if codes else "",
-        sealed_codes=None)
+        sealed_codes=None, l2_fallback_date=prev_date)
     narrative = build_auction_sector_narrative(
         date=date, prev_date=prev_date, market_line=market_line,
         board=board,
@@ -430,6 +487,7 @@ def _label_one(db, col, date: str, built: dict, *,
     seal = answers.get("auction_leader_seal_today") or {}
     hard = answers.get("leader_catalyst_hardness") or {}
     seat = answers.get("auction_seat_durability") or {}
+    tpat = answers.get("trial_settlement_pattern") or {}
     depth = answers.get("theme_speculation_depth") or {}
     contn = answers.get("theme_continuation") or {}
     if doc_kind == DOC_KIND_SECTOR:
@@ -468,6 +526,7 @@ def _label_one(db, col, date: str, built: dict, *,
         "questionSetHash": QUESTION_SET_HASH_AUCTION_LEADER,
         "lhbState": built.get("lhbState"),
         "corpusState": built.get("corpusState"),
+        "corpusFrozen": bool(built.get("corpusFrozen")),
         "auctionPushState": built.get("auctionPushState"),
         "sectorJudgmentState": (built.get("sectorJudgmentState")
                                 if doc_kind == DOC_KIND_LEADER else None),
@@ -486,6 +545,8 @@ def _label_one(db, col, date: str, built: dict, *,
         "auctionSealProbabilities": seal.get("probabilities") if doc_kind == DOC_KIND_LEADER else None,
         "leaderCatalystHardness": hard.get("choice") if doc_kind == DOC_KIND_LEADER else None,
         "auctionSeatDurability": seat.get("choice") if doc_kind == DOC_KIND_LEADER else None,
+        "trialSettlementPattern": tpat.get("choice") if doc_kind == DOC_KIND_LEADER else None,
+        "trialSettlementProbabilities": tpat.get("probabilities") if doc_kind == DOC_KIND_LEADER else None,
         "themeSpeculationDepth": depth.get("choice") if doc_kind == DOC_KIND_SECTOR else None,
         "themeContinuation": contn.get("choice") if doc_kind == DOC_KIND_SECTOR else None,
         "status": "ok" if parsed["ok"] else "degraded",
@@ -611,6 +672,21 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         for r in t1_all or []:
             t1_rows[str(r.get("code"))] = r
     pool_prev = fetch_pool_quality(db, prev_date) if prev_date else {"items": {}, "degraded": "no_prev_date"}
+    # P1 交叉源（2026-11-14b）：韭研+THS 封板二分（题材链单一实现复用，纯 DB 读
+    # 零外呼）；THS 缺/取数失败 → sealed=None 回退池单源旧口径 + prevPoolCross 留痕
+    prev_cross: dict = {"sealed": None, "info": {}, "state": "no_prev_date"}
+    streak_map: dict = {}
+    if prev_date:
+        try:
+            _s, _i, _m = sealed_and_info(db, prev_date)
+            prev_cross = {"sealed": _s, "info": _i,
+                          "state": "ok" if _s is not None else "ths_missing"}
+        except Exception as exc:  # noqa: BLE001 — 交叉源失败不阻断投喂
+            prev_cross = {"sealed": None, "info": {}, "state": f"fetch_failed:{exc}"}
+        try:
+            streak_map = jiuyan_streak_map(db, prev_date) or {}
+        except Exception:  # noqa: BLE001 — 连板补全失败不阻断（streak 缺位省略）
+            streak_map = {}
     lanes = fetch_daban_lanes(db, date)
     # 竞昨比原料（腾讯日K，按日 12h 缓存与页面共享；≤入选股数/日（双源 roster）、
     # 单股失败 10min 退避——红线 9 预算见 vA2 预登记 §6）；dry-run 零外呼
@@ -639,6 +715,24 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 bid_supplement = f"fetch_failed:{exc}"
     if bid_items:
         lanes["bid"] = bid_items   # 写回（lanes 假件可能无 bid 键：保证注入传播）
+    # 试盘源采集（2026-11-14c 定案接线，勘察 §6 合同；WzsLinker api-auction.php）：
+    # 仅 09:25–09:30 窗（试盘行已定格，与 bid 补源同窗）、裸读≤1 + 陈旧补拉≤1（红线 9
+    # 台账 §6.4）；dry-run 零外呼；actual_date 守卫在解析层（回退数据不得冒充当日）
+    trial_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
+    trial_rows: dict = {}
+    if not dry_run and _in_auction_window():
+        try:
+            tr = fetch_auction_trial(date)
+            trial_rows = tr.get("rows") or {}
+            trial_state = {k: tr[k] for k in ("state", "saved_at", "fetched", "n_rows",
+                                              "actual_date", "message") if tr.get(k) is not None}
+            trial_state["attempts"] = tr.get("attempts") or []
+            # 全量 raw 日档落库（2026-11-14 用户裁决，§4.0 原始记录自持）：仅 ok 态写，
+            # 空档也是事实；persistState 进 trialState（fail-visible）
+            if tr.get("state") == "ok":
+                trial_state["persistState"] = persist_trial_raw(db, date, tr)
+        except Exception as exc:   # noqa: BLE001 试盘失败不阻断投喂（整行缺席留痕）
+            trial_state = {"state": f"fetch_failed:{exc}"}
     gene_corpus = fetch_gene_corpus(db, prev_date) if prev_date else {}
     notice_corpus = fetch_notice_corpus(db, prev_date) if prev_date else {}
     heat_corpus = fetch_theme_heat(db, prev_date) if prev_date else {}
@@ -686,10 +780,19 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 pool_prev=pool_prev, lanes=lanes, reason_corpus=reason_corpus,
                 lhb_facts=lhb_facts, market_line=market_line,
                 base_rate_stats=base_rate_stats, push_entries=push_entries,
-                basis_map=basis_map, basis_state=basis_state))
+                basis_map=basis_map, basis_state=basis_state,
+                prev_cross=prev_cross))
     built_leaders: list[dict] = []
     for r in todo:
         board = str(r.get("board") or "未归属")
+        # 〇 重跑语料冻结（2026-11-14b）：单只重跑（codes+force）复用晨间原件
+        # narrative/corpusState，防盘后重跑用当日 final 重建注入 look-ahead
+        # （天普 11-13 21:10 重跑教训）；全日 force 不受影响（有意重建）
+        frozen_doc = col.find_one({"_id": f"{date}:{r['code']}"}) if (codes and force) else None
+        trow = trial_rows.get(r["code"])
+        trial = ({"row": trow, "source": "wzslinker_auction",
+                  "fetchedAt": trial_state.get("saved_at"),
+                  "prevPercentCross": None} if trow else None)
         built = build_one(db, date, prev_date, r,
                           t1_row=t1_rows.get(r["code"]), pool_prev=pool_prev,
                           lanes=lanes, gene_corpus=gene_corpus,
@@ -699,13 +802,32 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           basis_map=basis_map, basis_state=basis_state,
                           bid_supplement=bid_supplement,
                           sector_judgment=sector_answers.get(board),
-                          board_codes=by_board.get(board, [r]))
+                          board_codes=by_board.get(board, [r]),
+                          prev_cross=prev_cross, streak_map=streak_map,
+                          trial=trial)
+        if (frozen_doc and frozen_doc.get("status") == "ok"
+                and frozen_doc.get("narrative")):
+            built["narrative"] = frozen_doc["narrative"]
+            built["corpusState"] = frozen_doc.get("corpusState") or built["corpusState"]
+            built["corpusFrozen"] = True
+            built["chars"] = len(built["narrative"])
+            built["estimatedTokens"] = estimate_tokens(built["chars"])
+        else:
+            # runner 级 trialState：有试盘行=骨架 ok 态上叠采集观测；无行= runner 态
+            # （skipped_dry_run / skipped_out_of_window / fetch_failed / fallback / no_row）
+            if trial is not None:
+                built["corpusState"]["trialState"] = {
+                    **(built["corpusState"].get("trialState") or {}), **trial_state}
+            else:
+                built["corpusState"]["trialState"] = (
+                    {**trial_state, "state": "no_row"}
+                    if trial_state.get("state") == "ok" else trial_state)
         built["auctionPushState"] = {"source": push_meta.get("source"),
                                      "entryN": len(push_entries),
                                      "reason": push_meta.get("reason")}
         # 推送行注入（全日共用 entries；个股级只列自身）
         push_txt = auction_push_line(push_entries, codes=[r["code"]])
-        if push_txt:
+        if push_txt and not built.get("corpusFrozen"):
             # 按行首定位插入（板块归属行可能带推送概念后缀，精确串 replace 会失配）
             _lines = built["narrative"].split("\n")
             for _i, _ln in enumerate(_lines):
@@ -740,14 +862,16 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             sector_answers[str(b["board"])] = b.get("answers") or {}
     for b in built_leaders:
         board = str((b.get("row") or {}).get("board") or "未归属")
-        line = sector_judgment_line(sector_answers.get(board))
-        if line:
-            b["narrative"] = _inject_auction_sector_judgment(b["narrative"], line)
-            b["sectorJudgmentState"] = "injected"
-        else:
-            b["narrative"] = "\n".join(ln for ln in b["narrative"].split("\n")
-                                       if not ln.startswith("板块判定："))
-            b["sectorJudgmentState"] = "sector_missing"
+        if not b.get("corpusFrozen"):
+            # 冻结叙事已含晨间注入，不二次注入；仍须重判（重跑=冻结语料+新判答）
+            line = sector_judgment_line(sector_answers.get(board))
+            if line:
+                b["narrative"] = _inject_auction_sector_judgment(b["narrative"], line)
+                b["sectorJudgmentState"] = "injected"
+            else:
+                b["narrative"] = "\n".join(ln for ln in b["narrative"].split("\n")
+                                           if not ln.startswith("板块判定："))
+                b["sectorJudgmentState"] = "sector_missing"
         ok, tk = _label_one(db, col, date, b, sample_origin=sample_origin)
         ok_n += 1 if ok else 0
         degraded_n += 0 if ok else 1

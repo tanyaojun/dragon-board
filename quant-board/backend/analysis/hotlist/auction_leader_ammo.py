@@ -13,8 +13,13 @@ tests/hotlist/test_narrative_hygiene.py 黑名单。
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
+from backend.operations.auction_trial_fetch import normalize_trial_time
+
+_TIME_PAT = re.compile(r"^\d{2}:\d{2}(:\d{2})?$")   # 规范 hh:mm(:ss)（finding-2 防御）
 from backend.analysis.hotlist.theme_leader_ammo import (
     QUESTIONS_THEME_LEADER,
     _fmt_amount_yuan,
@@ -22,8 +27,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     _questions_hash,
 )
 
-QUESTION_SET_VERSION_AUCTION_LEADER = "vA2"
-AMMO_VERSION_AUCTION_LEADER = "2026-11-14a"   # 选龙双源（推送∪韭研龙一/二/三）+ 身位题措辞换代（vA2 预登记 B5）
+QUESTION_SET_VERSION_AUCTION_LEADER = "vA3"   # 换代登记：auction-leader-vA3-preregistration-20261114（三点裁决：资金并入判据/保留五档/板块聚合留 vA4）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-14d"   # vA3 换代：封板题试盘分支+一字板分支+硬度方向解耦+新增 trial_settlement_pattern（题面 hash 变更；试盘行渲染/采集为 2026-11-14c 同轮产物）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -41,9 +46,17 @@ QUESTIONS_AUCTION_LEADER = {
                         "新证据（竞价承接突变、催化硬度、身位竞争等），不得凭整体行情"
                         "乐观或悲观移动档位；锚行缺席时按在场证据判档且 confidence ≤0.6，"
                         "不得以「无历史锚」判 insufficient；②量化证据：「竞价」行（高开"
-                        "幅度/竞价额/竞价换手/竞价净额/同板对比）是当日承接的唯一可量化"
-                        "判据源——竞价放量高开且净额为正=承接强；竞价缩量低开或净额大幅"
-                        "为负=承接弱。偏离中枢而引用时必须点名具体数字；行缺席"
+                        "幅度/竞价额/竞价换手/竞价净额/同板对比）与「竞价试盘」行（开始/"
+                        "结束试盘时点、试盘涨幅、首开额/最终额）是当日承接的两条可量化"
+                        "判据源，双时点合读——试盘涨幅是结束试盘时点快照、竞价行是 09:25 "
+                        "匹配冻结值，两者背离本身是形态信息。一字板分支：09:25 匹配价≈"
+                        "涨停限制且竞价成交/换手为零时按硬一字读法，竞价零值是「无对手盘」"
+                        "而非抛压，不得作负证据；可撤窗（09:20 前）结束试盘不得单独作负"
+                        "证据（撤单后由真实委托承接封板是常见活板形态），须与试盘涨幅"
+                        "符号/强度、最终额相对首开额的增减合读；试盘涨幅为负（end 时点"
+                        "跌破昨收）可作显著负证据；试盘行缺席时回退按竞价行判据，不得"
+                        "悬空引用缺席行。竞价放量高开且净额为正=承接强；竞价缩量低开或"
+                        "净额大幅为负=承接弱。偏离中枢而引用时必须点名具体数字；行缺席"
                         "时不得以该行为由调档，也不得自行补 0；③催化与身位：有明确日期"
                         "与新鲜度的题材证据（产业树/题材事件·新闻/前瞻日历/板内解析）"
                         "权重高于结构特征；引用新闻须按业务/产业链关联核实；「催化硬度」"
@@ -65,7 +78,17 @@ QUESTIONS_AUCTION_LEADER = {
                             "缺失；锚行缺席本身不是 insufficient 理由",
         },
     },
-    "leader_catalyst_hardness": QUESTIONS_THEME_LEADER["leader_catalyst_hardness"],
+    # vA3 方向解耦（裁决①：资金并入形态题判据；硬度题保留可证实性单维度）：
+    # 负面硬事实（澄清公告/风险提示等公司级可证实事实）按硬事实计档，不因利空降档——
+    # 方向影响由封板题/形态题合读，本题只判「有多可证实」不判方向（vA2 天普澄清案）
+    "leader_catalyst_hardness": {
+        **QUESTIONS_THEME_LEADER["leader_catalyst_hardness"],
+        "instructions": QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]["instructions"]
+                        + "⑤方向解耦：负面硬事实（澄清公告、风险提示、股东减持等公司级"
+                        "可证实事实）同样按硬事实计档——硬度只判「可证实性」，不判利好"
+                        "利空方向；其对封板/形态的影响由封板题与形态题合读，本题不得因"
+                        "方向利空而降档至软催化。",
+    },
     "auction_seat_durability": {
         "type": "choice",
         "instructions": "仅依据所给证据（昨日梯队/结构行、昨日韭研龙序行、同板入选股间"
@@ -90,12 +113,44 @@ QUESTIONS_AUCTION_LEADER = {
                             "证据判档并降低置信",
         },
     },
+    # vA3 新增（预登记 §2.2，五档均为 09:25 可观测事实，不问结局；校准梯度见预登记 §1，
+    # 禁嵌题面——题面随每次投喂重复注入，嵌率烧 token 且锚定偏差）
+    "trial_settlement_pattern": {
+        "type": "choice",
+        "instructions": "仅依据所给证据（竞价试盘行：开始/结束试盘时点、试盘涨幅、首开额/"
+                        "首加额/最大额/最终额、竞价成交/换手；竞价行：09:25 匹配价、竞价"
+                        "成交额/换手；结构行：连板/昨日封板），判断该股当日集合竞价试盘的"
+                        "**结算形态**属哪一档。形态档全部为 09:25 前可观测事实，不涉及对"
+                        "日内走势或收盘的预测，不给买卖建议。硬规则：①主锚=结束试盘时点"
+                        "三档（09:25:00 全匹配 / 09:20–09:25 不可撤窗 / 09:20 前可撤窗）"
+                        "×试盘涨幅相对当日涨跌幅限制的强度（顶死≥95% / 一半以上 / 一半"
+                        "以下 / 为负）；②资金姿态合读：最终额相对首开额的增减（含首加额）"
+                        "只作档内合读证据——撤单后资金撤减不等于弱（试盘单退出后由真实"
+                        "委托承接是常见活板形态），维持挂着不等于强，不得单凭增减定档；"
+                        "③试盘涨幅是「结束试盘时点」快照、竞价行是 09:25 匹配冻结值，"
+                        "两者背离本身是形态信息，合读时须分别点名时点；④试盘行缺席判 "
+                        "insufficient，不得以竞价行硬填形态档。",
+        "criteria": {
+            "hard_oneword": "硬一字形态：结束试盘=09:25:00（竞价全程匹配）且试盘涨幅"
+                            "顶近当日涨停限制，竞价行匹配价亦≈限价",
+            "no_cancel_settle": "不可撤窗定型：结束试盘落在 09:20–09:25（不可撤单窗内"
+                                "最后定型），试盘涨幅未顶死或试盘有反复",
+            "cancel_weak": "可撤窗撤单+试盘负涨幅：结束试盘在 09:20 前，且试盘涨幅为负"
+                           "（end 时点已跌破昨收）",
+            "cancel_neutral": "可撤窗撤单+低强度：结束试盘在 09:20 前，试盘涨幅为正但"
+                              "低于当日涨跌幅限制的一半",
+            "cancel_strong": "可撤窗撤单+高强度：结束试盘在 09:20 前，但试盘涨幅不低于"
+                             "当日涨跌幅限制的一半",
+            "insufficient": "试盘行缺席（非涨停价试盘/榜外/采集缺席）；竞价行不能替代"
+                            "试盘行定形态档",
+        },
+    },
 }
 QUESTION_SET_HASH_AUCTION_LEADER = _questions_hash(QUESTIONS_AUCTION_LEADER)
 AUCTION_LEADER_KEYS = tuple(QUESTIONS_AUCTION_LEADER)
-# 个股级子集（同调用判答零额外调用次数）
+# 个股级子集（同调用判答零额外调用次数；vA3 = 4 题）
 AUCTION_LEADER_QUESTIONS = ("auction_leader_seal_today", "leader_catalyst_hardness",
-                            "auction_seat_durability")
+                            "trial_settlement_pattern", "auction_seat_durability")
 
 
 # ── 叙事行（纯数据事实；None=整行缺席） ─────────────────────────────────────
@@ -187,6 +242,96 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
     # 时点语义标注（2026-11-13 用户裁决）：与 09:15 试盘推送行区分，消解同叙事
     # 双竞价涨幅矛盾锚；市场机制语义属数据事实，非口径开发注释
     return "竞价（09:25 匹配价）：" + "；".join(parts) if parts else None
+
+
+def _trial_amount(v: Any) -> str | None:
+    """试盘金额：数值（元）→ 亿/万双门槛（≥1亿才用亿；试盘主力档 100万–1亿若走
+    _fmt_amount_yuan 的 100万门槛会渲染成 X.XX亿 非零显零式误导，961万→0.10亿）；
+    「961万」等上游串 → 原样透传；缺/0 → None。"""
+    if v is None or isinstance(v, bool) or v == "" or v == 0:
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return f"{f / 1e8:.2f}亿" if abs(f) >= 1e8 else f"{f / 1e4:.1f}万"
+    s = str(v).strip()
+    return s or None
+
+
+def _trial_pct(v: Any) -> str | None:
+    """试盘百分：数值 → +X.XX%（涨幅）/X.XX%（换手）形态；上游串原样透传；缺/0 → None。"""
+    if v is None or isinstance(v, bool) or v == "" or v == 0:
+        return None
+    if isinstance(v, (int, float)):
+        return f"{float(v):+.2f}%"
+    s = str(v).strip()
+    return s or None
+
+
+def _trial_turnover(v: Any) -> str | None:
+    if v is None or isinstance(v, bool) or v == "" or v == 0:
+        return None
+    if isinstance(v, (int, float)):
+        return f"{float(v):g}%"
+    s = str(v).strip()
+    return s or None
+
+
+def auction_trial_line(trial: dict | None) -> str | None:
+    """当日竞价试盘行（KPL 盯盘试盘页签 Type=7；2026-11-14c 骨架，合同定案前不接线）。
+
+    trial = 盯盘试盘行具名字段（start_time/end_time/first_amount/first_add/
+    max_amount/last_amount/jj_percent/jj_amount/jj_turnover；数值元或上游
+    「961万」串均可，串原样透传）。缺位字段不出现；全缺 → None（整行缺席）。
+    零值口径（review finding-8 裁决留痕）：试盘侧 0=缺席（无信息量不占位，
+    §红线8 缺数据处理），与竞价侧「真零=事实」（一字板分支供给）不同，两行
+    口径不同是有意设计。
+
+    时点纪律（勘察 §4 语义警示）：jj_percent/jj_amount/jj_turnover 是 end_time
+    时点快照——end_time ≥ 09:25 标「竞价全程匹配」，早于则标「{end} 时点」；
+    start/end 任一缺或非 hh:mm 规范格式 → 时点不可锚，快照三列整组不出
+    （review finding-2：非规范串不得参与 ≥09:25 语义比较，事实不可出）。
+    语义警示：first/first_add/max/last_amount 语义待窗内与 App 同屏核对，
+    只出 App 原名数值、不解释含义；pre_percent 不进叙事（结构行已覆盖昨日
+    事实，交叉值走 corpusState.trialState.prevPercentCross 结构化留痕）。
+    """
+    if not isinstance(trial, dict):
+        return None
+    start = normalize_trial_time(trial.get("start_time"))
+    end = normalize_trial_time(trial.get("end_time"))
+    # review finding-2：时点语义（≥09:25 比较与快照注）仅对规范 hh:mm(:ss) 开放；
+    # 非规范串（含未补零带冒号）不得参与字典序比较——时点不可锚 = 快照事实不可出
+    canon = bool(start and _TIME_PAT.match(str(start))) and bool(end and _TIME_PAT.match(str(end)))
+    amounts = "，".join(
+        txt for txt in (
+            _trial_amount(trial.get("first_amount")) and
+            f"首开 {_trial_amount(trial.get('first_amount'))}",
+            _trial_amount(trial.get("first_add")) and
+            f"首加 {_trial_amount(trial.get('first_add'))}",
+            _trial_amount(trial.get("max_amount")) and
+            f"最大 {_trial_amount(trial.get('max_amount'))}",
+            _trial_amount(trial.get("last_amount")) and
+            f"最终 {_trial_amount(trial.get('last_amount'))}") if txt)
+    auction_seg = None
+    if canon:
+        note = "竞价全程匹配" if end >= "09:25" else f"{end} 时点"
+        pct = _trial_pct(trial.get("jj_percent"))
+        amt = _trial_amount(trial.get("jj_amount"))
+        tur = _trial_turnover(trial.get("jj_turnover"))
+        parts = [p for p in (
+            f"试盘涨幅 {pct}（{note}）" if pct else None,
+            f"竞价成交 {amt}" if amt else None,
+            f"换手 {tur}" if tur else None) if p]
+        if parts:
+            auction_seg = "；" + "，".join(parts)
+    body = amounts + (auction_seg or "")
+    if not body:
+        return None
+    head = "竞价试盘"
+    if canon:
+        head += f"（{start}–{end}）"
+    elif start:
+        head += f"（{start} 起）"
+    return head + "：" + body
 
 
 def auction_dragon_line(roles: list[dict] | None, *, prev_date: str | None) -> str | None:
@@ -302,6 +447,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    push_line: str | None, bid_line: str | None,
                                    structure: str | None,
                                    dragon_line: str | None = None,
+                                   trial_line: str | None = None,
                                    ladder_line: str | None = None,
                                    base_rate: str | None = None,
                                    sector_judgment: str | None = None,
@@ -326,7 +472,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
         if push_board and push_board != board:
             belong += f"（竞价推送概念：{push_board}）"
         lines.append(belong)
-    for ln in (push_line, dragon_line, bid_line, structure, ladder_line, base_rate,
+    for ln in (push_line, dragon_line, trial_line, bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
                notice_count_line, lhb_facts_line):
         if ln:

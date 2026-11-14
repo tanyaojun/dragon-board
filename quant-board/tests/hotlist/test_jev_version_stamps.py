@@ -137,15 +137,20 @@ def test_relay_v9_phase_state_machine_criteria():
     assert "leader_strength" not in relay.QUESTIONS_RELAY
 
 
-def test_auction_leader_vA2_dedicated_stamps():
-    """竞价龙头晨间链独立版本戳（vA2，2026-11-14 预登记 auction-leader-vA2）：
+def test_auction_leader_vA3_dedicated_stamps():
+    """竞价龙头晨间链独立版本戳（vA3，2026-11-14 预登记 auction-leader-vA3）：
     独立题集代际 + 独立 AMMO 戳；落档用独立戳（跨代不可比违规防范）。"""
     import inspect
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
-    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA2"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-14a"   # 选龙双源 + 身位题措辞换代
+    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA3"
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-14d"   # vA3 换代（试盘分支/一字板分支/硬度方向解耦/形态题）
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
+    # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）
+    assert al.AUCTION_LEADER_QUESTIONS == (
+        "auction_leader_seal_today", "leader_catalyst_hardness",
+        "trial_settlement_pattern", "auction_seat_durability")
+    assert "trial_settlement_pattern" in al.QUESTIONS_AUCTION_LEADER
     # B5 措辞锁定：身位题同板对比全集 = 入选股（双源），不再写死推送股
     seat = al.QUESTIONS_AUCTION_LEADER["auction_seat_durability"]
     seat_txt = seat["instructions"] + "".join(seat["criteria"].values())
@@ -154,10 +159,14 @@ def test_auction_leader_vA2_dedicated_stamps():
     # A2 删题锁定：空间/人气题不在晨间题集
     assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
     assert "leader_rebound_popularity" not in al.QUESTIONS_AUCTION_LEADER
-    # 板块两题与催化硬度题原文复用 v17（单一事实源）
+    # 板块两题原文复用 v17（单一事实源）；硬度题 vA3 起拍卖链本地覆写（方向解耦
+    # ⑤规则），criteria 原文仍同源，instructions 为拍卖链扩展版
     from backend.analysis.hotlist import theme_leader_ammo as tl
     assert al.QUESTIONS_AUCTION_LEADER["theme_speculation_depth"] is tl.QUESTIONS_THEME_LEADER["theme_speculation_depth"]
-    assert al.QUESTIONS_AUCTION_LEADER["leader_catalyst_hardness"] is tl.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]
+    ah = al.QUESTIONS_AUCTION_LEADER["leader_catalyst_hardness"]
+    th = tl.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]
+    assert ah is not th and ah["criteria"] == th["criteria"]
+    assert "方向解耦" in ah["instructions"] and "方向解耦" not in th["instructions"]
     src = inspect.getsource(ops._label_one)
     assert "QUESTION_SET_VERSION_AUCTION_LEADER" in src
     assert "QUESTION_SET_VERSION_THEME_LEADER" not in src

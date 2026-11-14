@@ -137,7 +137,7 @@ def test_fire_writes_docs_and_idempotent(env):
     sector = col.docs[f"{DATE}:board:机器人"]
     assert leader["docKind"] == "leader" and leader["status"] == "ok"
     assert leader["auctionSealToday"] == "mid_45_65"
-    assert leader["questionSetVersion"] == "vA2"
+    assert leader["questionSetVersion"] == "vA3"
     assert leader["outcomeSealedToday"] is None
     assert "竞价看龙头推送（09:15 试盘价）：" in leader["narrative"]
     assert sector["docKind"] == "sector"
@@ -757,3 +757,163 @@ def test_auction_pct_from_bid_lane_not_push(env):
     # 证据三徽章字段落库（复刻题材龙头事件列；env mock 证据块无 industry→None）
     assert "evidenceIndustry" in d603 and "evidenceBoardResolved" in d603
     assert "evidenceKwordTags" in d603
+
+
+def test_sealed_prev_cross_matrix():
+    """2026-11-14b P1：KPL 池=截断排序榜（11-12 漏 605255），缺席≠未封板。
+    交叉源=sealed_and_info（韭研 final ∪ THS 炸板二分，题材链单一实现）。"""
+    healthy = {"items": {"600001": {"item": {"pool_state": "sealed"}},
+                         "600002": {"item": {"pool_state": "broken"}}}, "degraded": None}
+    cross = {"sealed": {"600002", "600003"},
+             "info": {"600002": {"zhaban": True}, "600003": {"time": "09:47:41"}},
+             "state": "ok"}
+    # 池命中 sealed → pool True（双源一致或池独证）
+    assert L._sealed_prev_cross(healthy, healthy["items"]["600001"], cross, "600001") == (True, "pool")
+    # 池命中 broken + 交叉证封板（TDX 回封）→ 冲突不伪造
+    assert L._sealed_prev_cross(healthy, healthy["items"]["600002"], cross, "600002") == (
+        None, "conflict_pool_broken_cross_sealed")
+    # 池漏档 + 交叉证封板 → True（天普 11-12 形态）
+    assert L._sealed_prev_cross(healthy, {}, cross, "600003") == (True, "jiuyan_ths")
+    # 池漏档 + 交叉无触板记录 → 旧口径 False
+    assert L._sealed_prev_cross(healthy, {}, cross, "600009") == (False, "pool")
+    # 池漏档 + 交叉证炸板 → False
+    cross_zb = {"sealed": set(), "info": {"600010": {"zhaban": True}}, "state": "ok"}
+    assert L._sealed_prev_cross(healthy, {}, cross_zb, "600010") == (False, "jiuyan_ths_zhaban")
+    # 交叉不可用（THS 缺）→ 旧口径 + pool_only 留痕
+    assert L._sealed_prev_cross(healthy, {}, {"sealed": None, "info": {}, "state": "ths_missing"},
+                                "600011") == (False, "pool_only")
+    # 旧入口兼容：无交叉 → 行为不变
+    assert L._sealed_prev(healthy, healthy["items"]["600001"]) is True
+    assert L._sealed_prev(healthy, {}) is False
+
+
+def test_build_one_pool_miss_cross_seals_structure(monkeypatch):
+    """池漏档 + 交叉证封板 → 结构行出「昨日封板（首封 …）」（韭研时点补全），
+    streak 由 jiuyan_streak_map 兜底；corpusState.prevPoolCross 留痕。"""
+    monkeypatch.setattr(L.digest, "build_theme_evidence_block",
+                        lambda *a, **k: {"text": "题材证据块：测试", "state": {}})
+    row = {"code": "603135", "name": "中重科技", "board": "机器人", "pct": 3.0}
+    cross = {"sealed": {"603135"}, "info": {"603135": {"time": "09:47:41"}}, "state": "ok"}
+    built = L.build_one(
+        None, DATE, "2026-11-12", row, t1_row=None,
+        pool_prev={"items": {}, "degraded": None}, lanes={}, gene_corpus={},
+        notice_corpus={}, heat_corpus={}, reason_corpus={}, lhb_facts=None,
+        market_line="盘面事实：测试", base_rate_stats=None, sector_judgment=None,
+        board_codes=[row], prev_cross=cross, streak_map={"603135": 3})
+    assert "昨日（2026-11-12）结构：连板 3 板，昨日封板（首封 09:47）" in built["narrative"]
+    assert built["corpusState"]["prevPoolCross"] == "jiuyan_ths"
+
+
+def test_frozen_rerun_reuses_morning_narrative(env):
+    """2026-11-14b 〇：单只重跑（codes+force）复用晨间原件叙事（防盘后重跑用
+    当日 final 重建注入 look-ahead）；判答仍重烧（2 调用），computedAt 真更新。"""
+    db, calls = env
+    L.run(DATE, confirm_budget=True)
+    col = db[L.COLLECTION]
+    original = col.docs[f"{DATE}:603135"]["narrative"]
+    n = len(calls)
+    import time as _t
+    _t.sleep(0.005)
+    L.run(DATE, confirm_budget=True, force=True, codes={"603135"})
+    doc = col.docs[f"{DATE}:603135"]
+    assert doc["corpusFrozen"] is True
+    assert doc["narrative"] == original
+    assert len(calls) == n + 2          # 冻结只冻语料，判答仍重烧（板块自愈+个股）
+    assert doc["sectorJudgmentState"] == "injected"
+
+
+def test_trial_state_contract_pending_and_renderer_wiring(env, monkeypatch):
+    """骨架合同：窗外默认跑 → trialState=skipped_out_of_window 且叙事无试盘行；
+    build_one 直传载荷 → trialState=ok + 交叉留痕字段，叙事出试盘行。"""
+    db, calls = env
+    L.run(DATE, confirm_budget=True)
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert doc["corpusState"]["trialState"] == {"state": "skipped_out_of_window"}
+    assert "竞价试盘" not in doc["narrative"]
+
+    monkeypatch.setattr(L.digest, "build_theme_evidence_block",
+                        lambda *a, **k: {"text": "题材证据块：测试", "state": {}})
+    row = {"code": "603135", "name": "中重科技", "board": "机器人", "pct": 3.0}
+    trial = {"source": "kpl_dingpan_type7", "fetchedAt": "2026-11-16T09:24:50",
+             "prevPercentCross": "agree_3src", "row": {
+                 "start_time": "09:15:01", "end_time": "09:18:13",
+                 "first_amount": "756万", "jj_percent": 4.78}}
+    built = L.build_one(
+        None, DATE, "2026-11-13", row, t1_row=None,
+        pool_prev={"items": {}, "degraded": None}, lanes={}, gene_corpus={},
+        notice_corpus={}, heat_corpus={}, reason_corpus={}, lhb_facts=None,
+        market_line="盘面事实：测试", base_rate_stats=None, sector_judgment=None,
+        board_codes=[row], trial=trial)
+    assert built["corpusState"]["trialState"]["state"] == "ok"
+    assert built["corpusState"]["trialState"]["prevPercentCross"] == "agree_3src"
+    i_trial = built["narrative"].index("竞价试盘（09:15:01–09:18:13）")
+    assert "首开 756万" in built["narrative"]
+    assert "试盘涨幅 +4.78%（09:18:13 时点）" in built["narrative"]
+
+
+def test_run_wires_trial_in_window(env, monkeypatch):
+    """窗内：fetch 返回入选股试盘行 → 叙事出试盘行 + trialState=ok+采集观测留痕。"""
+    db, calls = env
+    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
+    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: {
+        "state": "ok", "saved_at": "2026-11-16T09:25:30+08:00", "fetched": False,
+        "n_rows": 95, "actual_date": date, "message": "已读取本地缓存数据",
+        "attempts": [{"refresh": False, "state": "ok"}],
+        "rows": {"603135": {"start_time": "09:15:00", "end_time": "09:20:11",
+                             "first_amount": 2_116_000.0, "max_amount": 2_116_000.0,
+                             "jj_percent": -2.36, "jj_amount": 3_310_000.0}}})
+    res = L.run(DATE, confirm_budget=True)
+    assert res["ok"]
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert "竞价试盘（09:15:00–09:20:11）：首开 211.6万" in doc["narrative"]
+    assert "试盘涨幅 -2.36%（09:20:11 时点）" in doc["narrative"]
+    ts = doc["corpusState"]["trialState"]
+    assert ts["state"] == "ok" and ts["saved_at"] == "2026-11-16T09:25:30+08:00"
+    assert ts["n_rows"] == 95 and ts["attempts"] == [{"refresh": False, "state": "ok"}]
+
+
+def test_run_out_of_window_trial_skipped(env, monkeypatch):
+    """窗外：零外呼（fetch 不被调）、试盘行缺席、trialState=skipped_out_of_window。"""
+    db, calls = env
+    monkeypatch.setattr(L, "_in_auction_window", lambda: False)
+    fired = []
+    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: fired.append(date) or {})
+    L.run(DATE, confirm_budget=True)
+    assert fired == []
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert "竞价试盘" not in doc["narrative"]
+    assert doc["corpusState"]["trialState"] == {"state": "skipped_out_of_window"}
+
+
+def test_trial_raw_persisted_in_window(env, monkeypatch):
+    """全量 raw 日档落库（2026-11-14 用户裁决）：窗内 ok 态 → auction_trial_raw 写入
+    全量 rows；trialState.persistState 留痕；fetch 失败不写不覆盖。"""
+    db, _ = env
+    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
+    ok_result = {"state": "ok", "actual_date": DATE, "saved_at": "2026-11-13T09:26:01",
+                 "fetched": False, "n_rows": 2,
+                 "rows": {"603135": {"max_amount": 21_160_000.0, "jj_percent": -2.36},
+                          "605255": {"max_amount": 9_610_000.0, "jj_percent": 4.78}},
+                 "attempts": [{"refresh": False, "state": "ok", "fetched": False}]}
+    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: ok_result)
+    L.run(DATE, confirm_budget=True)
+    raw = db["auction_trial_raw"].docs[DATE]
+    assert raw["tradingDate"] == DATE and raw["nRows"] == 2
+    assert raw["rows"]["605255"]["jj_percent"] == 4.78
+    cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]["trialState"]
+    assert cs["persistState"]["persisted"] is True and cs["state"] == "ok"
+
+
+def test_trial_raw_fetch_failed_not_persisted(env, monkeypatch):
+    """fetch_failed 无载荷不落（label trialState 留痕，raw 档不覆盖/不建）。"""
+    db, _ = env
+    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
+    monkeypatch.setattr(L, "fetch_auction_trial",
+                        lambda date: {"state": "http_error:URLError", "rows": {},
+                                      "n_rows": 0, "attempts": []})
+    L.run(DATE, confirm_budget=True)
+    assert db["auction_trial_raw"].docs.get(DATE) is None
+    cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]["trialState"]
+    assert cs["state"].startswith("fetch_failed") is False
+    assert cs["state"] == "http_error:URLError"
+    assert "persistState" not in cs

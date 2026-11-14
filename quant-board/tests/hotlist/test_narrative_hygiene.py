@@ -586,3 +586,23 @@ def test_hygiene_auction_leader_vA2_dragon_line():
         [{"streak": 2, "sealedPrev": True}], prev_date="2026-11-12")
     _assert_clean(bs, "auction_board_structure_line(入选)")
     assert "入选 1 只" in bs
+
+
+def test_auction_question_texts_no_calibration_leak():
+    """vA3 §2 纪律（2026-11-14 裁决）：题面禁嵌历史基数率/校准措辞——题面随每次投喂
+    重复注入，嵌率烧 token 且形成锚定偏差；校准梯度只进预登记文档与评估层。
+    档位定义百分比（45%-65%/<25% 等）不在禁列。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL3
+    banned_words = ("基率", "回测", "校准", "抽样", "分桶")
+    banned_stats = ("70%", "73%", "41%", "36%", "18%", "74%", "72%", "34%", "35%",
+                    "15%", "19%", "22%", "13%", "12%", "23%", "61%", "78%", "44%",
+                    "14%", "4%",
+                    # 60 日复校新数（base-rate-60d-evaluation §2/§3，同入禁列；
+                    # "5%" 与档位定义 "95%" 子串碰撞不单列，由其余禁数覆盖）
+                    "76%", "43%", "16%", "75%", "48%", "34%", "11%", "77%")
+    for key, q in AL3.QUESTIONS_AUCTION_LEADER.items():
+        txt = q["instructions"] + "".join(q["criteria"].values())
+        for w in banned_words:
+            assert w not in txt, f"{key} 题面含校准措辞 {w!r}"
+        for s in banned_stats:
+            assert s not in txt, f"{key} 题面嵌基数率 {s!r}"
