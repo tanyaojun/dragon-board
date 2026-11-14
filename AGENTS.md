@@ -23,6 +23,12 @@
 - 不自动执行 `git push`、建/合 PR、删分支、改远端，除非用户明确要求。
 - 提交前 `git status --short` 与 `git diff` 必须人工读过，只 `git add <明确文件路径>`，不混入无关重构与本地产物。
 - 不提交 `dist/ .tmp/ node_modules/ coverage/ playwright-report/ test-results/ *.tsbuildinfo *.exe` 及数据库/大体积产物。
+- **临时产物硬规则（2026-11-14 用户裁决）**：AI 产生的临时文件/脚本/输出（验证脚本、
+  调试快照、json/csv 中间产物、截图等）一律放仓库根 `tmp/`（gitignore，不进 git），
+  **用完即删**；禁止散落在根目录、子仓库或任何源码目录旁（历史教训：根目录
+  `.sched_final.tmp`、`_fire_launch_8002.cmd`、`*_tmp.mjs` 反复残留让用户擦屁股）。
+  提交前 `git status --short` 若出现自己本轮产生的临时文件残留，属违规，必须当场删。
+  确需保留的临时脚本应转正为正式测试/脚本或文档，不走 tmp。
 
 ### 1.1 隔离工作区硬规则
 
