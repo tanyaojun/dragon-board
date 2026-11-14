@@ -922,7 +922,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   alData: { loading: false, error: null, doc: null, rows: [] },
   alUi: { q: '', board: '', choice: '', outcome: '', hard: '', seat: '',
           openKey: null, page: 1, mode: 'detail', q1: '', q2: '' },
-  alSort: { key: 'date', dir: -1 },
+  alSort: { key: 'lead', dir: -1 },   // 默认领涨降序（龙一在前；2026-11-14 用户需求）
   alNarr: {},
   diebanEntries: [], diebanUi: { openKey: null },
   riseEntries: [], riseUi: { openKey: null },
@@ -952,7 +952,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
   cycleData: null,   // 市场情绪周期数据源（2026-11 并入情绪周期日级表周期五列）：market-cycle 读口 series
-  labelSort: { key: 'rank', dir: 1 },
+  labelSort: { key: 'lead', dir: -1 },   // 默认领涨降序（龙一在前；2026-11-14 用户需求）
   diebanSort: { key: 'pctChange', dir: 1 },
   riseSort: { key: 'pctChange', dir: -1 } };   // 上涨复盘默认涨幅最高在前（下跌复盘默认最弱在前）
 
@@ -1772,6 +1772,9 @@ function setRelaySort(key){
   renderRelayTab();
 }
 function sortMark(sortState, key){ return sortState.key === key ? (sortState.dir === 1 ? ' ▲' : ' ▼') : ''; }
+// 领涨强度（排序用）：龙一最强=3 / 龙二=2 / 龙三=1；无身位/缺位→null（恒垫后，不冒充 0/最值）。
+// 「领涨降序」=最强龙头在前（龙一置顶），涨停复盘与竞价龙头共用（2026-11-14）。
+function leadStrength(role){ return role === '龙一' ? 3 : role === '龙二' ? 2 : role === '龙三' ? 1 : null; }
 function renderRelayTab(){
   // 2026-11 用户裁决：日期列版本徽章删除，题集版本迁入行展开详情卡 title（detailHtml verTag，
   // 混代际琥珀警示语义保留）。周期五列（天花板/≥3板/主板龙一/双创龙一/事件）数据源 =
@@ -2972,6 +2975,29 @@ function tlCycleBadge(r){
       + '">新龙</span>' : '';
   return st + reb;
 }
+// 题材证据分层「事件」格（题材龙头/竞价龙头共用单源，2026-11-14 复刻）：
+// 只出窄徽章（事件/新闻/题材），题材名称不显示（与「板块」列重复）；完整文本进 tooltip。
+// 缺失原因徽章 fail-visible；产业树已映射但无证据 → 灰 '-'。
+function evidenceCellHtml(r){
+  const evTitles = r.evidenceEventTitles || [];
+  const evTags = r.evidenceKwordTags || [];
+  const evNews = r.evidenceNewsTitles || [];
+  const evTitleBadge = evTitles.length
+    ? ' <span class="tl-ev" title="' + esc(evTitles.join('\n')) + '">+' + evTitles.length + '事件</span>'
+    : '';
+  const evNewsBadge = evNews.length
+    ? ' <span class="tl-ev" title="' + esc(evNews.join('\n')) + '">+' + evNews.length + '新闻</span>'
+    : '';
+  const evTagBadge = evTags.length
+    ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length + '</span>'
+    : '';
+  return r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
+      ? (evTitleBadge + evNewsBadge + evTagBadge
+        || '<span class="badge b-gray" title="产业树已映射但无事件/新闻/标签证据">-</span>')
+      : (r.evidenceMissingReason
+        ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
+        : '<span class="badge b-gray">-</span>');
+}
 function tlRowHtml(r, f){
   const p = tlProb(r);
   const open = f.openKey === tlKey(r);
@@ -3005,28 +3031,7 @@ function tlRowHtml(r, f){
   // 2026-11-12 用户裁决：板内 L2 解析徽章下线（列表缩紧），摘要迁详情卡 meta 常显
   // 2026-10-27 用户裁决（两轮纠偏定稿）：事件列**只出窄徽章、题材名称一律不显示**
   //（名称与「板块」列重复，占宽）；完整题材驱动事件文字描述进 tooltip。
-  const evTitles = r.evidenceEventTitles || [];
-  const evTags = r.evidenceKwordTags || [];
-  // 题材新闻命中镜像（2026-11-02：此前只活在叙事文本里，结构化层/徽章层不可见）
-  const evNews = r.evidenceNewsTitles || [];
-  const evTitleBadge = evTitles.length
-    ? ' <span class="tl-ev" title="' + esc(evTitles.join('\n')) + '">+' + evTitles.length
-      + '事件</span>'
-    : '';
-  const evNewsBadge = evNews.length
-    ? ' <span class="tl-ev" title="' + esc(evNews.join('\n')) + '">+' + evNews.length
-      + '新闻</span>'
-    : '';
-  const evTagBadge = evTags.length
-    ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length
-      + '</span>'
-    : '';
-  const evid = r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
-      ? (evTitleBadge + evNewsBadge + evTagBadge
-        || '<span class="badge b-gray" title="产业树已映射但无事件/新闻/标签证据">-</span>')
-      : (r.evidenceMissingReason
-        ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
-        : '<span class="badge b-gray">-</span>');
+  const evid = evidenceCellHtml(r);   // 与竞价龙头「事件」列共用单源（复刻）
   // 溢价列已删（2026-11-12 用户截图需求：列表缩紧）；T+2 溢价保留在详情卡 meta（fail-visible 出口）
   const dkey = js(r.tradingDate || '');
   return '<tr class="lg-row' + (open ? ' open' : '')
@@ -3327,9 +3332,22 @@ function alProb(row){
   const p = row.probabilities || {};
   const parts = Object.entries(AL_MIDPOINTS).map(kv => [Number(p[kv[0]] || 0), kv[1]]);
   const total = parts.reduce((a, kv) => a + kv[0], 0);
-  if (total <= 0.0001) return { text: '-' };
+  if (total <= 0.0001) return { text: '-', val: null };
   const est = parts.reduce((a, kv) => a + kv[0] * kv[1], 0) / total;
-  return { text: Math.round(est * 100) + '%' };
+  return { text: Math.round(est * 100) + '%', val: est };
+}
+// 领涨=本股龙序（dragonRoles 主板命中，回退首条）；推送单源无龙序 → null（不伪造身位）
+function alLeadRole(r){
+  const roles = r.dragonRoles || [];
+  if (!roles.length) return null;
+  const hit = roles.find(x => x.board === r.board) || roles[0];
+  return hit ? (hit.role || null) : null;
+}
+// 涨幅格式化（兼容数字/数字字符串；缺位/非有限 → '-'，不伪造数）
+function alPctTxt(v){
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  if (v == null || !isFinite(n)) return '-';
+  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 function alConfTip(r, key){
   if (r.gate && r.gate.applied && (r.gate.forcedKeys || []).includes(key))
@@ -3362,9 +3380,14 @@ function alFiltered(){ return alRows().filter(r => alMatches(r, STATE.alUi)); }
 function alSorted(list){
   const st = STATE.alSort;
   const kv = { date: r => r.tradingDate || '', code: r => r.code || '', name: r => r.name || '',
-    board: r => r.board || '', pct: r => r.auctionPct == null ? -999 : r.auctionPct };
+    board: r => r.board || '', pct: r => r.auctionPct == null ? -999 : r.auctionPct,
+    rpct: r => r.realtimePct == null ? -999 : r.realtimePct,
+    lead: r => leadStrength(alLeadRole(r)), prob: r => alProb(r).val };
   if (!kv[st.key]) return list;
+  const nullLast = st.key === 'lead' || st.key === 'prob';   // 缺身位/缺概率恒垫后（fail-visible）
   return list.slice().sort((a, b) => { const va = kv[st.key](a), vb = kv[st.key](b);
+    if (nullLast){ const ma = va == null, mb = vb == null;
+      if (ma && mb) return 0; if (ma) return 1; if (mb) return -1; }
     return (va < vb ? -1 : va > vb ? 1 : 0) * st.dir; });
 }
 function alSet(key, value){ STATE.alUi[key] = value;
@@ -3374,7 +3397,8 @@ function alBoard(name){ STATE.alUi.board = (STATE.alUi.board === name ? '' : nam
 function alPage(v){ STATE.alUi.page = v; alRefresh(); }
 function alSortBy(key){
   const st = STATE.alSort;
-  if (st.key === key) st.dir = -st.dir; else { st.key = key; st.dir = key === 'date' ? -1 : 1; }
+  if (st.key === key) st.dir = -st.dir;
+  else { st.key = key; st.dir = (key === 'code' || key === 'name' || key === 'board') ? 1 : -1; }
   STATE.alUi.page = 1; alRefresh();
 }
 function alClear(){
@@ -3490,11 +3514,11 @@ function alRenderRows(){
   const th = (label, key) => '<th class="sortable" onclick="alSortBy(\'' + key + '\')">'
     + esc(label) + sortMark(STATE.alSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
-    + th('板块', 'board') + th('竞价涨幅', 'pct')
-    + '<th>封板概率</th><th>档位</th><th>催化</th><th>身位</th>'
-    + '<th>题材深度</th><th>延续性</th><th>结局</th></tr>'
+    + th('板块', 'board') + th('领涨', 'lead') + th('竞价涨幅', 'pct') + th('实时涨幅', 'rpct')
+    + th('封板概率', 'prob') + '<th>档位</th><th>催化</th><th>身位</th>'
+    + '<th>题材深度</th><th>延续性</th><th>事件</th><th>结局</th></tr>'
     + (pg.rows.length ? pg.rows.map(r => alRowHtml(r, f)).join('')
-      : '<tr><td class="empty" colspan="12">无匹配竞价龙头（调整区间或筛选条件）</td></tr>');
+      : '<tr><td class="empty" colspan="15">无匹配竞价龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('alPagerHost'); if (ph) ph.innerHTML = alPager(pg.page, pg.total);
 }
 function alPager(page, total){
@@ -3527,9 +3551,12 @@ function alRowHtml(r, f){
     AL_DEPTH_BADGE[r.themeSpeculationDepth] || 'b-gray');
   const contCell = badge(AL_CONT_CN[r.themeContinuation] || r.themeContinuation || '-',
     AL_CONT_BADGE[r.themeContinuation] || 'b-gray');
-  const pct = r.auctionPct;
-  const pctTxt = (pct == null || typeof pct !== 'number') ? '-'
-    : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
+  const pctTxt = alPctTxt(r.auctionPct);       // 竞价涨幅（bid 通道真竞价值）
+  const rpctTxt = alPctTxt(r.realtimePct);     // 实时涨幅（推送芯片 pct）
+  const leadRole = alLeadRole(r);
+  const leadCell = badge(leadRole, 'b-purple',
+    leadRole ? '领涨身位：' + leadRole + '（韭研 T−1 涨停分组龙序）' : '');
+  const evid = evidenceCellHtml(r);
   const srcs = r.selectionSources || ['auction_push'];
   const dragonTxt = (r.dragonRoles || []).map(x => (x.board || '') + (x.role || '')
     + (x.boards > 1 ? '（' + (x.days > 1 ? x.days + '天' : '') + x.boards + '板' + (x.zhaban ? '，炸板' : '') + '）'
@@ -3550,11 +3577,13 @@ function alRowHtml(r, f){
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
     + '<td>' + esc(r.board || '未归属') + dragonBad + pushBad + bidBad + '</td>'
-    + '<td class="num">' + pctTxt + '</td>'
+    + '<td>' + leadCell + '</td>'
+    + '<td class="num" title="竞价涨幅（09:25 匹配价，bid 通道 bidding_pct）">' + pctTxt + '</td>'
+    + '<td class="num" title="实时涨幅（09:15 竞价看龙头推送芯片 pct）">' + rpctTxt + '</td>'
     + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td><td>' + hardCell + '</td><td>' + seatCell + '</td>'
-    + '<td>' + depthCell + '</td><td>' + contCell + '</td><td>' + outcome + '</td></tr>'
-    + (open ? '<tr class="lg-detail"><td colspan="12">' + alDetailHtml(r) + '</td></tr>' : '');
+    + '<td>' + depthCell + '</td><td>' + contCell + '</td><td>' + evid + '</td><td>' + outcome + '</td></tr>'
+    + (open ? '<tr class="lg-detail"><td colspan="15">' + alDetailHtml(r) + '</td></tr>' : '');
 }
 function alOpenRow(){
   const k = STATE.alUi.openKey;
@@ -3790,6 +3819,9 @@ function labelBoardOf(s){ return s.boardName || s.board || '未分板块'; }
 // null=断板股回溯不可算（不冒充，单列「真连板未定」）；
 // undefined=旧档/连板 join 缺失（随 boardJoinDegraded 注记）→ 回落 boards 旧口径，不新增猜数
 function streakOf(s){ return s.streak === undefined ? (s.boards || null) : s.streak; }
+// 本股龙序（dragon_rows 单源，按 code 末 6 位命中）；非领涨股 → undefined（不伪造身位）
+function labelOwnDragon(s){ return (s.boardDragons || []).find(d =>
+  d.code && String(d.code).slice(-6) === String(s.code || '').slice(-6)); }
 function labelMatches(s, f, skipHeight){
   if (f.q){ const q = f.q.toLowerCase();
     if (!String(s.code || '').toLowerCase().includes(q) && !String(s.name || '').toLowerCase().includes(q)) return false; }
@@ -3929,8 +3961,11 @@ function lfRenderRows(){
   let filtered = pool.filter(s => labelMatches(s, f, f.scope !== 'zt'));
   const ls = STATE.labelSort;
   const lkv = { code: x => x.code || '', boards: x => streakOf(x) || 0,
-    time: x => x.limitUpTime || '', rank: x => x.rank == null ? 9999 : x.rank };
+    time: x => x.limitUpTime || '', rank: x => x.rank == null ? 9999 : x.rank,
+    lead: x => leadStrength((labelOwnDragon(x) || {}).role) };
   filtered = filtered.slice().sort((a, b) => { const va = lkv[ls.key](a), vb = lkv[ls.key](b);
+    if (ls.key === 'lead'){ const ma = va == null, mb = vb == null;   // 缺身位恒垫后（fail-visible）
+      if (ma && mb) return 0; if (ma) return 1; if (mb) return -1; }
     return (va < vb ? -1 : va > vb ? 1 : 0) * ls.dir; });
   STATE.labelEntries = filtered.map(labelEntryOf);
   const hasFilter = f.q || f.board || f.height || f.driver || f.depth || f.fresh || f.buy || f.scope !== 'zt';
@@ -3954,8 +3989,7 @@ function lfRenderRows(){
       : `<span class="num">${heightText}</span>`;
     // 领涨=本股在所属板块的龙序（龙一/二/三，后端 dragon_rows 单源，按 code 末 6 位命中本行）；
     // 只显示本股身位，不再把板块三个龙* 全塞一格；非领涨股 / 韭研 final 缺失 → '-'（不伪造身位）
-    const ownDragon = (s.boardDragons || []).find(d =>
-      d.code && String(d.code).slice(-6) === String(s.code || '').slice(-6));
+    const ownDragon = labelOwnDragon(s);
     const dragons = ownDragon ? `<span style="color:var(--muted2)">${esc(ownDragon.role || '')}</span>` : '';
     // 原因=韭研异动解析首行（后端板块 join 的 reason，2026-10-20 用户需求）：
     // 完整首行放 title（列宽有限不重截断数据），缺失显示 '-'（不伪造原因）
@@ -3974,7 +4008,7 @@ function lfRenderRows(){
     + (open ? `<tr class="lg-detail"><td colspan="12">${detailHtml(entry, 'lab')}</td></tr>` : '');
   }).join('');
   const lth = (label, key) => `<th class="sortable" onclick="setLabelSort('${key}')">${label}${sortMark(ls, key)}</th>`;
-  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th><th>领涨</th>${lth('高度', 'boards')}${lth('封板', 'time')}<th>原因</th><th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
+  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th>${lth('领涨', 'lead')}${lth('高度', 'boards')}${lth('封板', 'time')}<th>原因</th><th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
     + (rows || '<tr><td colspan="12" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function renderLabels(){
@@ -4017,7 +4051,7 @@ function lfClear(){
 }
 function setLabelSort(key){
   const s = STATE.labelSort;
-  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'rank' ? 1 : 1; }
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'lead' ? -1 : 1; }
   renderLabels();
 }
 

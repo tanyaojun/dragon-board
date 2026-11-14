@@ -345,6 +345,9 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         evidence_block=block["text"])
     return {"docKind": DOC_KIND_LEADER, "row": row, "narrative": narrative,
             "evidence": block,
+            # 真竞价涨幅（09:25 匹配价，bid 通道 bidding_pct；含腾讯榜外补源）——
+            # 与推送芯片 pct（实时涨幅）严格分离，落库 auctionPct 取此值（2026-11-14 修复）
+            "auctionBidPct": (bid_item or {}).get("bidding_pct"),
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
                             "bidIn": code in bid_items, "bidSource": bid_source,
@@ -455,7 +458,10 @@ def _label_one(db, col, date: str, built: dict, *,
                "boardMapping": row.get("boardMapping"),
                "selectionSources": row.get("selectionSources") or [SOURCE_PUSH],
                "dragonRoles": row.get("dragonRoles") or [],
-               "auctionPct": row.get("pct")}
+               # 竞价涨幅=bid 通道真竞价值（bidding_pct）；实时涨幅=推送芯片 pct。
+               # 2026-11-14 修复：旧版把推送实时 pct 误存为 auctionPct（读口对历史档 join 兜底）
+               "auctionPct": built.get("auctionBidPct"),
+               "realtimePct": row.get("pct")}
     doc.update({
         "ammoVersion": AMMO_VERSION_AUCTION_LEADER,
         "questionSetVersion": QUESTION_SET_VERSION_AUCTION_LEADER,
@@ -470,6 +476,10 @@ def _label_one(db, col, date: str, built: dict, *,
         "evidenceMissingReason": (built.get("evidence") or {}).get("evidenceMissingReason"),
         "evidenceEventTitles": [e.get("title") for e in built["evidence"].get("events") or []],
         "evidenceNewsTitles": [n.get("title") for n in built["evidence"].get("news") or []],
+        # 事件列证据三徽章（复刻题材龙头 tlRowHtml evid；读口透传，旧档缺→fail-visible）
+        "evidenceIndustry": (built["evidence"].get("industry") or {}).get("name"),
+        "evidenceBoardResolved": bool(built["evidence"].get("boardResolved")),
+        "evidenceKwordTags": list(built["evidence"].get("kwordTags") or []),
         "narrative": narrative, "questionsRaw": questions,
         "answers": answers, "modelAnswers": raw_answers, "gate": gate,
         "auctionSealToday": seal.get("choice") if doc_kind == DOC_KIND_LEADER else None,

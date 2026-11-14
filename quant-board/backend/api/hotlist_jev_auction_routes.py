@@ -8,6 +8,7 @@ fail-visible）。
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -22,16 +23,104 @@ COLLECTION = "hotlist_jev_auction_leader_labels"
 LIVE_COLLECTION = "kpl_live_daily"
 
 
-def _row_of(d: dict, sector: dict | None, with_narrative: bool) -> dict:
+def _num_or_none(v: Any) -> float | None:
+    """quota 值 → float；不可解析/布尔/非有限 → None（不补 0，fail-visible）。"""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _bid_items_by_date(db: Any, dates: set[str]) -> dict[tuple[str, str], dict]:
+    """bid 通道日档（kpl_daban_pool lane=bid）→ {(date, code): item}。
+
+    仅供旧档竞价涨幅修复 join（bidding_pct=09:25 匹配价真竞价值）；读失败/无档
+    → 空映射（fail-visible，不阻断读口，不伪装 0）。单写者读口，零网络零模型。
+    """
+    try:
+        from backend.services.kpl_daban_archiver import load_day
+    except Exception:      # 模块不可达（极端）：不阻断读口
+        return {}
+    out: dict[tuple[str, str], dict] = {}
+    for date in sorted(d for d in dates if d):
+        try:
+            payload = load_day(db, date, lane="bid")
+        except Exception:
+            continue
+        if not payload.get("ok"):
+            continue
+        for it in payload.get("items") or []:
+            code = str((it or {}).get("stock_id") or "")[-6:]
+            if code and (date, code) not in out:
+                out[(date, code)] = it
+    return out
+
+
+def _legacy_evidence_fields(db: Any, date: str, board: Any, cache: dict) -> dict:
+    """旧档事件列证据三徽章读口重建（新档已落库直读，不走此路径）。
+
+    单一事实源 build_theme_evidence_block（纯库读、零网络零模型）；按 (date, board)
+    缓存。重建失败 → 三字段 None/[]（fail-visible，不阻断读口，不伪造证据）。
+
+    已知近似（评审 M3）：leader_code=None → 板块级口径（lead=分组首成员，同 sector
+    doc 口径），非打标时逐股值；深分组且唯一 expound 靠后时 evidenceBoardResolved
+    可能 True→False（仅影响事件列徽章门，不影响事件/新闻计数）；industry/kwordTags
+    按当前语料窗重算。彻底消除需零 token 回填旧档（登记为迁移态收尾项）。
+    """
+    key = (str(date), str(board or ""))
+    if key in cache:
+        return cache[key]
+    try:
+        from backend.analysis.hotlist import theme_event_digest as digest
+        block = digest.build_theme_evidence_block(
+            db, board_name=str(board or ""), date=str(date), leader_code=None)
+        ev = {"evidenceIndustry": (block.get("industry") or {}).get("name"),
+              "evidenceBoardResolved": bool(block.get("boardResolved")),
+              "evidenceKwordTags": list(block.get("kwordTags") or [])}
+    except Exception:      # noqa: BLE001 — 重建失败不阻断读口
+        ev = {"evidenceIndustry": None, "evidenceBoardResolved": None,
+              "evidenceKwordTags": []}
+    cache[key] = ev
+    return ev
+
+
+def _row_of(d: dict, sector: dict | None, with_narrative: bool,
+            bid_item: dict | None = None, ev_override: dict | None = None) -> dict:
     answers = d.get("answers") or {}
     model = d.get("modelAnswers") or {}
     seal = answers.get("auction_leader_seal_today") or {}
     mseal = model.get("auction_leader_seal_today") or {}
     sec_answers = (sector or {}).get("answers") or {}
+    # 竞价涨幅/实时涨幅（2026-11-14 修复：旧版 auctionPct 误存推送实时 pct）：
+    #   新档（含 realtimePct）→ 落库 auctionPct 已是 bid 通道真竞价值，直读；
+    #   旧档 → 读口 join bid 通道 bidding_pct 重建竞价涨幅，原 auctionPct 如实
+    #   转 realtimePct（不重跑烧 token；bid 无档 → None，前端显 '-'）。
+    if "realtimePct" in d:
+        auction_pct, realtime_pct = d.get("auctionPct"), d.get("realtimePct")
+    else:
+        auction_pct = (bid_item or {}).get("bidding_pct")
+        realtime_pct = d.get("auctionPct")
+    # 两分支统一归一（评审 M2）：bidding_pct/落库值可为空串或非数字串（协议层原样
+    # 透传），缺值一律 None（前端排序/显示垫后），不令 "" 被 JS coerce 成 0 参与排序。
+    auction_pct = _num_or_none(auction_pct)
+    realtime_pct = _num_or_none(realtime_pct)
+    # 事件列证据三徽章：新档直读落库；旧档读口重建（ev_override）
+    if ev_override is not None:
+        ev_industry = ev_override.get("evidenceIndustry")
+        ev_resolved = ev_override.get("evidenceBoardResolved")
+        ev_tags = ev_override.get("evidenceKwordTags") or []
+    else:
+        ev_industry = d.get("evidenceIndustry")
+        ev_resolved = d.get("evidenceBoardResolved")
+        ev_tags = d.get("evidenceKwordTags") or []
     row = {
         "tradingDate": d.get("tradingDate"), "code": d.get("code"),
         "name": d.get("name"), "board": d.get("board"),
-        "auctionPct": d.get("auctionPct"),
+        "auctionPct": auction_pct,
+        "realtimePct": realtime_pct,
         "choice": d.get("auctionSealToday"),
         "probabilities": d.get("auctionSealProbabilities"),
         "choiceConfidence": seal.get("confidence"),
@@ -51,6 +140,10 @@ def _row_of(d: dict, sector: dict | None, with_narrative: bool) -> dict:
         "evidenceMissingReason": d.get("evidenceMissingReason"),
         "evidenceEventTitles": d.get("evidenceEventTitles"),
         "evidenceNewsTitles": d.get("evidenceNewsTitles"),
+        # 事件列证据三徽章复刻题材龙头（旧档读口重建，fail-visible）
+        "evidenceIndustry": ev_industry,
+        "evidenceBoardResolved": ev_resolved,
+        "evidenceKwordTags": ev_tags,
         "outcomeSealedToday": d.get("outcomeSealedToday"),
         "outcomeSource": d.get("outcomeSource"), "outcomeCross": d.get("outcomeCross"),
         "corpusState": d.get("corpusState"), "auctionPushState": d.get("auctionPushState"),
@@ -94,9 +187,20 @@ def get_auction_leaders(date: str | None = None, start: str | None = None,
     truncated = bool(not query) and len(docs) >= 500
     sector_docs = {(str(d.get("tradingDate")), str(d.get("board"))): d
                    for d in docs if d.get("docKind") == "sector"}
-    rows = [_row_of(d, sector_docs.get((str(d.get("tradingDate")), str(d.get("board")))),
-                    bool(with_narrative))
-            for d in docs if d.get("docKind") != "sector"]
+    leader_docs = [d for d in docs if d.get("docKind") != "sector"]
+    # 旧档竞价涨幅修复：join bid 通道 bidding_pct（评审 N1：仅旧档日期需要 join，
+    # 新档直读落库值；避免新档窗口每次 60s 轮询白读整日档）
+    bid_map = _bid_items_by_date(
+        db, {str(d.get("tradingDate")) for d in leader_docs if "realtimePct" not in d})
+    ev_cache: dict = {}
+    rows = []
+    for d in leader_docs:
+        d_date = str(d.get("tradingDate")); d_code = str(d.get("code") or "")[-6:]
+        # 旧档事件列证据三徽章读口重建（新档含 evidenceKwordTags 直读，零重建开销）
+        ev_override = (None if "evidenceKwordTags" in d
+                       else _legacy_evidence_fields(db, d_date, d.get("board"), ev_cache))
+        rows.append(_row_of(d, sector_docs.get((d_date, str(d.get("board")))),
+                            bool(with_narrative), bid_map.get((d_date, d_code)), ev_override))
     labeled = {(r["tradingDate"], r["code"]) for r in rows}
     # 推送 roster 缺档行（打标停跑/当日未跑不阻断清单，fail-visible）
     live_q: dict[str, Any] = {"_id": date} if date else {}
@@ -126,9 +230,13 @@ def get_auction_leaders(date: str | None = None, start: str | None = None,
                 if key in labeled:
                     continue
                 missing += 1
+                # 口径与 _row_of 对齐（评审 M1）：auctionPct=真竞价（缺档行无 bid 值
+                # → None 不拿实时冒充），推送实时 pct 落 realtimePct；行不进表
+                # （alRows 过滤），但读口合同统一，防后续消费方复现原 bug
                 rows.append({"tradingDate": str(ld.get("_id")), "code": s.get("code"),
                              "name": s.get("name"), "board": s.get("board"),
-                             "auctionPct": s.get("pct"), "labelMissing": True})
+                             "auctionPct": None, "realtimePct": s.get("pct"),
+                             "labelMissing": True})
     except Exception as exc:  # noqa: BLE001 — 直播归档读失败不阻断 labels 清单（fail-visible 留痕）
         roster_error = f"{type(exc).__name__}: {exc}"
     # jiuyan 龙 roster 缺档行（vA2 A4e：同一 jiuyan_dragon_roster 实现按需计算；

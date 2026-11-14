@@ -511,12 +511,14 @@ def test_jiuyan_dragon_union_with_push(env, monkeypatch):
     col = db[L.COLLECTION]
     d603 = col.docs[f"{DATE}:603135"]
     assert set(d603["selectionSources"]) == {"auction_push", "jiuyan_dragon_t1"}
-    assert d603["auctionPct"] == 3.0          # 推送 pct 保留
+    assert d603["realtimePct"] == 3.0         # 推送实时 pct → realtimePct（2026-11-14 修复）
+    assert d603["auctionPct"] is None         # 无 bid 通道档 → 竞价涨幅缺席（不拿实时冒充）
     assert d603["dragonRoles"][0]["role"] == "龙一"
     assert d603["boardMapping"]["pickedBy"] == "t1_group"   # A4b 映射不变
     d100 = col.docs[f"{DATE}:600100"]
     assert d100["selectionSources"] == ["jiuyan_dragon_t1"]
-    assert d100["auctionPct"] is None         # jiuyan 单源无 09:15 试盘价
+    assert d100["auctionPct"] is None         # jiuyan 单源无 bid 档
+    assert d100["realtimePct"] is None        # jiuyan 单源无 09:15 试盘价
     assert d100["boardMapping"]["pickedBy"] == "dragon_t1"
     assert res["selection"]["overlapN"] == 1 and res["selection"]["unionN"] == 3
     assert "韭研涨停分组龙序" in d100["narrative"]
@@ -737,3 +739,21 @@ def test_evaluate_generation_breakdown():
     assert res["settledDocs"] == 2
     assert res["byQuestionSetVersion"]["vA1"]["settledDocs"] == 1
     assert res["byQuestionSetVersion"]["vA2"]["buckets"]["high_ge65"]["sealedRate"] == 0.0
+
+
+def test_auction_pct_from_bid_lane_not_push(env):
+    """2026-11-14 修复：auctionPct=bid 通道 bidding_pct（真竞价），realtimePct=推送 pct（实时）。"""
+    db, calls = env
+    # bid 通道日档：603135 竞价涨幅 5.5（≠推送实时 3.0）
+    db["kpl_daban_pool"].docs[DATE] = {
+        "_id": DATE, "bid_date": DATE,
+        "bid_items": [{"stock_id": "603135", "name": "中重科技",
+                       "bidding_pct": 5.5, "pct": 3.0}]}
+    res = L.run(DATE, confirm_budget=True)
+    assert res["ok"]
+    d603 = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    assert d603["auctionPct"] == 5.5        # 真竞价值（bid 通道）
+    assert d603["realtimePct"] == 3.0       # 推送实时 pct
+    # 证据三徽章字段落库（复刻题材龙头事件列；env mock 证据块无 industry→None）
+    assert "evidenceIndustry" in d603 and "evidenceBoardResolved" in d603
+    assert "evidenceKwordTags" in d603

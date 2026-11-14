@@ -305,3 +305,135 @@ def test_get_dual_source_missing_row_merges(client, monkeypatch):
     assert r["selectionSources"] == ["auction_push", "jiuyan_dragon_t1"]
     assert r["dragonRoles"][0]["role"] == "龙一"
     assert doc["nodeFilter"]["labelMissingRows"] == 3   # 600327 双源合一行 + 2 纯龙股
+
+
+def test_legacy_doc_auction_pct_joined_from_bid_lane(client):
+    """2026-11-14 修复：旧档（auctionPct=推送实时 pct）读口 join bid 通道 bidding_pct。"""
+    c, db = client
+    db["kpl_daban_pool"].docs[DATE] = {
+        "_id": DATE, "bid_date": DATE,
+        "bid_items": [{"stock_id": "603135", "bidding_pct": 5.5, "pct": 3.0}]}
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["auctionPct"] == 5.5       # 真竞价值（bid 通道 join）
+    assert row["realtimePct"] == 3.0      # 原 auctionPct（推送实时）转 realtimePct
+
+
+def test_legacy_doc_no_bid_lane_auction_pct_none(client):
+    """旧档无 bid 通道档 → 竞价涨幅 None（fail-visible，不拿实时冒充）。"""
+    c, db = client
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["auctionPct"] is None
+    assert row["realtimePct"] == 3.0
+
+
+def test_new_doc_auction_pct_stored_direct(client):
+    """新档（含 realtimePct）→ 直读落库 auctionPct/realtimePct，不再 join。"""
+    c, db = client
+    d = db[R.COLLECTION].docs[f"{DATE}:603135"]
+    d["auctionPct"] = 6.2
+    d["realtimePct"] = 3.0
+    # 即便 bid 通道给了不同值，新档以落库为准
+    db["kpl_daban_pool"].docs[DATE] = {
+        "_id": DATE, "bid_items": [{"stock_id": "603135", "bidding_pct": 9.9}]}
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["auctionPct"] == 6.2
+    assert row["realtimePct"] == 3.0
+
+
+def test_evidence_fields_exposed(client):
+    """事件列证据字段透传（复刻题材龙头）。"""
+    c, db = client
+    d = db[R.COLLECTION].docs[f"{DATE}:603135"]
+    d["evidenceIndustry"] = "机器人产业"
+    d["evidenceBoardResolved"] = True
+    d["evidenceKwordTags"] = ["减速器", "伺服"]
+    d["evidenceEventTitles"] = ["某事件"]
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["evidenceIndustry"] == "机器人产业"
+    assert row["evidenceBoardResolved"] is True
+    assert row["evidenceKwordTags"] == ["减速器", "伺服"]
+    assert row["evidenceEventTitles"] == ["某事件"]
+
+
+def test_legacy_evidence_reconstructed(client, monkeypatch):
+    """旧档事件列证据三徽章读口重建（单一事实源 build_theme_evidence_block）。"""
+    c, db = client
+    from backend.analysis.hotlist import theme_event_digest as digest
+    calls = []
+    def fake_block(db_, *, board_name, date, leader_code=None, **kw):
+        calls.append((board_name, date))
+        return {"industry": {"name": "机器人产业"}, "boardResolved": True,
+                "kwordTags": ["减速器"], "events": [], "news": []}
+    monkeypatch.setattr(digest, "build_theme_evidence_block", fake_block)
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["evidenceIndustry"] == "机器人产业"
+    assert row["evidenceBoardResolved"] is True
+    assert row["evidenceKwordTags"] == ["减速器"]
+    assert calls, "旧档应触发证据重建"
+
+
+def test_new_doc_evidence_no_reconstruction(client, monkeypatch):
+    """新档（含 evidenceKwordTags）直读落库，不触发读口重建。"""
+    c, db = client
+    d = db[R.COLLECTION].docs[f"{DATE}:603135"]
+    d["realtimePct"] = 3.0
+    d["evidenceIndustry"] = "存储产业"
+    d["evidenceBoardResolved"] = True
+    d["evidenceKwordTags"] = ["芯片"]
+    from backend.analysis.hotlist import theme_event_digest as digest
+    def boom(*a, **k):
+        raise AssertionError("新档不应触发证据重建")
+    monkeypatch.setattr(digest, "build_theme_evidence_block", boom)
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["evidenceIndustry"] == "存储产业"
+    assert row["evidenceKwordTags"] == ["芯片"]
+
+
+def test_legacy_evidence_reconstruction_failure_fail_visible(client, monkeypatch):
+    """证据重建失败 → 三字段 None/[]，不阻断读口（fail-visible）。"""
+    c, db = client
+    from backend.analysis.hotlist import theme_event_digest as digest
+    def boom(*a, **k):
+        raise RuntimeError("corpus read boom")
+    monkeypatch.setattr(digest, "build_theme_evidence_block", boom)
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    assert doc["ok"]
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["evidenceIndustry"] is None
+    assert row["evidenceKwordTags"] == []
+
+
+def test_pct_normalization_legacy_and_new(client):
+    """评审 M2：空串/非数字 bidding_pct 与落库值两分支统一归一 None（不 coerce 成 0）。"""
+    c, db = client
+    # 旧档：bid 通道 bidding_pct 为空串 → auctionPct=None（垫后，非 0）
+    db["kpl_daban_pool"].docs[DATE] = {
+        "_id": DATE, "bid_items": [{"stock_id": "603135", "bidding_pct": ""}]}
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["auctionPct"] is None
+    assert row["realtimePct"] == 3.0
+    # 新档：落库 auctionPct 空串 / realtimePct 非数字串 → 双双 None
+    d = db[R.COLLECTION].docs[f"{DATE}:603135"]
+    d["auctionPct"] = ""
+    d["realtimePct"] = "abc"
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["auctionPct"] is None
+    assert row["realtimePct"] is None
+
+
+def test_roster_row_contract_alignment(client):
+    """评审 M1：推送 roster 缺档行 auctionPct=None、realtimePct=推送 pct（合同统一）。"""
+    c, db = client
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "600327")
+    assert row["labelMissing"] is True
+    assert row["auctionPct"] is None        # 不拿推送实时 pct 冒充竞价涨幅
+    assert row["realtimePct"] == -8.64
