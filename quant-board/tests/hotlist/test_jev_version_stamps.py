@@ -144,7 +144,7 @@ def test_auction_leader_vA3_dedicated_stamps():
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
     assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA3"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-14d"   # vA3 换代（试盘分支/一字板分支/硬度方向解耦/形态题）
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-14e"   # 纯语料供给换代（A：KPL 09:05 二次刷新槽；hash 不动）
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）
     assert al.AUCTION_LEADER_QUESTIONS == (
