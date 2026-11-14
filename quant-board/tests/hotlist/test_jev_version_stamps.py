@@ -137,15 +137,20 @@ def test_relay_v9_phase_state_machine_criteria():
     assert "leader_strength" not in relay.QUESTIONS_RELAY
 
 
-def test_auction_leader_vA1_dedicated_stamps():
-    """竞价龙头晨间链独立版本戳（vA1，2026-11-13 预登记 auction-leader-vA1）：
+def test_auction_leader_vA2_dedicated_stamps():
+    """竞价龙头晨间链独立版本戳（vA2，2026-11-14 预登记 auction-leader-vA2）：
     独立题集代际 + 独立 AMMO 戳；落档用独立戳（跨代不可比违规防范）。"""
     import inspect
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
-    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA1"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-13g"   # 时点语义标注换代
+    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA2"
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-14a"   # 选龙双源 + 身位题措辞换代
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
+    # B5 措辞锁定：身位题同板对比全集 = 入选股（双源），不再写死推送股
+    seat = al.QUESTIONS_AUCTION_LEADER["auction_seat_durability"]
+    seat_txt = seat["instructions"] + "".join(seat["criteria"].values())
+    assert "入选股" in seat_txt and "推送股" not in seat_txt
+    assert "韭研龙序" in seat["instructions"]
     # A2 删题锁定：空间/人气题不在晨间题集
     assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
     assert "leader_rebound_popularity" not in al.QUESTIONS_AUCTION_LEADER

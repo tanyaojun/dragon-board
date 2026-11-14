@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""竞价龙头晨间投喂 runner（vA1，预登记 auction-leader-vA1-preregistration-20261113）。
+"""竞价龙头晨间投喂 runner（vA2，预登记 auction-leader-vA2-preregistration-20261114）。
 
-定位：每条投喂 = **当日 09:15「竞价看龙头」推送的一只个股**（选龙单源=A4，不允许
-bid 通道兜底）；板块级 doc 判深度/延续（v12 A2 拆题同款）。09:26 挂链（9:25 竞价
-冻结 + archiver ≤60s 轮询 lag），失败限次退避（scheduler 侧）。
+定位：每条投喂 = 当日选龙双源并集的一只个股（A4e：09:15「竞价看龙头」推送 ∪
+jiuyan T−1 涨停分组龙一/二/三，官方封板口径 ≥3 家，2026-11-14 用户裁决 B1–B3）；
+板块级 doc 判深度/延续（v12 A2 拆题同款）。09:26 挂链（9:25 竞价冻结 + archiver
+≤60s 轮询 lag），失败限次退避（scheduler 侧）。
 
-与题材龙头链关系：独立集合 `hotlist_jev_auction_leader_labels`、独立题集 vA1；
+与题材龙头链关系：独立集合 `hotlist_jev_auction_leader_labels`、独立题集 vA2；
 复刻骨架（dry-run/estimate/confirm-budget/幂等/单只重跑/stdout 标记行）与语料读口
 （fetch_* 单一事实源复用 theme_leader_label，禁第二套取数）。
 
@@ -40,6 +41,7 @@ from backend.analysis.hotlist.auction_leader_ammo import (
     auction_base_rate_line,
     auction_bid_line,
     auction_board_structure_line,
+    auction_dragon_line,
     auction_push_line,
     auction_structure_line,
     build_auction_leader_narrative,
@@ -94,6 +96,77 @@ SAMPLE_ORIGIN_LIVE = "live"
 SAMPLE_ORIGIN_BACKFILL = "backfill"
 # 基础率锚窗起点（投产日；防 look-ahead 右边界=before 当日排除）
 BASE_RATE_START = "2026-11-13"
+# A4e/B1/B2（2026-11-14 用户裁决）：jiuyan 源板块达标 = 官方封板口径涨停家数 ≥3
+JIUYAN_DRAGON_MIN_SEALED = 3
+SOURCE_PUSH = "auction_push"
+SOURCE_JIUYAN_DRAGON = "jiuyan_dragon_t1"
+
+
+def jiuyan_dragon_roster(db: Any, prev_date: str | None) -> tuple[list[dict], dict]:
+    """A4e 双源选龙：jiuyan T−1 涨停打标链各板块龙一/二/三（封板家数 ≥3）。
+
+    单一事实源：龙序 = `jiuyan_board_dragons`/`dragon_rows`（高度 M 降序 + 封板时间
+    升序，与 relay 梯队表同口径；B4：龙序不排除炸板股，炸板事实行内标注）；达标家数
+    = `jiuyan_board_info` zhaban/excluded 旗标（触板 − THS 炸板（含回封补证）− ST/北交所，
+    B2 官方封板口径，禁第二套二分）。零新增外呼源：全库内读 + 既有 `_daily_bars`
+    （本地 vipdoc 优先；本地缺文件股回退既有线上 mootdx 日线，进程内缓存+负缓存，
+    量级 ≤ T−1 炸板池命中数；预算见 vA2 预登记 §6，review M1）。
+
+    宁缺毋猜（B2）：T−1 final 缺席 / THS 炸板池缺失 → 整源缺席 + reason 结构化留痕
+    （不回退触板口径——会混入炸板股）。返回 (rows, state)：rows = [{code, name,
+    board（主板）, dragonRoles（全部龙序，封板家数降序→组名升序）}]。
+    """
+    state: dict = {"t1Date": prev_date, "countCaliber": "sealed_official",
+                   "minSealed": JIUYAN_DRAGON_MIN_SEALED}
+    if not prev_date:
+        return [], {**state, "reason": "no_prev_date"}
+    from backend.operations.jev_label_jiuyan import (
+        jiuyan_board_dragons, jiuyan_board_info)
+    doc = db["jiuyan_action"].find_one({"_id": f"{prev_date}:final"}, {"fields": 1}) or {}
+    fields = doc.get("fields") or []
+    if not any(f.get("stocks") for f in fields):
+        return [], {**state, "t1Final": False, "reason": "t1_final_missing"}
+    info, meta = jiuyan_board_info(db, prev_date)
+    if not meta.get("thsPoolFound"):
+        return [], {**state, "t1Final": True, "thsPoolFound": False,
+                    "reason": "ths_pool_missing"}
+    dragons = jiuyan_board_dragons(db, prev_date)
+    qualified: list[dict] = []
+    by_code: dict[str, dict] = {}
+    for f in fields:
+        name = str(f.get("name") or "")
+        stocks = f.get("stocks") or []
+        if not name or not stocks:
+            continue
+        sealed_n = 0
+        for s in stocks:
+            c = str(s.get("code") or "")[-6:]
+            i = info.get(c) or {}
+            if c and not i.get("zhaban") and not i.get("excluded"):
+                sealed_n += 1
+        if sealed_n < JIUYAN_DRAGON_MIN_SEALED:
+            continue
+        qualified.append({"board": name, "sealedN": sealed_n, "touchN": len(stocks)})
+        for r in dragons.get(name) or []:
+            code = r.get("code")
+            if not code:
+                continue
+            role = {"board": name, "role": r.get("role"), "boards": r.get("boards"),
+                    "days": r.get("days"), "time": r.get("time"), "sealedN": sealed_n}
+            if (info.get(code) or {}).get("zhaban"):
+                role["zhaban"] = True
+            e = by_code.setdefault(code, {"code": code, "name": r.get("name"),
+                                          "dragonRoles": []})
+            e["dragonRoles"].append(role)
+    rows: list[dict] = []
+    for code, e in by_code.items():
+        # 多板龙序主板：封板家数降序 → 组名升序（B6，A4b 同序无推送桥）
+        roles = sorted(e["dragonRoles"], key=lambda x: (-x["sealedN"], x["board"]))
+        rows.append({"code": code, "name": e.get("name"), "board": roles[0]["board"],
+                     "dragonRoles": roles})
+    rows.sort(key=lambda r: (r["board"], r["code"]))
+    return rows, {**state, "t1Final": True, "thsPoolFound": True,
+                  "boardsQualified": qualified, "dragonN": len(rows)}
 
 
 def _db():
@@ -109,9 +182,11 @@ def auction_seal_base_rate(db: Any, before: str) -> dict | None:
     无已结算行 → None（锚行整行缺席，封板题 confidence ≤0.6 规则承接）。
     """
     n = ok = 0
+    n_push = n_jiuyan = 0
     dates: list[str] = []
     for d in db[COLLECTION].find({}, {"tradingDate": 1, "docKind": 1, "status": 1,
-                                      "sampleOrigin": 1, "outcomeSealedToday": 1}):
+                                      "sampleOrigin": 1, "outcomeSealedToday": 1,
+                                      "selectionSources": 1}):
         date = str(d.get("tradingDate") or "")
         if not (BASE_RATE_START <= date < before):
             continue
@@ -124,18 +199,23 @@ def auction_seal_base_rate(db: Any, before: str) -> dict | None:
             continue
         n += 1
         ok += 1 if outcome else 0
+        # vA2 锚人群构成：双源股归韭研龙桶；vA1 旧档无 selectionSources 按推送计
+        if SOURCE_JIUYAN_DRAGON in (d.get("selectionSources") or [SOURCE_PUSH]):
+            n_jiuyan += 1
+        else:
+            n_push += 1
         dates.append(date)
     if not n:
         return None
-    return {"n": n, "rate": ok * 100.0 / n,
+    return {"n": n, "rate": ok * 100.0 / n, "nPush": n_push, "nJiuyan": n_jiuyan,
             "start": min(dates), "end": max(dates)}
 
 
 def roster_for(db: Any, date: str, *, fetch_missing: bool = True) -> tuple[dict | None, dict]:
-    """选龙单源（A4）：kpl_live_daily.auctionPush 投影；当日缺投影时晨间补归档一次。
+    """推送源（A4e 双源之一）：kpl_live_daily.auctionPush 投影；当日缺投影时晨间补归档一次。
 
-    历史日无投影 → (None, {reason})（直播不可回放，不伪造名单）；当日补归档失败
-    同样结构化返回（fail-visible）。fetch_missing=False（dry-run）纯只读：
+    历史日无投影 → (None, {reason})（直播不可回放，不伪造名单；jiuyan 源仍可跑，B3）；
+    当日补归档失败同样结构化返回（fail-visible）。fetch_missing=False（dry-run）纯只读：
     不发起直播 HTTP、不写归档（频控预算与零副作用）。
     """
     push = load_auction_push(db, date)
@@ -251,6 +331,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
         push_board=row.get("pushBoard"),
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
+        dragon_line=auction_dragon_line(row.get("dragonRoles"), prev_date=prev_date),
         bid_line=auction_bid_line(bid_entries),
         structure=auction_structure_line(facts, prev_date=prev_date),
         ladder_line=_auction_ladder_line(t1_row, prev_date),
@@ -296,7 +377,9 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                 _bi, (basis_map or {}).get(str(r.get("code"))))}
         bid_entries.append({"label": str(r.get("name") or r.get("code")), "item": _bi})
     codes = [str(r.get("code")) for r in rows]
-    lhb_codes, lhb_roles = _lhb_codes_roles(codes, [(c, "推送龙头") for c in codes])
+    dragon_roles = [x for r in rows for x in (r.get("dragonRoles") or [])
+                    if x.get("board") == board]
+    lhb_codes, lhb_roles = _lhb_codes_roles(codes, [(c, "入选龙头") for c in codes])
     lhb_txt = lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles) \
         if lhb_facts is not None else None
     if lhb_txt and prev_date:
@@ -308,6 +391,7 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         date=date, prev_date=prev_date, market_line=market_line,
         board=board,
         push_line=auction_push_line(push_entries, codes=codes),
+        dragon_line=auction_dragon_line(dragon_roles, prev_date=prev_date),
         board_structure=auction_board_structure_line(members, prev_date=prev_date),
         bid_line=auction_bid_line(bid_entries),
         base_rate=auction_base_rate_line(base_rate_stats),
@@ -355,7 +439,12 @@ def _label_one(db, col, date: str, built: dict, *,
                "boardSources": sorted({str(r.get("boardSource")) for r in rows}),
                "segmentRows": [{"code": r.get("code"), "name": r.get("name"),
                                 "pct": r.get("pct"),
-                                "pushBoard": r.get("pushBoard")} for r in rows]}
+                                "pushBoard": r.get("pushBoard"),
+                                "sources": r.get("selectionSources"),
+                                "dragonRole": next((x.get("role") for x in
+                                                    (r.get("dragonRoles") or [])
+                                                    if x.get("board") == built["board"]), None)}
+                               for r in rows]}
     else:
         row = built["row"]
         doc = {"_id": f"{date}:{row['code']}", "origin": ORIGIN, "tradingDate": date,
@@ -364,6 +453,8 @@ def _label_one(db, col, date: str, built: dict, *,
                "pushBoard": row.get("pushBoard"),
                "boardSource": row.get("boardSource"),
                "boardMapping": row.get("boardMapping"),
+               "selectionSources": row.get("selectionSources") or [SOURCE_PUSH],
+               "dragonRoles": row.get("dragonRoles") or [],
                "auctionPct": row.get("pct")}
     doc.update({
         "ammoVersion": AMMO_VERSION_AUCTION_LEADER,
@@ -420,24 +511,67 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         sample_origin = (SAMPLE_ORIGIN_LIVE if date == time.strftime("%Y-%m-%d")
                          else SAMPLE_ORIGIN_BACKFILL)
     push, push_meta = roster_for(db, date, fetch_missing=not dry_run)
-    if push is None or not push.get("stocks"):
+    push_rows = [{"code": str(s.get("code")), "name": s.get("name"),
+                  "board": s.get("board"), "pct": s.get("pct")}
+                 for s in (push or {}).get("stocks") or [] if s.get("code")]
+    prev_dates = trading_dates_before(db, date, 2, dataset_id)
+    prev_date = prev_dates[-1] if prev_dates else None
+    # A4e 双源选龙（2026-11-14 裁决 B1–B3）：推送 ∪ jiuyan T−1 龙一/二/三（封板 ≥3 家）
+    jrows, jstate = jiuyan_dragon_roster(db, prev_date)
+    fetch_failed = (push_meta or {}).get("pushState") == "fetch_failed"
+    if not push_rows and not jrows:
         reason = (push_meta or {}).get("reason") or "auction_push_missing"
-        # 晨间取数失败（瞬时抖动）≠ 验证后缺席：ok=False 交调度 3×5min 退避（A1）
-        fetch_failed = (push_meta or {}).get("pushState") == "fetch_failed"
-        print(f"{date} 竞价推送缺席（{reason}），跳过打标（fail-visible，不兜底选龙）")
+        print(f"{date} 选龙双源均缺席（推送: {reason}；jiuyan: {jstate.get('reason') or '无达标龙股'}），"
+              "跳过打标（fail-visible，不兜底选龙）")
         return {"ok": not fetch_failed, "date": date, "leaders": 0,
                 "skippedReason": "auction_push_missing",
                 "errorCode": "auction_push_fetch_failed" if fetch_failed else None,
-                "auctionPushState": push_meta}
-    rows = [{"code": str(s.get("code")), "name": s.get("name"),
-             "board": s.get("board"), "pct": s.get("pct")}
-            for s in push["stocks"] if s.get("code")]
-    prev_dates = trading_dates_before(db, date, 2, dataset_id)
-    prev_date = prev_dates[-1] if prev_dates else None
+                "auctionPushState": push_meta, "jiuyanDragonState": jstate}
+    if fetch_failed:
+        # B3：瞬时取数失败即使 jiuyan 源在场也先重试（不吃掉推送样本）；重试耗尽当日双源皆失
+        print(f"{date} 竞价推送取数失败，交退避重试（jiuyan 源 {len(jrows)} 股待重试后合并）")
+        return {"ok": False, "date": date, "leaders": 0,
+                "skippedReason": "auction_push_missing",
+                "errorCode": "auction_push_fetch_failed",
+                "auctionPushState": push_meta, "jiuyanDragonState": jstate}
+    # 并集去重（B6）：推送股保留 pct/概念桥映射，龙序并列披露；jiuyan 单源股 pct=None
+    by_code: dict[str, dict] = {}
+    for s in push_rows:
+        by_code[s["code"]] = {**s, "selectionSources": [SOURCE_PUSH], "dragonRoles": []}
+    overlap_n = 0
+    for jr in jrows:
+        cur = by_code.get(jr["code"])
+        if cur is not None:
+            overlap_n += 1
+            cur["selectionSources"].append(SOURCE_JIUYAN_DRAGON)
+            cur["dragonRoles"] = jr["dragonRoles"]
+            if not cur.get("name"):
+                cur["name"] = jr.get("name")
+        else:
+            by_code[jr["code"]] = {"code": jr["code"], "name": jr.get("name"),
+                                   "board": jr["board"], "pct": None,
+                                   "selectionSources": [SOURCE_JIUYAN_DRAGON],
+                                   "dragonRoles": jr["dragonRoles"],
+                                   "_dragonPrimary": True}
+    rows = list(by_code.values())
+    selection = {"pushN": len(push_rows), "jiuyanN": len(jrows),
+                 "overlapN": overlap_n, "unionN": len(rows)}
+    if not push_rows:
+        print(f"{date} 推送验证后缺席（{(push_meta or {}).get('reason')}），"
+              f"跑 jiuyan 单源 {len(jrows)} 股（B3，auctionPushState 留痕）")
     # 2026-11-13 用户裁决（二次修订）：板块归属取 jiuyan 打标链 **T−1 涨停分组**
     # 板块名（产业树成分反查映射不上，作废）；无命中回退推送概念 + boardSource 留痕
     bctx = ABM.load_board_context(db, prev_date)
     for r in rows:
+        if r.pop("_dragonPrimary", False):
+            # B6：jiuyan 单源股板块 = 龙序主板（封板家数降序→组名升序，已定序）
+            r["pushBoard"] = None
+            r["boardSource"] = ABM.SOURCE_JIUYAN
+            r["boardMapping"] = {"pickedBy": "dragon_t1",
+                                 "candidates": [{"name": x["board"], "n": x["sealedN"]}
+                                                for x in r["dragonRoles"]],
+                                 "t1Final": True, "t1Date": prev_date}
+            continue
         res = ABM.resolve_leader_board(bctx, r["code"], r.get("board"))
         r["board"] = res["board"]
         r["pushBoard"] = res["pushBoard"]
@@ -453,7 +587,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if codes:
         rows = [r for r in rows if r["code"] in codes]
     if not rows:
-        return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders"}
+        return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders",
+                "selection": selection, "jiuyanDragonState": jstate}
     rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
     # 一次取数全日共用（与题材链同哲学；T−1 语料 + 当日竞价）
     from backend.operations.jev_label_jiuyan import market_facts_line
@@ -467,8 +602,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             t1_rows[str(r.get("code"))] = r
     pool_prev = fetch_pool_quality(db, prev_date) if prev_date else {"items": {}, "degraded": "no_prev_date"}
     lanes = fetch_daban_lanes(db, date)
-    # 竞昨比原料（腾讯日K，按日 12h 缓存与页面共享；≤推送股数/日、单股失败 10min
-    # 退避——红线 9 预算见预登记 §5）；dry-run 零外呼
+    # 竞昨比原料（腾讯日K，按日 12h 缓存与页面共享；≤入选股数/日（双源 roster）、
+    # 单股失败 10min 退避——红线 9 预算见 vA2 预登记 §6）；dry-run 零外呼
     basis_map: dict = {}
     basis_state = "dry_run_skipped" if dry_run else "missing"
     if not dry_run:
@@ -505,7 +640,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         except Exception as exc:  # noqa: BLE001 — fail-visible 不阻断
             lhb_facts = {"ok": False, "degraded": True, "reason": f"fetch_failed: {exc}"}
     base_rate_stats = auction_seal_base_rate(db, before=date)
-    push_entries = push.get("entries") or []
+    push_entries = (push or {}).get("entries") or []
     by_board: dict[str, list[dict]] = {}
     for r in rows:
         by_board.setdefault(str(r.get("board") or "未归属"), []).append(r)
@@ -556,7 +691,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           sector_judgment=sector_answers.get(board),
                           board_codes=by_board.get(board, [r]))
         built["auctionPushState"] = {"source": push_meta.get("source"),
-                                     "entryN": len(push_entries)}
+                                     "entryN": len(push_entries),
+                                     "reason": push_meta.get("reason")}
         # 推送行注入（全日共用 entries；个股级只列自身）
         push_txt = auction_push_line(push_entries, codes=[r["code"]])
         if push_txt:
@@ -578,7 +714,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                   f"chars={b['chars']} -----")
             print(b["narrative"])
         return {"ok": True, "date": date, "dryRun": True, "leaders": len(todo),
-                "docs": len(built_all), "estimatedTokens": est}
+                "docs": len(built_all), "estimatedTokens": est,
+                "selection": selection, "jiuyanDragonState": jstate}
     if not confirm_budget:
         print(f"{date} 预计 {len(built_all)} 调用 ≈{est} tokens；真实开火需 --confirm-budget")
         raise SystemExit(2)
@@ -608,12 +745,13 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     result = {"ok": True, "date": date, "leaders": len(todo), "docs": len(built_all),
               "okCount": ok_n, "degraded": degraded_n, "tokensUsed": tokens,
               "estimatedTokensBudgetGuard": est,
+              "selection": selection, "jiuyanDragonState": jstate,
               "questionSetVersion": QUESTION_SET_VERSION_AUCTION_LEADER}
     return result
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="竞价龙头晨间投喂（vA1）")
+    ap = argparse.ArgumentParser(description="竞价龙头晨间投喂（vA2）")
     ap.add_argument("--date", required=True)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--estimate", action="store_true")

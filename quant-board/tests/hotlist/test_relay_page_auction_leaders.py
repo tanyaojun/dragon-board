@@ -97,3 +97,13 @@ def test_status_bar_routing_and_nits(html):
     assert "STATE.alUi.page = 1" in _fn(html, "rangeRefresh")
     assert "TL_GATE_CN" in _fn(html, "alDetailHtml")
     assert "2 次 jev 调用" in _fn(html, "alRerun"), "confirm 须披露板块连带重烧"
+
+
+def test_dragon_source_badge_vA2(html):
+    """vA2 §7：韭研龙源徽章（title 披露具体龙序，review M3）；推送缺席徽章仅推送源行。"""
+    body = _fn(html, "alRowHtml")
+    assert "jiuyan_dragon_t1" in body and "韭研龙" in body
+    assert "srcs.includes('auction_push')" in body
+    assert "dragonBad" in body
+    assert "r.dragonRoles" in body, "title 必须由 dragonRoles 拼装具体龙序"
+    assert "esc(dragonTxt" in body, "龙序 title 注入前必须 esc"

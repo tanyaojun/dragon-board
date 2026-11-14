@@ -565,3 +565,24 @@ def test_hygiene_review_20261113f_fixes():
     assert TA._fmt_amount_yuan(-2.5e8) == "-2.50亿"
     assert TA._fmt_amount_yuan(-5e5) == "-50.0万"
     assert TA._fmt_amount_yuan(2.5e8) == "2.50亿"
+
+
+def test_hygiene_auction_leader_vA2_dragon_line():
+    """vA2 龙序行/锚构成/板结构入选措辞接入 §1.2-8 黑名单回归（预登记 vA2 §5）。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    roles = [{"board": "半导体", "role": "龙一", "boards": 4, "days": 4,
+              "time": "09:30", "sealedN": 3},
+             {"board": "机器人", "role": "龙二", "boards": 2, "days": 2,
+              "time": "09:35", "sealedN": 5, "zhaban": True}]
+    ln = AL.auction_dragon_line(roles, prev_date="2026-11-12")
+    _assert_clean(ln, "auction_dragon_line")
+    assert ln.startswith("昨日（2026-11-12）韭研涨停分组龙序："), ln
+    _assert_absent(AL.auction_dragon_line([], prev_date="2026-11-12"),
+                   "auction_dragon_line(无龙序)")
+    _assert_clean(AL.auction_base_rate_line(
+        {"n": 40, "rate": 32.5, "nPush": 25, "nJiuyan": 15,
+         "start": "2026-11-13", "end": "2026-11-20"}), "auction_base_rate_line(构成)")
+    bs = AL.auction_board_structure_line(
+        [{"streak": 2, "sealedPrev": True}], prev_date="2026-11-12")
+    _assert_clean(bs, "auction_board_structure_line(入选)")
+    assert "入选 1 只" in bs

@@ -610,10 +610,10 @@
       </div>
     </div>
 
-    <!-- ⑥b 竞价龙头（vA1，2026-11-13 预登记 auction-leader-vA1）：晨间 09:26 投喂台账。
+    <!-- ⑥b 竞价龙头（vA2，2026-11-14 预登记 auction-leader-vA2）：晨间 09:26 投喂台账。
         与题材龙头同构——共用页头 #relayKpi 与 tabbar 时间范围控件；行=区间内全部
-        竞价龙头-日（labels ∪ 09:15 推送 roster，缺档行 labelMissing 披露）；
-        左侧三角展开 jev 调用日志卡（lg-card 范式）。 -->
+        竞价龙头-日（labels ∪ 09:15 推送 roster ∪ 韭研 T−1 龙一/二/三 roster，
+        缺档行 labelMissing 披露）；左侧三角展开 jev 调用日志卡（lg-card 范式）。 -->
     <div class="rv" id="rv-auction">
       <div class="card" style="margin-top:18px">
         <div class="board-row" id="alBoardRow"></div>
@@ -3292,10 +3292,11 @@ async function tlLoadNarrative(r){
   if (STATE.tlUi.openKey === key) tlRenderRows();
 }
 
-// ---------- 竞价龙头（连板指数子视图 rv-auction，vA1 2026-11-13） ----------
-// 与 rv-themes 同构（预登记 auction-leader-vA1 §6）：行源 = 区间内 labels ∪ 09:15
-// 推送 roster（缺档行 labelMissing 不进表，计数由 nodeFilter 披露）；共用页头 KPI
-// 与时间范围；60s 静默轮询；落库口径为准（模型原答仅展开卡审计）；结局 null=待结算。
+// ---------- 竞价龙头（连板指数子视图 rv-auction，vA2 2026-11-14） ----------
+// 与 rv-themes 同构（预登记 auction-leader-vA2 §7）：行源 = 区间内 labels ∪ 09:15
+// 推送 roster ∪ 韭研 T−1 龙一/二/三 roster（缺档行 labelMissing 不进表，计数由
+// nodeFilter 披露）；共用页头 KPI 与时间范围；60s 静默轮询；落库口径为准（模型原答
+// 仅展开卡审计）；结局 null=待结算。
 const AL_CHOICE_CN = { high_ge65: '高', mid_45_65: '中', low_25_45: '低',
                        verylow_lt25: '极低', insufficient: '证据不足' };
 const AL_CHOICE_RANGE = { high_ge65: '≥65%', mid_45_65: '45-65%', low_25_45: '25-45%',
@@ -3529,7 +3530,13 @@ function alRowHtml(r, f){
   const pct = r.auctionPct;
   const pctTxt = (pct == null || typeof pct !== 'number') ? '-'
     : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
-  const pushBad = (r.auctionPushState && r.auctionPushState.entryN === 0)
+  const srcs = r.selectionSources || ['auction_push'];
+  const dragonTxt = (r.dragonRoles || []).map(x => (x.board || '') + (x.role || '')
+    + (x.boards > 1 ? '（' + (x.days > 1 ? x.days + '天' : '') + x.boards + '板' + (x.zhaban ? '，炸板' : '') + '）'
+       : (x.boards === 1 ? '（首板）' : ''))).filter(Boolean).join('；');
+  const dragonBad = srcs.includes('jiuyan_dragon_t1')
+    ? ' <span class="badge b-blue" title="' + esc(dragonTxt || '选龙源：韭研 T−1 涨停分组龙一/二/三（官方封板口径≥3家）') + '">韭研龙</span>' : '';
+  const pushBad = (srcs.includes('auction_push') && r.auctionPushState && r.auctionPushState.entryN === 0)
     ? ' <span class="badge b-amber" title="当日 09:15 推送缺席（结构化留痕）">推送缺席</span>' : '';
   const bidBad = (r.corpusState && String(r.corpusState.bidLane || '').startsWith('missing'))
     ? ' <span class="badge b-amber" title="竞价通道日档缺席：' + esc(String(r.corpusState.bidLane)) + '">竞价缺</span>' : '';
@@ -3542,7 +3549,7 @@ function alRowHtml(r, f){
       + esc((r.tradingDate || '').slice(5)) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
-    + '<td>' + esc(r.board || '未归属') + pushBad + bidBad + '</td>'
+    + '<td>' + esc(r.board || '未归属') + dragonBad + pushBad + bidBad + '</td>'
     + '<td class="num">' + pctTxt + '</td>'
     + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td><td>' + hardCell + '</td><td>' + seatCell + '</td>'
