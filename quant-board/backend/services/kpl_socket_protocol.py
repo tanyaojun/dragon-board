@@ -58,6 +58,14 @@ BDO_RATE_IS_PERCENT = True  # 2014 rate 已是百分数（tur/ztTur×100）
 # 当日事件推送 16/16 样本三字段全缺位，date 语义=异动日；复验路径见
 # docs/kpl-socket/detail-scaling-verification.md §二）。证据不足解析器不动，原始值透出。
 ABN_SCALING_VERIFIED = False
+
+# 2010 所属板块 plateIncRate/stockIncRate = **百分数原样**（2026-11-11 被动交叉校准裁决，
+# 零新增开火；证据链见 docs/kpl-socket/detail-scaling-verification.md §四）：
+# 35/35 封板成分股 stock_inc_rate 与 limit_rules 板别涨停幅吻合（最大差 0.18=低价股
+# tick 舍入）；266 个 plate_inc_rate 落 [-0.19, 4.84]（中位 1.37），比率形态 261/266
+# 超成分股 30% 涨幅上限，排除。未来证据推翻时置 False，叙事百分比段集体缺席
+# （同 2030 kill-switch 模式）。
+RPLATE_INC_IS_PERCENT = True
 CMD_BF_REASON = 2202            # Hq.BFReasonResp（爆发原因推送，请求同 HQReq）
 CMD_STOCK_MX_SUB = 2006   # Hq.StockMXResp 首拉+订阅（请求 Hq.HQItemReq{f1 stockId, f2 count}，App 固定 count=25）
 CMD_STOCK_MX_PUSH = 2007  # Hq.StockMXResp 增量推送（不在 @y51 订阅面内，服务端跟在 2006 订阅后推）

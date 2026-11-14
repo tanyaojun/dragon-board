@@ -209,7 +209,9 @@ QuantBoard 主后端 :8000
   **2014（bdo）time=HHMM、金额族=元×1、rate=百分数（tur/ztTur×100）三项全钉死**
   （16 股 2936 items 全样本）；**2030（abn）price/nextDayPrice/nextDayZf 当日事件推送
   全缺位 → 口径阴性未钉死**，解析器不动、异动提醒行暂停渲染，等下一交易日日档被动
-  复验（复验路径见该文档 §二）。
+  复验（复验路径见该文档 §二）；**2010（rplate）plateIncRate/stockIncRate = 百分数原样
+  钉死**（被动交叉：35/35 封板成分股与板别涨停幅吻合、266 板块值合理百分比带，
+  见该文档 §四），叙事百分比段受 `RPLATE_INC_IS_PERCENT` 单一常量门控。
 
   **午后两修（2026-11-11 14:0x）**：① 2103 f21 `indexes`（pidType=0/8 页）服务端
   packed 编码 → parse_pb_f32 宽容解析返回原始 bytes → `get_daban_list` 原样透传
