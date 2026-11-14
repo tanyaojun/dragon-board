@@ -31,6 +31,10 @@ CONTENT_CHARS = 260
 MAX_EVENTS = 3
 EVENT_WINDOW_PAST_DAYS = 3      # 事件/新闻回看窗口（发酵中）
 NEWS_WINDOW_PAST_DAYS = 2
+# 早报节叙事字数预算（2026-11-14 晨间例外）：早报全文 ~429 字/日，仅命中段进叙事，
+# 节合计 ≤600 字（超预算段整段不入，不截断成残句）
+MORNING_CHARS = 600
+MORNING_MAX_PARAS = 6
 # 热度序列窗（S2，2026-10-24b：5→10 日——「断流/见顶回落」判据需要更长窗才看得出
 # 趋势拐点；库内不足的日子自然为 0，fail-visible 不伪造）
 HEAT_WINDOW_DAYS = 10
@@ -351,6 +355,29 @@ def _strip_html(s: str) -> str:
     return re.sub(r"<[^>]+>", " ", str(s or ""))
 
 
+def match_morning_paragraphs(paragraphs: list[str], board_name: str | None,
+                             *, limit: int = MORNING_MAX_PARAS) -> list[dict]:
+    """早报段落 → 板块：确定性关键词/共享子串锚（同事件通道口径，无语义猜测）。
+
+    返回 [{text, matchHow}]；matchHow 只进结构化字段（AGENTS §1.2-8 不进叙事）。
+    """
+    base = normalize_name(board_name)
+    if not base:
+        return []
+    keys = board_keywords(board_name)
+    out = []
+    for p in paragraphs or []:
+        text = str(p or "").strip()
+        if not text:
+            continue
+        hit = _anchor_hit(base, keys, text)
+        if hit:
+            out.append({"text": text, "matchHow": hit["how"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def match_kpl_news(items: list[dict], board_name: str | None,
                    *, limit: int = MAX_EVENTS) -> list[dict]:
     """题材新闻 → 板块：**Kword 题材标签优先**，**ZSName 官方板块次之**（2026-11-02
@@ -484,7 +511,8 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                               include_l2: bool = True,
                               sealed_codes: frozenset[str] | set[str] | None = None,
                               l2_fallback_date: str | None = None,
-                              leader_expound_chars: int | None = None) -> dict:
+                              leader_expound_chars: int | None = None,
+                              include_morning: bool = False) -> dict:
     """生成题材证据块（v4：产业树 + KPL 事件/新闻/日历 + L2 板内解析）。
 
     返回 {text, industry, events, news, calendar, state, ...}（text 直接可拼进叙事）。
@@ -500,6 +528,11 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     `leader_expound_chars`（同上，可选）：待判龙头自身解析摘录的独立字数上限
     （leader_code 在场时生效；同伴/板块级仍 content_chars）——防 260 字截断丢掉
     控制权变更/公告等公司级硬事实（天普 605255 11-13 复盘）。缺省 None = 旧行为。
+    `include_morning`（2026-11-14 晨间例外，可选）：True 时消费当日韭研早报档
+    （`jiuyan_morning_report`，只供 09:26 竞价链；17:30 题材链缺省 False 字节级零变化）。
+    仅命中段渲染（节合计 ≤MORNING_CHARS），缺席=整行零字；状态返回
+    morningState/morningDate/morningHits 供 corpusState 留痕。**不参与 evidenceMissing
+    三层门**（题面 hash 冻结，早报是补充供给非判据层变更）。
     """
     state = corpus_state(db, date=date)
     nodes = S.get_industry_nodes(db) if state.get("ok") else []
@@ -615,6 +648,42 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                 lines.append(f"- {ev.get('day')} {ev.get('title')}"
                              + (f"（{parens}）" if parens else ""))
 
+    # 早报节（2026-11-14 晨间例外，include_morning=True 才渲染；只供 09:26 竞价链）。
+    # 与 KPL 池独立读（corpus_state ok 与否不影响早报档披露，§4.0 部分异常不阻断）；
+    # 粗分桶（NOT_A_THEME）不参与匹配（防泛科技/公告类早报句误配）；缺席=整行零字。
+    morning_state: str | None = None
+    morning_date: str | None = None
+    morning_hits: list[dict] = []
+    if include_morning:
+        morning_date = date
+        if is_not_a_theme(board_name):
+            morning_state = "disabled"
+        else:
+            try:
+                mdoc = S.get_morning_report(db, date=date) or {}
+            except Exception:      # noqa: BLE001 读不到如实当缺档，不伪造
+                mdoc = {}
+            m_state = str(mdoc.get("state") or "")
+            if m_state == "ok":
+                morning_hits = match_morning_paragraphs(mdoc.get("paragraphs") or [],
+                                                        board_name)
+                morning_state = "ok" if morning_hits else "no_hit"
+            else:
+                morning_state = m_state or "missing"
+        used = 0
+        morning_lines: list[str] = []
+        for i, hit in enumerate(morning_hits):
+            text = hit["text"]
+            if i == 0 and len(text) > MORNING_CHARS:
+                text = text[:MORNING_CHARS] + "…"   # 首段必入（超长截断至预算）
+            elif used + len(text) > MORNING_CHARS or used >= MORNING_CHARS:
+                break
+            used += len(text)
+            morning_lines.append(f"- {text}")
+        if morning_lines:
+            lines.append(f"早盘催化（韭研早报 {date}）：")
+            lines.extend(morning_lines)
+
     # 近两日题材新闻（开盘啦 ThemeNews）+ 前瞻日历（开盘啦 Type=3）。
     # 2026-10-24a：两节均无匹配时合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话，
     # 纯 token 冗余）；单边有命中维持分列，语义不变。
@@ -729,4 +798,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             "evidenceMissingReason": missing_reason,
             "l2Date": l2_date if include_l2 else None,
             "l2FallbackUsed": bool(include_l2 and l2_date != date),
+            "morningState": morning_state,
+            "morningDate": morning_date,
+            "morningHits": morning_hits,
             "unmappedCandidates": match.get("candidates") or []}

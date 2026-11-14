@@ -28,7 +28,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA3"   # 换代登记：auction-leader-vA3-preregistration-20261114（三点裁决：资金并入判据/保留五档/板块聚合留 vA4）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-14e"   # 纯语料供给换代（盘前催化原料增量 A：KPL 09:05 二次刷新槽，题面 hash 不动）；前一版 2026-11-14d = vA3 换代：封板题试盘分支+一字板分支+硬度方向解耦+新增 trial_settlement_pattern（题面 hash 变更；试盘行渲染/采集为 2026-11-14c 同轮产物）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-14f"   # 纯语料供给换代（盘前催化原料增量 B：韭研早报晨间窗专属源接入，题面 hash 不动）；前一版 2026-11-14e = A：KPL 09:05 二次刷新槽；2026-11-14d = vA3 换代：封板题试盘分支+一字板分支+硬度方向解耦+新增 trial_settlement_pattern（题面 hash 变更；试盘行渲染/采集为 2026-11-14c 同轮产物）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")

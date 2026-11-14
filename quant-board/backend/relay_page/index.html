@@ -3596,6 +3596,9 @@ function alRowHtml(r, f){
     ? ' <span class="badge b-amber" title="当日 09:15 推送缺席（结构化留痕）">推送缺席</span>' : '';
   const bidBad = (r.corpusState && String(r.corpusState.bidLane || '').startsWith('missing'))
     ? ' <span class="badge b-amber" title="竞价通道日档缺席：' + esc(String(r.corpusState.bidLane)) + '">竞价缺</span>' : '';
+  const morningBad = (r.corpusState && r.corpusState.morningState
+      && String(r.corpusState.morningState) !== 'ok' && String(r.corpusState.morningState) !== 'no_hit')
+    ? ' <span class="badge b-amber" title="早盘催化（韭研早报）状态：' + esc(String(r.corpusState.morningState)) + '">早报' + esc(String(r.corpusState.morningState)) + '</span>' : '';
   const dkey = js(r.tradingDate || '');
   return '<tr class="lg-row' + (open ? ' open' : '')
       + (STATE.relayFocus === r.tradingDate ? ' focus' : '')
@@ -3605,7 +3608,7 @@ function alRowHtml(r, f){
       + esc((r.tradingDate || '').slice(5)) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
-    + '<td>' + esc(r.board || '未归属') + dragonBad + pushBad + bidBad + '</td>'
+    + '<td>' + esc(r.board || '未归属') + dragonBad + pushBad + bidBad + morningBad + '</td>'
     + '<td>' + leadCell + '</td>'
     + '<td class="num" title="竞价涨幅（09:25 匹配价，bid 通道 bidding_pct）">' + pctTxt + '</td>'
     + '<td class="num" title="实时涨幅（09:15 竞价看龙头推送芯片 pct）">' + rpctTxt + '</td>'

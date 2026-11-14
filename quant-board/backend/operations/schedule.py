@@ -34,6 +34,9 @@ _RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 
 _THEME_COLLECT_TIMEOUT_SECONDS = 480
 # KPL 采集子进程超时（最坏 11 调用 × (3s 间隔+请求) + 1 次退避 20s ≈ 80s，留 3 倍余量）
 _KPL_COLLECT_TIMEOUT_SECONDS = 480  # 最坏 41 调用×(3s 间隔+RTT)+20s 退避（review 2026-11-02 Nit：240 贴限）
+# 早报晨间采集子进程超时（2026-11-14 晨间例外）：最坏 = 铸 token 冷启动 ~25s + 首发
+# + errCode=9 退避 60s×1 + authFailed 自愈重铸 ~25s + 重试 + 60s 退避 ≈ 175s，+落库冗余
+_MORNING_COLLECT_TIMEOUT_SECONDS = 240
 # 龙头级投喂（每日 1 call/龙头，实测 13 只 13 次调用 <2s/次 + 基线/取数）：1800s 冗余
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
 _THEME_LEADER_RESULT_MARKER = "THEME_LEADER_RESULT_JSON:"   # 子进程结果行标记（机读接口，2026-11-02）
@@ -860,6 +863,10 @@ def run_theme_corpus_collect_once(today: str | None = None, *,
             cmd = [sys.executable, "-m", "backend.operations.jiuyan_theme_collect", "--date", today]
             timeout = _THEME_COLLECT_TIMEOUT_SECONDS
             parse_key = "jiuyan"
+        elif collector == "jiuyan_morning":
+            cmd = [sys.executable, "-m", "backend.operations.jiuyan_morning_collect", "--date", today]
+            timeout = _MORNING_COLLECT_TIMEOUT_SECONDS
+            parse_key = "jiuyan_morning"
         else:
             results[collector] = {"ok": False, "error": {"code": "unknown_collector"}}
             ok_all = False

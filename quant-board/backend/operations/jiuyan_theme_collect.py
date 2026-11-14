@@ -3,7 +3,10 @@
 
 **事件层已换源**：投资日历/早报（`timeline_news`/`timeline_list`）随 2026-10-23 裁决
 （方案 A：事件层唯一权威源=开盘啦，见 `kpl_theme_collect.py`）退役——采集路径删除，
-`jiuyan_timeline` 集合导出归档后 drop。本模块只剩产业树正文刷新（KPL 无对应物）。
+`jiuyan_timeline` 集合导出归档后 drop。**2026-11-14 晨间例外**：早报单端点
+（`timeline_news`）已复活为晨间窗专属源（只供 09:26 竞价链，与本模块无关），
+见 `jiuyan_morning_collect.py` 与预登记 auction-preopen-catalyst-preregistration-20261114.md。
+本模块只剩产业树正文刷新（KPL 无对应物）。
 
 流程：`jiuyan_auth.resolve_auth` → `ai/industry/list` 一次 → 落 `jiuyan_ai_industry`。
 

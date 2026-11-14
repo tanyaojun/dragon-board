@@ -25,6 +25,10 @@ COLLECTION_INDUSTRY = "jiuyan_ai_industry"
 # 题材端点调用计数（额度护栏，2026-10-20）：`_id={fetchDate}`，`calls.{source} = n`。
 # 不存凭据，只存计数；失败请求同样计数（服务端已扣额度）。
 COLLECTION_API_CALLS = "jiuyan_api_calls"
+# 早报日档（2026-11-14 晨间例外复活，只供 09:26 竞价链；与产业树同额度计数器）：
+# `_id={date}`，state=ok/not_published/fetch_failed/rate_limited；state=ok 时
+# title/content/paragraphs 在场；不复活已 drop 的 jiuyan_timeline 集合。
+COLLECTION_MORNING = "jiuyan_morning_report"
 
 
 def record_api_calls(db: Any, fetch_date: str, sources: tuple[str, ...]) -> dict:
@@ -44,6 +48,43 @@ def calls_recorded(db: Any, fetch_date: str) -> int:
     """当日题材端点已计调用总数（取不到按 0；缺字段容错）。"""
     doc = db[COLLECTION_API_CALLS].find_one({"_id": fetch_date}, {"calls": 1}) or {}
     return sum(int(v or 0) for v in (doc.get("calls") or {}).values())
+
+
+def save_morning_report(db: Any, *, fetch_date: str, state: str, title: str = "",
+                        content: str = "", paragraphs: list[str] | None = None,
+                        token_source: str | None = None,
+                        self_heal: dict | None = None) -> dict:
+    """早报日档幂等 upsert（`_id={fetch_date}`）。
+
+    - `state="ok"` 档一旦在库**不覆盖**（幂等短路，重跑零 HTTP 由编排层先行短路）；
+    - 空 content 不得覆盖已存正文（§4.0：空载荷不覆盖既有事实）；
+    - 非 ok 状态档（not_published/fetch_failed/rate_limited）覆盖式更新（供
+      corpusState.morningState 按状态披露与下一尝试槽重试）；
+    - firstSeenAt/firstSeenDate 首见不覆盖。
+    """
+    existing = db[COLLECTION_MORNING].find_one({"_id": fetch_date}) or {}
+    if existing.get("state") == "ok":
+        return {"written": 0, "skipped": True, "reason": "already_ok"}
+    if state == "ok" and not str(content or "").strip():
+        return {"written": 0, "skipped": True, "reason": "empty_content"}
+    quality: dict[str, Any] = {"tokenSource": token_source}
+    if self_heal:
+        quality["selfHeal"] = self_heal
+    doc = {
+        "_id": fetch_date, "kind": "jiuyan_morning_report", "date": fetch_date,
+        "state": state, "title": str(title or ""), "content": str(content or ""),
+        "paragraphs": [str(p) for p in (paragraphs or [])],
+        "firstSeenAt": existing.get("firstSeenAt") or _now(),
+        "firstSeenDate": existing.get("firstSeenDate") or fetch_date,
+        "fetchedAt": _now(), "quality": quality,
+    }
+    db[COLLECTION_MORNING].replace_one({"_id": fetch_date}, doc, upsert=True)
+    return {"written": 1, "state": state}
+
+
+def get_morning_report(db: Any, *, date: str) -> dict | None:
+    """读当日早报日档（无档 → None；digest 据此 morningState=missing）。"""
+    return db[COLLECTION_MORNING].find_one({"_id": date})
 
 
 

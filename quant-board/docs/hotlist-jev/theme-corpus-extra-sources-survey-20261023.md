@@ -188,6 +188,12 @@ ths_flash/proxy_common.js/wzs_home）。
 
 ### 8.2 单一源裁决（✅ 已裁决=方案 A，2026-10-23 实施，见预登记 §13）
 
+> **2026-11-14 晨间例外注记**：早报单端点（`timeline/news`）已按用户裁决复活为
+> 「晨间窗专属源」——只供 09:26 竞价龙头链（新集合 `jiuyan_morning_report`），
+> 本节「事件层唯一权威源=开盘啦」裁决对 17:30 题材链**不变**；日历 `timeline/list`
+> 仍不恢复（KPL 超集）。裁决与设计见
+> `auction-preopen-catalyst-preregistration-20261114.md` §0/§3。
+
 「每类语料一个权威源」的纪律不破坏——**事件语料层二选一**（✅ 用户裁决选方案 A，当日实施完毕：
 KPL 采集链 + digest v4 + 题集 v4 `56dbb0709335` + 韭研 timeline 退役归档 drop +
 调度 08:45/16:10 接线；详见 `theme-leader-nextday-preregistration-20261020.md` §13）：

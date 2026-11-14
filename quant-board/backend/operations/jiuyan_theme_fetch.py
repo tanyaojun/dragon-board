@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""韭研题材语料拉取层（仅剩产业树 `ai/industry/list`；2026-10-23 v4 换源后单源化）。
+"""韭研题材语料拉取层（产业树 `ai/industry/list` + 全成分树 `stock-tree` + 早报 `timeline/news`）。
 
 背景（用户提问「jev 能不能靠 jiuyan 的板块异动解析判题材」）：
 `/action/field` 只给板块名/家数/名单 + 个股 expound，**没有板块级文本**。同一套认证下
@@ -7,24 +7,32 @@
 
 - `/ai/industry/list {}` → AI 产业树：顶层板块 `group_name` + **板块级催化原文 `content`**
   + `hot`（热度）+ `update_time` + `children`（子行业，各自也有 content）
+- `/timeline/news {limit}` → 当日「早报」+ 未来 1-3 日日历（2026-11-14 晨间例外复活：
+  只恢复早报单端点、只供 09:26 竞价链晨间窗消费；`timeline/list` 日历不恢复——KPL 日历
+  是超集，复活即双轨；裁决见 auction-preopen-catalyst-preregistration-20261114.md §0，
+  2026-10-23 退役依据见 theme-corpus-extra-sources-survey-20261023.md §8，
+  原 `jiuyan_timeline` 集合已 drop 不复活）。
 
-**事件层（日历/早报）已换源**：`timeline/news`、`timeline/list` 两端点随 2026-10-23
-裁决（方案 A：事件层唯一权威源=开盘啦，`kpl_theme_fetch.py`）退役，采集与解析代码删除，
-`jiuyan_timeline` 集合导出归档后 drop（data/backups/jiuyan_timeline-archive-20261023.jsonl）。
-产业树无 KPL 对应物，保留。设计裁决（AGENTS §1.2-1/§4.0）：
+设计裁决（AGENTS §1.2-1/§4.0）：
 - 单一事实源：事件语料只认开盘啦，产业树催化只认韭研（每类语料一个权威源）；
-- fail-visible：errCode 9=配额、1/110=鉴权失败，结构化返回；解析缺字段不伪造 0/空成功；
+  早报为独立语料类型（人工隔夜汇总），晨间窗专属源（不融进事件层）；
+- fail-visible：errCode 9=短时限流、1/110=鉴权失败，结构化返回；解析缺字段不伪造 0/空成功；
 - 与异动采集共用认证链（`jiuyan_auth`），不新建凭据通道。
 """
 from __future__ import annotations
 
 import json
+import re
 
 # 端点（POST，与 /action/field 同一 API_BASE）
 PATH_AI_INDUSTRY = "/ai/industry/list"
 # 全成分树（V3-1，2026-10-25 实测定形：GET 被 405 拒「请求方式错误」,不是用GET」，
 # POST body {"code": 一级code} → errCode=0 data=该产业全树，成分挂各级节点 stock_list[]）
 PATH_STOCK_TREE = "/ai/industry/stock-tree"
+# 早报端点（2026-11-14 晨间例外复活，只恢复早报/不复活 timeline_list 日历——KPL 日历是超集，
+# 见 auction-preopen-catalyst-preregistration-20261114.md §0；原 2026-10-23 退役归档于
+# theme-corpus-extra-sources-survey-20261023.md §8）
+PATH_TIMELINE_NEWS = "/timeline/news"
 
 
 def normalize_stock_code(raw: object) -> str:
@@ -213,6 +221,96 @@ def flatten_stock_tree(root: dict) -> dict:
 
     _walk(root, [])
     return {**industry, "stocks": [best[c] for c in sorted(best)], "invalidN": invalid}
+
+
+def parse_timeline_news(payload: dict) -> dict:
+    """`/timeline/news` → {ok, days:[{date, items:[{articleId,title,content}]}]}。
+
+    data 形状不稳定（实测有时 list，有时 {msg,data:[...]}）：两种都接受，宁可如实空列表
+    （代码自 git 3fde9716 恢复，2026-11-14 晨间例外）。
+    """
+    data = (payload or {}).get("data")
+    if isinstance(data, dict):
+        data = data.get("data")
+    if not isinstance(data, list):
+        return {"ok": False, "error": f"timeline/news data 形状异常: {type(data).__name__}",
+                "days": []}
+    days = []
+    for block in data:
+        if not isinstance(block, dict):
+            continue
+        items = []
+        for art in block.get("list") or []:
+            if not isinstance(art, dict):
+                continue
+            items.append({
+                "articleId": str(art.get("article_id") or ""),
+                "title": (art.get("title") or "").strip(),
+                "content": (art.get("content") or "").strip(),
+            })
+        days.append({"date": str(block.get("date") or ""), "items": items})
+    return {"ok": True, "days": [d for d in days if d["date"]]}
+
+
+def parse_timeline_news_response(payload: dict) -> dict:
+    """`/timeline/news` 完整响应 → 解析结果 + errCode 结构化错误。"""
+    err = _errcode_error(payload, "timeline/news")
+    if err:
+        return {**err, "days": []}
+    return parse_timeline_news(payload)
+
+
+def fetch_timeline_news(*, session_cookie: str, token: str, timestamp: str,
+                        limit: int = 20) -> dict:
+    """拉早报+未来 1-3 日投资日历（当日早报项由 is_briefing 语义在上层筛选）。"""
+    return _fetch(PATH_TIMELINE_NEWS, {"limit": limit}, session_cookie=session_cookie,
+                  token=token, timestamp=timestamp, parser=parse_timeline_news_response,
+                  what="timeline/news")
+
+
+# ── 早报识别/切段（纯函数；v3 语义自 git 3fde9716 恢复，2026-11-14 晨间例外）──
+
+# 当日事件清单（早报/复盘）而非既定日程；盘前链只认早报/盘前必读两类（复盘/收盘必读
+# 是 T 日盘后产物，对 09:26 晨间窗是前视，不收）。
+BRIEFING_TITLES = ("早报", "盘前必读")
+
+
+def is_briefing(item: dict) -> bool:
+    """当日事件清单（早报）而非既定日程：标题在名单内，或正文以「1、热点事件」开头。"""
+    title = str((item or {}).get("title") or "").strip()
+    content = str((item or {}).get("content") or "").strip()
+    return title in BRIEFING_TITLES or content.startswith("1、热点事件")
+
+
+def extract_briefing(days: list[dict], date: str) -> dict | None:
+    """timeline/news days → 当日（`date`）早报项；无当日块/无早报项 → None（=not_published）。"""
+    for day in days or []:
+        if str(day.get("date") or "") != str(date or ""):
+            continue
+        for it in day.get("items") or []:
+            if is_briefing(it):
+                return it
+    return None
+
+
+def split_briefing_paragraphs(content: str) -> list[str]:
+    """早报正文 → 题材归因短句段：按「N）」/「N、」编号行切，段内续行归并；
+    空段丢弃，顺序保留（纯文本变换，无判读）。"""
+    out: list[str] = []
+    cur: list[str] = []
+    for raw in str(content or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if re.match(r"^\d+[）)、]", line):
+            if cur:
+                out.append("".join(cur))
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        out.append("".join(cur))
+    return [p for p in out if p.strip()]
 
 
 def fetch_industry_stock_tree(code: str, *, session_cookie: str, token: str,

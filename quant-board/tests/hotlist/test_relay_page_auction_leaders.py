@@ -77,6 +77,14 @@ def test_absence_badges_fail_visible(html):
     assert "待结算" in row                        # 结局 null=待结算，不伪装未封
 
 
+def test_morning_state_badge_20261114(html):
+    """早报晨间例外（2026-11-14）：morningState 非 ok/no_hit 时出缺席徽章（fail-visible）。
+    ok/no_hit 是正常态（早报已入库/已入判定），不出徽章。"""
+    row = _fn(html, "alRowHtml")
+    assert "morningState" in row and "早报" in row
+    assert "'ok'" in row and "'no_hit'" in row
+
+
 def test_choice_cn_and_midpoints(html):
     assert "AL_CHOICE_CN" in html and "AL_MIDPOINTS" in html
     m = re.search(r"const AL_MIDPOINTS = \{([^}]+)\}", html)

@@ -651,3 +651,88 @@ def test_leader_expound_not_clipped_when_budget_given():
     assert "ENDTOKEN" not in base["text"]      # 预设 260 截断丢尾部
     assert "ENDTOKEN" in full["text"]          # 全文进窗
     assert full["text"].count("解析摘录：") == 1
+
+
+# ── 早报节（2026-11-14 晨间例外，include_morning=True；缺省 False 题材链零变化）──
+
+MORNING_OK = {"_id": "2026-10-23", "kind": "jiuyan_morning_report", "date": "2026-10-23",
+              "state": "ok", "title": "早报",
+              "content": "1、热点事件\n1）物理AI：英伟达GTC大会10月23日在柏林举行。\n2）固态电池：某厂发布量产时间表。",
+              "paragraphs": ["1、热点事件",
+                             "1）物理AI：英伟达GTC大会10月23日在柏林举行。",
+                             "2）固态电池：某厂发布量产时间表。"],
+              "fetchedAt": "2026-10-23T08:31:00", "quality": {"tokenSource": "cache+minted"}}
+
+
+def _db_with_morning(doc=None):
+    db = _db()
+    if doc is not None:
+        db.cols["jiuyan_morning_report"] = FakeCol([doc])
+    return db
+
+
+def test_include_morning_default_off_zero_change():
+    """缺省 include_morning=False：库里哪怕有早报档，叙事零字节变化（题材链回归锚）。"""
+    with_doc = _db_with_morning(MORNING_OK)
+    without = _db_with_morning()
+    a = D.build_theme_evidence_block(with_doc, board_name="物理AI", date="2026-10-23")
+    b = D.build_theme_evidence_block(without, board_name="物理AI", date="2026-10-23")
+    assert a["text"] == b["text"], "默认关=字节级零变化"
+    assert "早盘催化" not in a["text"] and a["morningState"] is None
+
+
+def test_include_morning_renders_matched_paragraphs():
+    db = _db_with_morning(MORNING_OK)
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-10-23",
+                                       include_morning=True)
+    assert "早盘催化（韭研早报 2026-10-23）：" in res["text"]
+    assert "- 1）物理AI：英伟达GTC大会10月23日在柏林举行。" in res["text"]
+    assert "固态电池" not in res["text"], "未命中段不进叙事（整段缺席）"
+    assert res["morningState"] == "ok" and res["morningDate"] == "2026-10-23"
+    assert len(res["morningHits"]) == 1 and res["morningHits"][0]["matchHow"]
+
+
+def test_include_morning_no_hit_whole_line_absent():
+    db = _db_with_morning(MORNING_OK)
+    res = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-23",
+                                       include_morning=True)
+    assert "早盘催化" not in res["text"], "无命中=整行缺席，不出占位"
+    assert res["morningState"] == "no_hit"
+
+
+def test_include_morning_missing_and_not_published_disclosed_only_in_state():
+    db = _db_with_morning()
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-10-23",
+                                       include_morning=True)
+    assert "早盘催化" not in res["text"] and res["morningState"] == "missing"
+    db2 = _db_with_morning({**MORNING_OK, "state": "not_published", "paragraphs": [],
+                            "content": "", "title": ""})
+    res2 = D.build_theme_evidence_block(db2, board_name="物理AI", date="2026-10-23",
+                                        include_morning=True)
+    assert "早盘催化" not in res2["text"] and res2["morningState"] == "not_published"
+
+
+def test_include_morning_char_budget_600():
+    long_para = "1）物理AI：" + "长" * 700
+    db = _db_with_morning({**MORNING_OK,
+                           "paragraphs": [long_para, "1）固态电池：量产。"],
+                           "content": long_para})
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-10-23",
+                                       include_morning=True)
+    assert "固态电池" not in res["text"], "预算耗尽后续段整段不入"
+    body = [ln for ln in res["text"].splitlines() if ln.startswith("- 1）")]
+    assert body and len(body[0]) <= D.MORNING_CHARS + 4, "首段截断至预算（含「- 」前缀与省略号）"
+
+
+def test_include_morning_disabled_for_coarse_bucket():
+    db = _db_with_morning(MORNING_OK)
+    res = D.build_theme_evidence_block(db, board_name="公告", date="2026-10-23",
+                                       include_morning=True)
+    assert "早盘催化" not in res["text"] and res["morningState"] == "disabled"
+
+
+def test_match_morning_paragraphs_deterministic():
+    hits = D.match_morning_paragraphs(MORNING_OK["paragraphs"], "物理AI")
+    assert len(hits) == 1 and "物理AI" in hits[0]["text"]
+    assert D.match_morning_paragraphs(MORNING_OK["paragraphs"], "俄乌重建") == []
+    assert D.match_morning_paragraphs(MORNING_OK["paragraphs"], None) == []
