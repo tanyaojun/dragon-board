@@ -91,7 +91,7 @@ def test_question_set_frozen_hash_and_versions():
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v17"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-14a"   # 纯语料供给换代：S3 成分验证门+产业树残桩正文剔除（题面 hash 不动）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-15a"   # 纯语料供给换代：监管风险行（预登记 theme-leader-regulatory-risk-20261115，题面 hash 不动）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "8c6c94429abd"
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",

@@ -45,6 +45,11 @@
 | **F10 分红** | apparticle | `StockF10Basic` / `GetDividends` | StockID, hidden, Index, STAT_SDK_TYPE | ✅实测 `{list,count}`（errcode=0；**域=apparticle 非 apphq**，2026-11-08 首探 1020 已勘误） |
 | **F10 重要提醒** | apparticle | `StockF10Basic` / `BigReminderW43` | StockID, Index, STAT_SDK_TYPE | ✅实测 `{info,nowTime}` |
 | **题材子分类详情** | apphq | `Section` / `GetSection` | SectionID, Order, Index, STAT_SDK_TYPE | 未实测（j00.y0） |
+| **异动提醒·严重异动（当日 today+tomorrow 触发组）** | apphq | `StockBidYiDong` / `GetPianLiZhi_W46` | — | ✅ 2026-11-15 探针 errcode=0 `{Day,Time,List_Today,List_Tormorow}`（20 列行，列序定档见 hotlist-jev/theme-leader-regulatory-risk-preregistration-20261115 §2） |
+| **异动提醒·严重异动（历史日）** | apphis | `StockBidYiDong` / `GetYDTPZFPL_W46` | Day | ✅ 同上（历史日 List_Tormorow 恒空=结构化空态） |
+| **异动提醒·近期严重异动** | apphis | `StockBidYiDong` / `GetYDTPZFPL_W46_HisAll` | Day, IsZT, Index, st | ✅ `{List_His,List_His_Total}` 日期降序分页；IsZT 过滤语义可疑→客户端按 [15]/[16] 标志派生 |
+| **异动提醒·重点监控（监管期）** | apphq | `StockBidYiDong` / `GetYDTP_ZDJK_Today` | — | ✅ `{List}` 行=[代码,名称,监控开始,监控结束,…] |
+| **异动提醒·重点监控（历史）** | apphq/apphis | `StockBidYiDong` / `GetYDTP_ZDJK_His` | Day? | ✅ 上游有限窗（实测 1 条），给多少落多少不伪造完整历史 |
 
 ## 三、Socket 订阅面（0x40 通道，个股详情页级）
 

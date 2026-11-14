@@ -943,3 +943,39 @@ def test_corpus_state_morning_flash_fields_persisted(env, monkeypatch):
     sector = db[L.COLLECTION].docs[f"{DATE}:board:机器人"]
     assert sector["corpusState"]["morningState"] == "missing"
     assert sector["corpusState"]["flashState"] == "missing"
+
+
+def test_build_one_wires_regulatory_line():
+    """监管风险行（2026-11-15 预登记）：T−1 收盘档 reg_by_code 进晨间叙事；
+    无档/无命中整行缺席 + regulatoryState 留痕。"""
+    db = FakeDb()
+    row = {"code": "605255", "name": "天普股份", "board": "机器人"}
+    reg = {"byCode": {"605255": {
+        "monitor_current": {"stock_id": "605255", "stock_name": "天普股份",
+                            "start_date": "2026-11-13", "end_date": "2026-11-26"},
+        "recent": [{"stock_id": "605255", "stock_name": "天普股份",
+                    "abnormal_date": "2026-11-16", "suspended_flag": True,
+                    "resume_date": "2026-11-19", "monitor_flag": True,
+                    "triggered_flag": False, "period": None}]}},
+        "laneOk": True, "reason": None, "states": {}}
+    built = L.build_one(db, DATE, "2026-11-12", row, t1_row=None,
+                        pool_prev={"items": {}}, lanes={}, gene_corpus={},
+                        notice_corpus={}, heat_corpus={}, reason_corpus={},
+                        lhb_facts=None, market_line="涨停 46 家",
+                        base_rate_stats=None, sector_judgment=None,
+                        board_codes=[row], reg_corpus=reg)
+    n = built["narrative"]
+    assert "监管风险：待判龙头 天普股份605255 重点监控(2026-11-13~2026-11-26)" in n
+    assert "严重异动2026-11-16 停牌 预计复牌2026-11-19 重点监控" in n
+    assert built["regulatoryState"]["hitCodes"] == ["605255"]
+    # 无档 → 缺席 + 留痕
+    built0 = L.build_one(db, DATE, "2026-11-12", row, t1_row=None,
+                         pool_prev={"items": {}}, lanes={}, gene_corpus={},
+                         notice_corpus={}, heat_corpus={}, reason_corpus={},
+                         lhb_facts=None, market_line="涨停 46 家",
+                         base_rate_stats=None, sector_judgment=None,
+                         board_codes=[row],
+                         reg_corpus={"byCode": {}, "laneOk": False,
+                                     "reason": "no_archive", "states": {}})
+    assert "监管风险" not in built0["narrative"]
+    assert built0["regulatoryState"]["laneOk"] is False

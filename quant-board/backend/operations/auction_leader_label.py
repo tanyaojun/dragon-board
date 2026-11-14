@@ -61,6 +61,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     limitup_reason_line,
     lhb_line,
     notice_count_line,
+    regulatory_risk_line,
     sector_judgment_line,
     theme_heat_line,
     zt_gene_line,
@@ -80,7 +81,10 @@ from backend.operations.theme_leader_label import (
     fetch_notice_corpus,
     fetch_pool_quality,
     fetch_reason_corpus,
+    fetch_regulatory_corpus,
     fetch_theme_heat,
+    regulatory_entries_for_codes,
+    _regulatory_state,
     estimate_tokens,
     gene_entries_for_leaders,
     notice_entries_for_leaders,
@@ -327,7 +331,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               basis_map: dict | None = None, basis_state: str = "missing",
               bid_supplement: str | None = None,
               prev_cross: dict | None = None, streak_map: dict | None = None,
-              trial: dict | None = None) -> dict:
+              trial: dict | None = None, reg_corpus: dict | None = None) -> dict:
     """个股级投喂组装（零网络零模型）：T−1 语料 + 当日竞价 + 推送行。
 
     trial = 试盘源载荷（增量2 骨架，合同定案前恒 None → trialState=contract_pending，
@@ -370,6 +374,9 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         if lhb_facts is not None else None
     if lhb_txt and prev_date:
         lhb_txt = lhb_txt.replace("龙虎榜：", f"龙虎榜（{prev_date} 榜单）：", 1)
+    # 监管风险行（2026-11-15 预登记）：T−1 收盘档 reg_by_code，scope 同龙虎榜行
+    reg_entries = regulatory_entries_for_codes(lhb_codes, lhb_roles, reg_corpus or {})
+    reg_line = regulatory_risk_line(reg_entries)
     block = digest.build_theme_evidence_block(
         db, board_name=board or "", date=date, leader_code=code, sealed_codes=None,
         l2_fallback_date=prev_date, leader_expound_chars=1200, include_morning=True,
@@ -390,6 +397,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         gene_line=zt_gene_line(gene_entries_for_leaders(rows, gene_corpus)),
         reason_line=limitup_reason_line(reason_entries_for_leaders(rows, reason_corpus)),
         notice_count_line=notice_count_line(notice_entries_for_leaders(rows, notice_corpus)),
+        regulatory_line=reg_line,
         lhb_facts_line=lhb_txt,
         evidence_block=block["text"])
     return {"docKind": DOC_KIND_LEADER, "row": row, "narrative": narrative,
@@ -398,6 +406,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
             # 与推送芯片 pct（实时涨幅）严格分离，落库 auctionPct 取此值（2026-11-14 修复）
             "auctionBidPct": (bid_item or {}).get("bidding_pct"),
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
+            "regulatoryState": _regulatory_state(reg_corpus or {}, reg_entries),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
                             "bidIn": code in bid_items, "bidSource": bid_source,
                             "bidSupplement": bid_supplement,
@@ -425,7 +434,7 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                      market_line: str, base_rate_stats: dict | None,
                      push_entries: list[dict],
                      basis_map: dict | None = None, basis_state: str = "missing",
-                     prev_cross: dict | None = None) -> dict:
+                     prev_cross: dict | None = None, reg_corpus: dict | None = None) -> dict:
     """板块级投喂组装（深度/延续两题；板内推送股并列事实）。"""
     members = []
     for r in rows:
@@ -449,6 +458,8 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         if lhb_facts is not None else None
     if lhb_txt and prev_date:
         lhb_txt = lhb_txt.replace("龙虎榜：", f"龙虎榜（{prev_date} 榜单）：", 1)
+    reg_entries = regulatory_entries_for_codes(lhb_codes, lhb_roles, reg_corpus or {})
+    reg_line = regulatory_risk_line(reg_entries)
     block = digest.build_theme_evidence_block(
         db, board_name=board, date=date, leader_code=codes[0] if codes else "",
         sealed_codes=None, l2_fallback_date=prev_date, include_morning=True,
@@ -462,11 +473,13 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         bid_line=auction_bid_line(bid_entries),
         base_rate=auction_base_rate_line(base_rate_stats),
         reason_line=limitup_reason_line(reason_entries_for_leaders(rows, reason_corpus)),
+        regulatory_line=reg_line,
         lhb_facts_line=lhb_txt,
         evidence_block=block["text"])
     return {"docKind": DOC_KIND_SECTOR, "rows": rows, "board": board,
             "narrative": narrative, "evidence": block,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
+            "regulatoryState": _regulatory_state(reg_corpus or {}, reg_entries),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
                             "bidIn": any(str(r.get("code") or "") in bid_items
                                          for r in rows),   # review 2026-11-13f：板块级=任一成员在榜
@@ -535,6 +548,7 @@ def _label_one(db, col, date: str, built: dict, *,
         "questionSetVersion": QUESTION_SET_VERSION_AUCTION_LEADER,
         "questionSetHash": QUESTION_SET_HASH_AUCTION_LEADER,
         "lhbState": built.get("lhbState"),
+        "regulatoryState": built.get("regulatoryState"),
         "corpusState": built.get("corpusState"),
         "corpusFrozen": bool(built.get("corpusFrozen")),
         "auctionPushState": built.get("auctionPushState"),
@@ -747,6 +761,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     notice_corpus = fetch_notice_corpus(db, prev_date) if prev_date else {}
     heat_corpus = fetch_theme_heat(db, prev_date) if prev_date else {}
     reason_corpus = fetch_reason_corpus(db, prev_date) if prev_date else {}
+    # 监管风险语料（2026-11-15 预登记）：T−1 收盘档（17:00 槽），晨间投喂消费
+    reg_corpus = (fetch_regulatory_corpus(db, prev_date) if prev_date
+                  else {"byCode": {}, "laneOk": False, "reason": "no_prev_date", "states": {}})
     lhb_facts = None
     if prev_date:
         try:
@@ -791,7 +808,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 lhb_facts=lhb_facts, market_line=market_line,
                 base_rate_stats=base_rate_stats, push_entries=push_entries,
                 basis_map=basis_map, basis_state=basis_state,
-                prev_cross=prev_cross))
+                prev_cross=prev_cross, reg_corpus=reg_corpus))
     built_leaders: list[dict] = []
     for r in todo:
         board = str(r.get("board") or "未归属")
@@ -814,7 +831,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           sector_judgment=sector_answers.get(board),
                           board_codes=by_board.get(board, [r]),
                           prev_cross=prev_cross, streak_map=streak_map,
-                          trial=trial)
+                          trial=trial, reg_corpus=reg_corpus)
         if (frozen_doc and frozen_doc.get("status") == "ok"
                 and frozen_doc.get("narrative")):
             built["narrative"] = frozen_doc["narrative"]

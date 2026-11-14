@@ -35,6 +35,11 @@
   投喂」）：2026-11-10 起写入方 = collector（推送即落库），落库合同同上条：按
   stock_id 并集、字段随最新帧刷新（first_ts 首次到流）；日期跟随涨停池快照交易日，
   推送 ts 早于该日的跨日残留条目跳过不写（不污染当日档）。
+- 监管风险语料通道（KPL 异动提醒页 严重异动/重点监控 五组，reg_ 前缀字段；
+  2026-11-15 预登记 theme-leader-regulatory-risk）：HTTP 非推送型 → 本服务单写者，
+  交易日 17:00 收盘槽后每日一次（错过当轮自愈；2026-11-15 用户裁决 15:10→17:00）；频控预算 5 发/日、无重试、日预算上限 10（发弹前预留门控）
+  （kpl_api_calls calls.regulatory 计数，超预算结构化 skip）；部分端点失败仍落库
+  （reg_states 逐端点留痕），全源失败不写不覆盖；协议层 kpl_regulatory_risk.py。
 
 各通道在同一次写里各改各的前缀字段（单写者顺序执行，无并发冲突），日档互不覆盖。
 供 GET /api/kpl/daban-pool（涨停池）、GET /api/kpl/daban-bidding（集合竞价）、
@@ -50,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
@@ -58,6 +64,8 @@ import httpx
 
 from backend.core.settings import get_settings
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+from backend.services.kpl_regulatory_risk import (
+    REGULATORY_EXPECTED_CALLS, collect_regulatory)
 from backend.services.kpl_stock_gene import get_zt_gene
 from backend.services.kpl_stock_notice import get_notice_count
 from backend.snapshot_collector.trading_calendar import (
@@ -760,6 +768,58 @@ def load_stock_detail_corpus(db: Any, date: str, *, lane: str) -> dict[str, Any]
     return _load_stock_corpus(db, date, lane=lane, prefix=cfg["prefix"])
 
 
+# ── 监管风险语料通道（2026-11-15 预登记 theme-leader-regulatory-risk）────────
+# 协议层见 backend/services/kpl_regulatory_risk.py（KPL 异动提醒页 严重异动/重点监控
+# 五组，HTTP 非推送型 → 本服务 regulatory lane 单写者，每日 17:00 收盘槽一次）。
+# reg_ 前缀字段级 $set，与它通道互不覆盖；部分端点失败仍落库（states 逐端点留痕）。
+
+
+def archive_regulatory_corpus(db: Any, payload: dict[str, Any], *,
+                                now: Optional[datetime] = None) -> dict[str, Any]:
+    """监管风险语料落库（CLI 手动补采共用同一写路径）。
+
+    全源失败不写不覆盖旧档；空日期不写；空列表=真零与组=None=缺失严格区分（读口消费）。
+    """
+    date = str(payload.get("date") or "")
+    if not date:
+        return {"ok": False, "reason": "empty_date"}
+    states = payload.get("states") or {}
+    if not any((s or {}).get("ok") for s in states.values()):
+        return {"ok": False, "reason": "all_sources_failed", "date": date}
+    doc = {
+        "reg_date": date,
+        "reg_groups": payload.get("groups") or {},
+        "reg_by_code": payload.get("by_code") or {},
+        "reg_states": states,
+        "reg_dropped": payload.get("dropped") or {},
+        "reg_archived_at": (now or datetime.now(TZ_SHANGHAI)).isoformat(),
+    }
+    db[_COLLECTION].update_one({"_id": date}, {"$set": doc}, upsert=True)
+    return {"ok": True, "date": date, "codes": len(payload.get("by_code") or {}),
+            "ok_sources": [k for k, s in states.items() if (s or {}).get("ok")]}
+
+
+def load_regulatory_corpus(db: Any, date: str) -> dict[str, Any]:
+    """监管风险语料读口：{ok, date, groups, by_code, states, archived_at}；无档结构化降级。"""
+    row = db[_COLLECTION].find_one({"_id": date})
+    if not row or "reg_groups" not in row:
+        return {"ok": False, "reason": "no_archive", "date": date}
+    return {"ok": True, "date": date, "groups": row.get("reg_groups") or {},
+            "by_code": row.get("reg_by_code") or {},
+            "states": row.get("reg_states") or {},
+            "dropped": row.get("reg_dropped") or {},
+            "archived_at": row.get("reg_archived_at")}
+
+
+def latest_regulatory_day(db: Any) -> Optional[str]:
+    """最近含监管风险档的交易日（前端默认日期用）。"""
+    row = db[_COLLECTION].find({"reg_date": {"$exists": True}}, {"reg_date": 1}) \
+        .sort("reg_date", -1).limit(1)
+    for r in row:
+        return str(r.get("reg_date") or "") or None
+    return None
+
+
 # ── 公告/新闻/研报计数语料通道（2026-11-08 题材龙头语料第 3 项）────────────
 # 协议层见 backend/services/kpl_stock_notice.py（apphis CompanyNotice/GetCompanyCount，
 # announcement/report/news 三计数 + 上游数据日期；计数统计窗口上游未标注 → 原样透出
@@ -1090,6 +1150,7 @@ class DabanPoolArchiver:
         gene_limit: int = 6,
         notice_fetcher: Callable[[str], dict[str, Any]] = get_notice_count,
         notice_limit: int = 6,
+        regulatory_fetcher: Callable[[], dict[str, Any]] = collect_regulatory,
         clock: Optional[Callable[[], datetime]] = None,
     ) -> None:
         current = settings or get_settings()
@@ -1108,6 +1169,8 @@ class DabanPoolArchiver:
         # 公告计数语料（HTTP 单股粒度、协议层 ≥2s 限频）→ 与 gene 通道同款每轮限量懒取
         self._notice_fetcher = notice_fetcher
         self._notice_limit = max(1, int(notice_limit))
+        # 监管风险语料（HTTP 市场级列表、每日 17:00 槽一次；预算 ≤10 发/日 §1.2-9）
+        self._regulatory_fetcher = regulatory_fetcher
         self._task: asyncio.Task[None] | None = None
         self._last_run_at: str | None = None
         self._last_result: dict[str, Any] | None = None
@@ -1137,6 +1200,9 @@ class DabanPoolArchiver:
             "intervalSeconds": self.interval_seconds,
             "geneLimit": self._gene_limit,
             "noticeLimit": self._notice_limit,
+            "regulatoryEnabled": os.environ.get("KPL_REGULATORY_ENABLED", "1") != "0",
+            "regulatorySlot": "17:00",
+            "regulatoryBudget": int(os.environ.get("KPL_REGULATORY_DAILY_CALL_BUDGET", "10")),
             "lastRunAt": self._last_run_at,
             "lastResult": self._last_result,
             "lastError": self._last_error,
@@ -1270,6 +1336,55 @@ class DabanPoolArchiver:
                         results["notice"]["plan_reason"] = plan.get("reason")
             except Exception as error:
                 results["notice"] = {"ok": False, "reason": f"archive_failed:{error}"}
+            # 监管风险语料（2026-11-15 预登记）：HTTP 非推送型 → 本服务单写者；交易日
+            # 17:00 收盘槽后每日一次（17:30 题材投喂 / 次日 09:26 竞价投喂消费；
+            # 16:10 竞价结局回填消费 T−1 槽）。频控预算 §1.2-9：5 发/日、无重试（部分失败
+            # 当日定格+states 留痕，全失败下轮自愈），日预算上限 10 发弹前预留门控；
+            # 计数 kpl_api_calls calls.regulatory；非交易日/未到槽不采；错过时点当轮自愈。
+            try:
+                if os.environ.get("KPL_REGULATORY_ENABLED", "1") == "0":
+                    results["regulatory"] = {"ok": True, "note": "disabled"}
+                elif not trading_today or (_ctx_now.hour, _ctx_now.minute) < (17, 0):
+                    results["regulatory"] = {"ok": True, "note": "waiting_slot"}
+                else:
+                    from backend.operations.kpl_theme_store import (
+                        COLLECTION_API_CALLS, record_api_calls)
+                    reg_db = self._database_factory()
+                    # 交易日 latest_trading_day=None（上下文本义）→ 用当日；
+                    # 外层 elif 已门控 trading_today，此处必非空
+                    reg_target = str(latest_trading_day or _ctx_now.date().isoformat())
+                    prev_reg = reg_db[_COLLECTION].find_one(
+                        {"_id": reg_target}, {"reg_date": 1, "reg_states": 1}) or {}
+                    prev_states = prev_reg.get("reg_states") or {}
+                    if prev_reg.get("reg_date") == reg_target and any(
+                            (s or {}).get("ok") for s in prev_states.values()):
+                        results["regulatory"] = {"ok": True, "note": "already_archived",
+                                                 "date": reg_target}
+                    else:
+                        budget = max(1, int(os.environ.get(
+                            "KPL_REGULATORY_DAILY_CALL_BUDGET", "10")))
+                        calls_doc = reg_db[COLLECTION_API_CALLS].find_one(
+                            {"_id": reg_target}, {"calls": 1}) or {}
+                        used = int((calls_doc.get("calls") or {}).get("regulatory") or 0)
+                        # review m2：预留预期发数门控（混合计数场景防超调，如 used=6+5>10）
+                        if used + REGULATORY_EXPECTED_CALLS > budget:
+                            results["regulatory"] = {"ok": False,
+                                                     "reason": "budget_exhausted",
+                                                     "used": used, "budget": budget}
+                        else:
+                            payload = await asyncio.to_thread(self._regulatory_fetcher)
+                            # 逐发计数（record_api_calls 按源名各计 1，重复键折叠）
+                            for _ in range(int(payload.get("calls") or 0)):
+                                record_api_calls(reg_db, reg_target, ("regulatory",))
+                            if payload.get("date") != reg_target:
+                                results["regulatory"] = {
+                                    "ok": False, "reason": "date_mismatch",
+                                    "date": payload.get("date"), "target": reg_target}
+                            else:
+                                results["regulatory"] = await asyncio.to_thread(
+                                    archive_regulatory_corpus, reg_db, payload)
+            except Exception as error:
+                results["regulatory"] = {"ok": False, "reason": f"archive_failed:{error}"}
         self._last_result = results
         self._last_error = None if all(r.get("ok") for r in results.values()) \
             else ";".join(f"{k}:{r.get('reason')}" for k, r in results.items() if not r.get("ok"))

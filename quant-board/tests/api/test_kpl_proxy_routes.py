@@ -623,7 +623,8 @@ def test_daban_pool_lane_routes_storage_disabled(client, monkeypatch):
 
     monkeypatch.setattr(kpl_proxy_routes, "get_settings", lambda: _S())
     for path in ("/api/kpl/daban-pool", "/api/kpl/daban-bidding",
-                 "/api/kpl/daban-zhaban", "/api/kpl/daban-dt"):
+                 "/api/kpl/daban-zhaban", "/api/kpl/daban-dt",
+                 "/api/kpl/regulatory"):
         r = client.get(path, params={"date": "2026-11-08"})
         assert r.status_code == 502
         assert r.json()["reason"] == "storage_backend_disabled"
@@ -728,3 +729,86 @@ def test_daban_lead_route(client, monkeypatch):
     assert body["lead_boards"]["801159"]["items"][0]["label"] == "龙一"
     r2 = client.get("/api/kpl/daban-lead", params={"date": ""})
     assert r2.status_code == 400        # 日期校验护栏同款
+
+
+# ── 监管风险读口（2026-11-15 预登记 theme-leader-regulatory-risk）─────────
+
+class _RegRouteCol:
+    def __init__(self, rows=None):
+        self.rows = rows or {}
+
+    def find_one(self, q, projection=None, sort=None):
+        for r in self.rows.values():
+            if all(r.get(k) == v for k, v in q.items()):
+                return dict(r)
+        return None
+
+    def find(self, q=None, projection=None):
+        rows = []
+        for r in self.rows.values():
+            ok = True
+            for k, v in (q or {}).items():
+                if isinstance(v, dict) and "$exists" in v:
+                    ok = ok and ((k in r) == bool(v["$exists"]))
+                else:
+                    ok = ok and r.get(k) == v
+            if ok:
+                rows.append(dict(r))
+
+        class _Cur:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def sort(self, k, d):
+                self._rows.sort(key=lambda r: str(r.get(k) or ""), reverse=d < 0)
+                return self
+
+            def limit(self, n):
+                self._rows = self._rows[:n]
+                return self
+
+            def __iter__(self):
+                return iter(self._rows)
+
+        return _Cur(rows)
+
+
+class _RegRouteDb:
+    def __init__(self, rows=None):
+        self.cols = {"kpl_daban_pool": _RegRouteCol(rows)}
+
+    def __getitem__(self, name):
+        return self.cols.setdefault(name, _RegRouteCol())
+
+
+_REG_ROW = {"_id": "2026-11-13", "reg_date": "2026-11-13",
+            "reg_groups": {"today": [], "tomorrow": [], "recent": [],
+                           "monitor_current": [], "monitor_history": []},
+            "reg_by_code": {}, "reg_states": {"severe": {"ok": True}}}
+
+
+def test_regulatory_route_empty_date_defaults_latest(client, monkeypatch):
+    from backend.data.repositories import repository_factory as rf
+    db = _RegRouteDb({"2026-11-12": dict(_REG_ROW, _id="2026-11-12", reg_date="2026-11-12"),
+                      "2026-11-13": dict(_REG_ROW)})
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: db)
+    r = client.get("/api/kpl/regulatory")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["date"] == "2026-11-13"
+
+
+def test_regulatory_route_explicit_and_invalid_and_missing(client, monkeypatch):
+    from backend.data.repositories import repository_factory as rf
+    db = _RegRouteDb({"2026-11-13": dict(_REG_ROW)})
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: db)
+    r = client.get("/api/kpl/regulatory", params={"date": "2026-11-13"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    r2 = client.get("/api/kpl/regulatory", params={"date": "abc"})
+    assert r2.status_code == 400 and r2.json()["ok"] is False
+    # 格式合法但无档（含历法非法日）→ 结构化 no_archive，不伪装空列表
+    r2b = client.get("/api/kpl/regulatory", params={"date": "2026-13-99"})
+    assert r2b.status_code == 200 and r2b.json()["reason"] == "no_archive"
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: _RegRouteDb())
+    r3 = client.get("/api/kpl/regulatory")
+    assert r3.json()["ok"] is False and r3.json()["reason"] == "no_archive"

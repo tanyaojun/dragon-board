@@ -246,7 +246,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v17"
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-14a"   # 纯语料供给换代：S3 成分验证门+产业树残桩正文剔除（theme_event_digest 共享证据块；蹭标签词不再注入异题材叙事、≤9 字自复述残桩按无催化正文处理）；题面 hash 不动；前一版 2026-11-13a = A7：直播归档 merge-union
+AMMO_VERSION_THEME_LEADER = "2026-11-15a"   # 纯语料供给换代：监管风险行（KPL 异动提醒页 严重异动/重点监控 五组，预登记 theme-leader-regulatory-risk-20261115）；题面 hash 不动；前一版 2026-11-14a = S3 成分验证门+产业树残桩正文剔除
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -1461,6 +1461,82 @@ def risk_profile_line(entries: list[dict]) -> str | None:
     return "风险：" + "；".join(parts) if parts else None
 
 
+def _reg_pct(v: Any) -> str | None:
+    """监管行百分比渲染：上游数值=百分数原样+%后缀（探针定档）；缺位 None 不补 0。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return f"{v:g}%"
+
+
+def regulatory_risk_line(entries: list[dict]) -> str | None:
+    """监管风险行（2026-11-15 预登记 theme-leader-regulatory-risk，纯语料补行，题面 hash 不动）。
+
+    `entries` = [{"label", "hit"}]，hit = kpl_daban_pool reg_by_code 索引项
+    {monitor_current?, monitor_history?, recent[], today?, tomorrow?}（KPL 异动提醒页
+    市场级监管事实，fetch_regulatory_corpus 归一产物）。口径纪律：
+    - 只放数据事实：上游日期串/周期标签原样，百分比数值原样+%后缀，不自算不反推；
+    - 触发组=条件事实（「今日/明日涨停即触发严重异动」），不伪装既成异动；
+    - 逐字段非空才出段；该股无任何监管事实 → 缺席；全部缺席 → None（§1.2-8 整行缺席）；
+    - lane 降级由调用方不传 entries + 结构化 regulatoryState 留痕（不进叙事）。
+    """
+    if not entries:
+        return None
+    parts: list[str] = []
+    for entry in entries:
+        hit = (entry or {}).get("hit")
+        if not isinstance(hit, dict) or not hit:
+            continue
+        segs: list[str] = []
+        mc = hit.get("monitor_current") or {}
+        if mc.get("start_date") or mc.get("end_date"):
+            segs.append(f"重点监控({mc.get('start_date') or '不可考'}~{mc.get('end_date') or '不可考'})")
+        for r in (hit.get("recent") or [])[:2]:
+            d = (r or {}).get("abnormal_date")
+            if not d:
+                continue
+            seg = f"严重异动{d}"
+            if r.get("suspended_flag"):
+                seg += " 停牌"
+                if r.get("resume_date"):
+                    seg += f" 预计复牌{r['resume_date']}"
+            elif r.get("triggered_flag"):
+                seg += " 触发严重异动"
+            if r.get("monitor_flag"):
+                seg += " 重点监控"
+            if r.get("period"):
+                seg += f" {r['period']}"
+            segs.append(seg)
+        for key, cn in (("today", "今日"), ("tomorrow", "明日")):
+            t = hit.get(key) or {}
+            if not t:
+                continue
+            bits: list[str] = []
+            tp = _reg_pct(t.get("trigger_pct"))
+            sp = _reg_pct(t.get("space_pct"))
+            if tp:
+                bits.append(f"触发涨幅{tp}")
+            if sp:
+                bits.append(f"偏离空间{sp}")
+            if t.get("period"):
+                bits.append(str(t["period"]))
+            seg = f"{cn}涨停即触发严重异动" + (f"({' '.join(bits)})" if bits else "")
+            if t.get("streak_tag"):
+                seg += f" {t['streak_tag']}"
+            segs.append(seg)
+        mh = hit.get("monitor_history") or {}
+        if mh.get("start_date") or mh.get("end_date"):
+            segs.append(f"历史重点监控({mh.get('start_date') or '不可考'}~{mh.get('end_date') or '不可考'})")
+        if not segs:
+            continue
+        src = mc or mh or (hit.get("today") or {}) or (hit.get("tomorrow") or {}) \
+            or ((hit.get("recent") or [{}])[0])
+        name = str(src.get("stock_name") or "").strip()
+        code = str(src.get("stock_id") or "").strip()
+        who = f"{name}{code}" if (name or code) else ""
+        parts.append(f"{entry.get('label') or '该股'} {who} ".rstrip() + " " + "，".join(segs))
+    return "监管风险：" + "；".join(parts) if parts else None
+
+
 def _gene_num(v: Any) -> str:
     """基因数值渲染：整数去小数点（100 → 100），小数保留 1 位（66.6667 → 66.7）。
 
@@ -2421,6 +2497,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            bf_reason_line: str | None = None,
                            popularity_rank_line: str | None = None,
                            risk_line: str | None = None,
+                           regulatory_line: str | None = None,
                            abnormal_price_line: str | None = None,
                            gene_line: str | None = None,
                            notice_count_line: str | None = None,
@@ -2547,6 +2624,9 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     if risk_line:
         # 2026-11-11 ①：风险画像行（减持/解禁/质押/风险提示）
         lines.append(risk_line)
+    if regulatory_line:
+        # 2026-11-15：监管风险行（KPL 严重异动/重点监控，交易所级监管事实）
+        lines.append(regulatory_line)
     if abnormal_price_line:
         # 2026-11-11 ④：异动提醒行（2030，次日涨幅偏离实况）
         lines.append(abnormal_price_line)
@@ -2579,6 +2659,7 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
                            dt_line: str | None = None,
                            popularity_rank_line: str | None = None,
                            risk_line: str | None = None,
+                           regulatory_line: str | None = None,
                            forecast_line: str | None = None,
                            lhb_facts_line: str | None = None,
                            realtime_lhb_line: str | None = None,
@@ -2626,6 +2707,9 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
     if risk_line:
         # 2026-11-11 ①：风险画像行（双龙一并一行）
         lines.append(risk_line)
+    if regulatory_line:
+        # 2026-11-15：监管风险行（双龙一+板内成员 scope）
+        lines.append(regulatory_line)
     if forecast_line:
         # 2026-11-11 ③：上榜预测行
         lines.append(forecast_line)

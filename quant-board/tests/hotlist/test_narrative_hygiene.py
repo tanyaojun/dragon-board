@@ -652,3 +652,45 @@ def test_hygiene_evidence_block_morning_flash_absent_zero_lines():
     assert out["morningState"] == "missing" and out["flashState"] == "missing"
     for line in out["text"].splitlines():
         _assert_clean(line, "evidence_block(缺席)")
+
+
+# ── 2026-11-15 监管风险行（预登记 theme-leader-regulatory-risk）黑名单回归 ──
+
+def test_hygiene_regulatory_risk_line():
+    """监管风险行：五组事实渲染过黑名单；缺数据整行缺席（§1.2-8）。"""
+    hit = {
+        "monitor_current": {"stock_id": "605255", "stock_name": "天普股份",
+                            "start_date": "2026-11-13", "end_date": "2026-11-26"},
+        "monitor_history": {"stock_id": "605255", "stock_name": "天普股份",
+                            "start_date": "2026-10-01", "end_date": "2026-10-14"},
+        "recent": [{"stock_id": "605255", "stock_name": "天普股份",
+                    "abnormal_date": "2026-11-16", "suspended_flag": True,
+                    "resume_date": "2026-11-19", "monitor_flag": True,
+                    "triggered_flag": False, "period": None},
+                   {"stock_id": "605255", "stock_name": "天普股份",
+                    "abnormal_date": "2026-11-11", "suspended_flag": False,
+                    "resume_date": None, "monitor_flag": False,
+                    "triggered_flag": True, "period": "30日200%"}],
+        "today": {"stock_id": "600327", "stock_name": "大东方", "trigger_pct": 7.8,
+                  "space_pct": 17.83, "period": "10日100%", "streak_tag": "昨5连板"},
+        "tomorrow": {"stock_id": "301578", "stock_name": "辰奕智能", "trigger_pct": 17.9,
+                     "space_pct": 17.9, "period": "10日100%", "streak_tag": None},
+    }
+    line = A.regulatory_risk_line([{"label": "主板龙一", "hit": hit}])
+    _assert_clean(line, "regulatory_risk_line(五组渲染)")
+    assert "重点监控(2026-11-13~2026-11-26)" in line
+    assert "停牌 预计复牌2026-11-19" in line
+    assert "今日涨停即触发严重异动" in line and "明日涨停即触发严重异动" in line
+    assert "昨5连板" in line and "历史重点监控" in line
+    # 缺位字段不补 0：trigger_pct 缺失 → 该段不带触发涨幅
+    hit2 = {"today": {"stock_id": "600327", "stock_name": "大东方",
+                      "trigger_pct": None, "space_pct": None, "period": None}}
+    l2 = A.regulatory_risk_line([{"label": "x", "hit": hit2}])
+    _assert_clean(l2, "regulatory_risk_line(缺位)")
+    assert "触发涨幅" not in l2 and "0%" not in l2
+    # 整行缺席纪律
+    _assert_absent(A.regulatory_risk_line([]), "regulatory_risk_line(空entries)")
+    _assert_absent(A.regulatory_risk_line([{"label": "x", "hit": {}}]),
+                   "regulatory_risk_line(空hit)")
+    _assert_absent(A.regulatory_risk_line([{"label": "x", "hit": None}]),
+                   "regulatory_risk_line(None hit)")

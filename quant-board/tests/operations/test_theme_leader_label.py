@@ -211,7 +211,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v17"
     assert doc["questionSetHash"] == "8c6c94429abd"   # v17 题集×语料匹配+两新题+开火前修订 b（v1-v16 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-14a"   # 纯语料供给换代：S3 成分验证门+产业树残桩正文剔除
+    assert doc["ammoVersion"] == "2026-11-15a"   # 纯语料供给换代：监管风险行（预登记 theme-leader-regulatory-risk-20261115）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -2447,3 +2447,57 @@ def test_get_live_for_label_a7_morning_preserved(monkeypatch):
     out2 = L.get_live_for_label(db, today)
     assert out2["ok"] and out2["fromArchive"] is True
     assert out2["liveFetchFailed"] == "fetch_failed: x"
+
+
+# ── 监管风险行接线（2026-11-15 预登记 theme-leader-regulatory-risk）──────────
+
+_REG_DOC = {
+    "_id": "2026-10-19", "reg_date": "2026-10-19",
+    "reg_groups": {}, "reg_states": {"severe": {"ok": True}},
+    "reg_by_code": {"603278": {
+        "monitor_current": {"stock_id": "603278", "stock_name": "大业股份",
+                            "start_date": "2026-11-02", "end_date": "2026-11-13"},
+        "today": {"stock_id": "603278", "stock_name": "大业股份",
+                  "trigger_pct": 9.12, "space_pct": 0.06, "period": "10日100%"}}},
+}
+
+
+def test_regulatory_fetch_and_build_one_wiring():
+    db = FakeDb()
+    row = dict(ROWS[0], boardCodes=["603278"])
+    roles = {"603278": "待判龙一"}
+    # 无档 → laneOk False + 整行缺席 + 结构化留痕
+    c0 = L.fetch_regulatory_corpus(db, "2026-10-19")
+    assert c0["laneOk"] is False
+    e0 = L.regulatory_entries_for_codes(["603278"], roles, c0)
+    b0 = L.build_one(db, "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+                     regulatory_line=L.regulatory_risk_line(e0),
+                     regulatory_state=L._regulatory_state(c0, e0))
+    assert "监管风险" not in b0["narrative"]
+    assert b0["regulatoryState"]["laneOk"] is False
+    # 有档 → 行出现（监控+触发组事实）+ hitCodes 留痕
+    db.cols["kpl_daban_pool"].docs["2026-10-19"] = dict(_REG_DOC)
+    c1 = L.fetch_regulatory_corpus(db, "2026-10-19")
+    assert c1["laneOk"] is True
+    e1 = L.regulatory_entries_for_codes(["603278"], roles, c1)
+    b1 = L.build_one(db, "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+                     regulatory_line=L.regulatory_risk_line(e1),
+                     regulatory_state=L._regulatory_state(c1, e1))
+    n = b1["narrative"]
+    assert "监管风险：待判龙一 大业股份603278 重点监控(2026-11-02~2026-11-13)" in n
+    assert "今日涨停即触发严重异动(触发涨幅9.12% 偏离空间0.06% 10日100%)" in n
+    assert b1["regulatoryState"]["hitCodes"] == ["603278"]
+    # 板块级同接线
+    bs = L.build_sector_one(db, "2026-10-19", [row], BASELINE, market_line="涨停 46 家",
+                            regulatory_line=L.regulatory_risk_line(e1),
+                            regulatory_state=L._regulatory_state(c1, e1))
+    assert "监管风险：" in bs["narrative"]
+
+
+def test_run_wires_regulatory_line(env):
+    calls, db = env
+    db["kpl_daban_pool"].docs["2026-10-19"] = dict(_REG_DOC)
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    assert "监管风险：" in doc["narrative"]
+    assert doc["regulatoryState"]["laneOk"] is True

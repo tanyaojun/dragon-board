@@ -262,6 +262,35 @@ def daban_genes(date: str = "") -> JSONResponse:
     return _load_daban_lane_day(date, lane="gene")
 
 
+@router.get("/regulatory")
+def regulatory(date: str = "") -> JSONResponse:
+    """监管风险（严重异动/重点监控）按日读口（2026-11-15 预登记 theme-leader-regulatory-risk）。
+
+    数据源=本地 MongoDB kpl_daban_pool reg_ 前缀字段（DabanPoolArchiver regulatory
+    lane 每日 17:00 收盘槽单写者；CLI 补采同写路径）。date 空=最新监管档日。
+    groups 五列表（today/tomorrow/recent/monitor_current/monitor_history；
+    None=端点缺失，[]=真零）+ by_code 代码索引 + states 逐端点 ok/reason。
+    无档 → 结构化 no_archive（fail-visible，不伪装空列表）。
+    """
+    # 空 date=最新档（先判空再校验，避免 _validate_date 把空串当非法）
+    if date:
+        bad = _validate_date(date)
+        if bad is not None:
+            return bad
+    if get_settings().storage_backend != "mongodb":
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
+            status_code=502)
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    from backend.services.kpl_daban_archiver import (
+        latest_regulatory_day, load_regulatory_corpus)
+    db = get_runtime_mongodb_database()
+    day = date or latest_regulatory_day(db)
+    if not day:
+        return JSONResponse(content={"ok": False, "degraded": True, "reason": "no_archive"})
+    return JSONResponse(content=load_regulatory_corpus(db, day))
+
+
 @router.get("/lhb-forecast")
 async def lhb_forecast() -> JSONResponse:
     """2112 会不会上龙虎榜预测快照（task-4）：透传 :8002 collector 读口。

@@ -848,6 +848,31 @@
       </div>
     </div>
   </section>
+
+  <!-- 监管风险页（2026-11-15 预登记 theme-leader-regulatory-risk）：KPL 异动提醒页
+       严重异动/重点监控 五组日档展示；数据源 GET /api/kpl/regulatory（kpl_daban_pool reg_ 前缀） -->
+  <section id="tab-kplreg" style="display:none">
+    <div class="ph-line" style="margin-bottom:14px"></div>
+    <div class="card">
+      <div class="flex" style="margin-bottom:10px">
+        <span class="pill" id="kplRegPill"><span class="dot"></span>未加载</span>
+        <input type="date" id="kplRegDate" onchange="kplRegDateChange()" title="监管风险日档日期（默认最新）">
+        <button onclick="kplRegLoad(true)">刷新</button>
+        <span class="kpl-sub" id="kplRegMeta"></span>
+      </div>
+      <div id="kplRegBanner" class="kpl-note" style="display:none"></div>
+      <h3 style="margin:8px 0 4px">监管期证券</h3>
+      <div class="kpl-wrap" style="margin-bottom:10px"><table id="kplRegMonTable"></table></div>
+      <h3 style="margin:8px 0 4px">历史监管证券</h3>
+      <div class="kpl-wrap" style="margin-bottom:10px"><table id="kplRegMonHisTable"></table></div>
+      <h3 style="margin:8px 0 4px">近期严重异动</h3>
+      <div class="kpl-wrap" style="margin-bottom:10px"><table id="kplRegRecentTable"></table></div>
+      <h3 style="margin:8px 0 4px">今日涨幅至涨停，能触发严重异动的个股</h3>
+      <div class="kpl-wrap" style="margin-bottom:10px"><table id="kplRegTodayTable"></table></div>
+      <h3 style="margin:8px 0 4px">明日涨幅至涨停，能触发严重异动的个股</h3>
+      <div class="kpl-wrap"><table id="kplRegTomTable"></table></div>
+    </div>
+  </section>
 </main>
 
 <div id="sbBar">
@@ -4932,13 +4957,13 @@ const NAV = [
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
   // 2026-11-08 用户需求：打板六页（集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池）合并为
   // 【个股行情】单页（左板块列表不变，右个股列表左上方按钮切换模式），侧栏只留一个入口。
-  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'], ['kpltrial', '竞价试盘', '🎯'],  ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆']]},
+  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'], ['kpltrial', '竞价试盘', '🎯'], ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆'],['kplreg', '监管风险', '🛡️']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 // ════════════════════════════════════════════════════════════════════════════
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
                     rise: ['上涨复盘'],
-                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpltrial: ['竞价试盘'], kpllhb: ['龙虎榜'],
+                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpltrial: ['竞价试盘'], kpllhb: ['龙虎榜'], kplreg: ['监管风险'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 // 打板模式集合（单一来源，评审 P2-7）：大盘 KPI 条/WS KPI 刷新/KPI 日期/轮询列表/进页开关
 // 全部引用本数组；新增模式只改这一处 + DABAN_PAGES，避免字面量枚举多处漂移。
@@ -5682,6 +5707,7 @@ function setView(key){
   if (main === DABAN_PAGE) kplDabanEnter(KPL.dabanView || DABAN_DEFAULT_MODE);   // 个股行情：进页即按当前模式取快照+开轮询
   if (main === DABAN_PAGE) kplFitHeight('#tab-kplstock .kpl-layout');   // 表格高度与浏览器页面底对齐（板块行情同款）
   if (main === 'kpllhb') kplLhbEnter(); else kplLhbLeave();   // 龙虎榜页签：进页即取双快照+开轮询
+  if (main === 'kplreg') kplRegEnter();   // 监管风险页：进页取日档（2026-11-15 预登记）
   if (main === 'kpltrial') atEnter(); else atLeave();   // 竞价试盘页签：进页即取日档+韭研打标链分组，60s 轮询
   if (main !== 'lianban' && SC.pollTimer){ clearInterval(SC.pollTimer); SC.pollTimer = null; }   // 对比页签轮询只在连板行情页内活
   if (main !== 'lianban' && WL.pollTimer){ clearInterval(WL.pollTimer); WL.pollTimer = null; }   // 盯盘页签轮询只在连板行情页内活
@@ -8370,9 +8396,95 @@ function kthDaban(label, view, key){
   const mark = (key && s.key === key) ? (s.dir > 0 ? ' ▲' : ' ▼') : '';
   return `<th${key ? ` style="cursor:pointer" onclick="kplDabanSetSort('${view}','${key}')"` : ''}>${label}${mark}</th>`;
 }
+// ══ 监管风险（2026-11-15 预登记 theme-leader-regulatory-risk）══
+// 数据源=kpl_daban_pool reg_ 日档（GET /api/kpl/regulatory）；五组表 + 池行 badge
+// （同源 reg_by_code；仅池生效日有档才渲染 badge，不跨日归因；读口失败不阻断池渲染）。
+const KPLREG = {data:null, byDate:{}, pending:{}};
+function kplDabanRegDate(view){
+  if (KPL.dabanMode[view] === 'history') return KPL.dabanDate[view] || KPL.today;
+  // review M1：live 态 badge 跟随展示池的生效日——回退旧档优先（不跨日归因），
+  // 其次实时快照生效日（周末/盘前=上一交易日，kplZtArchDate 同款），兜底 today
+  const fb = KPL.dabanFallback[view];
+  if (fb && fb.date) return fb.date;
+  const snap = KPL.daban[(DABAN_PAGES[view] || {}).pid];
+  return (snap && snap.date) || KPL.today;
+}
+async function kplRegEnsure(date){
+  if (!date || KPLREG.byDate[date] !== undefined || KPLREG.pending[date]) return false;
+  KPLREG.pending[date] = true;
+  let fresh = false;
+  try {
+    const r = await jget(KPL_API + '/regulatory?date=' + encodeURIComponent(date));
+    KPLREG.byDate[date] = r.ok ? (r.by_code || {}) : null;
+    fresh = true;
+  } catch (e){ KPLREG.byDate[date] = null; fresh = true; }
+  delete KPLREG.pending[date];
+  return fresh;
+}
+function kplRegBadges(code, date){
+  const hit = ((KPLREG.byDate[date] || {})[String(code || '')]);
+  if (!hit) return '';
+  const b = [];
+  const mc = hit.monitor_current;
+  if (mc) b.push(`<span class="badge" style="background:#fee2e2;color:#b91c1c" title="重点监控 ${esc(mc.start_date||'')}~${esc(mc.end_date||'')}">监</span>`);
+  const rec = (hit.recent || [])[0];
+  if (rec && rec.suspended_flag) b.push(`<span class="badge" style="background:#7f1d1d;color:#fff" title="严重异动 ${esc(rec.abnormal_date||'')} 停牌 预计复牌 ${esc(rec.resume_date||'')}">停</span>`);
+  else if (rec && rec.triggered_flag) b.push(`<span class="badge" style="background:#ffedd5;color:#9a3412" title="严重异动 ${esc(rec.abnormal_date||'')}">异</span>`);
+  if (hit.today) b.push(`<span class="badge" style="background:#ffedd5;color:#9a3412" title="今日涨停即触发严重异动">触</span>`);
+  return b.join(' ');
+}
+function kplRegEnter(){ kplRegLoad(false); }
+function kplRegDateChange(){ kplRegLoad(false); }
+async function kplRegLoad(force){
+  const date = ($('kplRegDate') || {}).value || '';
+  const pill = $('kplRegPill'), banner = $('kplRegBanner'), meta = $('kplRegMeta');
+  if (pill) pill.innerHTML = '<span class="dot"></span>加载中';
+  try {
+    const r = await jget(KPL_API + '/regulatory' + (date ? '?date=' + encodeURIComponent(date) : ''));
+    KPLREG.data = r;
+    if (r.ok && r.date && !date) $('kplRegDate').value = r.date;
+    if (r.ok) KPLREG.byDate[r.date] = r.by_code || {};
+    if (pill) pill.innerHTML = r.ok ? '<span class="dot" style="background:#16a34a"></span>已加载' : '<span class="dot" style="background:#dc2626"></span>降级';
+    if (meta) meta.textContent = r.ok ? ('档日 ' + r.date + ' · 落库 ' + (r.archived_at || '--') + ' · 命中 ' + Object.keys(r.by_code || {}).length + ' 只') : (r.reason || 'no_archive');
+    if (banner){
+      const bad = Object.entries(r.states || {}).filter(([k, s]) => !s.ok);
+      if (!r.ok){ banner.style.display = ''; banner.textContent = '监管风险档不可用：' + (r.reason || 'unknown') + '（fail-visible，不伪装空列表）'; }
+      else if (bad.length){ banner.style.display = ''; banner.textContent = '部分端点缺失：' + bad.map(([k, s]) => k + '(' + (s.reason || '') + ')').join('、') + '——缺失组按「未采集」展示'; }
+      else banner.style.display = 'none';
+    }
+    kplRegRender();
+  } catch (e){
+    if (pill) pill.innerHTML = '<span class="dot" style="background:#dc2626"></span>取数失败';
+    if (banner){ banner.style.display = ''; banner.textContent = '读口不可用：' + e.message; }
+  }
+}
+function kplRegRender(){
+  const r = KPLREG.data || {};
+  const g = r.groups || {};
+  const monHead = '<thead><tr><th>代码</th><th>名称</th><th>监控开始</th><th>监控结束</th></tr></thead><tbody>';
+  const monRow = m => `<tr><td class="kpl-uni">${esc(m.stock_id||'--')}</td><td>${esc(m.stock_name||'--')}</td><td class="kpl-uni">${esc(m.start_date||'--')}</td><td class="kpl-uni">${esc(m.end_date||'--')}</td></tr>`;
+  const fill = (id, list, head, rowFn, emptyTxt) => {
+    const el = $(id); if (!el) return;
+    if (list == null){ el.innerHTML = head + '<tr><td class="empty" colspan="8">未采集（端点缺失）</td></tr></tbody>'; return; }
+    el.innerHTML = list.length ? head + list.map(rowFn).join('') + '</tbody>' : head + `<tr><td class="empty" colspan="8">${emptyTxt}</td></tr></tbody>`;
+  };
+  fill('kplRegMonTable', g.monitor_current, monHead, monRow, '0 只监管期证券（真零）');
+  fill('kplRegMonHisTable', g.monitor_history, monHead, monRow, '0 只历史监管证券（上游有限窗，原样透出）');
+  const recHead = '<thead><tr><th>代码</th><th>名称</th><th>异动日期</th><th>状态</th><th>周期</th><th>板块</th></tr></thead><tbody>';
+  fill('kplRegRecentTable', g.recent, recHead, m => {
+    const st = m.suspended_flag ? ('停牌' + (m.resume_date ? ' 预计复牌 ' + m.resume_date : '')) : (m.triggered_flag ? '触发严重异动' : (m.status_text || '--'));
+    return `<tr><td class="kpl-uni">${esc(m.stock_id||'--')}</td><td>${esc(m.stock_name||'--')}${m.monitor_flag ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c">监</span>' : ''}</td><td class="kpl-uni">${esc(m.abnormal_date||'--')}</td><td>${esc(st)}</td><td class="kpl-uni">${esc(m.period||'--')}</td><td class="kpl-sub">${esc((m.plate||'').replace(/\n|、/g,' · ')||'--')}</td></tr>`;
+  }, '0 只近期严重异动（真零）');
+  const trigHead = '<thead><tr><th>代码</th><th>名称</th><th>涨幅%</th><th>触发涨幅%</th><th>价格</th><th>偏离空间%</th><th>周期</th><th>板块</th></tr></thead><tbody>';
+  const trigRow = m => `<tr><td class="kpl-uni">${esc(m.stock_id||'--')}</td><td>${esc(m.stock_name||'--')}${m.monitor_flag ? ' <span class="badge" style="background:#fee2e2;color:#b91c1c">监</span>' : ''}${m.streak_tag ? ' <span class="kpl-sub" style="color:var(--amber)">' + esc(m.streak_tag) + '</span>' : ''}</td><td class="kpl-uni">${m.pct==null?'--':esc(String(m.pct))}</td><td class="kpl-uni">${m.trigger_pct==null?'--':esc(String(m.trigger_pct))}</td><td class="kpl-uni">${m.price==null?'--':esc(String(m.price))}</td><td class="kpl-uni">${m.space_pct==null?'--':esc(String(m.space_pct))}</td><td class="kpl-uni">${esc(m.period||'--')}</td><td class="kpl-sub">${esc((m.plate||'').replace(/\n|、/g,' · ')||'--')}</td></tr>`;
+  fill('kplRegTodayTable', g.today, trigHead, trigRow, '0 只（真零）');
+  fill('kplRegTomTable', g.tomorrow, trigHead, trigRow, '0 只（真零；历史日档该组结构化空）');
+}
 function kplDabanRender(view){
   const conf = DABAN_PAGES[view];
   if (!dabanOn(view)) return;
+  // 监管 badge 同源懒取（池生效日有档才渲染；新档到达后重渲一次）
+  kplRegEnsure(kplDabanRegDate(view)).then(fresh => { if (fresh && dabanOn(view)) kplDabanRender(view); });
   if (view === 'kplzt') return kplZtRender();   // 涨停行情二版：字段体系对齐【板块行情】，独立渲染器
   if (view === 'kplbid') return kplBidRender(); // 集合竞价三版：同上（2026-11-08 用户裁决）
   if (view === 'kplzb' || view === 'kpldt') return kplPoolRender(view);   // 炸板池/跌停池：参照涨停行情同构（2026-11-08）
@@ -8418,7 +8530,8 @@ function kplDabanRender(view){
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + conf.cols.map(c => kthDaban(c.label, view, c.key)).join('') + '</tr></thead><tbody>';
   for (const r of rows){
-    const badges = [r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
+    const badges = [kplRegBadges(r.stock_id, kplDabanRegDate(view)),
+                    r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
                     r.stock_tag ? `<span class="badge b-purple" title="App stockTag 标签">${esc(r.stock_tag)}</span>` : '',
                     r.financing_tag == 1 ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8" title="financingTag=1（推断=融资标的）">融</span>' : '']
       .filter(Boolean).join(' ');
@@ -8866,7 +8979,8 @@ function kplZtRender(){
     + kthDaban('封单额', 'kplzt', 'zt_tur')
     + '</tr></thead><tbody>';
   for (const r of rows){
-    const badges = [r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
+    const badges = [kplRegBadges(r.stock_id, kplDabanRegDate('kplzt')),
+                    r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
                     r.stock_tag ? `<span class="badge b-purple" title="App stockTag 标签">${esc(r.stock_tag)}</span>` : '',
                     r.financing_tag == 1 ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8" title="financingTag=1（推断=融资标的）">融</span>' : '']
       .filter(Boolean).join(' ');
@@ -9079,7 +9193,8 @@ function kplPoolRender(view){
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + cols.map(c => kthDaban(c.label, view, c.nosort ? null : c.key)).join('') + '</tr></thead><tbody>';
   for (const r of rows){
-    const badges = [r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
+    const badges = [kplRegBadges(r.stock_id, kplDabanRegDate(view)),
+                    r.warn_tag ? `<span class="badge" style="background:#fee2e2;color:#b91c1c" title="风险警示">${esc(r.warn_tag)}</span>` : '',
                     r.stock_tag ? `<span class="badge b-purple" title="App stockTag 标签">${esc(r.stock_tag)}</span>` : '',
                     r.financing_tag == 1 ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8" title="financingTag=1（推断=融资标的）">融</span>' : '']
       .filter(Boolean).join(' ');
@@ -9207,8 +9322,10 @@ function kplBidRender(){
                     r.stock_tag ? `<span class="badge b-purple" title="App stockTag 标签">${esc(r.stock_tag)}</span>` : '',
                     r.financing_tag == 1 ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8" title="financingTag=1（推断=融资标的）">融</span>' : '']
       .filter(Boolean).join(' ');
+    const regB = kplRegBadges(r.stock_id, kplDabanRegDate('kplbid'));
+    const allB = [regB, badges].filter(Boolean).join(' ');
     html += `<tr><td class="kpl-uni">${esc(r.stock_id || '--')}</td>`
-      + `<td>${esc(r.name || '--')}${badges ? '<div style="margin-top:2px">' + badges + '</div>' : ''}</td>`
+      + `<td>${esc(r.name || '--')}${allB ? '<div style="margin-top:2px">' + allB + '</div>' : ''}</td>`
       + `<td class="kpl-uni ${kcls(knumUnit(r.bidding_pct))}">${kfmtNum(knumUnit(r.bidding_pct)) + (r.bidding_pct == null ? '' : '%')}</td>`
       + `<td class="kpl-uni ${kcls(knumUnit(r.bidding_net))}">${kfmtAmt(knumUnit(r.bidding_net))}</td>`
       + `<td class="kpl-uni">${kfmtNum(knumUnit(r.bidding_turnover), 1)}</td>`

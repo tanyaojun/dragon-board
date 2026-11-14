@@ -28,7 +28,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA3"   # 换代登记：auction-leader-vA3-preregistration-20261114（三点裁决：资金并入判据/保留五档/板块聚合留 vA4）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-14h"   # 纯语料供给换代（D：S3 成分验证门+产业树残桩正文剔除——蹭标签词不再注入异题材叙事、≤9 字自复述残桩按无催化正文处理，题面 hash 不动）；前一版 2026-11-14g = C：同花顺 7×24 隔夜快讯兑底层接入；2026-11-14f = B：韭研早报晨间窗专属源；2026-11-14e = A：KPL 09:05 二次刷新槽；2026-11-14d = vA3 换代：封板题试盘分支+一字板分支+硬度方向解耦+新增 trial_settlement_pattern（题面 hash 变更；试盘行渲染/采集为 2026-11-14c 同轮产物）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-15a"   # 纯语料供给换代：监管风险行（KPL 严重异动/重点监控，T−1 收盘档，预登记 theme-leader-regulatory-risk-20261115）；题面 hash 不动；前一版 2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -455,6 +455,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    gene_line: str | None = None,
                                    reason_line: str | None = None,
                                    notice_count_line: str | None = None,
+                                   regulatory_line: str | None = None,
                                    lhb_facts_line: str | None = None,
                                    push_board: str | None = None,
                                    evidence_block: str) -> str:
@@ -474,7 +475,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
         lines.append(belong)
     for ln in (push_line, dragon_line, trial_line, bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
-               notice_count_line, lhb_facts_line):
+               notice_count_line, regulatory_line, lhb_facts_line):
         if ln:
             lines.append(ln)
     lines.append(evidence_block)
@@ -489,6 +490,7 @@ def build_auction_sector_narrative(*, date: str, prev_date: str, market_line: st
                                    base_rate: str | None = None,
                                    lhb_facts_line: str | None = None,
                                    reason_line: str | None = None,
+                                   regulatory_line: str | None = None,
                                    evidence_block: str) -> str:
     """板块级晨间叙事（深度/延续两题；双源入选股并列事实）。"""
     lines = [f"{date} 交易日 · 竞价龙头盘前投喂"]
@@ -496,7 +498,7 @@ def build_auction_sector_narrative(*, date: str, prev_date: str, market_line: st
         lines.append(f"昨日（{prev_date}）{market_line}")
     lines.append(f"待判板块：{board}")
     for ln in (push_line, dragon_line, board_structure, bid_line, base_rate, reason_line,
-               lhb_facts_line):
+               regulatory_line, lhb_facts_line):
         if ln:
             lines.append(ln)
     lines.append(evidence_block)

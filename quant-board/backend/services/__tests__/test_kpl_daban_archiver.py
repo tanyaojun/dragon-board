@@ -1300,3 +1300,177 @@ def test_archive_stock_detail_lanes_contract():
          "ts": 1794289200.0}]}, lane="rplate")
     loaded = load_stock_detail_corpus(db, "2026-11-10", lane="rplate")
     assert loaded["ok"] and loaded["items"][0]["plates"][0]["plate_name"] == "人形机器人"
+
+
+# ── 监管风险 lane（2026-11-15 预登记 theme-leader-regulatory-risk）──────────
+# 日槽 17:00 门控 / 每日一次 / 预算护栏 / 日期错配 / 开关 / 与它 lane 隔离。
+
+class _RegColl(_FakeCollection):
+    def find_one(self, q, projection=None, sort=None):
+        return super().find_one(q, sort=sort)
+
+    def update_one(self, q, update, upsert=False):
+        super().update_one(q, update, upsert=upsert)
+        for key, delta in (update.get("$inc") or {}).items():
+            row = self.rows[q["_id"]]
+            cur = row
+            parts = key.split(".")
+            for p in parts[:-1]:
+                cur = cur.setdefault(p, {})
+            cur[parts[-1]] = int(cur.get(parts[-1]) or 0) + int(delta)
+
+
+class _RegDb:
+    def __init__(self):
+        self.pool = _RegColl()
+        self.calls = _RegColl()
+
+    def __getitem__(self, name):
+        return {"kpl_daban_pool": self.pool, "kpl_api_calls": self.calls}[name]
+
+
+def _reg_payload(date="2026-11-13"):
+    return {"date": date, "calls": 5,
+            "groups": {"today": [], "tomorrow": [], "recent": [],
+                       "monitor_current": [], "monitor_history": []},
+            "by_code": {"600327": {"today": {"stock_id": "600327"}}},
+            "states": {"severe": {"ok": True}}}
+
+
+class _AllFailClient:
+    def __init__(self, **kw):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, timeout=None):
+        raise OSError("conn refused")
+
+
+def _reg_archiver(db, clock, fetcher=None, monkeypatch=None):
+    from backend.services import kpl_daban_archiver as arch
+
+    class _S:
+        storage_backend = "mongodb"
+    if monkeypatch is not None:
+        monkeypatch.setattr(arch.httpx, "AsyncClient", _AllFailClient)
+        _patch_trading_calendar(monkeypatch)
+    return arch.DabanPoolArchiver(
+        settings=_S(), database_factory=lambda: db, interval_seconds=60,
+        gene_fetcher=_fake_gene, clock=clock,
+        regulatory_fetcher=fetcher or (lambda: _reg_payload()))
+
+
+def test_regulatory_lane_daily_slot_and_idempotent(monkeypatch):
+    import asyncio
+    db = _RegDb()
+    clock = lambda: datetime(2026, 11, 13, 17, 20, tzinfo=TZ_SHANGHAI)  # 周五 17:00 槽后
+    archiver = _reg_archiver(db, clock, monkeypatch=monkeypatch)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]
+    # 它 lane 全失败不连带 regulatory（隔离）
+    assert res["pool"]["ok"] is False
+    assert res["regulatory"]["ok"] is True and res["regulatory"]["date"] == "2026-11-13"
+    assert db.pool.rows["2026-11-13"]["reg_date"] == "2026-11-13"
+    assert db.calls.rows["2026-11-13"]["calls"]["regulatory"] == 5
+    # 第二轮：每日一次，不重复采不重复计数
+    asyncio.run(archiver._archive_once())
+    res2 = archiver.status()["lastResult"]
+    assert res2["regulatory"]["note"] == "already_archived"
+    assert db.calls.rows["2026-11-13"]["calls"]["regulatory"] == 5
+
+
+def test_regulatory_lane_waiting_slot_and_non_trading_day(monkeypatch):
+    import asyncio
+    db = _RegDb()
+    a1 = _reg_archiver(db, lambda: datetime(2026, 11, 13, 10, 0, tzinfo=TZ_SHANGHAI),
+                       monkeypatch=monkeypatch)
+    asyncio.run(a1._archive_once())
+    assert a1.status()["lastResult"]["regulatory"]["note"] == "waiting_slot"
+    # 槽前边界 16:59 仍不采（2026-11-15 裁决 15:10→17:00）
+    a1b = _reg_archiver(db, lambda: datetime(2026, 11, 13, 16, 59, tzinfo=TZ_SHANGHAI),
+                        monkeypatch=monkeypatch)
+    asyncio.run(a1b._archive_once())
+    assert a1b.status()["lastResult"]["regulatory"]["note"] == "waiting_slot"
+    a2 = _reg_archiver(db, lambda: datetime(2026, 11, 15, 17, 20, tzinfo=TZ_SHANGHAI),
+                       monkeypatch=monkeypatch)  # 周日
+    asyncio.run(a2._archive_once())
+    assert a2.status()["lastResult"]["regulatory"]["note"] == "waiting_slot"
+    assert "2026-11-13" not in db.pool.rows
+
+
+def test_regulatory_budget_exhausted(monkeypatch):
+    import asyncio
+    db = _RegDb()
+    db.calls.rows["2026-11-13"] = {"_id": "2026-11-13", "calls": {"regulatory": 10}}
+    archiver = _reg_archiver(db, lambda: datetime(2026, 11, 13, 17, 20, tzinfo=TZ_SHANGHAI),
+                             monkeypatch=monkeypatch)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]["regulatory"]
+    assert res["ok"] is False and res["reason"] == "budget_exhausted"
+    assert "reg_date" not in db.pool.rows.get("2026-11-13", {})
+
+
+def test_regulatory_date_mismatch_not_written(monkeypatch):
+    import asyncio
+    db = _RegDb()
+    archiver = _reg_archiver(db, lambda: datetime(2026, 11, 13, 17, 20, tzinfo=TZ_SHANGHAI),
+                             fetcher=lambda: _reg_payload("2026-11-12"),
+                             monkeypatch=monkeypatch)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]["regulatory"]
+    assert res["ok"] is False and res["reason"] == "date_mismatch"
+    assert "reg_date" not in db.pool.rows.get("2026-11-13", {})
+
+
+def test_regulatory_disabled_env(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("KPL_REGULATORY_ENABLED", "0")
+    db = _RegDb()
+    archiver = _reg_archiver(db, lambda: datetime(2026, 11, 13, 17, 20, tzinfo=TZ_SHANGHAI),
+                             monkeypatch=monkeypatch)
+    asyncio.run(archiver._archive_once())
+    assert archiver.status()["lastResult"]["regulatory"]["note"] == "disabled"
+
+
+def test_regulatory_budget_reserve_gate(monkeypatch):
+    """review m2：used=6 时 6+5>10 → 发弹前 skip（fetcher 不得被调）。"""
+    import asyncio
+    db = _RegDb()
+    db.calls.rows["2026-11-13"] = {"_id": "2026-11-13", "calls": {"regulatory": 6}}
+
+    def _boom():
+        raise AssertionError("budget reserved gate must skip before fetch")
+
+    archiver = _reg_archiver(db, lambda: datetime(2026, 11, 13, 17, 20, tzinfo=TZ_SHANGHAI),
+                             fetcher=_boom, monkeypatch=monkeypatch)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]["regulatory"]
+    assert res["ok"] is False and res["reason"] == "budget_exhausted"
+    assert "reg_date" not in db.pool.rows.get("2026-11-13", {})
+
+
+def test_regulatory_lane_partial_endpoint_failure_still_writes(monkeypatch):
+    """m5：lane 级部分端点失败仍落库 + reg_states 留痕（§4.0）。"""
+    import asyncio
+    db = _RegDb()
+    payload = _reg_payload()
+    payload["states"]["severe"] = {"ok": False, "reason": "errcode:1002"}
+    payload["states"]["monitor_current"] = {"ok": True}
+    payload["groups"]["today"] = None
+    payload["groups"]["tomorrow"] = None
+    payload["groups"]["monitor_current"] = [{"stock_id": "600825"}]
+    payload["by_code"]["600825"] = {"monitor_current": {"stock_id": "600825"}}
+    archiver = _reg_archiver(db, lambda: datetime(2026, 11, 13, 17, 20, tzinfo=TZ_SHANGHAI),
+                             fetcher=lambda: payload, monkeypatch=monkeypatch)
+    asyncio.run(archiver._archive_once())
+    res = archiver.status()["lastResult"]["regulatory"]
+    assert res["ok"] is True
+    row = db.pool.rows["2026-11-13"]
+    assert row["reg_states"]["severe"]["ok"] is False
+    assert row["reg_groups"]["today"] is None      # 缺失≠真零
+    assert row["reg_groups"]["monitor_current"]   # 成功组照落

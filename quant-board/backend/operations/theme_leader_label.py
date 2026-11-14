@@ -70,6 +70,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     plate_series_line,
     popularity_rank_line,
     rank_sentinel_warnings,
+    regulatory_risk_line,
     risk_profile_line,
     sector_judgment_line,
     structure_facts_line,
@@ -932,6 +933,37 @@ def detail_lines_for_leader(row: dict, detail_corpus: dict[str, Any],
     }
 
 
+def fetch_regulatory_corpus(db: Any, date: str) -> dict:
+    """监管风险语料（2026-11-15 预登记）：kpl_daban_pool reg_ 前缀日档 →
+    {"byCode", "laneOk", "reason", "states"}。单一事实源 load_regulatory_corpus；
+    读口异常不阻断投喂（laneOk=False，叙事行缺席 + 结构化留痕）。竞价链复用本函数。"""
+    try:
+        from backend.services.kpl_daban_archiver import load_regulatory_corpus
+        corpus = load_regulatory_corpus(db, date)
+    except Exception:
+        return {"byCode": {}, "laneOk": False, "reason": "import_error", "states": {}}
+    if not corpus.get("ok"):
+        return {"byCode": {}, "laneOk": False,
+                "reason": corpus.get("reason") or "no_archive", "states": {}}
+    return {"byCode": corpus.get("by_code") or {}, "laneOk": True, "reason": None,
+            "states": corpus.get("states") or {}}
+
+
+def regulatory_entries_for_codes(codes: list[str], roles: dict[str, str],
+                                 corpus: dict) -> list[dict]:
+    """相关个股集合 → 监管风险行 entries（身位标签 + reg_by_code 索引项；无命中缺席）。"""
+    by = (corpus or {}).get("byCode") or {}
+    return [{"label": roles.get(k, "相关个股"), "code": k, "hit": by[k]}
+            for k in codes if by.get(k)]
+
+
+def _regulatory_state(corpus: dict, entries: list[dict]) -> dict:
+    """regulatoryState 结构化留痕（审计/前端用，不进叙事）。"""
+    return {"laneOk": bool((corpus or {}).get("laneOk")),
+            "reason": (corpus or {}).get("reason"),
+            "hitCodes": [str((e or {}).get("code") or "") for e in entries or []]}
+
+
 # 代际来源：`live` = 当日挂链（17:30，2026-10-30 改时；前瞻样本）；`backfill` = 事后补跑历史日。
 # **评估必须分开统计**：事后补跑的日子可能看到「当时还不存在」的语料（如题材料只在 10-20 采集），
 # 混进前瞻样本会把泄漏当成模型能力（预登记 §11 H1 回填方案）。
@@ -1222,6 +1254,8 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               bid_line: str | None = None,
               dt_line: str | None = None,
               detail_lines: dict[str, str | None] | None = None,
+              regulatory_line: str | None = None,
+              regulatory_state: dict | None = None,
               forecast_line: str | None = None,
               realtime_lhb_line: str | None = None,
               sector_judgment: dict | None = None,
@@ -1283,6 +1317,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         bf_reason_line=(detail_lines or {}).get("bfReason"),
         popularity_rank_line=popularity_rank_line(reason_entries or []),
         risk_line=risk_profile_line(reason_entries or []),
+        regulatory_line=regulatory_line,
         abnormal_price_line=(detail_lines or {}).get("abnormalPrice"),
         related_plate_line=(detail_lines or {}).get("relatedPlate"),
         zt_big_order_line=(detail_lines or {}).get("ztBigOrder"),
@@ -1303,6 +1338,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         sector_judgment_line=sector_judgment_line(sector_judgment),
     )
     return {"docKind": DOC_KIND_LEADER, "narrative": narrative, "evidence": block,
+            "regulatoryState": regulatory_state,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_facts_line is not None),
             # v17：板块判答注入状态（构建时仅库读兜底；同轮注入由 run() 标注前终裁）
             "sectorJudgmentState": ("injected" if "板块判定：" in narrative else None),
@@ -1325,6 +1361,8 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
                      market_summary: str | None = None,
                      lhb_facts: dict | None = None,
                      dt_line: str | None = None,
+                     regulatory_line: str | None = None,
+                     regulatory_state: dict | None = None,
                      forecast_line: str | None = None,
                      realtime_lhb_line: str | None = None) -> dict:
     """组装一条**板块级**投喂（v12 A2 拆题：深度/延续题每板块一次，预登记 §2.3）。
@@ -1372,6 +1410,7 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         reason_line=limitup_reason_line(reason_entries or []),
         popularity_rank_line=popularity_rank_line(reason_entries or []),
         risk_line=risk_profile_line(reason_entries or []),
+        regulatory_line=regulatory_line,
         forecast_line=forecast_line,
         lhb_facts_line=lhb_facts_line,
         realtime_lhb_line=realtime_lhb_line,
@@ -1379,6 +1418,7 @@ def build_sector_one(db: Any, date: str, board_rows: list[dict],
         board=str(ref["board"]),
     )
     return {"docKind": DOC_KIND_SECTOR, "narrative": narrative, "evidence": block,
+            "regulatoryState": regulatory_state,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_facts_line is not None),
             "driverCross": None,
             "chars": len(narrative),
@@ -1500,6 +1540,8 @@ def _label_one(db, col, date: str, built: dict,
         # A（2026-11-11 用户裁决）：龙虎榜缺席结构化留痕（叙事整行缺席时审计/补齐链
         # 唯一可观测源；§1.2-8 落库层 fail-visible）
         "lhbState": built.get("lhbState"),
+        # 2026-11-15：监管风险 lane 状态留痕（审计/前端用，不进叙事）
+        "regulatoryState": built.get("regulatoryState"),
         "questionSetVersion": QUESTION_SET_VERSION_THEME_LEADER,
         "questionSetHash": QUESTION_SET_HASH_THEME_LEADER,
         "structure": {k: (built.get("rows") or [built["row"]])[0].get(k) for k in (
@@ -1701,6 +1743,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     fc_corpus = fetch_lhb_forecast_corpus(db, date)
     rt_corpus = fetch_lhb_realtime_corpus(db, date)
     detail_corpus = fetch_stock_detail_corpus(db, date)
+    # 监管风险语料（2026-11-15 预登记）：一次取全日共用（个股+板块两级叙事行）
+    reg_corpus = fetch_regulatory_corpus(db, date)
     # v17：续板基础率锚先验底（滚动直算，窗 2026-10-23~当日之前，防 look-ahead；
     # 无已结算行=None → 锚行整行缺席，fail-visible）
     base_rate_stats = live_base_rate(db, before=date)
@@ -1789,6 +1833,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
               {"main": "主板龙一", "growth": "双创龙一"}.get(r.get("segment"), "龙一"))
              for r in brows])
         dt_names, dt_ok = dt_names_for_board(brows[0], lanes_corpus)
+        reg_entries = regulatory_entries_for_codes(brows_codes, brows_roles, reg_corpus)
         built = build_sector_one(
             db, date, brows, rows_baseline, dataset_id, market_line,
             board_history=board_history,
@@ -1806,6 +1851,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),
             market_summary=market_summary,
+            regulatory_line=regulatory_risk_line(reg_entries),
+            regulatory_state=_regulatory_state(reg_corpus, reg_entries),
             lhb_facts=lhb_facts)
         built["rows"] = brows
         built["questions"] = {k: QUESTIONS_THEME_LEADER[k] for k in SECTOR_QUESTIONS}
@@ -1835,6 +1882,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             [str(c) for c in (row.get("boardCodes") or [])],
             [(str(row.get("code") or ""), "待判龙一")])
         dt_names, dt_ok = dt_names_for_board(row, lanes_corpus)
+        reg_entries = regulatory_entries_for_codes(row_codes, row_roles, reg_corpus)
         built = build_one(
             db, date, row, rows_baseline, dataset_id, market_line,
             board_history=board_history,
@@ -1849,6 +1897,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             bid_line=bid_line(bid_entries_for_leaders([row], lanes_corpus)),
             dt_line=board_dt_line(dt_names, dt_ok),
             detail_lines=detail_lines_for_leader(row, detail_corpus, theme_heat),
+            regulatory_line=regulatory_risk_line(reg_entries),
+            regulatory_state=_regulatory_state(reg_corpus, reg_entries),
             forecast_line=lhb_forecast_line(
                 _scope_entries(row_codes, row_roles, fc_corpus.get("items") or {}),
                 lane_ok=bool(fc_corpus.get("laneOk"))),
