@@ -374,9 +374,9 @@
      kpl-layout 高度由 fitLayoutBottom() 按实际顶部位置动态设定（page-head/banner 高度
      可变，静态 calc 不可靠），卡片纵向 flex、kpl-wrap 占满余量（模式同 .kpl-lhb-split） */
   @media (min-width:1101px){
-    #tab-lianban .kpl-layout, #tab-kpl .kpl-layout, #tab-kplstock .kpl-layout{align-items:stretch}
-    #tab-lianban .kpl-layout>.card, #tab-kpl .kpl-layout>.card, #tab-kplstock .kpl-layout>.card{display:flex;flex-direction:column;min-height:0}
-    #tab-lianban .kpl-layout>.card>.kpl-wrap, #tab-kpl .kpl-layout>.card>.kpl-wrap, #tab-kplstock .kpl-layout>.card>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
+    #tab-lianban .kpl-layout, #tab-kpl .kpl-layout, #tab-kplstock .kpl-layout, #tab-kpltrial .kpl-layout{align-items:stretch}
+    #tab-lianban .kpl-layout>.card, #tab-kpl .kpl-layout>.card, #tab-kplstock .kpl-layout>.card, #tab-kpltrial .kpl-layout>.card{display:flex;flex-direction:column;min-height:0}
+    #tab-lianban .kpl-layout>.card>.kpl-wrap, #tab-kpl .kpl-layout>.card>.kpl-wrap, #tab-kplstock .kpl-layout>.card>.kpl-wrap, #tab-kpltrial .kpl-layout>.card>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
     #tab-lianban .kpl-layout .kpl-pane{flex:1 1 0;display:flex;flex-direction:column;min-height:0}
     #tab-lianban .kpl-layout .kpl-pane>.kpl-wrap{flex:1 1 0;min-height:120px;max-height:none}
   }
@@ -768,6 +768,35 @@
             <input class="lg-filter" id="kplStockSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="kplDabanRender(KPL.dabanView)">
           </h3>
           <div class="kpl-wrap"><table id="kplStockStockTable"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 竞价试盘（2026-11-14 用户需求）：页面布局=【个股行情】同款（左板块列表右个股列表联动）；
+       分组键=韭研板块名（涨停打标分组 ∪ 产业树一级节点并入，2026-11-14 用户裁决：未入
+       打标分组不单独成组；产业树未收录→「未分板块」，非 KPL bk_name 题材概念）；
+       数据=/api/hotlist-jev/auction-trial（纯读 auction_trial_raw 日档，零上游外呼） -->
+  <section id="tab-kpltrial" style="display:none">
+    <div class="ph-line" style="margin-bottom:14px"></div>
+    <div class="card">
+      <div class="flex" style="margin-bottom:10px">
+        <span class="kpl-sub kpl-uni" id="atStats"></span>
+        <span style="flex:1"></span>
+        <input type="date" id="atDate" onchange="atDateChange()">
+        <button onclick="atBackToLatest()">回最新</button>
+      </div>
+      <div class="kpl-layout">
+        <div class="card" style="padding:10px 12px">
+          <input class="lg-filter" id="atPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="atRender()">
+          <div class="kpl-wrap"><table id="atPlateTable"></table></div>
+        </div>
+        <div class="card" style="padding:10px 12px">
+          <h3 style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="kpl-sub" id="atStockTitle" style="font-weight:400">个股列表</span>
+            <input class="lg-filter" id="atStockSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="atRender()">
+          </h3>
+          <div class="kpl-wrap"><table id="atStockTable"></table></div>
         </div>
       </div>
     </div>
@@ -4897,13 +4926,13 @@ const NAV = [
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
   // 2026-11-08 用户需求：打板六页（集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池）合并为
   // 【个股行情】单页（左板块列表不变，右个股列表左上方按钮切换模式），侧栏只留一个入口。
-  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'],  ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆']]},
+  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'], ['kpltrial', '竞价试盘', '🎯'],  ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 // ════════════════════════════════════════════════════════════════════════════
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
                     rise: ['上涨复盘'],
-                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpllhb: ['龙虎榜'],
+                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpltrial: ['竞价试盘'], kpllhb: ['龙虎榜'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 // 打板模式集合（单一来源，评审 P2-7）：大盘 KPI 条/WS KPI 刷新/KPI 日期/轮询列表/进页开关
 // 全部引用本数组；新增模式只改这一处 + DABAN_PAGES，避免字面量枚举多处漂移。
@@ -4983,7 +5012,9 @@ async function lbLoad(){
     + ' · ' + fields.length + ' 板块 ' + total + ' 只 · ' + (LB.doc.fetchedAt || '') + fb) : '';
   lbRenderBoards(); lbRenderStocks(); lbSyncSubscription();
   // 板块节点/聚合涨幅：复用板块节点读口（同源 analysis/hotlist/sector_nodes，确定性
-  // 收盘定档 + 盘中自带 dateFallback 回退）；按 board 名匹配韭研板块目录。
+  // 收盘定档 + 盘中自带 dateFallback 回退）；读口 board 已同义归一到粗桶主名（
+  // 2026-11-14 用户裁决，与目录名同源 jiuyan_industry_root 对照层）→ 精确匹配，
+  // 替代原 lbNameKeys 启发式临时方案（启发式仅保留给 KPL 封板镜像的 KPL 侧匹配）
   try {
     const nr = await jget('/api/hotlist-jev/sector-nodes?days=5' + (date ? '&date=' + encodeURIComponent(date) : ''));
     LB.nodesRows = {};
@@ -5013,7 +5044,8 @@ function lbView(){
   return ((LB.doc && LB.doc.fields) || []).filter(f => !q || (f.name || '').toLowerCase().includes(q));
 }
 // V4-E2：sector-pulse 响应归一为 {rows, stored, reason}——实时 payload 与历史
-// stored 收盘帧行同构消费；历史帧量比从 doc.frames["15:00"].boards 注入。
+// stored 收盘帧行同构消费；历史帧量比从 doc.frames["15:00"].boards 注入（boards 键
+// 已由读口同步归一到粗桶主名，2026-11-14 review major-1 修复：读口归一 all/candidates）
 function lbPulseMap(pr){
   if (pr && pr.source === 'stored'){
     const doc = pr.doc || {};
@@ -5031,6 +5063,9 @@ function lbPulseMap(pr){
            stored: false, reason: (pr && pr.reason) || null };
 }
 // 归一（去空白/括号/分隔符 + 剥一个后缀）；匹配两侧（韭研 board、KPL plate）同规则
+// 2026-11-14：韭研侧（sector-nodes/sector-pulse/打标链目录）已由后端读口统一归一到
+// 粗桶主名（jiuyan_industry_root 对照层）→ 精确匹配；本启发式仅保留给 KPL 侧
+// （ztCountNorm plate 名，KPL 词汇体系不同，根层不覆盖），逐步被后端桥替代
 function lbNormName(name){
   let s = String(name || '').replace(/[\s\u3000（）()【】\[\]、·/]+/g, '');
   for (const suf of ['板块', '概念', '题材']) {
@@ -5272,7 +5307,7 @@ function fitLayoutBottom(sel){
 }
 function lbFitHeight(){ fitLayoutBottom('#tab-lianban .kpl-layout'); }
 function kplFitHeight(sel){ fitLayoutBottom(sel || '#tab-kpl .kpl-layout'); }
-window.addEventListener('resize', () => { lbFitHeight(); kplFitHeight(); if (STATE.view === DABAN_PAGE) kplFitHeight('#tab-kplstock .kpl-layout'); });
+window.addEventListener('resize', () => { lbFitHeight(); kplFitHeight(); if (STATE.view === DABAN_PAGE) kplFitHeight('#tab-kplstock .kpl-layout'); if (STATE.view === 'kpltrial') kplFitHeight('#tab-kpltrial .kpl-layout'); });
 
 // ══════════ 盯盘清单（V4-G：候选板块强势股自选，2026-11-01；2026-11 并入连板行情右栏【盯盘】页签）══════════
 // 数据源：GET /api/hotlist-jev/watchlist（仅当日实时；票涨幅=TDX 报价，60s 轮询；
@@ -5629,8 +5664,10 @@ function setView(key){
   if (main === 'relay' && (prevMain !== 'relay' || prevRelayView !== STATE.relayView)) renderRelayTab();
   if (main === 'overview') ovIndexLoad();   // 总览：大盘分时+直播看点（30s 轮询兜底，见启动区）
   const kpiEl = $('kplMarketKpi');
-  // 大盘 KPI 条=kpl 组子页公用（kpl/kpllive/个股行情；打板六模式已并入单页，2026-11-08）
-  const kplGroup = ['kpl', 'kpllive', DABAN_PAGE];
+  // 大盘 KPI 条=kpl 组子页公用（kpl/kpllive/个股行情/竞价试盘 2026-11-14 用户需求；
+  // 打板六模式已并入单页）。竞价试盘页纯 REST 主链不开订阅，但 KPI 卡的
+  // market_overview/zd_stat 两源是 socket 事件——同组复用 kpl WS 连接（kpllive 同款）
+  const kplGroup = ['kpl', 'kpllive', DABAN_PAGE, 'kpltrial'];
   if (kpiEl) kpiEl.style.display = kplGroup.includes(main) ? '' : 'none';
   if (main !== 'lianban') lbLeave();   // 连板行情轮询计时器只在页内活
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
@@ -5639,6 +5676,7 @@ function setView(key){
   if (main === DABAN_PAGE) kplDabanEnter(KPL.dabanView || DABAN_DEFAULT_MODE);   // 个股行情：进页即按当前模式取快照+开轮询
   if (main === DABAN_PAGE) kplFitHeight('#tab-kplstock .kpl-layout');   // 表格高度与浏览器页面底对齐（板块行情同款）
   if (main === 'kpllhb') kplLhbEnter(); else kplLhbLeave();   // 龙虎榜页签：进页即取双快照+开轮询
+  if (main === 'kpltrial') atEnter(); else atLeave();   // 竞价试盘页签：进页即取日档+韭研打标链分组，60s 轮询
   if (main !== 'lianban' && SC.pollTimer){ clearInterval(SC.pollTimer); SC.pollTimer = null; }   // 对比页签轮询只在连板行情页内活
   if (main !== 'lianban' && WL.pollTimer){ clearInterval(WL.pollTimer); WL.pollTimer = null; }   // 盯盘页签轮询只在连板行情页内活
   if (main === 'kpllive') kplLiveEnter(); else kplLiveLeave();   // 市场雷达：文本流轮询仅本页运行
@@ -6401,16 +6439,16 @@ function kplHandleEvent(ev){
       }
       break;
     case 'market_overview':   // 2115：预测量能/强度/亏钱效应/空头气氛（大盘 KPI 条）
-      if (!stale){ KPI_MKT.mo = ev; if (STATE.view === 'kpl') kplRenderMarketKpi(); }
+      if (!stale){ KPI_MKT.mo = ev; if (['kpl', 'kpltrial'].includes(STATE.view)) kplRenderMarketKpi(); }
       break;
     case 'zd_stat':   // 2114：涨跌家数/涨跌停（大盘 KPI 条）
-      if (!stale){ KPI_MKT.zd = ev; if (STATE.view === 'kpl') kplRenderMarketKpi(); }
+      if (!stale){ KPI_MKT.zd = ev; if (['kpl', 'kpltrial'].includes(STATE.view)) kplRenderMarketKpi(); }
       break;
     case 'daban_head':   // 2100 打板头：昨日涨停/封板率/跌停绝对值（KPI 三卡昨日侧 socket 源）
       if (!stale){
         KPI_MKT.head = { yesterday_zt: ev.yesterday_zt, yesterday_fb: ev.yesterday_fb,
                          yesterday_dt: ev.yesterday_dt, source: 'socket' };
-        if (['kpl', 'kpllive', DABAN_PAGE].includes(STATE.view)) kplRenderMarketKpi();
+        if (['kpl', 'kpllive', DABAN_PAGE, 'kpltrial'].includes(STATE.view)) kplRenderMarketKpi();
       }
       break;
     case 'zt_situation':   // 2119：破板率（封板率=100−破板率，App 封板率卡同口径）
@@ -9276,6 +9314,7 @@ function kplRenderMarketKpi(){
 // KPI 条跟随当前视图日期：kpl=工具条 KPL.date（历史模式才非 today），打板三页=各自 dabanDate
 function kplKpiDate(){
   if (STATE.view === 'kpl') return KPL.mode === 'history' ? KPL.date : KPL.today;
+  if (STATE.view === 'kpltrial') return (($('atDate').value || '').trim()) || KPL.today;   // 竞价试盘：KPI 跟随页内日期框（2026-11-14）
   if (STATE.view === DABAN_PAGE){
     const v = KPL.dabanView;   // 单页化：KPI 跟随页内当前模式（各模式选日各自记忆）
     return KPL.dabanMode[v] === 'history' ? (KPL.dabanDate[v] || KPL.today) : KPL.today;
@@ -9344,6 +9383,302 @@ async function kplFetchBreadthHist(date){
     KPI_MKT.breadthHistByDate[date] = r.ok ? r : {miss: true, reason: r.reason || ('HTTP ' + resp.status), note: r.note || ''};
   } catch (e){ KPI_MKT.breadthHistByDate[date] = {miss: true, reason: e.message || 'fetch error'}; }
   kplRenderMarketKpi();
+}
+
+// ══════════ KPL 行情 · 竞价试盘（2026-11-14，勘察 auction-trial-source-survey-20261114 §6）══════════
+// 数据：GET /api/hotlist-jev/auction-trial（纯读 auction_trial_raw 日档，零上游外呼——
+//   WzsLinker 频控预算只归打标链采集路径，本页 60s 轮询不触发任何外呼，红线 9）
+//   + GET /api/hotlist-jev/jiuyan-action（韭研打标链涨停分组，同日回退口径与连板行情一致）。
+// 页面布局=【个股行情】同款（左板块列表右个股列表，点选联动；再点已选分组=取消回「全部」）。
+// **分组键=韭研板块名（用户裁决 2026-11-14 二次澄清：未入涨停打标分组的试盘股并入
+//   韭研板块分组，不单独成组、不管有没有打标）**：
+//   ① 当日涨停打标分组（jiuyan-action doc.fields[].name，打标股每板各计一次）；
+//   ② 未入打标分组 → 韭研产业树一级节点（读口 board join，jiuyan_board 单一事实源，
+//      与上涨/下跌复盘同源）；③ 产业树也未收录 → 读口板块名称桥 boardBridge
+//      （bk_name 归一 → theme/sector_industry_mapping → suggest_for 同引擎）；
+//   ④ 仍无 → 读口 boardHist（近 60 日打标链涨停分组最近归属兑底，事件桶不入）；
+//   ⑤ 四级全 miss → 「未分板块」行（2026-11-06 用户裁决：不回推 KPL bk_name
+//      题材名，避免单列双口径）。
+//   KPL bk_name 仅作右表参考列（tooltip 标注不作分组）。
+// 语义警示（勘察 §4/§6.3，右表 tooltip 如实标注，不猜语义入叙事）：
+//   jj_percent/jj_turnover 是 end_time 时点快照——end=09:25 → 09:25 冻结值；
+//   end<09:20 → 试盘结束（可撤窗内撤单前）时点值；
+//   circulated_value 流通值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生；
+//   first/first_add/max/last 金额语义待 App 同屏核对（勘察 §6.4），列名只用中性词。
+const AT = {doc: null, dates: [], nameMiss: 0, boardMiss: 0, boardMeta: null, unmapped: [], rootMeta: null,
+            loading: false, error: null, fb: null, seq: 0, pollTimer: null,
+            sel: '', boardSort: {key: 'n', dir: -1}, stockSort: {key: 'jjPctN', dir: -1},
+            codeBoards: {}, jy: {doc: null, error: null, fb: null}};
+function atCode6(c){ const m = String(c || '').match(/(\d{6})\s*$/); return m ? m[1] : ''; }
+// 粗桶口径统一（2026-11-14 用户确认）：当日打标分组名同义归一（aliasMap 由读口
+// rootMeta 透出，种子代码常量 + jiuyan_root_alias 库内覆盖），事件桶组不入左表
+function atCanonical(n){ const m = (AT.rootMeta && AT.rootMeta.aliasMap) || {}; return m[String(n || '').trim()] || String(n || '').trim(); }
+function atIsEventBucket(n){ const b = (AT.rootMeta && AT.rootMeta.eventBuckets) || []; return b.includes(String(n || '').trim()); }
+function atEnter(){
+  atLoad();
+  if (!AT.pollTimer) AT.pollTimer = setInterval(() => {
+    if (STATE.view !== 'kpltrial'){ clearInterval(AT.pollTimer); AT.pollTimer = null; return; }
+    if (!AT.loading) atLoad();
+  }, 60000);
+  kplFitHeight('#tab-kpltrial .kpl-layout');
+}
+function atLeave(){ if (AT.pollTimer){ clearInterval(AT.pollTimer); AT.pollTimer = null; } }
+function atDateChange(){ AT.sel = ''; atLoad(); kplRenderMarketKpi(); }   // KPI 卡跟随选日（历史分支内部拉指数/涨跌家数历史帧）
+function atBackToLatest(){ $('atDate').value = ''; AT.sel = ''; atLoad(); kplRenderMarketKpi(); }
+function atRows(){
+  const rows = (AT.doc && AT.doc.rows) || {};
+  return Object.entries(rows).map(([code, r]) => ({...r, code: String(code), code6: atCode6(code)}));
+}
+// 板块模型（2026-11-14 二次澄清）：涨停打标分组 ∪ 产业树一级节点并入，无独立「未入打标组」。
+// 每只试盘股归属：打标分组（可多组，各计一次，打标 badge 用）→ 产业树 board（单值，
+// 已在打标分组名单里的同名板块去重）→ 两者皆无 → 「未分板块」（产业树未收录，fail-visible）。
+function atBoardModel(){
+  const fields = (AT.jy.doc && AT.jy.doc.fields) || [];
+  const rows = atRows();
+  const byCode = {};
+  for (const r of rows) byCode[r.code6] = r;
+  const boards = [];
+  const covered = new Set();
+  AT.codeBoards = {};
+  for (const f of fields){
+    const cname = atCanonical(f.name);
+    if (atIsEventBucket(cname)) continue;   // 事件桶不是板块（粗桶口径，fail-visible 由未分板块兜底）
+    const members = [];
+    for (const s of (f.stocks || [])){
+      const c6 = atCode6(s.code);
+      const row = byCode[c6];
+      if (!row) continue;
+      members.push({...row, jyName: s.name || null});
+      covered.add(c6);
+      (AT.codeBoards[c6] = AT.codeBoards[c6] || []).push(cname);
+    }
+    boards.push({name: cname, jyCount: f.count != null ? f.count : (f.stocks || []).length, members});
+  }
+  // 未入打标分组的股并入产业树板块（同名板块去重；打标分组名与产业树节点名撞名时合入同一组）
+  const boardByName = {};
+  for (const b of boards) boardByName[b.name] = b;
+  for (const r of rows){
+    if (covered.has(r.code6)) continue;
+    const bn = r.board;   // board 已在读口/jiuyan_board 单点归一到粗桶主名（boardRoot 死字段已删，review minor-2）
+    if (!bn) continue;
+    let b = boardByName[bn];
+    if (!b){ b = {name: bn, jyCount: null, members: []}; boardByName[bn] = b; boards.push(b); }
+    b.members.push({...r});
+    (AT.codeBoards[r.code6] = AT.codeBoards[r.code6] || []).push(bn);
+  }
+  // 产业树也未收录 → 桥接/兑底（读口 boardBridge=名称桥归一粗桶、boardHist=近60日
+  // 打标链最近归属）各计一次（同名去重）；四级全 miss → 「未分板块」（2026-11-06
+  // 用户裁决：不回推 KPL bk_name，fail-visible）
+  // 粗桶口径统一：读口 board/boardBridge/boardHist 均已归一到粗桶主名（对照层
+  // jiuyan_industry_root_mapping + aliasMap），unmapped 名保留原值（不猜）
+  for (const r of rows){
+    const extra = [].concat(Array.isArray(r.boardBridge) ? r.boardBridge : [],
+                            Array.isArray(r.boardHist) ? r.boardHist : []);
+    for (const bn of extra){
+      if (!bn) continue;
+      if ((AT.codeBoards[r.code6] || []).includes(bn)) continue;
+      let b = boardByName[bn];
+      if (!b){ b = {name: bn, jyCount: null, members: []}; boardByName[bn] = b; boards.push(b); }
+      b.members.push({...r});
+      (AT.codeBoards[r.code6] = AT.codeBoards[r.code6] || []).push(bn);
+    }
+  }
+  const unboarded = rows.filter(r => !(AT.codeBoards[r.code6] || []).length);
+  return {boards, unboarded};
+}
+function atNum(v){ const n = typeof v === 'number' ? v : parseFloat(v); return Number.isFinite(n) ? n : null; }
+function atPct(v){ const n = atNum(v); return n == null ? '--' : kfmtNum(n) + '%'; }
+function atAgg(members){
+  // 聚合列：均值/合计只对有值成员计（缺值不补 0，fail-visible）；全缺 → null 显 '--'
+  const pcts = members.map(m => atNum(m.jj_percent)).filter(v => v != null);
+  const turs = members.map(m => atNum(m.jj_turnover)).filter(v => v != null);
+  const amts = members.map(m => atNum(m.jj_amount)).filter(v => v != null);
+  return {
+    pct: pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : null,
+    tur: turs.length ? turs.reduce((a, b) => a + b, 0) / turs.length : null,
+    amt: amts.length ? amts.reduce((a, b) => a + b, 0) : null,
+  };
+}
+function atBoardSortBy(key){ lbSortToggle(AT.boardSort, key); atRender(); }
+function atStockSortBy(key){ lbSortToggle(AT.stockSort, key); atRender(); }
+function atSelect(name){ AT.sel = (name && AT.sel !== name) ? name : ''; atRender(); }
+async function atLoad(){
+  if (AT.loading) return;
+  AT.loading = true;
+  const seq = ++AT.seq;   // 过期响应守卫（连板行情同款）：60s 轮询与手动刷新重叠时旧响应不覆盖
+  const date = ($('atDate').value || '').trim();
+  const qs = date ? '?date=' + encodeURIComponent(date) : '';
+  let r = null, jy = null;
+  try { r = await jget('/api/hotlist-jev/auction-trial' + qs); }
+  catch (e) { r = {ok: false, degraded: true, reason: '读口失败：' + (e && e.message ? e.message : e)}; }
+  try { jy = await jget('/api/hotlist-jev/jiuyan-action' + qs); }
+  catch (e) { jy = {ok: false, degraded: true, reason: '读口失败：' + (e && e.message ? e.message : e)}; }
+  if (seq !== AT.seq) return;
+  AT.loading = false;
+  AT.dates = (r && r.dates) || [];
+  AT.doc = (r && r.doc) || null;
+  AT.nameMiss = (r && r.nameMissCount) || 0;
+  AT.boardMiss = (r && r.boardMissCount) || 0;
+  AT.boardMeta = (r && r.boardMeta) || null;
+  AT.unmapped = (r && r.bridgeUnmapped) || [];
+  AT.rootMeta = (r && r.rootMeta) || null;
+  AT.fb = (r && r.dateFallback) || null;
+  AT.error = (r && (r.ok === false || r.degraded)) ? (r.reason || r.error || '读口降级') : null;
+  AT.jy.doc = (jy && jy.doc) || null;
+  AT.jy.fb = (jy && jy.dateFallback) || null;
+  AT.jy.error = (jy && (jy.ok === false || jy.degraded)) ? (jy.reason || jy.error || '读口降级') : null;
+  if (!date && AT.doc && AT.doc.tradingDate) $('atDate').value = AT.doc.tradingDate;   // 首载回填生效日
+  if (AT.sel){   // 选中分组消失回「全部」（数据刷新后分组可能不再有试盘股）
+    const names = atBoardModel().boards.map(b => b.name);
+    if (AT.sel !== '__noboard__' && !names.includes(AT.sel)) AT.sel = '';
+  }
+  atRender();
+}
+const AT_PCT_TIP = '竞价涨幅=jj_percent，是试盘结束（end_time）时点匹配涨幅：结束=09:25 → 09:25 冻结值；结束<09:20 → 可撤窗（09:15–09:20）内撤单前时点值（勘察 §4）';
+function atRender(){
+  if (STATE.view !== 'kpltrial') return;
+  const model = atBoardModel();
+  const q = String(($('atPlateSearch') || {}).value || '').trim().toLowerCase();
+  const sq = String(($('atStockSearch') || {}).value || '').trim().toLowerCase();
+  // ── 左：板块列表（首行「全部」+ 韭研板块：打标分组∪产业树并入 + 未分板块）──
+  const sel = AT.sel;
+  let ph = '<thead><tr><th>#</th>'
+    + lbThSort('板块', 'name', AT.boardSort, 'atBoardSortBy')
+    + lbThSort('试盘', 'n', AT.boardSort, 'atBoardSortBy')
+    + lbThSort('竞价涨幅均值', 'pct', AT.boardSort, 'atBoardSortBy')
+    + lbThSort('竞价成交额合计', 'amt', AT.boardSort, 'atBoardSortBy')
+    + lbThSort('竞价换手均值', 'tur', AT.boardSort, 'atBoardSortBy')
+    + '</tr></thead><tbody>';
+  const aggRow = (name, members, extra) => {
+    const a = atAgg(members);
+    return `<tr${sel === name ? ' class="on"' : ''} onclick="atSelect('${js(name)}')">`
+      + `<td class="kpl-uni">${extra.idx}</td><td>${extra.label}</td>`
+      + `<td class="kpl-uni" title="试盘家数=该板块内竞价试盘个股数（打标分组/产业树多归属各计一次${name === '' ? '；全部行=按个股去重' : ''}）">${members.length}</td>`
+      + `<td class="kpl-uni ${kcls(a.pct)}">${atPct(a.pct)}</td>`
+      + `<td class="kpl-uni">${a.amt != null ? kfmtAmt(a.amt) : '--'}</td>`
+      + `<td class="kpl-uni">${atPct(a.tur)}</td></tr>`;
+  };
+  let pn = 0;
+  if (!q) pn++, ph += aggRow('', atRows(), {idx: '--', label: esc('全部')});
+  let bsort = [...model.boards];
+  bsort.sort((a, b) => {
+    const k = AT.boardSort.key, d = AT.boardSort.dir;
+    const va = k === 'name' ? a.name : k === 'n' ? a.members.length
+      : k === 'pct' ? (atAgg(a.members).pct ?? -Infinity) : k === 'amt' ? (atAgg(a.members).amt ?? -Infinity)
+      : (atAgg(a.members).tur ?? -Infinity);
+    const vb = k === 'name' ? b.name : k === 'n' ? b.members.length
+      : k === 'pct' ? (atAgg(b.members).pct ?? -Infinity) : k === 'amt' ? (atAgg(b.members).amt ?? -Infinity)
+      : (atAgg(b.members).tur ?? -Infinity);
+    return k === 'name' ? d * String(va).localeCompare(String(vb), 'zh') : d * ((va > vb ? 1 : va < vb ? -1 : 0) || a.name.localeCompare(b.name, 'zh'));
+  });
+  for (const b of bsort){
+    if (q && !b.name.toLowerCase().includes(q)) continue;   // 过滤词只筛分组行
+    pn++;
+    ph += aggRow(b.name, b.members, {idx: pn, label: esc(b.name)});
+  }
+  if (model.unboarded.length && (!q || '未分板块'.includes(q))){
+    pn++;
+    const bm = AT.boardMeta || {};
+    const tip = '韭研产业树未收录（batch=' + esc(String(bm.batchDate || '--')) + ' · ' + (bm.nodes || 0) + ' 节点 · '
+      + (bm.codes || 0) + ' 股）且未入当日涨停打标分组；按 2026-11-06 用户裁决不回推 KPL 题材名，不伪装成已分组'
+      + (bm.reason ? '；产业库异常：' + esc(String(bm.reason)) : '');
+    const label = `<span class="badge" style="background:#f1f5f9;color:#475569" title="${tip}">未分板块</span>`;
+    const a = atAgg(model.unboarded);
+    ph += `<tr${sel === '__noboard__' ? ' class="on"' : ''} onclick="atSelect('__noboard__')">`
+      + `<td class="kpl-uni">${pn}</td><td>${label}</td><td class="kpl-uni">${model.unboarded.length}</td>`
+      + `<td class="kpl-uni ${kcls(a.pct)}">${atPct(a.pct)}</td>`
+      + `<td class="kpl-uni">${a.amt != null ? kfmtAmt(a.amt) : '--'}</td><td class="kpl-uni">${atPct(a.tur)}</td></tr>`;
+  }
+  const hasRows = atRows().length > 0;
+  $('atPlateTable').innerHTML = (pn || hasRows) ? ph + '</tbody>'
+    : '<tbody><tr><td class="empty">' + (q ? '无匹配板块（过滤词无命中）' : '暂无数据（等待试盘日档到流）') + '</td></tr></tbody>';
+  // ── 右：个股列表（选中板块过滤；未选中=全部按个股去重）──
+  let rightRows;
+  if (sel === '__noboard__') rightRows = model.unboarded;
+  else if (sel){ const b = model.boards.find(x => x.name === sel); rightRows = b ? b.members : []; }
+  else rightRows = atRows();
+  if (sq) rightRows = rightRows.filter(r =>
+    (String(r.code || '') + String(r.name || '') + String(((AT.codeBoards[r.code6] || []).join('·')) || '')).toLowerCase().includes(sq));
+  $('atStockTitle').textContent = sel === '__noboard__' ? '未分板块 · 试盘个股'
+    : sel ? sel + ' · 试盘个股' : '全部 · 试盘个股（点左侧板块筛选）';
+  const decorated = rightRows.map(r => {
+    return {...r, jjPctN: atNum(r.jj_percent), jjTurN: atNum(r.jj_turnover),
+            jjAmtN: atNum(r.jj_amount), priceN: atNum(r.price), pctN: atNum(r.percent),
+            prePctN: atNum(r.pre_percent), floatN: atNum(r.circulated_value),
+            firstN: atNum(r.first_amount), firstAddN: atNum(r.first_add),
+            maxN: atNum(r.max_amount), lastN: atNum(r.last_amount)};
+  });
+  const skey = AT.stockSort.key, sdir = AT.stockSort.dir;
+  decorated.sort((a, b) => {
+    const va = skey === 'code' ? a.code : skey === 'name' ? (a.name || a.jyName || '')
+      : skey === 'end' ? String(a.end_time || '') : skey === 'start' ? String(a.start_time || '')
+      : skey === 'bk' ? String(a.bk_name || '') : (a[skey] ?? -Infinity);
+    const vb = skey === 'code' ? b.code : skey === 'name' ? (b.name || b.jyName || '')
+      : skey === 'end' ? String(b.end_time || '') : skey === 'start' ? String(b.start_time || '')
+      : skey === 'bk' ? String(b.bk_name || '') : (b[skey] ?? -Infinity);
+    const cmp = (typeof va === 'string' || typeof vb === 'string') ? String(va).localeCompare(String(vb), 'zh') : (va > vb ? 1 : va < vb ? -1 : 0);
+    return sdir * (cmp || String(a.code).localeCompare(String(b.code)));
+  });
+  const amtTip = k => k === 'firstN' ? '首开额=first_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
+    : k === 'firstAddN' ? '首加额=first_add：语义待 App 同屏核对（勘察 §6.4），单位=元'
+    : k === 'maxN' ? '峰值额=max_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
+    : '最终额=last_amount：语义待 App 同屏核对（勘察 §6.4），单位=元';
+  let html = '<thead><tr><th>代码</th><th>名称</th>'
+    + lbThSort('竞价涨幅', 'jjPctN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('竞价换手', 'jjTurN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('竞价成交额', 'jjAmtN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('试盘开始', 'start', AT.stockSort, 'atStockSortBy')
+    + lbThSort('试盘结束', 'end', AT.stockSort, 'atStockSortBy')
+    + lbThSort('首开额', 'firstN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('首加额', 'firstAddN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('峰值额', 'maxN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('最终额', 'lastN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('现价', 'priceN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('涨幅', 'pctN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('昨涨幅', 'prePctN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('流通值', 'floatN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('KPL题材', 'bk', AT.stockSort, 'atStockSortBy')
+    + '</tr></thead><tbody>';
+  for (const r of decorated){
+    const name = r.name || r.jyName || '--';
+    const nameTip = r.name ? '' : r.jyName ? '名称=韭研打标组成员名（stock_names 字典 miss 兑底）'
+      : '名称不可考：stock_names 字典 miss 且未入韭研板块（不猜名）';
+    html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
+      + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
+      + `<td class="kpl-uni ${kcls(r.jjPctN)}" title="${esc(AT_PCT_TIP)}">${atPct(r.jjPctN)}${r.end_time ? '<div class=\"kpl-sub\">至 ' + esc(String(r.end_time)) + '</div>' : ''}</td>`
+      + `<td class="kpl-uni" title="竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）">${atPct(r.jjTurN)}</td>`
+      + `<td class="kpl-uni" title="竞价成交额=jj_amount（元，rank 原值）">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
+      + `<td class="kpl-uni">${esc(String(r.start_time || '--'))}</td>`
+      + `<td class="kpl-uni">${esc(String(r.end_time || '--'))}</td>`
+      + `<td class="kpl-uni" title="${esc(amtTip('firstN'))}">${r.firstN != null ? kfmtAmt(r.firstN) : '--'}</td>`
+      + `<td class="kpl-uni" title="${esc(amtTip('firstAddN'))}">${r.firstAddN != null ? kfmtAmt(r.firstAddN) : '--'}</td>`
+      + `<td class="kpl-uni" title="${esc(amtTip('maxN'))}">${r.maxN != null ? kfmtAmt(r.maxN) : '--'}</td>`
+      + `<td class="kpl-uni" title="${esc(amtTip('lastN'))}">${r.lastN != null ? kfmtAmt(r.lastN) : '--'}</td>`
+      + `<td class="kpl-uni">${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
+      + `<td class="kpl-uni ${kcls(r.pctN)}" title="percent 当日涨幅（收盘口径以行情源为准）">${atPct(r.pctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）">${atPct(r.prePctN)}</td>`
+      + `<td class="kpl-uni" title="circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
+      + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
+  }
+  $('atStockTable').innerHTML = decorated.length ? html + '</tbody>'
+    : '<tbody><tr><td class="empty">' + (sq ? '无匹配个股（搜索词无命中）'
+      : AT.doc ? ((sel && sel !== '__noboard__' && !rightRows.length) ? '该板块今日无试盘个股（板块存在但成员未出涨停价试盘单）' : '试盘列表为空（当日全市场无试盘个股属合法事实）')
+      : '等待试盘日档到流') + '</td></tr></tbody>';
+  // ── 页头统计/数据源行（fail-visible：降级/回退/缺失全部透出，不伪装实时）──
+  const d = AT.doc || {};
+  const fb = AT.fb ? ' · 日档回退 ' + AT.fb.requested + '→' + AT.fb.served : '';
+  $('atStats').textContent = AT.error && !AT.doc ? '竞价试盘 · 读口降级'
+    : `竞价试盘 · ${d.tradingDate || '--'} · ${d.nRows != null ? d.nRows : atRows().length} 只`
+      + (d.savedAt ? ' · 档龄 ' + esc(String(d.savedAt)) : '')
+      + (AT.nameMiss ? ` · 名称缺失 ${AT.nameMiss} 只` : '')
+      + (model.unboarded.length ? ` · 未分板块 ${model.unboarded.length} 只` : '') + fb;
+  // 2026-11-14 用户裁决：页头长段「数据源：…」描述删除；fail-visible 收敛到
+  // atStats 短计数（桥未收录词数）+ sbLog 错误日志（降级/回落/异常原因全量在状态栏）
+  $('atStats').textContent += (AT.unmapped && AT.unmapped.length)
+    ? ' · 桥未收录 ' + AT.unmapped.length + ' 词' : '';
+  if (AT.error && window.sbLog) sbLog('error', '[竞价试盘] ' + AT.error);
+  if (AT.jy.error && window.sbLog) sbLog('error', '[竞价试盘] 韭研打标链：' + AT.jy.error);
+  kplFitHeight('#tab-kpltrial .kpl-layout');
 }
 
 setView('overview');

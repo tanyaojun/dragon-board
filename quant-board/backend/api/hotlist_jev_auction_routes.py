@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 import os
+import re
+import time
 from typing import Any
 
 from fastapi import APIRouter
@@ -348,3 +350,267 @@ def post_auction_leader_rerun(payload: AuctionLeaderRerunPayload) -> dict[str, A
                     "latencyMs": doc.get("latencyMs"), "errorCode": doc.get("errorCode"),
                     "errorDetail": doc.get("errorDetail"),
                     "computedAt": doc.get("computedAt")}}
+
+
+# ══════════ 竞价试盘日档读口（2026-11-14，勘察 auction-trial-source-survey-20261114 §6）══════════
+# 数据源=本地 MongoDB auction_trial_raw（_id=日期，打标链 auction_trial_fetch 落库，
+# 60 交易日回填+盘中打标槽位采集），本读口**纯读零上游外呼**（红线 9：WzsLinker 频控
+# 预算只归打标链采集路径，页面刷新不触发任何外呼）。
+# rows 键=6 位代码（KPL param.code），无名称列——名称 join stock_names 全 A 字典、
+# board join 韭研产业树一级节点（jiuyan_board 单一事实源，未收录置 None 前端「未分板块」），
+# miss 不伪装：None 透出，前端标注。跨日回退只向更早
+# 有档日回退并 dateFallback 透出（不冒充当日，天普 11-12 池漏档同级教训）。
+TRIAL_RAW_COLLECTION = "auction_trial_raw"
+
+
+def _root_event_buckets() -> list[str]:
+    """事件桶名单（前端当日打标分组过滤用，VOTE_EXCLUDE 单源透出）。"""
+    try:
+        from backend.services.jev.jiuyan_industry_root import VOTE_EXCLUDE
+        return sorted(VOTE_EXCLUDE)
+    except Exception:
+        return ["公告", "其他", "新股", "次新", "ST", "B股", "转债", "其他相关",
+                "ST板块", "北交所", "摘帽", "摘帽相关", "ST相关"]
+
+
+# ══════════ jiuyan↔KPL 板块名称桥（2026-11-14，未分组股过多排查落地）══════════
+# 用户指路：未分组 40+ 主因 = 桥未接（theme_industry_mapping 202 条构建于 KPL 252
+# 名录，未覆盖打板页 bk_name 词表，48 只未分组 bk 仅命中 2）+ 韭研产业树为热点
+# 概念树（一级 108 节点），医药/环保/水务等传统行业树上无节点。桥接链三级：
+#   ① theme_industry_mapping（P4 治理桥，_id=KPL 题材名 → industryNames）
+#   ② sector_industry_mapping（板块节点 V3 桥，board → industryNames）
+#   ③ industry_alias.suggest_for 同引擎实时建议（exact/contains/multi-union）
+#   ④ 近 60 日打标链涨停分组最近归属兑底（打标链个股身位；事件桶停用词不入）
+# 映射/名单进程内 300s 缓存（jiuyan_board 同规）；纯读零写入零上游外呼。
+_BRIDGE_CACHE: dict[str, tuple[float, dict]] = {}
+_BRIDGE_TTL_S = 300.0
+
+
+def _norm_bk(value: object) -> str:
+    """KPL bk_name 归一：去尾部计数括号「半导体(3)」→「半导体」，再去 概念/板块 后缀
+    （industry_alias._normalize 同链，单一事实源不镜像造轮子）。"""
+    s = str(value or "").strip()
+    s = re.sub(r"（[^（]*）$|\([^)]*\)$", "", s).strip()
+    try:
+        from backend.services.theme.industry_alias import _normalize
+        return _normalize(s)
+    except Exception:
+        return s
+
+
+def _bridge_maps(db: Any) -> dict:
+    """桥原料一次载入（300s 缓存）：names=stock_names 字典、maps={theme,sector}、
+    inds=产业树一级节点名、hist=近 60 日打标链 (date, name, codes) 升序序列。
+    各原料读失败结构化留痕（*_error），不阻断读口主链（§4.0）。"""
+    hit = _BRIDGE_CACHE.get("maps")
+    now = time.monotonic()
+    if hit is not None and now - hit[0] < _BRIDGE_TTL_S:
+        return hit[1]
+    out: dict = {"names": {}, "maps": [], "inds": [], "hist": [],
+                 "histError": None, "sourceErrors": {}}
+    try:
+        for s in db["stock_names"].find({}, {"code": 1, "name": 1}):
+            c = str(s.get("code") or "")[-6:]
+            if c and c not in out["names"]:
+                out["names"][c] = str(s.get("name") or "")
+    except Exception as exc:
+        out["names"] = {}
+        out["maps"] = []
+        out["histError"] = f"stock_names:{type(exc).__name__}"
+        out["sourceErrors"]["stock_names"] = out["histError"]
+        return out   # 失败态不缓存（review minor-1）：下一请求重试，不冻 300s 降级原料
+    for col, key in (("theme_industry_mapping", "theme"), ("sector_industry_mapping", "sector")):
+        m: dict[str, list[str]] = {}
+        try:
+            for x in db[col].find({}, {"industryNames": 1, "board": 1}):
+                names = [str(n) for n in (x.get("industryNames") or []) if n]
+                if names:
+                    m[str(x.get("board") or x["_id"])] = names
+        except Exception as exc:
+            out["histError"] = out["histError"] or f"{col}:{type(exc).__name__}"
+            out["sourceErrors"][col] = f"{col}:{type(exc).__name__}"
+        out["maps"].append({"key": key, "map": m})
+    try:
+        out["inds"] = [str(d["name"]) for d in db["jiuyan_industry_stocks"].find({}, {"name": 1}) if d.get("name")]
+    except Exception as exc:
+        out["inds"] = []
+        out["sourceErrors"]["jiuyan_industry_stocks"] = f"inds:{type(exc).__name__}"
+    try:
+        docs = list(db["jiuyan_action"].find(
+            {}, {"tradingDate": 1, "fields.name": 1, "fields.stocks.code": 1}))
+        docs = sorted((d for d in docs if isinstance(d, dict)),
+                      key=lambda x: str(x.get("tradingDate") or ""))[-60:]
+        out["hist"] = [(str(d.get("tradingDate") or ""), d.get("fields") or []) for d in docs]
+    except Exception as exc:
+        out["hist"] = []
+        out["histError"] = out["histError"] or f"jiuyan_action:{type(exc).__name__}"
+        out["sourceErrors"]["jiuyan_action"] = f"jiuyan_action:{type(exc).__name__}"
+    if out["sourceErrors"]:
+        return out   # 部分原料降级：不缓存，下一请求重试（§4.0 不把故障冻成常态）
+    _BRIDGE_CACHE["maps"] = (now, out)
+    return out
+
+
+def _bridge_lookup(bk_name: object, maps: list[dict], inds: list[str]) -> list[str]:
+    """bk_name → 桥接板块名（① 治理桥 → ② V3 桥 → ③ suggest_for 同引擎实时建议）。
+    多命中（multi-union）全保留（前端每组各计一次）；全 miss → []。"""
+    bk = str(bk_name or "").strip()
+    if not bk:
+        return []
+    norm = _norm_bk(bk)
+    for m in maps:
+        names = (m.get("map") or {}).get(norm) or (m.get("map") or {}).get(bk)
+        if names:
+            return names
+    if not inds:
+        return []
+    try:
+        from backend.services.theme.industry_alias import suggest_for
+        sug = suggest_for(norm, inds)
+    except Exception:
+        sug = None
+    return [str(n) for n in (sug or {}).get("names") or []]
+
+
+def _bridge_hist(hist: list, need: set[str]) -> dict[str, list[str]]:
+    """近 60 日打标链最近归属：code → 最近出现日的涨停分组名（同日多组全保留，
+    事件桶 停用词不入（VOTE_EXCLUDE 单源含 ST板块/北交所/摘帽等，粗桶口径）；旧日期不再覆盖
+    （最近身位优先，确定性）。"""
+    try:
+        from backend.services.jev.jiuyan_industry_root import VOTE_EXCLUDE
+        _EXCL = VOTE_EXCLUDE
+    except Exception:
+        _EXCL = {"公告", "其他", "新股", "次新", "ST", "B股", "转债", "其他相关",
+                 "ST板块", "北交所", "摘帽", "摘帽相关", "ST相关"}
+    out: dict[str, list[str]] = {}
+    for _date, fields in hist:   # hist 升序 → 后写覆盖 = 最近身位
+        for f in fields or []:
+            nm = str((f or {}).get("name") or "").strip()
+            if not nm or nm in _EXCL:
+                continue
+            for s in f.get("stocks") or []:
+                c = str((s or {}).get("code") or "")[-6:]
+                if c in need:
+                    out.setdefault(c, [])
+                    if nm not in out[c]:
+                        out[c].insert(0, nm)   # 同日多组：后组插前（fields 逆序优先，后组为更新身位）
+    return out
+
+
+@router.get("/auction-trial")
+def get_auction_trial(date: str | None = None) -> dict[str, Any]:
+    """竞价试盘日档读口（纯读）：无 date → 最新有档日 + 全部日期索引。"""
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        col = db[TRIAL_RAW_COLLECTION]
+        dates = sorted(str(d["_id"]) for d in col.find({}, {"_id": 1}))
+        if not dates:
+            return {"ok": True, "dates": [], "doc": None, "degraded": True,
+                    "reason": "auction_trial_raw 无日档（打标链未采集或集合为空）"}
+        target = (date or "").strip() or dates[-1]
+        date_fallback = None
+        doc = col.find_one({"_id": target})
+        if doc is None and date:
+            earlier = [d for d in dates if d < target]
+            if earlier:
+                served = earlier[-1]
+                doc = col.find_one({"_id": served})
+                if doc is not None:
+                    date_fallback = {"requested": target, "served": served}
+        if doc is None:
+            return {"ok": True, "dates": dates, "doc": None, "degraded": True,
+                    "reason": f"{target} 无试盘日档（未采集或非交易日）"}
+        # 板块归属 join（2026-11-14 用户裁决：未入涨停打标分组的试盘股并入韭研板块分组，
+        # 不单独成组）：① board = 韭研产业树一级节点名（jiuyan_board 单一事实源，与
+        # 上涨/下跌复盘同源）；② 产业树未收录 → **板块名称桥**（2026-11-14 用户指路：
+        # jiuyan↔KPL 桥未接是未分组主因之一）：bk_name 归一 → theme_industry_mapping
+        # （P4 治理桥）→ sector_industry_mapping（板块节点 V3 桥）→ industry_alias.
+        # suggest_for 同引擎实时建议（exact/contains/multi-union，确定性不猜）；
+        # ③ 仍无 → 近 60 日打标链涨停分组最近归属兑底（打标链个股身位，事件桶
+        # 公告/其他等停用词不入）。④全 miss → board 缺失透出（前端「未分板块」，
+        # 不回推 KPL bk_name 原名，2026-11-06 用户裁决）。当日涨停打标分组归属由
+        # 前端 jiuyan-action 读口叠加（多组各计一次，本口不重复建设）。
+        bridge = _bridge_maps(db)
+        # 粗桶对照（2026-11-14 用户裁决实施）：产业树一级节点太细（单日机器人拆 4-5
+        # 节点）而打标链分组名粗——board/boardBridge 归一到打标链粗桶口径（
+        # jiuyan_industry_root_mapping 对照层，非物理加层：上游周频全量刷新会冲掉
+        # 物理结构）；unmapped 节点保留 level-1 原值兑底（不猜）；boardHist/当日打标
+        # 分组本身已是粗桶名，不动。board 保留 level-1 原值作审计字段。
+        try:
+            from backend.services.jev import jiuyan_industry_root
+            root_idx = jiuyan_industry_root.root_index(db)
+            root_alias = jiuyan_industry_root.root_alias_map(db)
+        except Exception:
+            root_idx, root_alias = {}, {}
+        rows = doc.get("rows") or {}
+        try:
+            from backend.services.jev import jiuyan_board
+            b_idx, b_meta = jiuyan_board.board_index(db)
+        except Exception:
+            b_idx, b_meta = {}, {"nodes": 0, "codes": 0, "reason": "jiuyan_board_import_failed"}
+        named_rows: dict[str, dict] = {}
+        n_name_miss = 0
+        n_board_miss = 0
+        for code, row in rows.items():
+            r = dict(row or {})
+            c6 = str(code)[-6:]
+            r["name"] = bridge["names"].get(c6)
+            if not r["name"]:
+                n_name_miss += 1
+            r["board"] = b_idx.get(c6)   # 已在 jiuyan_board.board_index 内单点归一到粗桶主名
+            if not r["board"] and bridge["maps"]:
+                bb: list[str] = []
+                for n in _bridge_lookup(r.get("bk_name"), bridge["maps"], bridge["inds"]):
+                    rn = root_idx.get(n) or n   # 桥名归一到粗桶，unmapped 保留原值
+                    if rn and rn not in bb:
+                        bb.append(rn)
+                r["boardBridge"] = bb
+            named_rows[str(code)] = r
+        # ③ 近 60 日打标链兑底：仅限仍无任何韭研板块归属的股（need 非空且 hist 原料
+        #    非空才扫，最近身位优先；hist 已在 _bridge_maps 内缓存——hist 兜底独立于
+        #    names/映射层故障，只看自身原料，review minor-1）
+        need = {c for c, r in named_rows.items()
+                if not r.get("board") and not r.get("boardBridge")}
+        if need and bridge["hist"]:
+            hist = _bridge_hist(bridge["hist"], need)
+            for c in need:
+                if hist.get(c):
+                    seen: list[str] = []
+                    for n in hist[c]:
+                        rn = root_alias.get(n, n)   # 同义归一到主名（粗桶口径统一）
+                        if rn and rn not in seen:
+                            seen.append(rn)
+                    if seen:
+                        named_rows[c]["boardHist"] = seen
+        unmapped_bk: set[str] = set()
+        try:   # 事件桶词表单源（review minor-4）：与 _bridge_hist/_root_event_buckets 同用 VOTE_EXCLUDE
+            from backend.services.jev.jiuyan_industry_root import VOTE_EXCLUDE as _EXCL
+        except Exception:
+            _EXCL = {"公告", "其他", "新股", "次新", "ST", "B股", "转债", "其他相关"}
+        for r in named_rows.values():
+            if not r.get("board") and not r.get("boardBridge") and not r.get("boardHist"):
+                n_board_miss += 1
+                bk = _norm_bk(r.get("bk_name"))
+                if bk and bk not in _EXCL:
+                    unmapped_bk.add(bk)   # 事件桶词不是桥候选（治理口径），不入未收录清单
+        doc = {k: v for k, v in doc.items() if k != "_id"}
+        doc["rows"] = named_rows
+        result: dict[str, Any] = {"ok": True, "dates": dates, "doc": doc,
+                                  "nameMissCount": n_name_miss,
+                                  "boardMissCount": n_board_miss,
+                                  "bridgeUnmapped": sorted(unmapped_bk),
+                                  **({"bridgeDegraded": sorted(bridge["sourceErrors"].keys())}
+                                     if bridge.get("sourceErrors") else {}),
+                                  "boardMeta": b_meta,
+                                  "rootMeta": {"mappedNodes": len(root_idx),
+                                               "collection": "jiuyan_industry_root_mapping",
+                                               "aliasMap": root_alias,
+                                               "eventBuckets": _root_event_buckets()}}
+        if date_fallback:
+            result["dateFallback"] = date_fallback
+        return result
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"auction_trial_read_failed: {exc}"}

@@ -128,6 +128,20 @@ GET http://wzslinker.top/companys/api-auction.php?page=limit_up_bidding&date=YYY
    end=09:25:00（华东重机）jj==收盘涨幅；end=09:19:51（大胜达）jj=试盘结束匹配涨幅。
 4. first/first_add/max/last 金额语义仍以 App 同屏核对为准（行内自洽性已强支持
    「首开=首笔涨停价委托/首加=追加/max=峰值/last=撤单后余额」，但不猜语义入叙事）。
+5. **工作台消费层已上线（2026-11-14；分组口径同日二次澄清 + 桥接链补全）**：relay_page
+   【竞价试盘】页（KPL 行情组）——后端纯读口 `GET /api/hotlist-jev/auction-trial`
+   （auction_trial_raw + stock_names 名称 join，零上游外呼，页面轮询不占 WzsLinker
+   预算）；左板块=**韭研板块**（用户裁决：未入打标分组不单独成组、不管有没有打标），
+   个股-板块联动；归属链四级：① 当日涨停打标分组（多组各计一次）② 产业树一级节点
+   （jiuyan_board）③ **板块名称桥**（bk_name 归一 → theme_industry_mapping →
+   sector_industry_mapping → suggest_for 同引擎实时建议；排查结论：原桥 202 条构建于
+   KPL 252 名录，未覆盖打板页 bk_name 词表；**词表已入治理闭环（同日，见
+   theme-governance-p1p4-implementation-20261025.md §五B）：--rebuild-daban 日终挂链
+   + 43 条新桥落库 + 读口 bridgeUnmapped fail-visible**）④ 近 60 日打标链涨停分组最近归属兑底
+   （事件桶公告/其他不入）；四级全 miss → 「未分板块」行（2026-11-06 裁决不回推
+   bk_name）。11-13 档实测：未分板块 48→24 只（桥 13 + 打标链兑底 11 救回；剩余 24
+   只历史仅公告/其他事件桶或从未打标，产业树上无节点可归）；右表列 tooltip 内嵌
+   §4 语义警示（end_time 时点/流通值口径/金额语义待核）。
 
 ### 6.4 WzsLinker 预算台账（红线 9）
 

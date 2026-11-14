@@ -99,6 +99,79 @@
 - **家族继承**：宇树/优必选机器人无直接映射时继承父题材对照
   （matchType=family_inherit<人形机器人>，effective_mapping_of 消费治理层 familyLinks）。
 
+## 五B、打板页词表治理闭环（2026-11-14 用户裁决「长期数据治理值得做，请实施」）
+
+**背景**：竞价试盘页（勘察 auction-trial-source-survey-20261114 §6.3）排查发现
+48 只未分组股的 bk_name 词表不在 themes 名录内——P4 桥初建时仅命中 2，长期靠
+读口运行时实时 suggest（不可审计、不可裁决）。用户裁决将打板词表纳入同一
+治理闭环。
+
+**实施**（三件套，纯本地零上游零模型）：
+1. **词表源扩展**：`industry_alias.daban_theme_names`——`auction_trial_raw`
+   全日档 rows.bk_name 归一去重（去计数括号+概念/板块后缀，排除事件桶
+   EXCLUDE_WORDS 与治理层非题材）；CLI `--rebuild-daban` = themes 名录 ∪ 打板词表
+   幂等重建（manual 不动，unmapped 打印=人工裁决候选）。rows 为动态 map，
+   dotted projection 无效，整 rows 取回提取。
+2. **日终自动重建**：盘后链新增 advisory 步 `industryAliasBridge`
+   （schedule._run_industry_alias_bridge_step，交易日门控，子进程
+   `industry_alias --rebuild-daban`，120s 超时；失败/跳过不翻转整体 ok——
+   消费方为展示层归属兑底，滞后天级由读口实时 suggest 兑底）。非交易日
+   跳过（11-14 实测 skipped:non_trading_day）。
+3. **未收录词表 fail-visible**：竞价试盘读口透 `bridgeUnmapped`
+   （当档四级全 miss 的 bk_name 归一词表，事件桶不入），前端数据源行
+   显「桥未收录 N 词」+ tooltip 全词表（人工裁决入口）。
+
+**首次落地（2026-11-14）**：词表 430（themes 249 ∪ 打板 209），auto +43 行
+（半导体/半导体封测/半导体设计/房地产/天然气/PCB/LED/传媒/化工/化工原料/农业/
+出版/体育/储能/乳制品/3D打印/AI应用/华为/地产/存储芯片等 20+），mapped
+203→246；unmapped 184 = 治理层已裁决留白（事件/区域/横切主题）∪ 打板新词
+（医药/医药商业/化学药/医疗器械/环保/水务/水泥/钢铁等传统行业词——**产业树上
+无对应节点，需先扩产业树或人工裁决映射方向**，fail-visible 不强凑）。
+消费方：竞价试盘页归属链 ② 桥级（boardBridge）自此全部走持久桥，运行时
+suggest 仅作新词兑底。
+
+## 五C、产业树一级→粗桶对照层（2026-11-14 用户裁决「采纳建议，请实施」）
+
+**背景**：产业树一级 108 节点为热点概念细粒度（单日「机器人」拆 4-5 节点），
+打标链分组名为用户视角粗桶（jiuyan_action 全集合 155 档去重 168 名，剔 7 事件桶
+161 真板块名，与树一级 exact 重叠仅 32/168）——消费方需统一到粗桶口径。
+**对照层非物理加层**（上游周频全量刷新会冲掉物理结构，P4 同款教训）。
+
+**实施**：
+1. **粗桶同义归一**（用户确认口径）：打标链分组名编辑手写漂移频繁（医疗医药/
+   医药医疗、液冷散热/AI散热/AI液冷/数据中心散热、房地产/地产基建/地产产业链…
+   日期交叠或衔接），归一表 `ROOT_ALIAS_SEED`（32 条别名→主名，纯同义合并不并
+   真细分），库内 `jiuyan_root_alias` manual 行可覆盖种子；
+2. **对照层** `jiuyan_industry_root_mapping`（`backend/services/jev/
+   jiuyan_industry_root.py`）：level-1 节点成分股 × 近 60 日打标链归属投票
+   （票按主名合并），Top1 占比 ≥0.40（T3 判据）→ auto_vote 落库（votes/members
+   审计字段）；低置信 → unmapped 披露 + stale auto 行回退删除（消费方保留
+   level-1 原值兑底，不猜）；manual（--set）不被覆盖；CLI
+   `--rebuild-root/--set/--list`；单测 5 例（归一合并/阈值/manual 保护/低置信
+   回退/读异常结构化，全 fake 零真库）；
+3. **消费端**：竞价试盘读口新增 `boardRoot`（board 归一粗桶，board 保留 level-1
+   原值审计）、`boardBridge`/`boardHist` 同义归一，rootMeta 透出 aliasMap（前端
+   当日打标分组同步归一）+ eventBuckets（事件桶不入左表）；日终 advisory 步
+   `jiuyanRootBridge` 挂盘后链；
+4. **首次落地（2026-11-14）**：103 个有投票证据节点中 **81 个 auto 落库**
+   （机器人/半导体/大消费/PCB/AI硬件/算力/医疗医药/地产…），22 个低置信
+   unmapped（天然气/有色金属/玻璃基板/福建/算力概念等——Top3 已披露待人工
+   --set 裁决）；竞价试盘页 11-13 档实测：左表 29 粗桶板块、同义并存消除
+   （无医药医疗/AI影视传媒双桶）、事件桶不入表、机器人 14 行=产业树 4 节点合并；
+   **同日消费扩展（用户指令）：上涨/下跌复盘「板块」字段接入同一对照层**——
+   改在 `jiuyan_board.board_index` 单点归一（单一事实源，三消费方自动生效：
+   rise/dieban/竞价试盘），meta 透 rootMapped=81/rootReason；11-13 档实测：
+   dieban 201 股/rise 226 股 board 分布均粗桶（机器人 21/22、AI影视 20 合并
+   生效，unmapped 节点保留一级原值兜底如福建/华为昇腾超节点/算力概念）；
+   **连板行情页同日接入（用户指令）**：jiuyan-action 读口 fields.name /
+   sector-nodes 读口 rows.board+aggExtraRows+wzsBoards / sector-pulse 读口
+   all+candidates 行 board（含 stored 帧 boards 键，拷贝后归一不污 60s 共享缓存）
+   统一归一到主名（原名 rawName 审计 + rootAliasRenamed 计数；bridge 原料失败
+   不缓存并透出 bridgeDegraded），目录与节点/盘中读数精确匹配，替代前端
+   lbNameKeys 启发式临时方案（启发式仅保留给 KPL 封板镜像的 KPL 侧词汇，
+   根层不覆盖）；11-13 档实测：昨节点列 8/9 命中（ST板块节点档本无该板块
+   如实 '--'）、封板昨日家数列正常。
+
 ## 五A、T3 正式挂靠（用户指令，gov-v1→gov-v2）
 
 **判据（冻结）**：candidates 100 对 × 成分股重叠率（|child∩parent|/|child|，

@@ -3,7 +3,9 @@
 
 单一事实源 = `jiuyan_industry_stocks`（韭研产业树 stock-tree 全成分快照，
 `operations/jiuyan_theme_store.save_industry_stocks` 落库、交易日 16:10 周频守卫刷新）。
-消费方：`jev_rise_review` / `jev_dieban_review` —— board = 韭研产业名；韭研未收录的个股
+消费方：`jev_rise_review` / `jev_dieban_review` / 竞价试盘读口 —— board = 韭研粗桶名
+（2026-11-14 用户裁决：一级节点经 jiuyan_industry_root 对照层归一到打标链粗桶口径，
+unmapped 节点保留一级原值兑底，rootMapped/rootReason 入 meta）；韭研未收录的个股
 board 置空（页面显示「未分板块」，2026-11-06 用户裁决：不回推主题材名，避免单列双口径）。
 
 归属规则（确定性，不猜）：节点按 `_id` 升序，取**首个**收录该股的一级产业；
@@ -31,7 +33,8 @@ def reset_jiuyan_board_cache() -> None:
 
 
 def board_index(db: Any) -> tuple[dict[str, str], dict[str, Any]]:
-    """返回 (code → 韭研一级产业名, meta)。
+    """返回 (code → 韭研板块粗桶主名, meta)（2026-11-14 归一后：同义漂移经
+    root_alias 归一到主名，unmapped 节点保留一级原值，见下方归一段）。
 
     meta = {batchDate, nodes, codes}：batchDate 成分快照批次（多批次并存取最大值）、
     nodes 收录一级产业数、codes 去重后可归属个股数；读库异常时 meta 额外带
@@ -69,6 +72,20 @@ def board_index(db: Any) -> tuple[dict[str, str], dict[str, Any]]:
     if read_failed:
         meta["reason"] = "industry_stocks_read_failed"   # 调用方据此组装 degraded 根因
         return index, meta                  # 失败不进缓存：下次轮询重试，不把失败冻 300s
+    # 粗桶归一（2026-11-14 用户裁决）：一级节点太细（单日机器人拆 4-5 节点）而打标链
+    # 分组名粗——board 归一到打标链粗桶口径（jiuyan_industry_root_mapping 对照层，
+    # 非物理加层）；unmapped 节点保留一级原值兑底（不猜）；对照层数/异常入 meta
+    # （rootMapped=0 为合法态=对照层未建，调用方不必 degraded）。
+    try:
+        from backend.services.jev import jiuyan_industry_root
+        r_idx, r_meta = jiuyan_industry_root.root_index_meta(db)
+    except Exception as exc:                # noqa: BLE001 — 归一层不可用不阻断主链
+        r_idx, r_meta = {}, {"reason": f"root_import_failed: {type(exc).__name__}"}
+    if r_idx:
+        index = {c: r_idx.get(b, b) for c, b in index.items()}
+    meta["rootMapped"] = len(r_idx)
+    if r_meta.get("reason"):
+        meta["rootReason"] = r_meta["reason"]
     _CACHE[_CACHE_KEY] = (now, index, meta)
     return index, meta
 

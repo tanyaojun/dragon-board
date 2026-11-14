@@ -363,6 +363,15 @@ def get_relay_index(
         return {"ok": False, "degraded": True, "reason": f"relay_index_read_failed: {exc}"}
 
 
+def _root_alias(db: Any) -> dict[str, str]:
+    """粗桶同义归一表（alias→主名，jiuyan_industry_root 单源；读异常回落空表不阻断）。"""
+    try:
+        from backend.services.jev import jiuyan_industry_root
+        return jiuyan_industry_root.root_alias_map(db)
+    except Exception:
+        return {}
+
+
 @router.get("/sector-nodes")
 def get_sector_nodes(
     date: str | None = None,
@@ -388,6 +397,14 @@ def get_sector_nodes(
             newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
             latest = str(newest.get("tradingDate")) if newest else None
         day_doc = col.find_one({"tradingDate": latest}) if latest else None
+        # 粗桶同义归一（2026-11-14 用户裁决）：rows.board 为打标链分组名（编辑手写漂移：
+        # 医药医疗/医疗医药、AI影视传媒/AI影视…跨日不同名）——读口统一归一到主名后，
+        # 连板行情页目录精确匹配（替代前端 lbNameKeys 启发式临时方案）。
+        alias = _root_alias(db)
+
+        def _canon_board(b: Any) -> str:
+            s = str(b or "").strip()
+            return alias.get(s, s)
         # 盘中回退：指定日无档（16:20 盘后链未跑）→ 取 < 指定日的最新存档，
         # 响应带 dateFallback 标记（$ne None 与序列查询同守卫，防 null 档期混入）
         date_fallback = None
@@ -416,18 +433,21 @@ def get_sector_nodes(
                 if node:
                     dist[node] = dist.get(node, 0) + 1
                 if node == "wzs":
-                    wzs_boards.append(str(r.get("board") or ""))
+                    wzs_boards.append(_canon_board(r.get("board")))
             s["nodeDist"] = dist
             s["wzsBoards"] = wzs_boards
         if day_doc:
             dist: dict[str, int] = {}
             wzs_boards: list[str] = []
             for r in day_doc.get("rows") or []:
+                r["board"] = _canon_board(r.get("board"))
                 node = r.get("node")
                 if node:
                     dist[node] = dist.get(node, 0) + 1
                 if node == "wzs":
                     wzs_boards.append(str(r.get("board") or ""))
+            for r in day_doc.get("aggExtraRows") or []:
+                r["board"] = _canon_board(r.get("board"))
             day_doc["nodeDist"] = dist
             day_doc["wzsBoards"] = wzs_boards
         # 审计 P3：series 含选中日、doc 也是选中日，直接相加会双计——按交易日去重
@@ -533,13 +553,52 @@ def get_sector_pulse(date: str | None = None) -> dict[str, Any]:
         return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
     try:
         from backend.operations.sector_pulse import COLLECTION_PULSE, get_pulse_cached
+        alias = _root_alias(db)
+
+        def _canon_rows(payload: Any) -> Any:
+            # 归一 all/candidates 行 board + stored 帧 boards 键（fb15[e.board] 量比查找）。
+            # 注意：get_pulse_cached 返回的是 _PULSE_CACHE 共享对象（60s）——必须拷贝后改，
+            # 不得就地写（否则归一副作用泄漏给 get_watchlist 等另一消费方，review major-1）。
+            if not isinstance(payload, dict):
+                return payload
+            out = dict(payload)
+
+            def _fix_list(rows: Any) -> list:
+                fixed = []
+                for r in rows or []:
+                    if isinstance(r, dict) and r.get("board"):
+                        s = str(r["board"]).strip()
+                        r = dict(r)
+                        r["board"] = alias.get(s, s)
+                    fixed.append(r)
+                return fixed
+            out["all"] = _fix_list(payload.get("all"))
+            out["candidates"] = _fix_list(payload.get("candidates"))
+            frames = payload.get("frames")
+            if isinstance(frames, dict):
+                nf: dict[str, Any] = {}
+                for k, fr in frames.items():
+                    if isinstance(fr, dict) and isinstance(fr.get("boards"), dict):
+                        nb = {}
+                        for b, v in fr["boards"].items():
+                            s = str(b).strip()
+                            nb[alias.get(s, s)] = v
+                        fr2 = dict(fr)
+                        fr2["boards"] = nb
+                        nf[k] = fr2
+                    else:
+                        nf[k] = fr
+                out["frames"] = nf
+            return out
         today = datetime.now().strftime("%Y-%m-%d")
         target = date or today
         if target != today:
             frame = db[COLLECTION_PULSE].find_one({"_id": f"{target}:PULSE"})
+            if frame is not None:
+                frame = _canon_rows(frame)
             return {"ok": True, "source": "stored", "date": target, "doc": frame,
                     "reason": None if frame else "该日无收盘帧（15:05 后无请求 / 非交易日 / 早于 V2c 投产日）"}
-        return get_pulse_cached(db, target)
+        return _canon_rows(get_pulse_cached(db, target))
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"sector_pulse_read_failed: {exc}"}
 
@@ -805,7 +864,21 @@ def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str,
             return {"ok": True, "dates": dates, "doc": None,
                     "degraded": True, "reason": f"{target_date}:{kind} 未落库"}
         doc = {k: v for k, v in doc.items() if k != "_id"}
+        # 粗桶同义归一（2026-11-14）：fields[].name 为打标链分组名（编辑手写漂移），
+        # 读口归一到主名（原名留 rawName 审计）——连板行情目录/竞价试盘分组等消费方
+        # 精确匹配 sector-nodes/sector-pulse（读口同步归一），替代前端启发式临时方案。
+        alias = _root_alias(db)
+        n_renamed = 0
+        for f in doc.get("fields") or []:
+            raw = str(f.get("name") or "")
+            canon = alias.get(raw.strip(), raw.strip())
+            if canon and canon != raw:
+                f["rawName"] = raw
+                f["name"] = canon
+                n_renamed += 1
         result = {"ok": True, "dates": dates, "doc": doc}
+        if n_renamed:
+            result["rootAliasRenamed"] = n_renamed
         if date_fallback:
             result["dateFallback"] = date_fallback
         return result

@@ -19,7 +19,9 @@
 5. **近3日累计涨幅**：当前价 / 3 个交易日前 15:00 价 − 1（仅采集池行有价格史）；基准缺失 → None。
 6. **振幅**：`(high − low) / preClose`（全市场日线行与采集池行都可算；缺前收 → None）。
 7. **盘中**：15:00 帧未到 → 回落当日最新 `half_hour` 槽，`intraday=True`。
-8. **板块字段**（2026-11-06）：board = 韭研产业树一级节点名（`services/jev/jiuyan_board`，
+8. **板块字段**（2026-11-06；2026-11-14 粗桶口径）：board = 韭研产业树一级节点经
+   jiuyan_industry_root 对照层归一的**打标链粗桶名**（unmapped 节点保留一级原值，
+   `services/jev/jiuyan_board`，
    单一事实源 `jiuyan_industry_stocks` 周频全成分快照）；韭研未收录 → board 置空
    （「未分板块」，用户裁决：不回推主题材名，避免单列双口径）；
    产业库空 → `degraded[jiuyan_board]` 披露。

@@ -1407,6 +1407,7 @@ def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any
 
 
 _ZHABAN_LABEL_TIMEOUT_SECONDS = 1200  # 炸板归因：当日炸板池逐股一 call（串行），池峰值 ~40 只冗余
+_INDUSTRY_ALIAS_TIMEOUT_SECONDS = 120  # 桥重建：纯本地词表×108 产业 suggest，秒级，120s 冗余
 
 
 def _run_zhaban_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
@@ -1444,6 +1445,96 @@ def _run_zhaban_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     if proc.returncode != 0:
         return {"ok": False, "error": {"code": "zhaban_label_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
     return {"ok": True, "runStartedAt": run_started_at.isoformat(),
+            "stdoutTail": (proc.stdout or "")[-300:]}
+
+
+def _run_industry_alias_bridge_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """jiuyan↔KPL 板块名称桥日终重建（advisory 步，2026-11-14 用户裁决实施治理闭环）。
+
+    - 子进程=industry_alias --rebuild-daban：themes 名录 ∪ 打板页题材词表
+      （auction_trial_raw 全日档 bk_name）幂等重建 auto 映射（manual 行不动，
+      纯本地零上游零模型调用）；unmapped 清单 stdout 披露（人工裁决候选）；
+    - 门控=交易日（非交易日跳过，零成本）；
+    - **advisory 语义**：失败/跳过不翻转 after_market 整体 ok、不参与 stopped_at
+      （消费方=竞价试盘页等展示层归属兑底，非生产数据链；读口另有实时 suggest
+      兜底，桥重建滞后天级不影响当日展示）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        trading, _cal = is_trading_day_cached(datetime.now(_TZ).date())
+    except Exception as exc:  # noqa: BLE001 — 门控失败按跳过处理（fail-visible）
+        return {"ok": True, "skipped": True, "reason": f"gate error: {exc}"}
+    if not trading:
+        return {"ok": True, "skipped": True, "reason": "non_trading_day"}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.services.theme.industry_alias",
+             "--rebuild-daban"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_INDUSTRY_ALIAS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "industry_alias_timeout",
+                                       "message": f"timeout {_INDUSTRY_ALIAS_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "industry_alias_failed",
+                                       "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    tail = (proc.stdout or "")[-300:]
+    mapped = unmapped_n = None
+    try:
+        import json as _json
+        summary = _json.loads(proc.stdout or "{}")
+        mapped = summary.get("mapped")
+        unmapped_n = len(summary.get("unmapped") or [])
+    except Exception:
+        pass
+    return {"ok": True, "runStartedAt": run_started_at.isoformat(),
+            "mapped": mapped, "unmapped": unmapped_n, "stdoutTail": tail}
+
+
+def _run_jiuyan_root_bridge_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """产业树一级→粗桶对照层日终重建（advisory 步，2026-11-14 用户裁决实施）。
+
+    - 子进程=jiuyan_industry_root --rebuild-root：成分股历史打标链归属投票
+      （近 60 日，票按同义主名合并）幂等重建 auto_vote 行（Top1 占比≥0.40，
+      manual 不动，低置信回退+unmapped 披露）；纯本地零上游零模型调用；
+    - 门控=交易日；**advisory 语义**同 alias 步（消费方=竞价试盘页展示层，
+      滞后天级由 level-1 原值兑底，不阻断）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        trading, _cal = is_trading_day_cached(datetime.now(_TZ).date())
+    except Exception as exc:  # noqa: BLE001 — 门控失败按跳过处理（fail-visible）
+        return {"ok": True, "skipped": True, "reason": f"gate error: {exc}"}
+    if not trading:
+        return {"ok": True, "skipped": True, "reason": "non_trading_day"}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.services.jev.jiuyan_industry_root",
+             "--rebuild-root"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_INDUSTRY_ALIAS_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "jiuyan_root_timeout",
+                                       "message": f"timeout {_INDUSTRY_ALIAS_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "jiuyan_root_failed",
+                                       "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    mapped = unmapped_n = None
+    try:
+        import json as _json
+        summary = _json.loads(proc.stdout or "{}")
+        mapped = len(summary.get("added") or []) + len(summary.get("changed") or [])
+        unmapped_n = len(summary.get("unmapped") or [])
+    except Exception:
+        pass
+    return {"ok": True, "runStartedAt": run_started_at.isoformat(),
+            "mapped": mapped, "unmapped": unmapped_n,
             "stdoutTail": (proc.stdout or "")[-300:]}
 
 
@@ -1690,10 +1781,15 @@ def run_after_market_once(
         jev_daily_line_result = _run_jev_daily_line_step(today, dry_run=dry_run)
         calib_drift_result = _run_calib_drift_step(today, dry_run=dry_run)
         amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
+        # jiuyan↔KPL 板块名称桥日终重建（advisory，2026-11-14 治理闭环；映射消费
+        # =竞价试盘页等展示层，滞后天级由读口实时 suggest 兑底）
+        industry_alias_result = _run_industry_alias_bridge_step(today, dry_run=dry_run)
+        # 产业树一级→粗桶对照层日终重建（advisory，同日实施；投票按同义主名合并）
+        jiuyan_root_result = _run_jiuyan_root_bridge_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "marketCycle", "relayIndex", "marketCycleRef", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "marketCycle", "relayIndex", "marketCycleRef", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "industryAliasBridge", "jiuyanRootBridge"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -1714,6 +1810,8 @@ def run_after_market_once(
                 "jevDailyLine": jev_daily_line_result,
                 "calibDriftMonitor": calib_drift_result,
                 "amountVsSameRecord": amount_vs_same_result,
+                "industryAliasBridge": industry_alias_result,
+                "jiuyanRootBridge": jiuyan_root_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,

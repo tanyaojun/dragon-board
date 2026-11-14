@@ -31,7 +31,9 @@ upsert 家数/逐股文档（1 次/日，受 15:05 截点、30 日窗口、120s 
 7. **日内回撤**：采集池行 `(high − price) / high`（正幅值）；回撤池行用 `max_drawdown` 幅值。
    两者语义不同，页面分列标注。
 8. **盘中**：15:00 帧未到（收盘前）→ 回落当日**最新** `half_hour` 槽，`intraday=True`。
-9. **板块字段**（2026-11-06）：board = 韭研产业树一级节点名（`services/jev/jiuyan_board`，
+9. **板块字段**（2026-11-06；2026-11-14 粗桶口径）：board = 韭研产业树一级节点经
+   jiuyan_industry_root 对照层归一的**打标链粗桶名**（unmapped 节点保留一级原值，
+   `services/jev/jiuyan_board`，
    单一事实源 `jiuyan_industry_stocks` 周频全成分快照）；韭研未收录 → board 置空
    （「未分板块」，用户裁决：不回推原板块名/主题材/EM industry/THS industry_block，
    避免单列双口径）；产业库空 → `degraded[jiuyan_board]` 披露。
