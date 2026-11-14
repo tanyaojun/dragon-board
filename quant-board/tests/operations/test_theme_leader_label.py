@@ -211,7 +211,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v17"
     assert doc["questionSetHash"] == "8c6c94429abd"   # v17 题集×语料匹配+两新题+开火前修订 b（v1-v16 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-13a"   # A7：直播归档 merge-union 供给修复（题面 hash 不动）
+    assert doc["ammoVersion"] == "2026-11-14a"   # 纯语料供给换代：S3 成分验证门+产业树残桩正文剔除
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"

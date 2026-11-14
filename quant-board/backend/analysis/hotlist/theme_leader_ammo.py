@@ -246,7 +246,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v17"
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-13a"   # A7：直播归档 merge-union（晨间归档不被 17:30 覆盖，09:15 竞价推送进供给）；题面 hash 不动
+AMMO_VERSION_THEME_LEADER = "2026-11-14a"   # 纯语料供给换代：S3 成分验证门+产业树残桩正文剔除（theme_event_digest 共享证据块；蹭标签词不再注入异题材叙事、≤9 字自复述残桩按无催化正文处理）；题面 hash 不动；前一版 2026-11-13a = A7：直播归档 merge-union
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──

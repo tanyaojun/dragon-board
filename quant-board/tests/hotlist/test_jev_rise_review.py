@@ -165,7 +165,8 @@ def test_board_uses_jiuyan_industry_strict(monkeypatch):
     assert by_code["600009"]["boardSource"] is None
     assert by_code["600010"]["board"] is None                  # 全市场行同样口径
     assert by_code["600010"]["boardSource"] is None
-    assert out["jiuyanBoard"] == {"batchDate": "2026-09-01", "nodes": 2, "codes": 2}
+    assert out["jiuyanBoard"] == {"batchDate": "2026-09-01", "nodes": 2, "codes": 2,
+                                  "rootMapped": 0}   # rootMapped=0 合法态：对照层未建（无映射集合文档）
 
 
 def test_jiuyan_board_empty_is_degraded(monkeypatch):

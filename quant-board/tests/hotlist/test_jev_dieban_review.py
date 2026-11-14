@@ -163,7 +163,8 @@ def test_board_uses_jiuyan_industry_strict(monkeypatch):
     assert by_code["600001"]["boardSource"] == "jiuyan"
     assert by_code["600009"]["board"] is None                  # 韭研未收录 → 置空（不回推）
     assert by_code["600009"]["boardSource"] is None
-    assert out["jiuyanBoard"] == {"batchDate": "2026-09-01", "nodes": 2, "codes": 2}
+    assert out["jiuyanBoard"] == {"batchDate": "2026-09-01", "nodes": 2, "codes": 2,
+                                  "rootMapped": 0}   # rootMapped=0 合法态：对照层未建（无映射集合文档）
     assert {"scope": "jiuyan_board", "reason": "industry_stocks_empty"} not in out["degraded"]
     # 板块分布 chips / 筛选共用同一 resolved 值（韭研名计入分布，不残留双口径）
     assert any(b["board"] == "第一产业" for b in out["negative"]["topBoards"])

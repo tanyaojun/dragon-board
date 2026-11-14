@@ -85,7 +85,7 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     # 叙事只能写「未覆盖（0/N，归因证据缺失）」）。
     # v8 解环（Option A，2026-11-12）：marketCycle 确定性步在 relayIndex 之前（relay v8 叙事
     # 需当日 market_cycle 语料），marketCycleRef 在 relayIndex 之后补刷并列参照。
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "marketCycle", "relayIndex", "marketCycleRef", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "sectorNodes", "phasePulse", "jiuyanLabel", "zhabanLabel", "marketCycle", "relayIndex", "marketCycleRef", "leaderWzs", "themeCycle", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "industryAliasBridge", "jiuyanRootBridge"]   # 末尾两 advisory 步：名称桥/粗桶对照层日终补齐（2026-11-14）
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
     assert "jevVoteRecheck" not in result["results"]  # 2026-10-15 用户裁决摘除（浪费 token）
