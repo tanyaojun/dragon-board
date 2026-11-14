@@ -20,6 +20,7 @@
 还是单日反抽**。
 
 **范围**：
+
 1. v14 题集换代：`QUESTION_SET_VERSION_THEME_LEADER = "v14"`，新增**事件驱动题**
    （现四题零改动）；
 2. 人气证据链叙事行：弱转强事件股的叙事注入「人气证据链」行（全部复用已落地
@@ -48,24 +49,24 @@
 
 ### 2.2 判档词表（B2 待裁决）
 
-| 档 | 语义 |
-|---|---|
+| 档               | 语义                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------- |
 | `dragon_confirm` | 新龙确立：反包+板内跟随（当日板内上板家数≥2）或题材延续题 strong_extend 同判，人气聚合 |
-| `one_day_pop` | 单日反抽：封板但无板内跟随、无题材新催化，人气未聚 |
-| `insufficient` | 证据不足：窗内序列缺失+板块结构不可考（窄口径，沿用 v13 收紧哲学） |
+| `one_day_pop`    | 单日反抽：封板但无板内跟随、无题材新催化，人气未聚                                     |
+| `insufficient`   | 证据不足：窗内序列缺失+板块结构不可考（窄口径，沿用 v13 收紧哲学）                     |
 
 ## 三、人气证据链叙事行（零新采集，全部复用已落地数据）
 
 事件股叙事追加 `人气证据链` 行组（build_leader_narrative 注入，事件日才出现）：
 
-| 证据项 | 来源 | 判据用途 |
-|---|---|---|
-| 窗内逐日表现 | leader_wzs 观察池行（§4.1 披露字段，已落地） | D0 起逐日涨跌幅/触板——「稳住高位」逆势证据 |
-| 反包日身位 | 事件行（k/height/形式①②） | 反包完成态与形式 |
-| 板内跟随 | 当日板内上板家数（sector rows，已落地） | 聚合 vs 孤军（2.1 ①判据） |
-| 板块家数序列 | sector rows 家数环比（已落地） | 扩张/萎缩定向 |
-| 空间锚行 | 现有 narrative 空间锚（历史同结构再走率） | 概率中枢先对齐 |
-| 周期态 | hotlist_jev_theme_cycle 当日行（P3 工作流 A，已落地） | 重启日/主升·第N轮作为背景事实（只披露，不进判档硬判据） |
+| 证据项       | 来源                                                  | 判据用途                                                |
+| ------------ | ----------------------------------------------------- | ------------------------------------------------------- |
+| 窗内逐日表现 | leader_wzs 观察池行（§4.1 披露字段，已落地）          | D0 起逐日涨跌幅/触板——「稳住高位」逆势证据              |
+| 反包日身位   | 事件行（k/height/形式①②）                             | 反包完成态与形式                                        |
+| 板内跟随     | 当日板内上板家数（sector rows，已落地）               | 聚合 vs 孤军（2.1 ①判据）                               |
+| 板块家数序列 | sector rows 家数环比（已落地）                        | 扩张/萎缩定向                                           |
+| 空间锚行     | 现有 narrative 空间锚（历史同结构再走率）             | 概率中枢先对齐                                          |
+| 周期态       | hotlist_jev_theme_cycle 当日行（P3 工作流 A，已落地） | 重启日/主升·第N轮作为背景事实（只披露，不进判档硬判据） |
 
 **fail-visible**：任一证据项缺位如实标注「缺」，不伪 0；但缺位不自动 insufficient
 （三层同缺才够档，v13 哲学）。
@@ -82,23 +83,23 @@
 
 ## 五、待裁决（B1-B5）
 
-| # | 问题 | 选项 | 倾向 |
-|---|---|---|---|
-| B1 | 新题形态 | A. 事件驱动题（仅弱转强事件股判答，稳态 +1~2 calls/事件日）；B. 通用第5题（全叙事行每日判答，+40~60 calls/日）；C. 不加题只注入人气叙事行（零调用，但「成色」仍靠人读，不算题集换代） | A（事件语义最具体、预算最小、与「新龙」徽标一一对应） |
-| B2 | 判档词表 | A. 三档（dragon_confirm/one_day_pop/insufficient，§2.2）；B. 四档（加「疑似确立·低置信」独立档） | A（低置信用 confidence 表达，不新增档位口径） |
-| B3 | 人气证据链范围 | A. 只用已落地结构证据（§三，零新采集）；B. 另接 KPL 人气榜等新数据源（需独立采集立项） | A（首版零新采集；B 列为 v15 候选） |
-| B4 | 落库/读口 | A. answers 并入现有 leader doc（`hotlist_jev_theme_leader_labels`，新 answer key，读口只加字段）；B. 独立集合 | A（单一事实源，红线 §1.2-1） |
-| B5 | 展示 | A. 台账新龙徽标 tooltip 透出「jev 成色：确立/反抽+日期」（只加字段）；B. 独立列 | A（与周期列同哲学：并列披露不仲裁，不加列宽） |
+| #   | 问题           | 选项                                                                                                                                                                                  | 倾向                                                  |
+| --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| B1  | 新题形态       | A. 事件驱动题（仅弱转强事件股判答，稳态 +1~2 calls/事件日）；B. 通用第5题（全叙事行每日判答，+40~60 calls/日）；C. 不加题只注入人气叙事行（零调用，但「成色」仍靠人读，不算题集换代） | A（事件语义最具体、预算最小、与「新龙」徽标一一对应） |
+| B2  | 判档词表       | A. 三档（dragon_confirm/one_day_pop/insufficient，§2.2）；B. 四档（加「疑似确立·低置信」独立档）                                                                                      | A（低置信用 confidence 表达，不新增档位口径）         |
+| B3  | 人气证据链范围 | A. 只用已落地结构证据（§三，零新采集）；B. 另接 KPL 人气榜等新数据源（需独立采集立项）                                                                                                | A（首版零新采集；B 列为 v15 候选）                    |
+| B4  | 落库/读口      | A. answers 并入现有 leader doc（`hotlist_jev_theme_leader_labels`，新 answer key，读口只加字段）；B. 独立集合                                                                         | A（单一事实源，红线 §1.2-1）                          |
+| B5  | 展示           | A. 台账新龙徽标 tooltip 透出「jev 成色：确立/反抽+日期」（只加字段）；B. 独立列                                                                                                       | A（与周期列同哲学：并列披露不仲裁，不加列宽）         |
 
 ## 六、实施记录（2026-11-02 落地）
 
-| 文件 | 内容 |
-|---|---|
-| `backend/analysis/hotlist/theme_leader_ammo.py` | 题集 v14（新题 `leader_rebound_popularity` 三档，四题零改动）+ `rebound_popularity_line` 人气证据链行组（事件/窗内逐日表现/板内跟随/周期背景，缺位 fail-visible）+ `build_leader_narrative` 加 `rebound_line` 参数（证据块前） |
-| `backend/operations/theme_leader_label.py` | 事件门（B1:A）：单源 join `hotlist_jev_leader_wzs` events（按日缓存），仅事件股判答新题（`LEADER_QUESTIONS_REBOUND` 3 题）；周期背景单源 `hotlist_jev_theme_cycle`；落库便捷字段 `leaderReboundPopularity`（全答仍在 answers） |
-| `backend/api/hotlist_jev_limitup_routes.py` | `/theme-leaders` 加 `reboundPopularity`/`reboundPopularityConfidence`（只加字段不改合同，B4:A 单一事实源） |
-| `backend/relay_page/index.html` | 新龙徽标 tooltip 透出「jev 成色：新龙确立/单日反抽（置信 X）」（B5:A 并列披露不加列） |
-| 测试 | hash 冻结 v14+新题判据冻结；行构造器正反例（含缺位 fail-visible）；叙事接线（链行在证据块前/非事件日不含）；事件门正反例（事件股 3 题+链行、非事件股 2 题零增量、wzs 文档缺失零调用不报错）；证据门 forcedKeys 覆盖新题。全 mock 零真实调用（红线 §1.2-7） |
+| 文件                                                   | 内容                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/analysis/hotlist/theme_leader_ammo.py`        | 题集 v14（新题 `leader_rebound_popularity` 三档，四题零改动）+ `rebound_popularity_line` 人气证据链行组（事件/窗内逐日表现/板内跟随/周期背景，缺位 fail-visible）+ `build_leader_narrative` 加 `rebound_line` 参数（证据块前）                             |
+| `backend/operations/theme_leader_label.py`             | 事件门（B1:A）：单源 join `hotlist_jev_leader_wzs` events（按日缓存），仅事件股判答新题（`LEADER_QUESTIONS_REBOUND` 3 题）；周期背景单源 `hotlist_jev_theme_cycle`；落库便捷字段 `leaderReboundPopularity`（全答仍在 answers）                             |
+| `backend/api/hotlist_jev_limitup_routes.py`            | `/theme-leaders` 加 `reboundPopularity`/`reboundPopularityConfidence`（只加字段不改合同，B4:A 单一事实源）                                                                                                                                                 |
+| `backend/relay_page/index.html`                        | 新龙徽标 tooltip 透出「jev 成色：新龙确立/单日反抽（置信 X）」（B5:A 并列披露不加列）                                                                                                                                                                      |
+| 测试                                                   | hash 冻结 v14+新题判据冻结；行构造器正反例（含缺位 fail-visible）；叙事接线（链行在证据块前/非事件日不含）；事件门正反例（事件股 3 题+链行、非事件股 2 题零增量、wzs 文档缺失零调用不报错）；证据门 forcedKeys 覆盖新题。全 mock 零真实调用（红线 §1.2-7） |
 
 回归：tests/hotlist + tests/operations + schedule 平台 1598 passed。
 
