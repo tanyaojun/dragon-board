@@ -410,6 +410,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
                             "morningState": block.get("morningState"),
                             "morningDate": block.get("morningDate"),
                             "flashState": block.get("flashState"),
+                            "flashDate": block.get("flashDate"),
                             "trialState": ({"state": "ok",
                                             "source": trial.get("source"),
                                             "fetchedAt": trial.get("fetchedAt"),
@@ -473,7 +474,8 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                             "prevPool": pool_prev.get("degraded"), "lhbDate": prev_date,
                             "morningState": block.get("morningState"),
                             "morningDate": block.get("morningDate"),
-                            "flashState": block.get("flashState")},
+                            "flashState": block.get("flashState"),
+                            "flashDate": block.get("flashDate")},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 
 

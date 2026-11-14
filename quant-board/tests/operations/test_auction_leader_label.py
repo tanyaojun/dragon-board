@@ -917,3 +917,29 @@ def test_trial_raw_fetch_failed_not_persisted(env, monkeypatch):
     assert cs["state"].startswith("fetch_failed") is False
     assert cs["state"] == "http_error:URLError"
     assert "persistState" not in cs
+
+
+def test_corpus_state_morning_flash_fields_persisted(env, monkeypatch):
+    """2026-11-14 盘前催化增量 B/C：label 层合同——①两 builder 均以
+    include_morning/include_flash=True 调 digest；②corpusState 透传
+    morningState/morningDate/flashState/flashDate（个股+板块）；③语料无档 →
+    missing（真实 digest 集成已由 digest 层测试+独立 FakeDb 直调锁定）。"""
+    db, calls = env
+    seen_kwargs: list[dict] = []
+
+    def rich_stub(*a, **k):
+        seen_kwargs.append(k)
+        return {"text": "题材证据块：测试", "state": {}, "events": [], "news": [],
+                "morningState": "missing", "morningDate": DATE,
+                "flashState": "missing", "flashDate": DATE}
+    monkeypatch.setattr(L.digest, "build_theme_evidence_block", rich_stub)
+    L.run(DATE, confirm_budget=True)
+    assert seen_kwargs, "label 必须调 digest"
+    assert all(k.get("include_morning") is True and k.get("include_flash") is True
+               for k in seen_kwargs), "两 builder 均传 True"
+    cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]
+    assert cs["morningState"] == "missing" and cs["morningDate"] == DATE
+    assert cs["flashState"] == "missing" and cs["flashDate"] == DATE
+    sector = db[L.COLLECTION].docs[f"{DATE}:board:机器人"]
+    assert sector["corpusState"]["morningState"] == "missing"
+    assert sector["corpusState"]["flashState"] == "missing"

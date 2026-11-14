@@ -606,3 +606,49 @@ def test_auction_question_texts_no_calibration_leak():
             assert w not in txt, f"{key} 题面含校准措辞 {w!r}"
         for s in banned_stats:
             assert s not in txt, f"{key} 题面嵌基数率 {s!r}"
+
+
+# ── 2026-11-14 盘前催化增量 B/C 新叙事节（早报/快讯）黑名单回归 ──
+# 预登记 §B3/§C3 合同：新叙事行必须过本黑名单；缺席=整行零字。
+
+def _morning_ok_doc():
+    return {"_id": "2026-11-14", "kind": "jiuyan_morning_report", "date": "2026-11-14",
+            "state": "ok", "title": "早报",
+            "content": "1、热点事件\n1）物理AI：英伟达GTC大会11月14日在柏林举行。",
+            "paragraphs": ["1、热点事件",
+                           "1）物理AI：英伟达GTC大会11月14日在柏林举行。"],
+            "fetchedAt": "2026-11-14T08:31:00", "quality": {"tokenSource": "cache+minted"}}
+
+
+def _flash_docs():
+    return [{"_id": "2026-11-13:2001", "kind": "ths_flash", "id": "2001", "seq": "3001",
+             "title": "物理AI产业链获大额订单", "digest": "物理AI产业链获大额订单",
+             "ctimeEpoch": 1763023800, "ctimeDate": "2026-11-13", "ctimeHHMM": "21:30",
+             "source": "", "stocks": [], "tags": ["AI"], "firstSeenDate": "2026-11-14"}]
+
+
+def test_hygiene_evidence_block_morning_flash_rendered():
+    """早报节/快讯节命中渲染：逐行过黑名单；匹配口径只进结构化字段。"""
+    db = _FakeDb()
+    db.cols["jiuyan_morning_report"] = _FakeCol([_morning_ok_doc()])
+    db.cols["ths_flash"] = _FakeCol(_flash_docs())
+    out = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_morning=True, include_flash=True)
+    assert "早盘催化（韭研早报 2026-11-14）：" in out["text"]
+    assert "隔夜快讯（同花顺7×24）：" in out["text"]
+    for line in out["text"].splitlines():
+        _assert_clean(line, "evidence_block(早报+快讯渲染)")
+    # 口径留痕只在结构化字段，不进叙事
+    assert out["morningHits"][0]["matchHow"] and out["flashHits"][0]["matchHow"]
+    assert "matchHow" not in out["text"] and "弱匹配" not in out["text"]
+
+
+def test_hygiene_evidence_block_morning_flash_absent_zero_lines():
+    """语料无档/未命中：整行零字（无空头节头、无占位）。"""
+    db = _FakeDb()
+    out = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_morning=True, include_flash=True)
+    assert "早盘催化" not in out["text"] and "隔夜快讯" not in out["text"]
+    assert out["morningState"] == "missing" and out["flashState"] == "missing"
+    for line in out["text"].splitlines():
+        _assert_clean(line, "evidence_block(缺席)")

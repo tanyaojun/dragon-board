@@ -84,7 +84,10 @@
   先例）：True 时读当日早报档，按板块关键词对 paragraphs 做确定性包含匹配
   （复用 `board_keywords`/共享子串锚），仅命中段渲染 `早盘催化（韭研早报 {date}）：…`
   （节合计 ≤600 字，仅子串级命中标「弱匹配」）；返回 `morningState`
-  （ok/no_hit/not_published/missing/fetch_failed/rate_limited/disabled）+ `morningDate`。
+  （ok/no_hit/not_published/missing/fetch_failed/rate_limited/auth_failed/late/disabled）
+  + `morningDate`。`late`（评审修复 2026-11-14）：ok 档 `fetchedAt` 晚于当日 09:26
+  （进程重启后补跑槽可能采到晚间才发布的早报）→ 不渲染防前视，与快讯侧截止对齐；
+  无时点字段的 legacy 档放行。
 - 缺席=整行零字（§1.2-8）；`corpus_state` ok 语义不变（§4.0 部分异常不阻断）；
   `NOT_A_THEME` 粗分桶排除；新叙事行过 `test_narrative_hygiene` 黑名单。
 
@@ -137,7 +140,9 @@ NOT_A_THEME）/ 竞价（morningState 落库、冻结重跑叙事逐字一致）
 
 - digest 增 `include_flash: bool=False`：读窗口 [T−1 15:00, 当日 09:26) 条目，板块
   关键词对 title+digest 确定性包含匹配（无题材标签，命中即「弱匹配」标注），≤3 条×260 字，
-  节名 `隔夜快讯（同花顺7×24）：` 带 ctime/来源；返回 `flashState`；缺席整行零字。
+  节名 `隔夜快讯（同花顺7×24）：` 带 ctime 前缀（来源以节名统一标注，评审修复
+  2026-11-14 措辞收窄）；返回 `flashState`；缺席整行零字。窗口为**半开区间
+  [T−1 15:00, 09:26)**（评审修复：恰 09:26:00 条目不含）。
 - 竞价两 builder 传 `include_flash=True`；corpusState 增 `flashState`；证据读口/诊断工具
   同传；ammo → `2026-11-14g`（hash 不动）；relay ln 增 flashState 徽章+测试。
 
@@ -160,6 +165,27 @@ NOT_A_THEME）/ 竞价（morningState 落库、冻结重跑叙事逐字一致）
 ## 6. 上线后验收记录（回填区）
 
 - 〔C 上线 ≥5 交易日后回填：晨间窗催化命中率 vs §1 基线〕
+- 〔首日监控（评审登记项，非缺陷）：核对 `ths_flash_meta.oldestCtime` 与窗口起点
+  T−1 15:00 的距离——若隔夜窗 >150 条（两槽各 ≤3 页）到不了窗口起点，meta 恒 failed
+  且 15:00 起点段永久缺；不足时另裁决加页/预算，勿静默上调。同窗观测
+  `morningState=late` 频次（早报发布时点实测）。〕
+
+## 7a. 评审修复记录（2026-11-14 双 reviewer 并行评审，verdict 均 OK with notes）
+
+| # | 级别 | 处置 |
+|---|---|---|
+| 1 | P1 | THS 预算预检不含退避重试可突破日预算 → 改为**每次 HTTP 前预算准入**（含重试），总调用严格 ≤ 预算；耗尽即停落 meta failed |
+| 2 | P1 | THS 子进程超时 180s < 真实最坏 270s（最坏路径 meta 永不落档）→ 300s + 注释修正核算 |
+| 3 | P1 | 新叙事节未过 hygiene 黑名单回归 → test_narrative_hygiene 补渲染/缺席两例 |
+| 4 | P1 | diagnose CLI flag 死参数 → `--include-morning/--include-flash` 接线 |
+| 5 | P2 | 早报读口无 09:26 截止（与快讯不对称）→ `late` 迟到档不渲染（防补跑前视） |
+| 6 | P2 | 快讯读口 `$lte` 违反半开区间 → `$lt` + 恰 09:26:00 边界测试 |
+| 7 | P2 | dry-run 写生产预算计数 → 两个新采集器 dry-run 完全只读 |
+| 8 | P2 | 早报 docstring「3 次/槽」与实际最坏 4 次不符 → 修正 + 准入语义说明 |
+| 9 | P2 | digest 读口 except 静默折叠 → logger.warning 留痕 |
+| 10 | P2 | corpusState 落库无断言 → 个股+板块 missing 透传断言（含 flashDate 补落） |
+| 11 | P2 | legacy 证据读口未传 flag → 同传 True |
+| 12 | P2 | 枚举注释/文档漂移（auth_failed 缺、C2 来源措辞）→ 修正 |
 
 ## 7. 验证命令
 

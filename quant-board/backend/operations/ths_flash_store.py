@@ -73,9 +73,12 @@ def save_flash_items(db: Any, *, fetch_date: str, items: list[dict]) -> dict:
 
 def get_flash_window(db: Any, *, start_epoch: int, end_epoch: int,
                      limit: int = 60) -> list[dict]:
-    """读窗口 [start, end] 内快讯（ctimeEpoch 降序，python 侧排序兼容 fake 库）。"""
+    """读半开窗口 [start, end) 内快讯（ctimeEpoch 降序，python 侧排序兼容 fake 库）。
+
+    `end` 为当日 09:26:00 epoch：恰 09:26:00 发布的条目不进晨间窗（与预登记
+    C2 半开区间合同一致，评审修复 P2）。"""
     rows = list(db[COLLECTION_FLASH].find({"ctimeEpoch": {"$gte": int(start_epoch),
-                                                          "$lte": int(end_epoch)}}))
+                                                          "$lt": int(end_epoch)}}))
     rows.sort(key=lambda d: d.get("ctimeEpoch") or 0, reverse=True)
     return rows[:limit]
 

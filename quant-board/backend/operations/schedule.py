@@ -37,9 +37,11 @@ _KPL_COLLECT_TIMEOUT_SECONDS = 480  # 最坏 41 调用×(3s 间隔+RTT)+20s 退�
 # 早报晨间采集子进程超时（2026-11-14 晨间例外）：最坏 = 铸 token 冷启动 ~25s + 首发
 # + errCode=9 退避 60s×1 + authFailed 自愈重铸 ~25s + 重试 + 60s 退避 ≈ 175s，+落库冗余
 _MORNING_COLLECT_TIMEOUT_SECONDS = 240
-# THS 快讯采集子进程超时（2026-11-14 C 阶段）：最坏 3 页 × (HTTP 15s + 退避 60s×1) ≈ 225s 贴限，
-# 页级退避只 1 次 → 常规最坏 3×15+60 = 105s，180s 覆盖
-_THS_FLASH_COLLECT_TIMEOUT_SECONDS = 180
+# THS 快讯采集子进程超时（2026-11-14 C 阶段；评审修复 P1：原 180s 核算漏了重试
+# 那次 HTTP）：真最坏 = 3 页 × (HTTP 15s + 退避 60s×1 + 重试 HTTP 15s) = 270s
+# （页1退避后成功继续翻、页2/3 各自可退避），+启动/落库冗余 → 300s。
+# 超时被杀只丢 meta 覆盖档（下一槽重试可自愈）；逐页计数在库，预算不超耗。
+_THS_FLASH_COLLECT_TIMEOUT_SECONDS = 300
 # 龙头级投喂（每日 1 call/龙头，实测 13 只 13 次调用 <2s/次 + 基线/取数）：1800s 冗余
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
 _THEME_LEADER_RESULT_MARKER = "THEME_LEADER_RESULT_JSON:"   # 子进程结果行标记（机读接口，2026-11-02）

@@ -18,13 +18,15 @@ fail-visible（AGENTS §1.2-8/§4.0）：
   任何失败绝不阻塞 09:26 打标（打标只读库，缺档=叙事整行缺席）。
 
 额度：题材端点（`/jystock-app/api/v1/*`）与异动端点（`/action/*`）两套独立日额度。
-本层每尝试槽最多 3 次 HTTP（首发 + errCode=9 退避重试 1 次 + authFailed 自愈重试 1 次），
-三尝试槽 ≤3 次/日；与产业树（16:10，1 次/日）共享预算 12，余量充足。
+本层每尝试槽最坏 4 次 HTTP（首发 + errCode=9 退避重试 + authFailed 自愈重铸后首发
++ 自愈后再限流重试）；每次 HTTP 前预算准入，总调用严格 ≤ 共享预算，不挤占。
+三尝试槽 + 产业树（16:10，1 次/日）共享预算 12（最坏情形下后到者按准入语义
+fail-visible 跳过，status 披露）。
 
 CLI：
   python -m backend.operations.jiuyan_morning_collect --date 2026-11-14 [--dry-run]
 
-`--dry-run` 不写业务库、只打印统计（零 jev 调用，但**照常计 HTTP 调用数**）。
+`--dry-run` 完全只读（不写业务库、不写预算计数、不落 state/ok 档，只打印统计）。
 """
 from __future__ import annotations
 
@@ -64,13 +66,19 @@ def morning_enabled() -> bool:
     return os.environ.get("JIUYAN_MORNING_COLLECT_ENABLED", "1") != "0"
 
 
-def _fetch_morning(db: Any, fetch_date: str, auth: dict) -> tuple[dict, dict | None]:
+def _fetch_morning(db: Any, fetch_date: str, auth: dict, *, budget: int,
+                   dry_run: bool = False) -> tuple[dict, dict | None]:
     """有限次 HTTP：首发 + errCode=9 退避重试 1 次 + authFailed 自愈重试 1 次。
 
-    返回 (fetch_result, self_heal_trace|None)；每次 HTTP 前计数（失败同样消耗服务端额度）。
+    每次 HTTP 前预算准入（dry_run 跳过计数与准入）：超出即不发起/不重试，
+    返回 budget_exhausted 失败。总调用严格 ≤ 共享预算（红线 9）。
+    返回 (fetch_result, self_heal_trace|None)。
     """
     def once(a: dict) -> dict:
-        S.record_api_calls(db, fetch_date, (SOURCE_MORNING,))
+        if not dry_run:
+            if S.calls_recorded(db, fetch_date) >= budget:
+                return {"ok": False, "error": "budget_exhausted"}
+            S.record_api_calls(db, fetch_date, (SOURCE_MORNING,))
         return F.fetch_timeline_news(session_cookie=a["session"], token=a["token"],
                                      timestamp=a["timestamp"], limit=NEWS_LIMIT)
 
@@ -144,7 +152,7 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
                                   token_source=str(auth.get("source") or "unknown"),
                                   error=str(auth.get("error") or "auth_missing"),
                                   self_heal=self_heal)
-    res, self_heal = _fetch_morning(db, fetch_date, auth)
+    res, self_heal = _fetch_morning(db, fetch_date, auth, budget=budget, dry_run=dry_run)
     token_source = str(res.get("tokenSource") or auth.get("source") or "unknown")
     if self_heal:
         result["selfHeal"] = self_heal
@@ -194,7 +202,7 @@ def _persist_state(db: Any, fetch_date: str, state: str, result: dict, dry_run: 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="韭研早报晨间采集（只供 09:26 竞价链晨间窗）")
     ap.add_argument("--date", default=None, help="采集日（默认今天，YYYY-MM-DD）")
-    ap.add_argument("--dry-run", action="store_true", help="不写业务库，只打印统计（仍计调用额度）")
+    ap.add_argument("--dry-run", action="store_true", help="完全只读：不写业务库/计数/state 档，只打印统计")
     ap.add_argument("--budget", type=int, default=None,
                     help=f"当日题材端点调用预算（缺省 env/常量={DEFAULT_DAILY_CALL_BUDGET}）")
     args = ap.parse_args(argv)

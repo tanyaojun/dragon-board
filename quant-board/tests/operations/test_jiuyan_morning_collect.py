@@ -270,3 +270,37 @@ def test_cli_main_marker_and_exit_codes(monkeypatch, _no_sleep, capsys):
                         lambda **kw: dict(F.parse_timeline_news_response(_news_payload(with_today=False))))
     rc2 = M.main(["--date", TODAY])
     assert rc2 == 0, "not_published 非失败，exit 0（下一尝试槽承接）"
+
+
+# ── 评审修复回归（2026-11-14 review）：dry-run 只读 / 重试前预算准入 ──
+
+def test_collect_dry_run_is_read_only(monkeypatch, _no_sleep):
+    """dry-run 完全只读：不写预算计数、不落 state/ok 档（评审修复 P2-3）。"""
+    db = _fake_db()
+    monkeypatch.setattr(M.jiuyan_auth, "resolve_auth", _FakeAuth())
+    monkeypatch.setattr(M.F, "fetch_timeline_news",
+                        lambda **kw: dict(F.parse_timeline_news_response(_news_payload())))
+    out = M.collect_once(db=db, fetch_date=TODAY, dry_run=True)
+    assert out["ok"] is True and out["state"] == "ok" and out.get("paragraphs")
+    assert S.calls_recorded(db, TODAY) == 0, "dry-run 不写生产预算计数"
+    assert not db[S.COLLECTION_MORNING].docs, "dry-run 不落早报日档"
+
+
+def test_collect_budget_admission_skips_retry_when_exhausted(monkeypatch, _no_sleep):
+    """每次 HTTP 前预算准入：预算内首发后，重试前复查超额即不重试（总调用 ≤ 预算）。"""
+    db = _fake_db()
+    for _ in range(11):
+        S.record_api_calls(db, TODAY, (M.SOURCE_MORNING,))   # 已用 11，预算 12
+    monkeypatch.setattr(M.jiuyan_auth, "resolve_auth", _FakeAuth())
+    calls = {"n": 0}
+
+    def fake_fetch(**kw):
+        calls["n"] += 1
+        return {"ok": False, "rateLimited": True, "authFailed": False,
+                "error": "timeline/news: errCode=9 限流", "days": []}
+    monkeypatch.setattr(M.F, "fetch_timeline_news", fake_fetch)
+    out = M.collect_once(db=db, fetch_date=TODAY)
+    assert out["ok"] is False
+    assert calls["n"] == 1, "预算耗尽后限流重试被准入拦截，不发第 2 次 HTTP"
+    assert S.calls_recorded(db, TODAY) == 12, "总调用严格 ≤ 预算（首发计入后即封顶）"
+    assert "budget_exhausted" in str((out.get("error") or {}).get("message"))

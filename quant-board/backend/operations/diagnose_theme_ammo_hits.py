@@ -103,6 +103,10 @@ def main() -> int:
     ap.add_argument("--mongo", default="mongodb://127.0.0.1:27017")
     ap.add_argument("--db", default="dragon_board_quant")
     ap.add_argument("--out", default="data/reports/theme-leader/ammo-mirror-audit.json")
+    ap.add_argument("--include-morning", action="store_true",
+                    help="回放口径带韭研早报节（对齐 2026-11-14 竞价生产口径）")
+    ap.add_argument("--include-flash", action="store_true",
+                    help="回放口径带隔夜快讯节（对齐 2026-11-14 竞价生产口径）")
     args = ap.parse_args()
 
     db = MongoClient(args.mongo)[args.db]
@@ -130,7 +134,8 @@ def main() -> int:
             "poolCalendar": len(KS.get_calendar_items(db, date=date, window_days=CAL_WINDOW)),
         }
 
-    rows = [diagnose_row(db, d) for d in docs]
+    rows = [diagnose_row(db, d, include_morning=args.include_morning,
+                         include_flash=args.include_flash) for d in docs]
     for r in rows:
         p = pools.get(r["date"]) or {}
         for k in ("events", "news"):

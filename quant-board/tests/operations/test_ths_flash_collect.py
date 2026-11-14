@@ -186,3 +186,69 @@ def test_cli_main_marker_and_exit_codes(monkeypatch, capsys):
     lines = [ln for ln in capsys.readouterr().out.splitlines()
              if ln.startswith(THEME_COLLECT_RESULT_MARKER)]
     assert len(lines) == 1 and '"ok":true' in lines[0].replace(" ", "")
+
+
+# ── 评审修复回归（2026-11-14 review）：预算准入 / dry-run 只读 / 半开窗口 ──
+
+def test_collect_budget_admission_bounds_total_calls(monkeypatch):
+    """每次 HTTP（首发+退避重试）前预算准入：总调用严格 ≤ 预算，超额即停落 failed。"""
+    db = _fake_db()
+    for _ in range(6):
+        S.record_api_calls(db, TODAY, 1)          # 当日已用 6，预算 8
+    sleeps = []
+    monkeypatch.setattr(C.time, "sleep", lambda s: sleeps.append(s))
+
+    def fake_fetch(page, **kw):
+        return {"ok": False, "error": "ths_flash: HTTP 503"}   # 页1 恒失败 → 触发重试
+    monkeypatch.setattr(F, "fetch_flash_page", fake_fetch)
+    out = C.collect_once(db=db, fetch_date=TODAY)
+    assert out["ok"] is False and out["state"] == "failed"
+    assert S.calls_recorded(db, TODAY) == 8, "首发+重试各计 1 次，达预算即停（不超耗）"
+    assert sleeps == [C.RETRY_SLEEP_SECONDS]
+    assert S.get_meta(db, date=TODAY)["state"] == "failed", "预算内耗尽也落 meta failed"
+
+
+def test_collect_budget_admission_blocks_retry_after_exhaustion(monkeypatch):
+    """满页消耗预算到上限后：下一页连首发都不发（准入拦截）。"""
+    db = _fake_db()
+    for _ in range(7):
+        S.record_api_calls(db, TODAY, 1)          # 已用 7，预算 8 → 只够 1 次 HTTP
+    start, _end = S.flash_window_epochs(TODAY)
+    calls = {"n": 0}
+
+    def fake_fetch(page, **kw):
+        calls["n"] += 1
+        # 满页（50 条）且全部在窗内 → 不触发页尽停机，继续翻第 2 页
+        return {"ok": True,
+                "payload": _payload([_item(i, start + 600 + i, f"物理AI{i}")
+                                     for i in range(50)])}
+    monkeypatch.setattr(F, "fetch_flash_page", fake_fetch)
+    out = C.collect_once(db=db, fetch_date=TODAY)
+    assert calls["n"] == 1, "第 2 页因预算准入不发 HTTP"
+    assert out["ok"] is False and out["state"] == "failed"
+    assert "budget_exhausted" in str(out.get("error"))
+
+
+def test_collect_dry_run_is_read_only(monkeypatch):
+    """dry-run 完全只读：不写预算计数、不落 items/meta（评审修复 P2-3）。"""
+    db = _fake_db()
+    start, end = S.flash_window_epochs(TODAY)
+    monkeypatch.setattr(F, "fetch_flash_page",
+                        lambda page, **kw: {"ok": True,
+                                            "payload": _payload([_item(1, end - 600)])})
+    out = C.collect_once(db=db, fetch_date=TODAY, dry_run=True)
+    assert out["ok"] is True and out["written"] == 1
+    assert S.calls_recorded(db, TODAY) == 0, "dry-run 不写生产预算计数"
+    assert S.get_meta(db, date=TODAY) is None and not db[S.COLLECTION_FLASH].docs
+
+
+def test_flash_window_half_open_excludes_exact_end():
+    """半开区间 [T−1 15:00, 09:26)：恰 09:26:00 发布的条目不进晨间窗（评审修复 P2-2）。"""
+    db = _fake_db()
+    start, end = S.flash_window_epochs(TODAY)
+    at_start = _item(1, start)                    # 恰起点 → 含
+    at_end = _item(2, end)                        # 恰 09:26:00 → 不含
+    inside = _item(3, end - 1)
+    S.save_flash_items(db, fetch_date=TODAY, items=[at_start, at_end, inside])
+    got = [g["id"] for g in S.get_flash_window(db, start_epoch=start, end_epoch=end)]
+    assert sorted(got) == ["1001", "1003"], "半开窗口：起点含、终点 09:26:00 不含（降序返回）"

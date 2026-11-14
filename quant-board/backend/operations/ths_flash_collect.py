@@ -7,13 +7,14 @@
 
 fail-visible（AGENTS §1.2-9/§4.0）：
 - 页失败 60s 退避重试一次，仍失败 → meta.state=failed + degraded（有限次，不无限重试）；
-- **无凭据、无 socket、无轮询风暴**（每尝试槽 ≤3 页，两尝试槽 ≤8 调用/日）；
+- **无凭据、无 socket、无轮询风暴**（两尝试槽，日总调用 ≤ 预算：每次 HTTP 前预算准入，
+  含退避重试那次；超出即停不重试，meta 落 failed）；
 - 采集与打标解耦：任何失败绝不阻塞 09:26 打标（digest 读窗口，缺档=flashState 披露）。
 
 CLI：
   python -m backend.operations.ths_flash_collect --date 2026-11-14 [--dry-run]
 
-`--dry-run` 不写业务库、只打印统计（照常计 HTTP 调用数）。
+`--dry-run` 完全只读（不写业务库、不写预算计数、不落 meta/items，只打印统计）。
 """
 from __future__ import annotations
 
@@ -71,10 +72,12 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
         return {**result, "skipped": True, "reason": "already_covered",
                 "pages": meta.get("pages"), "written": meta.get("written")}
     pages_planned = DEFAULT_PAGES_PER_ATTEMPT
-    if used + pages_planned > budget:
+    # 预算准入语义：真实上限在每次 HTTP 前（_fetch_page_with_backoff）逐次校验，
+    # 总调用 ≤ 预算（含退避重试）；此处只做连一页都发不了的快失败。
+    if used >= budget:
         return {**result, "ok": False,
                 "error": {"code": "budget_exhausted",
-                          "message": f"当日已用 {used} + 计划 {pages_planned} > 预算 {budget}"},
+                          "message": f"当日已用 {used} ≥ 预算 {budget}"},
                 "skippedByBudget": [SOURCE_FLASH]}
 
     start_epoch, _end = S.flash_window_epochs(fetch_date)
@@ -84,7 +87,8 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
     reached_window_start = False
     error: str | None = None
     for page in range(1, pages_planned + 1):
-        res = _fetch_page_with_backoff(db, fetch_date, page)
+        res = _fetch_page_with_backoff(db, fetch_date, page, budget=budget,
+                                       dry_run=dry_run)
         if not res.get("ok"):
             error = str(res.get("error") or "unknown")
             break
@@ -115,23 +119,34 @@ def collect_once(*, db: Any = None, fetch_date: str | None = None,
     result.update({"state": state, "pages": pages_done, "written": total_written,
                    "skippedExisting": skipped_existing, "oldestCtime": oldest_ctime,
                    "reachedWindowStart": reached_window_start,
-                   "callsUsedToday": S.calls_recorded(db, fetch_date) if not dry_run else used + pages_done})
+                   "callsUsedToday": used if dry_run else S.calls_recorded(db, fetch_date)})
     if state != "ok":
         return {**result, "ok": False, "degraded": [f"{SOURCE_FLASH}:failed"], "error":
                 {"code": "ths_flash_failed", "message": (error or "")[:200]}}
     return result
 
 
-def _fetch_page_with_backoff(db: Any, fetch_date: str, page: int) -> dict:
-    """页拉取 + 失败 60s 退避重试一次（有限次，红线 9）；每次 HTTP 前计数
-    （失败同样消耗服务端额度，预算护栏才有意义）。"""
-    S.record_api_calls(db, fetch_date, 1)
+def _fetch_page_with_backoff(db: Any, fetch_date: str, page: int, *, budget: int,
+                             dry_run: bool = False) -> dict:
+    """页拉取 + 失败 60s 退避重试一次（有限次，红线 9）。
+
+    每次 HTTP（首发与退避重试）前预算准入：超出即不发起/不重试，返回
+    budget_exhausted 失败 → 循环 break → meta 落 failed。总调用严格 ≤ 预算。
+    """
+    if not dry_run and S.calls_recorded(db, fetch_date) >= budget:
+        return {"ok": False, "error": "budget_exhausted"}
+    if not dry_run:
+        S.record_api_calls(db, fetch_date, 1)
     res = F.fetch_flash_page(page)
     if not res.get("ok"):
         logger.warning("ths_flash page=%s 失败（%s），%.0fs 后重试一次", page,
                        res.get("error"), RETRY_SLEEP_SECONDS)
         time.sleep(RETRY_SLEEP_SECONDS)
-        S.record_api_calls(db, fetch_date, 1)
+        if not dry_run and S.calls_recorded(db, fetch_date) >= budget:
+            logger.warning("ths_flash 预算耗尽，放弃重试 page=%s", page)
+            return {"ok": False, "error": "budget_exhausted"}
+        if not dry_run:
+            S.record_api_calls(db, fetch_date, 1)
         res = F.fetch_flash_page(page)
     return res
 
@@ -139,7 +154,7 @@ def _fetch_page_with_backoff(db: Any, fetch_date: str, page: int) -> dict:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="同花顺 7×24 快讯采集（只供 09:26 竞价链晨间窗）")
     ap.add_argument("--date", default=None, help="采集日（默认今天，YYYY-MM-DD）")
-    ap.add_argument("--dry-run", action="store_true", help="不写业务库，只打印统计（仍计调用）")
+    ap.add_argument("--dry-run", action="store_true", help="完全只读：不写业务库/计数/meta，只打印统计")
     ap.add_argument("--budget", type=int, default=None,
                     help=f"当日调用预算（缺省 env/常量={DEFAULT_DAILY_CALL_BUDGET}）")
     args = ap.parse_args(argv)

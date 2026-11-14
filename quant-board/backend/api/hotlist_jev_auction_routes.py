@@ -78,7 +78,8 @@ def _legacy_evidence_fields(db: Any, date: str, board: Any, cache: dict) -> dict
     try:
         from backend.analysis.hotlist import theme_event_digest as digest
         block = digest.build_theme_evidence_block(
-            db, board_name=str(board or ""), date=str(date), leader_code=None)
+            db, board_name=str(board or ""), date=str(date), leader_code=None,
+            include_morning=True, include_flash=True)
         ev = {"evidenceIndustry": (block.get("industry") or {}).get("name"),
               "evidenceBoardResolved": bool(block.get("boardResolved")),
               "evidenceKwordTags": list(block.get("kwordTags") or [])}

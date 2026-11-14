@@ -47,7 +47,9 @@ def _match(doc, query):
                     return False
                 if op == "$lte" and (val is None or not val <= arg):
                     return False
-                if op not in ("$gte", "$lte"):
+                if op == "$lt" and (val is None or not val < arg):
+                    return False
+                if op not in ("$gte", "$lte", "$lt"):
                     raise AssertionError(op)
         elif val != cond:
             return False
@@ -61,12 +63,14 @@ def _project(doc, projection):
 
 
 class FakeDb:
-    def __init__(self, industry=None, topic=None, news=None, calendar=None):
+    def __init__(self, industry=None, topic=None, news=None, calendar=None,
+                 industry_stocks=None):
         self.cols = {
             "jiuyan_ai_industry": FakeCol(industry),
             "kpl_topic_events": FakeCol(topic),
             "kpl_theme_news": FakeCol(news),
             "kpl_theme_calendar": FakeCol(calendar),
+            "jiuyan_industry_stocks": FakeCol(industry_stocks),
         }
 
     def __getitem__(self, name):
@@ -399,28 +403,35 @@ def test_driver_tag_channel_supplements_mismatched_first_match():
     别名；其对口内容由板内解析 expound 承载）。10-22/23 真实扫描 fire 9/14。
     """
     industry = [
-        {"code": "S1", "name": "半导体", "level": 1, "hot": 12.0,
+        {"code": "S1", "name": "半导体产业链", "level": 1, "hot": 12.0,
          "content": "1、2026年8月，全球半导体销售额同比+10%（宽父节点月度旧闻）。",
-         "contentChangedDate": "2026-10-15", "lastFetchDate": "2026-10-22"},
-        {"code": "S2", "name": "存储芯片", "level": 2, "hot": 18.0,
+         "contentChangedDate": "2026-10-15", "lastFetchDate": "2026-10-22",
+         "path": ["半导体产业链"]},
+        {"code": "S2", "name": "半导体产业链-存储芯片", "level": 2, "hot": 18.0,
          "content": "1、2026年10月21日，存储现货价续涨，合约价四季度看涨。",
-         "contentChangedDate": "2026-10-21", "lastFetchDate": "2026-10-22"},
+         "contentChangedDate": "2026-10-21", "lastFetchDate": "2026-10-22",
+         "path": ["半导体产业链", "半导体产业链-存储芯片"]},
     ]
+    industry_stocks = [{"_id": "S1", "kind": "jiuyan_industry_stocks",
+                        "name": "半导体产业链", "level": 1,
+                        "stocks": [{"code": "603733", "name": "睿能科技"}]}]
     action = [{"_id": "2026-10-22:final", "fields": [
         {"name": "半导体", "count": 4, "stocks": [
             {"code": "sh603733", "name": "睿能科技",
              "expound": "存储芯片+机器人+拟收购博泰智能\n1、公司存储芯片业务占比领先。"},
         ]},
     ]}]
-    db = _db(industry=industry, topic=[], news=[], calendar=[])
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=industry_stocks)
     db.cols["jiuyan_action"] = FakeCol(action)
     out = D.build_theme_evidence_block(db, board_name="半导体", date="2026-10-22",
                                        leader_code="603733")
     text = out["text"]
-    assert "板块级催化原文（「半导体」" in text, "首通道保留不替换（2026-10-30d：exact 常态不标注）"
+    assert "板块级催化原文（「半导体产业链」" in text, "首通道保留不替换（2026-10-30d：exact 常态不标注）"
     assert "产业树补充映射" in text
-    assert "「存储芯片」关联「存储芯片」" in text
+    assert "「存储芯片」关联「半导体产业链-存储芯片」" in text
     assert "现货价续涨" in text, "补的是对口催化正文"
+    assert out["s3State"] == "injected" and out["s3Term"] == "存储芯片"
 
 
 def test_driver_tag_channel_skips_same_node_and_respects_include_l2():
@@ -428,27 +439,117 @@ def test_driver_tag_channel_skips_same_node_and_respects_include_l2():
     industry = NODES + [
         {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
          "content": "1、2026年10月20日，可回收火箭试飞成功。",
-         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22"},
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22",
+         "path": ["商业航天"]},
     ]
+    industry_stocks = [{"_id": "B1", "kind": "jiuyan_industry_stocks",
+                        "name": "商业航天", "level": 1,
+                        "stocks": [{"code": "603278", "name": "大业股份"}]}]
     action = [{"_id": "2026-10-22:final", "fields": [
         {"name": "机器人", "count": 2, "stocks": [
             {"code": "sh603278", "name": "大业股份",
              "expound": "人形机器人+商业航天\n1、腱绳产品尚处探索阶段。"},
         ]},
     ]}]
-    db = _db(industry=industry, topic=[], news=[], calendar=[])
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=industry_stocks)
     db.cols["jiuyan_action"] = FakeCol(action)
     out = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22",
                                        leader_code="603278")
     text = out["text"]
     # 切词 [人形机器人, 商业航天]：「人形机器人」经别名命中「国产机器人」=首通道节点 → 跳过；
-    # 「商业航天」exact 命中不同节点 → 补充
+    # 「商业航天」exact 命中不同节点 → 成分验证龙头 ∈ 快照 → 补充
     assert "产业树补充映射" in text and "关联「商业航天」" in text
     assert text.count("板块级催化原文") == 1 and "「国产机器人」" in text
     # relay 兼容形状：无 L2 → 无板内解析、无补充映射
     out2 = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22",
                                         leader_code="603278", include_l2=False)
     assert "产业树补充映射" not in out2["text"]
+
+
+def test_driver_tag_gate_blocks_non_member_tag():
+    """S3 成分验证门（2026-11-14 用户报障：大东方 600327 零售标签蹭「商业航天」
+    被注入卫星叙事）：标签词词面命中节点但龙头不在成分快照 → 不注入异题材叙事，
+    跳过原因留 s3State 不进叙事。"""
+    industry = [
+        {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
+         "content": "1、2026年9月23日晚，我国成功发射卫星互联网低轨 26 组卫星。",
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22",
+         "path": ["商业航天"]},
+    ]
+    industry_stocks = [{"_id": "B1", "kind": "jiuyan_industry_stocks",
+                        "name": "商业航天", "level": 1,
+                        "stocks": [{"code": "001270", "name": "铖昌科技"}]}]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "大消费", "count": 2, "stocks": [
+            {"code": "sh600327", "name": "大东方",
+             "expound": "零售+商业航天+民营医院\n1、公司商业零售门店情况。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=industry_stocks)
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
+                                       leader_code="600327")
+    assert "产业树补充映射" not in out["text"], "蹭标签词不得注入"
+    assert out["s3State"] == "skipped_not_member"
+    assert out["s3Term"] == "商业航天" and out["s3Node"] == "商业航天"
+
+
+def test_driver_tag_gate_unverifiable_without_snapshot():
+    """成分快照缺席（读不到/无该节点档）=无法核验 → 不注入（fail-safe：宁可少补
+    不误补），s3State 如实标 unverifiable。"""
+    industry = [
+        {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
+         "content": "1、2026年9月23日晚，我国成功发射卫星互联网低轨 26 组卫星。",
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22",
+         "path": ["商业航天"]},
+    ]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "大消费", "count": 2, "stocks": [
+            {"code": "sh600327", "name": "大东方",
+             "expound": "零售+商业航天+民营医院\n1、公司商业零售门店情况。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=[])
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
+                                       leader_code="600327")
+    assert "产业树补充映射" not in out["text"]
+    assert out["s3State"] == "skipped_unverifiable"
+
+
+def test_stub_content_treated_as_no_catalyst():
+    """残桩正文门槛（2026-11-14）：ai_industry 788/995 节点正文 ≤9 字自复述
+    （「大消费-酒」正文=「酒」），零信息量整行不投喂——首通道按「无催化正文」
+    渲染、hasContent=False（三层缺失门不被假证据托底）；S3 残桩同样不注入。"""
+    industry = [
+        {"code": "C1", "name": "大消费-酒", "level": 2, "hot": 0.0,
+         "content": "酒", "contentChangedDate": "2026-09-26",
+         "lastFetchDate": "2026-10-22", "path": ["大消费", "大消费-酒"]},
+        {"code": "C2", "name": "白酒概念", "level": 1, "hot": 3.0,
+         "content": "白酒", "contentChangedDate": "2026-09-26",
+         "lastFetchDate": "2026-10-22", "path": ["白酒概念"]},
+    ]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "大消费", "count": 2, "stocks": [
+            {"code": "sh600327", "name": "大东方",
+             "expound": "零售+白酒+民营医院\n1、公司商业零售门店情况。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=[])
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
+                                       leader_code="600327")
+    text = out["text"]
+    assert "板块级催化：产业树节点「大消费-酒」无催化正文" in text
+    assert "板块级催化原文" not in text
+    assert out["hasContent"] is False
+    # S3 同门：标签词「白酒」命中残桩节点 → 不注入
+    assert "产业树补充映射" not in text
+    assert out["s3State"] == "skipped_stub_content"
 
 
 def test_tag_terms_split_is_deterministic():
@@ -832,3 +933,33 @@ def test_match_flash_items_deterministic():
     assert len(hits) == 1 and "物理AI" in hits[0]["title"]
     assert D.match_flash_items(FLASH_OK, "俄乌重建") == []
     assert D.match_flash_items(FLASH_OK, None) == []
+
+
+def test_include_morning_late_fetch_not_rendered():
+    """迟到档：fetch 时点晚于当日 09:26（重启补跑采到晚间早报）→ 不渲染防前视，
+    morningState=late 结构化披露（评审修复 P2-1，与快讯侧截止对齐）。"""
+    late = {**MORNING_OK, "fetchedAt": "2026-10-23T09:40:00"}
+    res = D.build_theme_evidence_block(_db_with_morning(late), board_name="物理AI",
+                                       date="2026-10-23", include_morning=True)
+    assert "早盘催化" not in res["text"] and res["morningHits"] == []
+    assert res["morningState"] == "late" and res["morningDate"] == "2026-10-23"
+    # 恰 09:26 及以前仍正常渲染（现有 08:31 夹具路径不受影响）
+    ok = D.build_theme_evidence_block(_db_with_morning(MORNING_OK), board_name="物理AI",
+                                      date="2026-10-23", include_morning=True)
+    assert ok["morningState"] == "ok" and "早盘催化" in ok["text"]
+
+
+def test_include_flash_exact_0926_boundary_excluded():
+    """恰 09:26:00 发布的条目不进半开窗口 [T−1 15:00, 09:26)；09:25:59 正常进。"""
+    end = _epoch("2026-11-14 09:26")
+    at_end = {**FLASH_OK[1], "id": "2099", "ctimeEpoch": end,
+              "ctimeDate": "2026-11-14", "ctimeHHMM": "09:26",
+              "title": "物理AI板块竞价异动", "digest": "物理AI板块竞价异动"}
+    just_before = {**FLASH_OK[1], "id": "2098", "ctimeEpoch": end - 1,
+                   "ctimeDate": "2026-11-14", "ctimeHHMM": "09:25",
+                   "title": "物理AI盘前利好", "digest": "物理AI盘前利好"}
+    db = _db_with_flash(FLASH_OK + [at_end, just_before])
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_flash=True)
+    assert "09:26 物理AI板块竞价异动" not in res["text"], "恰 09:26:00 不含"
+    assert "物理AI盘前利好" in res["text"] and res["flashState"] == "ok"

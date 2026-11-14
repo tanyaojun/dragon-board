@@ -69,7 +69,9 @@ def _match(doc, query):
                     return False
                 if op == "$lte" and (val is None or not val <= arg):
                     return False
-                if op not in ("$gte", "$lte"):
+                if op == "$lt" and (val is None or not val < arg):
+                    return False
+                if op not in ("$gte", "$lte", "$lt"):
                     raise AssertionError(f"fake 未支持 {op}")
         elif val != cond:
             return False

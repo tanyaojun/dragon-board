@@ -26,7 +26,7 @@ COLLECTION_INDUSTRY = "jiuyan_ai_industry"
 # 不存凭据，只存计数；失败请求同样计数（服务端已扣额度）。
 COLLECTION_API_CALLS = "jiuyan_api_calls"
 # 早报日档（2026-11-14 晨间例外复活，只供 09:26 竞价链；与产业树同额度计数器）：
-# `_id={date}`，state=ok/not_published/fetch_failed/rate_limited；state=ok 时
+# `_id={date}`，state=ok/not_published/fetch_failed/rate_limited/auth_failed；state=ok 时
 # title/content/paragraphs 在场；不复活已 drop 的 jiuyan_timeline 集合。
 COLLECTION_MORNING = "jiuyan_morning_report"
 
@@ -146,6 +146,15 @@ def get_industry_nodes(db: Any) -> list[dict]:
         "code": 1, "name": 1, "level": 1, "parentCode": 1, "path": 1, "content": 1,
         "hot": 1, "contentChangedDate": 1, "industryUpdateTime": 1, "lastFetchDate": 1,
     }))
+
+
+def get_industry_stocks_by_name(db: Any, name: str) -> dict | None:
+    """一级产业成分快照读口（按名精确匹配；读不到返回 None，调用方如实降级）。
+
+    供语料层 S3 成分验证门（theme_event_digest）纯库读使用，零网络。"""
+    if not name:
+        return None
+    return db[COLLECTION_INDUSTRY_STOCKS].find_one({"name": str(name)})
 
 
 # ── 全成分快照（V3-1：板块节点三期全成分增强，2026-10-25） ──────────────────

@@ -21,10 +21,14 @@ jev 的确定性证据块，供「板块龙头隔日连板概率」题集使用�
 """
 from __future__ import annotations
 
+import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 from backend.operations import jiuyan_theme_store as S
 from backend.operations import kpl_theme_store as KS
+
+logger = logging.getLogger(__name__)
 
 BLOCK_HEADER = "【题材证据】"
 CONTENT_CHARS = 260
@@ -218,6 +222,42 @@ def _tag_terms(tag_line: str | None, limit: int = 3) -> list[str]:
     return out
 
 
+# 残桩正文门槛（2026-11-14 用户报障：大东方大消费→商业航天错联复盘）：
+# ai_industry 995 节点中 788 个正文 ≤9 字且多为自复述残桩（「大消费-酒」正文=「酒」），
+# 零判读信息量——缺数据/无信息量整行不投喂（AGENTS §1.2-8）：按「无催化正文」处理，
+# 且不托底 has_content（三层缺失门不被假证据掩护）。有催化正文极少 <10 字。
+_STUB_CONTENT_CHARS = 10
+
+
+def _is_stub_content(node: dict | None) -> bool:
+    """正文 <10 字视为自复述残桩（韭研冷节点只回填了节点名本身），零信息量。"""
+    return len(str((node or {}).get("content") or "").strip()) < _STUB_CONTENT_CHARS
+
+
+def _leader_node_membership(db, node: dict | None,
+                            leader_code: str | None) -> str | None:
+    """龙头 ∈ 产业树成分验证（S3 门，2026-11-14）：沿匹配节点 path 自下而上回溯最近
+    一级节点，查成分快照（jiuyan_industry_stocks，周频 batchDate）成员码集合。
+    返回 'member' | 'not_member' | None（快照缺席/读失败=无法核验，不缓存不伪造）；
+    零网络纯库读。词面命中 ≠ 业务关联：不在树 = KPL 蹭标签，不得注入叙事。"""
+    if not node or not leader_code:
+        return None
+    code6 = str(leader_code)[-6:]
+    names = ([str(p) for p in (node.get("path") or [])]
+             or [str(node.get("name") or "")])
+    try:
+        from backend.operations import jiuyan_theme_store as JTS
+        for name in reversed(names):
+            snap = JTS.get_industry_stocks_by_name(db, name)
+            if not snap:
+                continue
+            codes = {str(s.get("code"))[-6:] for s in snap.get("stocks") or []}
+            return "member" if code6 in codes else "not_member"
+    except Exception:                                    # noqa: BLE001 读失败如实降级
+        return None
+    return None
+
+
 # ── 确定性关联锚（v3 引入，v4 沿用；早报段落匹配的通用化） ─────────────────
 # 背景：完整板块名子串匹配不上语义同源的事件（「俄乌重建」vs「俄乌和平」）。
 # 规则：①含式命中（关键词 ⊆ 归一文本）；②最长公共连续子串 ≥2 字且含 ≥1 汉字
@@ -378,6 +418,29 @@ def match_morning_paragraphs(paragraphs: list[str], board_name: str | None,
         if len(out) >= limit:
             break
     return out
+
+
+def _morning_fetched_after_cutoff(mdoc: dict, date: str) -> bool:
+    """早报档 fetch 时点晚于当日 09:26 → 迟到档（morningState=late，不渲染）。
+
+    防前视：调度 done 集是内存态，进程重启后错过槽按 ≥时点补跑——若早报当日发布
+    晚于 09:26，迟到补跑会把晚间内容当晨间证据。快讯侧同款截止 baked 进读口，
+    此处对齐。时点取 fetchedAt（内容抓取时刻）；无时点字段（异常/legacy）放行。
+    """
+    raw = str(mdoc.get("fetchedAt") or mdoc.get("firstSeenAt") or "").strip()
+    if not raw:
+        return False
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if dt.tzinfo is not None:   # 落库侧为本地墙钟（UTC+8）；带时区则归一到 UTC+8 后比墙钟
+        dt = dt.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    try:
+        cutoff = datetime.strptime(f"{date} 09:26", "%Y-%m-%d %H:%M")
+    except ValueError:
+        return False
+    return dt > cutoff
 
 
 def match_flash_items(items: list[dict], board_name: str | None,
@@ -612,7 +675,8 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     elif not match.get("matched"):
         if board_name:                        # 空名（未归属股）不掏空占位（review 2026-11-13f）
             lines.append(f"板块级催化：产业树未映射（「{board_name}」）")
-    elif not (node or {}).get("content"):
+    elif not (node or {}).get("content") or _is_stub_content(node):
+        # 残桩正文（≤9 字自复述）按缺席处理（2026-11-14）：不伪装成催化原文
         lines.append(f"板块级催化：产业树节点「{node.get('name')}」无催化正文")
     else:
         chg = node.get("contentChangedDate") or "未知"
@@ -637,6 +701,13 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     # S3 驱动标签补充映射（2026-10-24b）：龙头驱动标签词命中产业树**不同**节点时
     # 并列披露一行（只补最优先一个；命中首通道同名节点/节点无正文 → 不重复不凑数）。
     # 首通道未映射时同样适用（此时任何命中都是增量）。
+    # 2026-11-14 成分验证门（用户报障：大东方 600327 零售标签蹭「商业航天」被注入
+    # 卫星叙事）：词面命中 ≠ 业务关联，注入前必须验证龙头 ∈ 匹配节点（含一级祖先）
+    # 成分快照——不在/无法核验/残桩正文一律不注入，跳过原因留 s3State 供审计不进叙事；
+    # 继续扫后续标签词（各词独立门，不连坐）。
+    s3_state: str | None = None
+    s3_term: str | None = None
+    s3_node_name: str | None = None
     if include_l2 and state.get("ok") and nodes and leader_tag_line:
         first_name = normalize_name((node or {}).get("name"))
         for term in _tag_terms(leader_tag_line):
@@ -644,7 +715,15 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             n2 = m2.get("node") or {}
             if not m2.get("matched") or normalize_name(n2.get("name")) == first_name:
                 continue
-            if not n2.get("content"):
+            s3_term, s3_node_name = term, n2.get("name")
+            if _is_stub_content(n2):
+                s3_state = s3_state or "skipped_stub_content"
+                continue
+            mem = _leader_node_membership(db, n2, leader_code)
+            if mem != "member":
+                s3_state = s3_state or (
+                    "skipped_not_member" if mem == "not_member"
+                    else "skipped_unverifiable")
                 continue
             chg2 = n2.get("contentChangedDate") or "未知"
             gap2 = _days_between(chg2, date)
@@ -654,6 +733,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                 f"产业树补充映射（龙头标签词「{term}」关联「{n2.get('name')}」，"
                 f"热度 {n2.get('hot')}，"
                 f"正文更新 {chg2}={gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
+            s3_state = "injected"
             break
 
     # 当日题材事件（开盘啦 Topic：仅标题+热度+日期；2026-10-28 用户裁决，正文不出、弱匹配降级）
@@ -692,10 +772,16 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         else:
             try:
                 mdoc = S.get_morning_report(db, date=date) or {}
-            except Exception:      # noqa: BLE001 读不到如实当缺档，不伪造
+            except Exception as exc:      # noqa: BLE001 读不到如实当缺档，不伪造；留痕
+                logger.warning("早报读口异常（date=%s）：%s", date, exc)
                 mdoc = {}
             m_state = str(mdoc.get("state") or "")
-            if m_state == "ok":
+            if m_state == "ok" and _morning_fetched_after_cutoff(mdoc, date):
+                # 迟到档：fetch 时点晚于当日 09:26（进程重启后补跑槽可能采到
+                # 晚间才发布的早报）→ 不渲染，防前视；快讯侧同款截止已 baked 进读口
+                morning_state = "late"
+                morning_hits = []
+            elif m_state == "ok":
                 morning_hits = match_morning_paragraphs(mdoc.get("paragraphs") or [],
                                                         board_name)
                 morning_state = "ok" if morning_hits else "no_hit"
@@ -731,7 +817,8 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                 start_epoch, end_epoch = TS.flash_window_epochs(date)
                 flash_items = TS.get_flash_window(db, start_epoch=start_epoch,
                                                   end_epoch=end_epoch)
-            except Exception:      # noqa: BLE001 读不到如实当缺档，不伪造
+            except Exception as exc:      # noqa: BLE001 读不到如实当缺档，不伪造；留痕
+                logger.warning("快讯读口异常（date=%s）：%s", date, exc)
                 flash_items = []
             flash_hits = match_flash_items(flash_items, board_name)
             flash_state = "ok" if flash_hits else (
@@ -824,7 +911,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             board_resolved = True
             lines.append("板内同伴驱动：" + "、".join(peer_tags))
 
-    has_content = bool((node or {}).get("content"))
+    has_content = bool((node or {}).get("content")) and not _is_stub_content(node)
     missing_reason = None
     if include_l2:
         # v4 口径：L3（产业树/KPL 事件·新闻·日历）与 L2（板内解析）**均无**可用证据才缺——
@@ -862,4 +949,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             "flashState": flash_state,
             "flashDate": flash_date,
             "flashHits": flash_hits,
+            "s3State": s3_state,
+            "s3Term": s3_term,
+            "s3Node": s3_node_name,
             "unmappedCandidates": match.get("candidates") or []}
