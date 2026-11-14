@@ -65,25 +65,37 @@
 | 对拍原料 | kpl_daban_pool bid_ 通道（293 只×28 列） | 列映射交叉验证 |
 | 下游链 | `auction_trial_fetch.persist_trial_raw` / 读口 / 页面 | 直采产出同形 rows 即插即用 |
 
-### 2.2 窗口前预制（本预登记同轮落码，不进生产链）
+### 2.2 窗口前预制（已落码 2026-11-14，三脚本均 --selftest PASS；脚本在仓库根 tmp/，
+不进 git、用完即删）
 
-1. **HTTP 探针脚本**（`tmp/` 临时脚本，用完即删；不进 backend）：
+> 落码后勘误：socket 试探会话运行期内 collector 内建重连防线照常工作（生产级
+> 退避+短命连击计数），进程级不追加手动重连；预登记「≤2 连接」语义=单次运行
+> --fire 只起一个服务实例、失败不手动重试。
+
+1. **HTTP 探针脚本**（`tmp/probe_http_auction.py`，--selftest PASS）：
    - 读 `KPL_APP_BASE_PARAMS` 公共出口，`_post_form` 发射，单发 JSON 全文落
      `tmp/probe/<seq>_<tag>.json` + 时间戳与 http 状态；
    - **硬门**：仅交易日 09:20–09:35 接受 `--fire`（防误触）；无重试循环；
    - 预注册弹射序列（见 §3 表）。
-2. **socket 试探会话**（一次性脚本，不并 production :8002）：
+2. **socket 试探会话**（`tmp/probe_socket_auction.py`，--selftest PASS，含 pid=7
+   订阅帧编码验证 + 服务实例构造验证）：
    - `kpl_collector_service` 实例化 `daban_list_pids=(7, 8)`（7=试盘 tab_id，
      **未知是否合法**——服务器不认则无帧，零风险试探）、`human_delay=True`、
      `enforce_trading_hours=True`、`KPL_DEBUG` 全帧落盘；09:14 前连上，
      09:30 主动断开销毁；≤2 连接上限；
    - 与生产 :8002 完全隔离（独立进程/独立 KPL_DEBUG 文件），失败不影响生产链。
-3. **对拍脚本**（`tmp/`，用完即删）：四方按 6 位代码 join——
+3. **对拍脚本**（`tmp/probe_reconcile.py`，--selftest PASS，含列映射假设算法
+   fixture 验证）：四方按 6 位代码 join——
    ① WzsLinker 缓存裸读（09:26 后）② HTTP 探针响应 ③ socket pid=7 帧（若有）
    ④ :8002 pid=8 快照（`GET 127.0.0.1:8002/api/kpl/daban-list?pid_type=8`，
    本机读零上游）→ 逐字段 diff 表，输出列映射假设与残差清单。
 4. **App 同屏对拍记录表**：用户手机 KPL 盯盘页试盘页签 09:20/09:24/09:26 三个
    时点截图（首开/首加/峰值/撤后/结束时间），与探针值逐股核对。
+
+**周一操作序**：09:14 `python tmp/probe_socket_auction.py --fire`（建连到 09:30）
+→ 09:20/09:24 用户手机截图 → 09:25:30
+`python tmp/probe_http_auction.py --fire --date 2026-11-16`（S1-S5 依序）→ 09:26
+`python tmp/probe_reconcile.py --date 2026-11-16`（四方 join 出报告）。
 
 ## 3. 探针预算表（红线 9：先写预算后开火，无重试循环）
 
