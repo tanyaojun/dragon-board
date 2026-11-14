@@ -107,3 +107,13 @@ def test_dragon_source_badge_vA2(html):
     assert "dragonBad" in body
     assert "r.dragonRoles" in body, "title 必须由 dragonRoles 拼装具体龙序"
     assert "esc(dragonTxt" in body, "龙序 title 注入前必须 esc"
+
+
+def test_event_cell_single_source_with_theme(html):
+    """2026-11-14 复刻：事件格 = evidenceCellHtml 单源，题材/竞价两页共用同一实现
+    （防两处徽章口径漂移）；两页行渲染都必须经它出事件列。"""
+    assert html.count("function evidenceCellHtml(") == 1, "事件格必须单一定义（单源）"
+    assert "evidenceCellHtml(r)" in _fn(html, "tlRowHtml"), "题材龙头行必须经共用事件格"
+    assert "evidenceCellHtml(r)" in _fn(html, "alRowHtml"), "竞价龙头行必须经共用事件格（复刻）"
+    ev = _fn(html, "evidenceCellHtml")
+    assert "r.evidenceEventTitles" in ev and "r.evidenceNewsTitles" in ev and "r.evidenceKwordTags" in ev, "事件/新闻/题材三徽章同源消费"

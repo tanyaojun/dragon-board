@@ -390,7 +390,9 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
     assert "<th>事件</th>" in rows_fn, "列名必须为「事件」"
     bar = _fn(html, "tlRenderBar")
     assert "tlSel('事件'" not in bar, "「事件」筛控件已删（2026-11-04 用户裁决），列/徽章保留"
-    row = _fn(html, "tlRowHtml")
+    # 2026-11-14 复刻重构：事件格抽为共用 evidenceCellHtml（题材/竞价两页单源），
+    # 徽章断言随之锚定该函数；语义断言不变（只出徽章/tooltip 全文/不出题材名）
+    row = _fn(html, "evidenceCellHtml")
     assert "r.evidenceEventTitles" in row and "r.evidenceKwordTags" in row, \
         "徽章计数与 tooltip 全文必须消费标题/标签"
     assert "esc(evTitles.join" in row and "事件</span>" in row, \
@@ -475,9 +477,10 @@ def test_l2_digest_moved_to_detail_card(html: str) -> None:
     事件/新闻/题材窄徽章；摘要随详情卡 meta 精简移除（2026-11-12 用户裁决；
     evidenceBoardResolved 行内兜底判定消费不变，原始 JSON 仍可查）。"""
     row = _fn(html, "tlRowHtml")
+    ev = _fn(html, "evidenceCellHtml")
     assert "+板内解析" not in row and "l2Tag" not in row and "l2Digest" not in row, \
         "列表徽章/死变量不得残留"
-    assert "evidenceBoardResolved" in row, "事件列兜底判定仍消费 evidenceBoardResolved 出参"
+    assert "evidenceBoardResolved" in ev, "事件列兜底判定仍消费 evidenceBoardResolved 出参"
     detail = _fn(html, "tlDetailHtml")
     assert "evidenceBoardResolved" not in detail and "r.evidenceBoardDigest" not in detail, \
         "板内解析摘要随详情卡 meta 精简移除（用户裁决）"
@@ -560,7 +563,7 @@ def test_event_column_news_badge(html: str) -> None:
     但 evidenceEventTitles/kwordTags 均空——新闻命中此前只活在叙事文本里，
     结构化层与徽章层不可见。镜像字段 evidenceNewsTitles 必须接到 +N新闻 徽章
     （tooltip=标题全文，与事件徽章同口径）。"""
-    row = _fn(html, "tlRowHtml")
+    row = _fn(html, "evidenceCellHtml")
     assert "r.evidenceNewsTitles" in row, "新闻徽章必须消费 evidenceNewsTitles"
     assert "esc(evNews.join" in row and "新闻</span>" in row, \
         "新闻徽章必须带 tooltip 全文（title=完整新闻标题）"

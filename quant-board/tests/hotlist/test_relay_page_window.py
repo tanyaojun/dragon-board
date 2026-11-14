@@ -1935,7 +1935,8 @@ def test_review_unlabeled_rows_render_clean_node(js: str, tmp_path):
         pytest.skip("node 不可用")
     parts = [_fn(js, n) for n in (
         "esc", "sortMark", "labelBoardOf", "streakOf", "labelMatches",
-        "scopePool", "labelEntryOf", "lfRenderRows", "lfRenderKpi")]
+        "scopePool", "labelEntryOf", "lfRenderRows", "lfRenderKpi",
+        "leadStrength", "labelOwnDragon")]
     # 复用既有共享 helper（m1 审查修复：不重定义模块级 _const_block 静默替换语义）；
     # 单行 const 用 _const，对象字面量用 _const_block（花括号配平）
     parts += [_const(js, m) for m in (
