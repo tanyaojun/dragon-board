@@ -35,6 +35,8 @@ NEWS_WINDOW_PAST_DAYS = 2
 # 节合计 ≤600 字（超预算段整段不入，不截断成残句）
 MORNING_CHARS = 600
 MORNING_MAX_PARAS = 6
+# 快讯节（2026-11-14 C 阶段）：隔夜窗 ≤3 条 × 260 字（同 MAX_EVENTS 口径）
+FLASH_MAX_ITEMS = 3
 # 热度序列窗（S2，2026-10-24b：5→10 日——「断流/见顶回落」判据需要更长窗才看得出
 # 趋势拐点；库内不足的日子自然为 0，fail-visible 不伪造）
 HEAT_WINDOW_DAYS = 10
@@ -378,6 +380,30 @@ def match_morning_paragraphs(paragraphs: list[str], board_name: str | None,
     return out
 
 
+def match_flash_items(items: list[dict], board_name: str | None,
+                      *, limit: int = FLASH_MAX_ITEMS) -> list[dict]:
+    """快讯 → 板块：标题锚优先，digest 兑底（无题材标签，命中均属关键词级弱关联）。
+
+    matchHow 只进结构化字段（AGENTS §1.2-8 不进叙事）。
+    """
+    base = normalize_name(board_name)
+    if not base:
+        return []
+    keys = board_keywords(board_name)
+    out = []
+    for it in items or []:
+        title = str(it.get("title") or "")
+        digest_txt = str(it.get("digest") or "")
+        hit = _anchor_hit(base, keys, title)
+        if not hit and digest_txt and digest_txt != title:
+            hit = _anchor_hit(base, keys, digest_txt, anchor_text=title)
+        if hit:
+            out.append({**it, "matchHow": hit["how"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def match_kpl_news(items: list[dict], board_name: str | None,
                    *, limit: int = MAX_EVENTS) -> list[dict]:
     """题材新闻 → 板块：**Kword 题材标签优先**，**ZSName 官方板块次之**（2026-11-02
@@ -512,7 +538,8 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                               sealed_codes: frozenset[str] | set[str] | None = None,
                               l2_fallback_date: str | None = None,
                               leader_expound_chars: int | None = None,
-                              include_morning: bool = False) -> dict:
+                              include_morning: bool = False,
+                              include_flash: bool = False) -> dict:
     """生成题材证据块（v4：产业树 + KPL 事件/新闻/日历 + L2 板内解析）。
 
     返回 {text, industry, events, news, calendar, state, ...}（text 直接可拼进叙事）。
@@ -533,6 +560,10 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     仅命中段渲染（节合计 ≤MORNING_CHARS），缺席=整行零字；状态返回
     morningState/morningDate/morningHits 供 corpusState 留痕。**不参与 evidenceMissing
     三层门**（题面 hash 冻结，早报是补充供给非判据层变更）。
+    `include_flash`（2026-11-14 C 阶段，可选）：True 时消费同花顺 7×24 隔夜窗
+    （[T−1 日历日 15:00, 当日 09:26)，截止 baked 进读口防回放前视）；≤3 条×260 字，
+    节名「隔夜快讯（同花顺7×24）」；返回 flashState/flashDate/flashHits；缺席=整行零字；
+    同样不参与 evidenceMissing 三层门。
     """
     state = corpus_state(db, date=date)
     nodes = S.get_industry_nodes(db) if state.get("ok") else []
@@ -684,6 +715,33 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             lines.append(f"早盘催化（韭研早报 {date}）：")
             lines.extend(morning_lines)
 
+    # 隔夜快讯节（2026-11-14 C 阶段，include_flash=True 才渲染；只供 09:26 竞价链）。
+    # 窗口 [T−1 日历日 15:00, 当日 09:26)（截止 baked 进读口，防盘后重跑/回放前视）；
+    # 与 KPL 池/早报独立读；缺席=整行零字；粗分桶不参与。
+    flash_state: str | None = None
+    flash_date: str | None = None
+    flash_hits: list[dict] = []
+    if include_flash:
+        flash_date = date
+        if is_not_a_theme(board_name):
+            flash_state = "disabled"
+        else:
+            try:
+                from backend.operations import ths_flash_store as TS
+                start_epoch, end_epoch = TS.flash_window_epochs(date)
+                flash_items = TS.get_flash_window(db, start_epoch=start_epoch,
+                                                  end_epoch=end_epoch)
+            except Exception:      # noqa: BLE001 读不到如实当缺档，不伪造
+                flash_items = []
+            flash_hits = match_flash_items(flash_items, board_name)
+            flash_state = "ok" if flash_hits else (
+                "no_hit" if flash_items else "missing")
+        if flash_hits:
+            lines.append("隔夜快讯（同花顺7×24）：")
+            for it in flash_hits:
+                when = f"{it.get('ctimeDate')} {it.get('ctimeHHMM')}".strip()
+                lines.append(f"- {when} {_clip(it.get('title'), content_chars)}")
+
     # 近两日题材新闻（开盘啦 ThemeNews）+ 前瞻日历（开盘啦 Type=3）。
     # 2026-10-24a：两节均无匹配时合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话，
     # 纯 token 冗余）；单边有命中维持分列，语义不变。
@@ -801,4 +859,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             "morningState": morning_state,
             "morningDate": morning_date,
             "morningHits": morning_hits,
+            "flashState": flash_state,
+            "flashDate": flash_date,
+            "flashHits": flash_hits,
             "unmappedCandidates": match.get("candidates") or []}

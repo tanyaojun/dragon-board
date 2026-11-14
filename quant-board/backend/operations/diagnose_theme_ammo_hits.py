@@ -55,7 +55,8 @@ def classify_zero(persisted: int, replay: int, pool: int) -> str:
     return "C_persist_zero"
 
 
-def diagnose_row(db, doc: dict, *, include_morning: bool = False) -> dict:
+def diagnose_row(db, doc: dict, *, include_morning: bool = False,
+                 include_flash: bool = False) -> dict:
     date = str(doc.get("tradingDate"))
     board = str(doc.get("board") or "")
     code = str(doc.get("code") or "")
@@ -65,7 +66,8 @@ def diagnose_row(db, doc: dict, *, include_morning: bool = False) -> dict:
     try:
         block = digest.build_theme_evidence_block(
             db, board_name=board, date=date, leader_code=code,
-            sealed_codes=None, include_l2=True, include_morning=include_morning)
+            sealed_codes=None, include_l2=True, include_morning=include_morning,
+            include_flash=include_flash)
         replay_events = len(block.get("events") or [])
         replay_news = len(block.get("news") or [])
         replay_kword = len(block.get("kwordTags") or [])

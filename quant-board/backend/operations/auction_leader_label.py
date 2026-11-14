@@ -372,7 +372,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         lhb_txt = lhb_txt.replace("龙虎榜：", f"龙虎榜（{prev_date} 榜单）：", 1)
     block = digest.build_theme_evidence_block(
         db, board_name=board or "", date=date, leader_code=code, sealed_codes=None,
-        l2_fallback_date=prev_date, leader_expound_chars=1200, include_morning=True)
+        l2_fallback_date=prev_date, leader_expound_chars=1200, include_morning=True,
+        include_flash=True)
     narrative = build_auction_leader_narrative(
         date=date, prev_date=prev_date, market_line=market_line,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
@@ -408,6 +409,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
                             "lhbDate": prev_date,
                             "morningState": block.get("morningState"),
                             "morningDate": block.get("morningDate"),
+                            "flashState": block.get("flashState"),
                             "trialState": ({"state": "ok",
                                             "source": trial.get("source"),
                                             "fetchedAt": trial.get("fetchedAt"),
@@ -448,7 +450,8 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         lhb_txt = lhb_txt.replace("龙虎榜：", f"龙虎榜（{prev_date} 榜单）：", 1)
     block = digest.build_theme_evidence_block(
         db, board_name=board, date=date, leader_code=codes[0] if codes else "",
-        sealed_codes=None, l2_fallback_date=prev_date, include_morning=True)
+        sealed_codes=None, l2_fallback_date=prev_date, include_morning=True,
+        include_flash=True)
     narrative = build_auction_sector_narrative(
         date=date, prev_date=prev_date, market_line=market_line,
         board=board,
@@ -469,7 +472,8 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                             "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"), "lhbDate": prev_date,
                             "morningState": block.get("morningState"),
-                            "morningDate": block.get("morningDate")},
+                            "morningDate": block.get("morningDate"),
+                            "flashState": block.get("flashState")},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 
 

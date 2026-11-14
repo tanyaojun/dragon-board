@@ -8,16 +8,18 @@ from backend.snapshot_collector.scheduler import _THEME_CORPUS_ATTEMPTS
 
 
 def test_theme_corpus_slots_config():
-    """七槽：08:30/08:50/09:10 早报三尝试（2026-11-14 晨间例外 B 阶段，当日 ok 档在库
-    即短路零 HTTP）/ 08:45 盘前 kpl / 09:05 盘前二次刷新 kpl（2026-11-14 A 阶段裁决，
-    覆盖 08:45–09:25 发布窗，末次最坏 09:13 < 09:26 竞价投喂）/ 11:45 盘中 kpl
-    （2026-11-02 用户裁决 B）/ 16:10 kpl+jiuyan。"""
+    """九槽：08:30/08:50/09:10 早报三尝试（2026-11-14 晨间例外 B 阶段）/ 08:45 盘前 kpl /
+    08:50+09:10 THS 快讯两尝试（C 阶段兑底层）/ 09:05 盘前二次刷新 kpl（A 阶段，
+    覆盖 08:45–09:25 发布窗）/ 11:45 盘中 kpl（2026-11-02 用户裁决 B）/ 16:10 kpl+jiuyan。
+    末次尝试最坏 09:10+退避 ≈ 09:15 < 09:26 竞价投喂。"""
     assert _THEME_CORPUS_ATTEMPTS == (
         (datetime.time(8, 30), "morning1", ("jiuyan_morning",)),
         (datetime.time(8, 45), "preopen", ("kpl",)),
         (datetime.time(8, 50), "morning2", ("jiuyan_morning",)),
+        (datetime.time(8, 50), "flash1", ("ths_flash",)),
         (datetime.time(9, 5), "preopen2", ("kpl",)),
         (datetime.time(9, 10), "morning3", ("jiuyan_morning",)),
+        (datetime.time(9, 10), "flash2", ("ths_flash",)),
         (datetime.time(11, 45), "midday", ("kpl",)),
         (datetime.time(16, 10), "postclose", ("kpl", "jiuyan")),
     )

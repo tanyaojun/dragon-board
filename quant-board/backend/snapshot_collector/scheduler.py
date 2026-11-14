@@ -77,6 +77,8 @@ class SnapshotCollectorScheduler:
         self._jiuyan_theme_last: dict[str, Any] | None = None
         # 早报晨间采集最近一次尝试结果（2026-11-14 晨间例外；jiuyan_morning 槽专用）
         self._jiuyan_morning_last: dict[str, Any] | None = None
+        # THS 快讯采集最近一次尝试结果（2026-11-14 C 阶段；ths_flash 槽专用）
+        self._ths_flash_last: dict[str, Any] | None = None
         # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时；每日 ≈112k tokens 包络
         # （2026-11-11 实测 22 doc，旧 ≈29k 为 13 龙头旧口径），幂等；龙虎榜主榜晚于
         # 挂链生成，由 C 席位兜底 + B 补齐链保障，见 _THEME_LEADER_LHB_BACKFILL_SLOTS）
@@ -157,6 +159,7 @@ class SnapshotCollectorScheduler:
             "jiuyan": self._jiuyan_last,
             "jiuyanTheme": self._jiuyan_theme_last,
             "jiuyanMorning": self._jiuyan_morning_last,
+            "thsFlash": self._ths_flash_last,
             "themeLeader": self._theme_leader_last,
             "themeLeaderLhbBackfill": self._theme_leader_lhb_backfill_last,
             "auctionLeader": self._auction_leader_last,
@@ -528,6 +531,8 @@ _JIUYAN_ATTEMPTS = (
 # 盘前早报三尝试槽（morning1/2/3，2026-11-14 晨间例外裁决 B 阶段）：韭研早报
 # `timeline/news` 只供 09:26 竞价链；当日 ok 档在库即短路零 HTTP，not_published 等下一槽；
 # 首槽发布时点校准规则见预登记 §3（首槽=max(08:30, 发布+5min)，≤3 次、末次 ≤09:15）。
+# 盘前 THS 快讯两尝试槽（flash1/2，2026-11-14 C 阶段裁决）：同花顺 7×24 隔夜快讯兑底层，
+# 当日 meta ok 档在库即短路零 HTTP；日预算 8（红线 9 已登记）。
 # 盘中 11:45（2026-11-02 用户裁决 B）：KPL 刷新——当日新闻流尽早进语料
 #（盘中新出题材新闻如 10:41 研讨会此前要等 16:10 才进语料）；
 # 收盘后 16:10：开盘啦刷新（当日新闻流收全）+ 韭研产业树正文（无 KPL 对应物，保留）。
@@ -535,8 +540,10 @@ _THEME_CORPUS_ATTEMPTS = (
     (datetime.time(8, 30), "morning1", ("jiuyan_morning",)),
     (datetime.time(8, 45), "preopen", ("kpl",)),
     (datetime.time(8, 50), "morning2", ("jiuyan_morning",)),
+    (datetime.time(8, 50), "flash1", ("ths_flash",)),
     (datetime.time(9, 5), "preopen2", ("kpl",)),
     (datetime.time(9, 10), "morning3", ("jiuyan_morning",)),
+    (datetime.time(9, 10), "flash2", ("ths_flash",)),
     (datetime.time(11, 45), "midday", ("kpl",)),
     (datetime.time(16, 10), "postclose", ("kpl", "jiuyan")),
 )
@@ -640,10 +647,15 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                         if key in state["done"]:
                             continue
                         if (now.hour, now.minute) >= (theme_time.hour, theme_time.minute):
-                            # 早报槽独立开关（JIUYAN_MORNING_COLLECT_ENABLED）：关闭时不占子进程
+                            # 早报/快讯槽独立开关：关闭时不占子进程
                             if theme_collectors == ("jiuyan_morning",):
                                 from backend.operations.jiuyan_morning_collect import morning_enabled
                                 if not morning_enabled():
+                                    state["done"].add(key)
+                                    continue
+                            if theme_collectors == ("ths_flash",):
+                                from backend.operations.ths_flash_collect import flash_enabled
+                                if not flash_enabled():
                                     state["done"].add(key)
                                     continue
                             state["done"].add(key)
@@ -658,6 +670,12 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                             if morning_res is not None:
                                 sched._jiuyan_morning_last = {
                                     **morning_res, "slot": theme_kind,
+                                    "at": now.isoformat(timespec="seconds")}
+                            flash_res = ((theme_result.get("collectors") or {})
+                                         .get("ths_flash"))
+                            if flash_res is not None:
+                                sched._ths_flash_last = {
+                                    **flash_res, "slot": theme_kind,
                                     "at": now.isoformat(timespec="seconds")}
                             logger.info("jiuyan theme corpus %s %s: %s", theme_kind, trading_date,
                                         json.dumps(theme_result, ensure_ascii=False,

@@ -85,6 +85,12 @@ def test_morning_state_badge_20261114(html):
     assert "'ok'" in row and "'no_hit'" in row
 
 
+def test_flash_state_badge_20261114(html):
+    """隔夜快讯兑底层（2026-11-14 C 阶段）：flashState 非 ok/no_hit 时出徽章。"""
+    row = _fn(html, "alRowHtml")
+    assert "flashState" in row and "快讯" in row
+
+
 def test_choice_cn_and_midpoints(html):
     assert "AL_CHOICE_CN" in html and "AL_MIDPOINTS" in html
     m = re.search(r"const AL_MIDPOINTS = \{([^}]+)\}", html)

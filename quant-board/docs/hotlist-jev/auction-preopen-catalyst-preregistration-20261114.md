@@ -114,9 +114,14 @@ NOT_A_THEME）/ 竞价（morningState 落库、冻结重跑叙事逐字一致）
 
 - 复探 `GET https://news.10jqka.com.cn/tapp/news/push/stock/?page=1&tag=&track=website&pagesize=50`
   （2026-10-23 勘察 §3 已实证形状）：确认存活/翻页/频控形态。
+- 结果（2026-11-14 14:45 实测，3 发：page1 / page2 / page1 重发，间隔 ≥3s）：
+  三发全 HTTP 200 + code=200；50 条/页（字段 id/seq/title/digest/ctime(epoch 秒)/
+  stock(JSON 数组)/tag(JSON 数组)）；`page=2` 有效翻页；重发内容有差异系实时流更新
+  （新条目顶入），**未见限流征兆**。样本落
+  `data/backups/ths-flash-probe-20261114.json`（gitignored）。
 - 日预算 `THS_FLASH_DAILY_CALL_BUDGET` 默认 8（两尝试槽 × ≤3 页 + 退避重试），
-  计数集合 `ths_api_calls`（`_id={fetchDate}`）；探针发现激进限流 → 预算只降不升
-  （≤2 次/日单尝试），上升须另裁决。〔探针后回填实测〕
+  计数集合 `ths_api_calls`（`_id={fetchDate}`，逐页计数含退避重试）；探针未发现限流，
+  仍按预算保守接线；上调须另裁决。
 
 ### C1 采集/存储/调度
 
@@ -165,5 +170,8 @@ cd quant-board
   tests/operations/test_auction_leader_label.py tests/hotlist/test_theme_event_digest.py `
   tests/hotlist/test_narrative_hygiene.py tests/hotlist/test_jev_version_stamps.py `
   tests/api/test_auction_leader_route.py tests/hotlist/test_relay_page_auction_leaders.py
-# 再跑全量 pytest；已知 HEAD 既有 4 例失败（11-14b 文档登记）不在本计划修复
+# 再跑全量 pytest。已知 HEAD 既有 4 例失败（3adbf31b「韦研板块粗桶对照层」引入，与本计划
+# 无关，已用干净 worktree 复验）：jev_dieban_review/jev_rise_review 各 1 例（jiuyanBoard
+# 多 rootMapped 键）、operations_schedule 1 例（after-market steps 多 industryAliasBridge）、
+# dual_strength_syna_harness 1 例（空窗 error 语义）。
 ```

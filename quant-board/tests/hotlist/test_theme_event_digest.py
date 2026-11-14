@@ -736,3 +736,99 @@ def test_match_morning_paragraphs_deterministic():
     assert len(hits) == 1 and "物理AI" in hits[0]["text"]
     assert D.match_morning_paragraphs(MORNING_OK["paragraphs"], "俄乌重建") == []
     assert D.match_morning_paragraphs(MORNING_OK["paragraphs"], None) == []
+
+
+# ── 隔夜快讯节（2026-11-14 C 阶段，include_flash=True；缺省 False 题材链零变化）──
+
+def _epoch(date_hhmm: str) -> int:
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+    return int(datetime.strptime(date_hhmm, "%Y-%m-%d %H:%M").replace(tzinfo=tz).timestamp())
+
+
+FLASH_OK = [
+    {"_id": "2026-11-13:2001", "kind": "ths_flash", "id": "2001", "seq": "3001",
+     "title": "物理AI产业链获大额订单，龙头业绩超预期",
+     "digest": "物理AI产业链获大额订单，龙头业绩超预期",
+     "ctimeEpoch": _epoch("2026-11-13 21:30"), "ctimeDate": "2026-11-13", "ctimeHHMM": "21:30",
+     "source": "", "stocks": [{"name": "中科曙光", "code": "603019"}], "tags": ["AI"],
+     "firstSeenDate": "2026-11-14"},
+    {"_id": "2026-11-14:2002", "kind": "ths_flash", "id": "2002", "seq": "3002",
+     "title": "隔夜外盘：美股三大指数收跌",
+     "digest": "隔夜外盘：美股三大指数收跌",
+     "ctimeEpoch": _epoch("2026-11-14 07:10"), "ctimeDate": "2026-11-14", "ctimeHHMM": "07:10",
+     "source": "", "stocks": [], "tags": ["美股"], "firstSeenDate": "2026-11-14"},
+]
+
+
+def _db_with_flash(rows=None):
+    db = _db()
+    if rows is not None:
+        db.cols["ths_flash"] = FakeCol(rows)
+    return db
+
+
+def test_include_flash_default_off_zero_change():
+    with_doc = _db_with_flash(FLASH_OK)
+    without = _db_with_flash()
+    a = D.build_theme_evidence_block(with_doc, board_name="物理AI", date="2026-11-14")
+    b = D.build_theme_evidence_block(without, board_name="物理AI", date="2026-11-14")
+    assert a["text"] == b["text"], "默认关=字节级零变化"
+    assert "隔夜快讯" not in a["text"] and a["flashState"] is None
+
+
+def test_include_flash_renders_matched_title_with_ctime():
+    db = _db_with_flash(FLASH_OK)
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_flash=True)
+    assert "隔夜快讯（同花顺7×24）：" in res["text"]
+    assert "- 2026-11-13 21:30 物理AI产业链获大额订单" in res["text"]
+    assert "美股三大指数收跌" not in res["text"], "未命中条目不进叙事"
+    assert res["flashState"] == "ok" and res["flashDate"] == "2026-11-14"
+    assert res["flashHits"][0]["matchHow"] and res["flashHits"][0]["stocks"][0]["code"] == "603019"
+
+
+def test_include_flash_digest_anchor_weak_hit():
+    db = _db_with_flash([{**FLASH_OK[0], "title": "隔夜要闻汇总",
+                          "digest": "物理AI产业链获大额订单"}])
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_flash=True)
+    assert res["flashState"] == "ok" and res["flashHits"][0]["matchHow"], "digest 兑底命中"
+
+
+def test_include_flash_no_hit_and_missing():
+    db = _db_with_flash([FLASH_OK[1]])
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_flash=True)
+    assert "隔夜快讯" not in res["text"] and res["flashState"] == "no_hit"
+    db2 = _db_with_flash()
+    res2 = D.build_theme_evidence_block(db2, board_name="物理AI", date="2026-11-14",
+                                        include_flash=True)
+    assert "隔夜快讯" not in res2["text"] and res2["flashState"] == "missing"
+
+
+def test_include_flash_window_cutoff_0926_blocks_lookahead():
+    """09:26 截止 baked 进读口：盘后重跑/回放时，当日 09:26 后发布的条目不得进晨间证据
+    （防单只重跑/回放用盘后语料重建前视，2026-11-13 21:10 重跑教训同类）。"""
+    late = {**FLASH_OK[1], "id": "2003", "ctimeEpoch": _epoch("2026-11-14 14:00"),
+            "ctimeDate": "2026-11-14", "ctimeHHMM": "14:00",
+            "title": "物理AI板块午后拉升", "digest": "物理AI板块午后拉升"}
+    db = _db_with_flash(FLASH_OK + [late])
+    res = D.build_theme_evidence_block(db, board_name="物理AI", date="2026-11-14",
+                                       include_flash=True)
+    assert "14:00" not in res["text"], "09:26 后条目不得进晨间窗"
+    assert res["flashState"] == "ok"
+
+
+def test_include_flash_disabled_for_coarse_bucket():
+    db = _db_with_flash(FLASH_OK)
+    res = D.build_theme_evidence_block(db, board_name="公告", date="2026-11-14",
+                                       include_flash=True)
+    assert "隔夜快讯" not in res["text"] and res["flashState"] == "disabled"
+
+
+def test_match_flash_items_deterministic():
+    hits = D.match_flash_items(FLASH_OK, "物理AI")
+    assert len(hits) == 1 and "物理AI" in hits[0]["title"]
+    assert D.match_flash_items(FLASH_OK, "俄乌重建") == []
+    assert D.match_flash_items(FLASH_OK, None) == []
