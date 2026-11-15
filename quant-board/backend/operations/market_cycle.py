@@ -488,6 +488,16 @@ if __name__ == "__main__":   # pragma: no cover — CLI（盘后链 P2 挂链前
         if not (_args.start and _args.end):
             print(_json.dumps({"ok": False, "error": "--backfill 须 --from --to"}))
             _sys.exit(1)
+        # 回填前置检查（2026-11-16 事故裁决，报告型）：其回填链自带 covering
+        # fetchers（v13 gain10 全缺不降级），不设档阻断，只透出上游存档状态。
+        from backend.operations.backfill_preflight import market_cycle_preflight
+        _dates = sorted({str(d["tradingDate"]) for d in _db["jiuyan_action"].find(
+            {"_id": {"$regex": ":final$"}}, {"tradingDate": 1})
+            if d.get("tradingDate") and _args.start <= str(d["tradingDate"]) <= _args.end})
+        _pre = market_cycle_preflight(_db, _dates, _args.dataset_id,
+                                      allow_unhealthy=False)
+        _pre["proceed"] = True
+        print(_json.dumps({"preflight": _pre}, ensure_ascii=False))
         _docs = backfill(_db, _args.start, _args.end, _args.dataset_id,
                          offsets=_offsets, force=_args.force)
         _ev = sum(len(d.get("events") or []) for d in _docs)

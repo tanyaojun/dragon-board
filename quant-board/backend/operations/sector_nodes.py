@@ -544,6 +544,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--from", dest="from_date")
     ap.add_argument("--to", dest="to_date")
     ap.add_argument("--dataset-id", default=DEFAULT_DATASET_ID)
+    ap.add_argument("--allow-unhealthy", dest="allow_unhealthy", action="store_true",
+                    help="前置检查发现增益不可达仍强制回填（知情决策，报告照常透出）")
     args = ap.parse_args(argv)
 
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
@@ -553,6 +555,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": False, "error": "backfill 需要 --from 与 --to"},
                              ensure_ascii=False))
             return 2
+        # 回填前置检查（2026-11-16 事故裁决）：依赖链存档健康度逐日透出；
+        # 增益不可达（TDX 棒窗覆盖不到/不可用）默认阻断——重跑会把好档覆盖成近空档
+        # （11-12 事故）。确定性重算链其余问题只报告不阻断（重跑即修复）。
+        from backend.operations.backfill_preflight import (
+            EXIT_BLOCKED, sector_nodes_preflight)
+        _dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
+            {"kind": "jiuyan_action", "tradingDate": {"$gte": args.from_date,
+             "$lte": args.to_date}, "_id": {"$regex": ":final$"}},
+            {"tradingDate": 1}) if d.get("tradingDate")})
+        pre = sector_nodes_preflight(db, _dates, args.dataset_id,
+                                     allow_unhealthy=args.allow_unhealthy)
+        pre["proceed"] = not (pre["blockers"] and not args.allow_unhealthy)
+        print(json.dumps({"preflight": pre}, ensure_ascii=False))
+        if not pre["proceed"]:
+            return EXIT_BLOCKED
         out = backfill(db, args.from_date, args.to_date, args.dataset_id)
         out["ok"] = True
         print(json.dumps(out, ensure_ascii=False))

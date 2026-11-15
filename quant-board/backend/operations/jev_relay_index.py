@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from collections import Counter
@@ -2282,12 +2283,27 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true", help="只打印叙事，不调用模型")
     ap.add_argument("--force", action="store_true",
                     help="判据代际升级重放：已 ok 的日期也重新判定（replace_one 幂等覆盖）")
+    ap.add_argument("--allow-unhealthy", dest="allow_unhealthy", action="store_true",
+                    help="前置检查发现依赖档坏账仍强制重放（知情决策，报告照常透出）")
     ap.add_argument("--dataset-id", dest="dataset_id", default=DEFAULT_DATASET_ID)
     args = ap.parse_args()
     if not (os.environ.get("JEV_TYPESAFE_KEY") or "").strip() and not os.environ.get("JEV_CF_TOKEN"):
         raise SystemExit("需要 JEV_TYPESAFE_KEY 或 JEV_CF_TOKEN 环境变量")
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
+    # 回填前置检查（2026-11-16 事故裁决）：--force 多日重放前核对依赖链存档健康度。
+    # LLM 重放不可逆：节点档坏账 → 梯队表龙一回退、叙事语料降级，烧 token 也只能
+    # 产出降级答案并覆盖原档 → 默认阻断（--allow-unhealthy 显式越过）。单日日常
+    # 判定（schedule 盘后链）不走此门，健康度由档内 fail-visible 字段披露。
+    from backend.operations.backfill_preflight import EXIT_BLOCKED, relay_preflight
+    from backend.operations.sector_nodes import SECTOR_NODE_VERSION
+    if args.force and args.relay_day:
+        pre = relay_preflight(db, args.relay_day, ledger_version=SECTOR_NODE_VERSION,
+                              allow_unhealthy=args.allow_unhealthy)
+        pre["proceed"] = not (pre["blockers"] and not args.allow_unhealthy)
+        print(json.dumps({"preflight": pre}, ensure_ascii=False))
+        if not pre["proceed"]:
+            raise SystemExit(EXIT_BLOCKED)
     days = args.relay_day
     if not days:
         latest = db["jiuyan_action"].find_one(

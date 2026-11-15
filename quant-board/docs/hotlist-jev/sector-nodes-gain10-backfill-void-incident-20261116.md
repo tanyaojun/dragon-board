@@ -45,6 +45,26 @@ root 板块对照层（`jiuyan_industry_root_mapping`）引起——**排查否�
 ——本次坏档静默躺两周的直接原因。是否把「板块全跳过」升为 degraded / 页面注记，
 涉及预登记改档，另行裁决。
 
+## 后续处置（2026-11-16 续，用户裁决 A+C）
+
+1. **回填前置检查落码**：新增 `operations/backfill_preflight.py`（依赖链存档健康度
+   逐日报告；烧 token 的 relay 重放在节点档坏账时默认阻断 `EXIT_BLOCKED=3`，
+   `--allow-unhealthy` 显式越过；确定性重算链只报告+gain10 可达性抽检——抽检
+   None 占比 >0.5 默认阻断，即 11-12 事故的直接信号）。接线三个 CLI：
+   `sector_nodes --backfill`、`jev_relay_index --relay-day --force`、
+   `market_cycle --backfill`（报告型）；schedule 盘后单日路径不接（零开销，
+   健康度由档内 fail-visible 字段披露）。测试 `tests/operations/test_backfill_preflight.py`。
+2. **事故范围修正**：前置检查发现 11-12 事故回填实际起点是 **2026-09-11 之后的
+   10-12**（10-12~10-22 共 8 个 v5 空档；10-08/10-09 及更早仍是 v4 旧代档）。
+   已用新 CLI 回填 2026-09-11..10-22（24 日，preflight gainSample noneRatio 0.0，
+   10-24 周末无 final 合法保留 v4）——全部交易日节点档现为 v5 ok 且有行。
+3. **relay 20 日重放（方案 A）**：10-08..11-04 共 20 档 `--force` 重放，preflight
+   通过（ledgerBad=0），20 次 jev 调用 ≈18.8 万 tokens，全部 status=ok；重放后
+   梯队表「龙一档缺失/回退」注记 0 残留（语料完整口径）。分数/相位前后对照：
+   index 变动 ±10 以内为主（10-20 43.8→29.9、10-21 53.0→33.0 变动最大），相位
+   翻转 3 例（10-13 bottoming→launch、10-14 divergence→collapse、10-21
+   relay_heat→divergence，为语料修复后的重判，非异常）。daysInPhase 链升序重算一致。
+
 ## 防复发要点
 
 - 任何对距今 >4 个交易日的 v5 回填/重算，必须走覆盖式日线入口（`bars_covering`
