@@ -802,6 +802,38 @@
     </div>
   </section>
 
+  <!-- 最强风口（2026-11-15 用户需求）：页面布局=【竞价试盘】同款（左板块列表右个股列表联动）；
+       左板块=个股行「精选板块」聚合（App 同列前 2 个，热角标=热点板块∩精选板块）；无精选板块
+       个股不入左表分组（个股行板块列显 '--'，fail-visible 不伪装分组）；
+       数据=/api/kpl/fengkou（apphq StockFengKData/GetFengKListBest，KPL App 最强风口 H5 页
+       同款读口；服务层 30s TTL 无重试，前端实时档 60s 轮询、历史选日单发，红线 9 预算 ≤1 发/分钟；
+       端点要求登录态，凭据失效/付费墙均结构化透出） -->
+  <section id="tab-kplfk" style="display:none">
+    <div class="ph-line" style="margin-bottom:14px"></div>
+    <div class="card">
+      <div class="flex" style="margin-bottom:10px">
+        <span class="kpl-sub kpl-uni" id="fkStats"></span>
+        <span style="flex:1"></span>
+        <input type="date" id="fkDate" onchange="fkDateChange()">
+        <button onclick="fkBackToLatest()">回最新</button>
+      </div>
+      <div id="fkBanner" class="kpl-note" style="display:none"></div>
+      <div class="kpl-layout">
+        <div class="card" style="padding:10px 12px">
+          <input class="lg-filter" id="fkPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="fkRender()">
+          <div class="kpl-wrap"><table id="fkPlateTable"></table></div>
+        </div>
+        <div class="card" style="padding:10px 12px">
+          <h3 style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="kpl-sub" id="fkStockTitle" style="font-weight:400">个股列表</span>
+            <input class="lg-filter" id="fkStockSearch" style="margin-left:auto;width:180px" placeholder="搜索名称/代码…" oninput="fkRender()">
+          </h3>
+          <div class="kpl-wrap"><table id="fkStockTable"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-kpllhb" style="display:none">
     <div class="ph-line" style="margin-bottom:14px"></div>
     <div class="card">
@@ -4957,13 +4989,13 @@ const NAV = [
   // 集合竞价/即将涨停 = KPL App 打板页签（2103 订阅快照，2026-10-27 二期）
   // 2026-11-08 用户需求：打板六页（集合竞价/即将涨停/风向标/涨停池/炸板池/跌停池）合并为
   // 【个股行情】单页（左板块列表不变，右个股列表左上方按钮切换模式），侧栏只留一个入口。
-  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'], ['kpltrial', '竞价试盘', '🎯'], ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆'],['kplreg', '监管风险', '🛡️']]},
+  {group: 'KPL 行情', items: [['kpl', '板块行情', '📋'], ['kplstock', '个股行情', '🧾'], ['kpltrial', '竞价试盘', '🎯'], ['kplfk', '最强风口', '💨'], ['kpllive', '直播', '📡'],['kpllhb', '龙虎榜', '🏆'],['kplreg', '监管风险', '🛡️']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
 // ════════════════════════════════════════════════════════════════════════════
 const VIEW_CRUMB = {overview: ['总览'], lianban: ['连板行情'], labels: ['涨停复盘'], dieban: ['下跌复盘'],
                     rise: ['上涨复盘'],
-                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpltrial: ['竞价试盘'], kpllhb: ['龙虎榜'], kplreg: ['监管风险'],
+                    kpl: ['板块行情'], kpllive: ['直播'], kplstock: ['个股行情'], kpltrial: ['竞价试盘'], kplfk: ['最强风口'], kpllhb: ['龙虎榜'], kplreg: ['监管风险'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 // 打板模式集合（单一来源，评审 P2-7）：大盘 KPI 条/WS KPI 刷新/KPI 日期/轮询列表/进页开关
 // 全部引用本数组；新增模式只改这一处 + DABAN_PAGES，避免字面量枚举多处漂移。
@@ -5698,7 +5730,7 @@ function setView(key){
   // 大盘 KPI 条=kpl 组子页公用（kpl/kpllive/个股行情/竞价试盘 2026-11-14 用户需求；
   // 打板六模式已并入单页）。竞价试盘页纯 REST 主链不开订阅，但 KPI 卡的
   // market_overview/zd_stat 两源是 socket 事件——同组复用 kpl WS 连接（kpllive 同款）
-  const kplGroup = ['kpl', 'kpllive', DABAN_PAGE, 'kpltrial'];
+  const kplGroup = ['kpl', 'kpllive', DABAN_PAGE, 'kpltrial', 'kplfk'];
   if (kpiEl) kpiEl.style.display = kplGroup.includes(main) ? '' : 'none';
   if (main !== 'lianban') lbLeave();   // 连板行情轮询计时器只在页内活
   if (kplGroup.includes(main)){ kplViewEnter(); kplRenderMarketKpi(); kplFetchIndex(); }
@@ -5709,6 +5741,7 @@ function setView(key){
   if (main === 'kpllhb') kplLhbEnter(); else kplLhbLeave();   // 龙虎榜页签：进页即取双快照+开轮询
   if (main === 'kplreg') kplRegEnter();   // 监管风险页：进页取日档（2026-11-15 预登记）
   if (main === 'kpltrial') atEnter(); else atLeave();   // 竞价试盘页签：进页即取日档+韭研打标链分组，60s 轮询
+  if (main === 'kplfk') fkEnter(); else fkLeave();   // 最强风口页签：进页即取实时档，60s 轮询（历史选日=单发）
   if (main !== 'lianban' && SC.pollTimer){ clearInterval(SC.pollTimer); SC.pollTimer = null; }   // 对比页签轮询只在连板行情页内活
   if (main !== 'lianban' && WL.pollTimer){ clearInterval(WL.pollTimer); WL.pollTimer = null; }   // 盯盘页签轮询只在连板行情页内活
   if (main === 'kpllive') kplLiveEnter(); else kplLiveLeave();   // 市场雷达：文本流轮询仅本页运行
@@ -9438,6 +9471,7 @@ function kplRenderMarketKpi(){
 function kplKpiDate(){
   if (STATE.view === 'kpl') return KPL.mode === 'history' ? KPL.date : KPL.today;
   if (STATE.view === 'kpltrial') return (($('atDate').value || '').trim()) || KPL.today;   // 竞价试盘：KPI 跟随页内日期框（2026-11-14）
+  if (STATE.view === 'kplfk') return (($('fkDate').value || '').trim()) || KPL.today;   // 最强风口：KPI 跟随页内日期框（2026-11-15）
   if (STATE.view === DABAN_PAGE){
     const v = KPL.dabanView;   // 单页化：KPI 跟随页内当前模式（各模式选日各自记忆）
     return KPL.dabanMode[v] === 'history' ? (KPL.dabanDate[v] || KPL.today) : KPL.today;
@@ -9802,6 +9836,202 @@ function atRender(){
   if (AT.error && window.sbLog) sbLog('error', '[竞价试盘] ' + AT.error);
   if (AT.jy.error && window.sbLog) sbLog('error', '[竞价试盘] 韭研打标链：' + AT.jy.error);
   kplFitHeight('#tab-kpltrial .kpl-layout');
+}
+
+// ══════════ KPL 行情 · 最强风口（2026-11-15，合同逆向自 apppage web2/strongestTuyere.js）══════════
+// 数据：GET /api/kpl/fengkou（apphq StockFengKData/GetFengKListBest，KPL App「最强风口」H5 页
+//   同款读口；服务层 30s TTL、无重试循环，前端实时档 60s 轮询、历史选日单发，红线 9 预算 ≤1 发/分钟）。
+// 页面布局=【竞价试盘】同款（左板块右个股联动；再点已选分组=取消回「全部」）。
+// 左板块=个股行「精选板块」聚合（boards[]，App 同列最多展示前 2 个；「热」角标=hot_boards∩boards）。
+// 行语义（13 位逐位逆向，未确认位不猜）：强度[2] / 涨跌幅[4]% / 主力净额[5] / 主力买[8] /
+//   主力卖[9]；trend_state[3] → 名称旁 ↑/↓ 小标；name_red[7] → 红名（疑涨停，语义未确认，仅样式）；
+//   peak_time[11] → 代码旁时间角标（强度峰值时点，App 同款 hh:mm）。
+// 降级口径（fail-visible）：login_expired（errcode 1001/1016，共享凭据登录态失效）/ vip_locked
+//   （State=0 开通功能付费墙）/ 上游异常均横幅+状态栏透出，不伪装空榜。
+const FK = {doc: null, loading: false, error: null, seq: 0, pollTimer: null,
+            sel: '', userDate: false,   // 用户显式选日=true：轮询/请求走历史档；回最新/取消后回实时档
+            boardSort: {key: 'strengthSum', dir: -1}, stockSort: {key: 'strengthN', dir: -1}};
+function fkNum(v){ const n = typeof v === 'number' ? v : parseFloat(v); return Number.isFinite(n) ? n : null; }
+function fkPct(v){ const n = fkNum(v); return n == null ? '--' : kfmtNum(n) + '%'; }
+function fkItems(){ return (FK.doc && FK.doc.items) || []; }
+function fkEnter(){
+  fkLoad();
+  if (!FK.pollTimer) FK.pollTimer = setInterval(() => {
+    if (STATE.view !== 'kplfk'){ clearInterval(FK.pollTimer); FK.pollTimer = null; return; }
+    // 历史选日=单发口径：轮询只刷实时档，选日不重复打上游（切日/回最新各自手动拉）。
+    // 评审 P1：判据用 userDate 标志而非日期框空否——实时档生效日会回填进框，框非空≠历史模式
+    if (FK.userDate) return;
+    if (!FK.loading) fkLoad();
+  }, 60000);
+  kplFitHeight('#tab-kplfk .kpl-layout');
+}
+function fkLeave(){ if (FK.pollTimer){ clearInterval(FK.pollTimer); FK.pollTimer = null; } }
+function fkDateChange(){ FK.sel = ''; FK.userDate = !!($('fkDate').value || '').trim(); fkLoad(); kplRenderMarketKpi(); }
+function fkBackToLatest(){ $('fkDate').value = ''; FK.sel = ''; FK.userDate = false; fkLoad(); kplRenderMarketKpi(); }
+function fkBoardModel(){
+  const boards = [], byName = {};
+  for (const it of fkItems()){
+    const bs = it.boards || [];
+    for (const bn of bs){   // App 同款：每股可属多板块，各计一次
+      let b = byName[bn];
+      if (!b){ b = {name: bn, members: []}; byName[bn] = b; boards.push(b); }
+      b.members.push(it);
+    }
+  }
+  return boards;
+}
+function fkBoardSortBy(key){ lbSortToggle(FK.boardSort, key); fkRender(); }
+function fkStockSortBy(key){ lbSortToggle(FK.stockSort, key); fkRender(); }
+function fkSelect(name){ FK.sel = (name && FK.sel !== name) ? name : ''; fkRender(); }
+async function fkLoad(){
+  if (FK.loading) return;
+  FK.loading = true;
+  const seq = ++FK.seq;   // 过期响应守卫（竞价试盘同款）：轮询与手动刷新重叠时旧响应不覆盖
+  const date = FK.userDate ? (($('fkDate').value || '').trim()) : '';   // 实时档不带回填日（历史档走 apphis，实时档=最新交易日快照）
+  const qs = date ? '?date=' + encodeURIComponent(date) : '';
+  let r = null;
+  try { r = await jget('/api/kpl/fengkou' + qs); }
+  catch (e) { r = {ok: false, degraded: true, reason: '读口失败：' + (e && e.message ? e.message : e)}; }
+  if (seq !== FK.seq) return;
+  FK.loading = false;
+  FK.doc = r || null;
+  FK.error = (r && (r.ok === false || r.degraded)) ? (r.error || r.reason || '读口降级') : null;
+  if (!date && r && r.ok && r.day) $('fkDate').value = r.day;   // 首载回填生效日
+  if (FK.sel && !fkBoardModel().some(b => b.name === FK.sel)) FK.sel = '';   // 选中分组消失回「全部」
+  fkRender();
+}
+function fkRender(){
+  if (STATE.view !== 'kplfk') return;
+  const items = fkItems();
+  const q = String(($('fkPlateSearch') || {}).value || '').trim().toLowerCase();
+  const sq = String(($('fkStockSearch') || {}).value || '').trim().toLowerCase();
+  const sel = FK.sel;
+  // ── 左：板块列表（首行「全部」+ 精选板块聚合行）──
+  let ph = '<thead><tr><th>#</th>'
+    + lbThSort('板块', 'name', FK.boardSort, 'fkBoardSortBy')
+    + lbThSort('家数', 'n', FK.boardSort, 'fkBoardSortBy')
+    + lbThSort('强度合计', 'strengthSum', FK.boardSort, 'fkBoardSortBy')
+    + lbThSort('涨幅均值', 'pct', FK.boardSort, 'fkBoardSortBy')
+    + lbThSort('主力净额合计', 'net', FK.boardSort, 'fkBoardSortBy')
+    + '</tr></thead><tbody>';
+  const sumAgg = (members) => {
+    const strs = members.map(m => fkNum(m.strength)).filter(v => v != null);
+    const pcts = members.map(m => fkNum(m.change_pct)).filter(v => v != null);
+    const nets = members.map(m => fkNum(m.main_net)).filter(v => v != null);
+    return {
+      strengthSum: strs.length ? strs.reduce((a, b) => a + b, 0) : null,
+      pct: pcts.length ? pcts.reduce((a, b) => a + b, 0) / pcts.length : null,
+      net: nets.length ? nets.reduce((a, b) => a + b, 0) : null,
+    };
+  };
+  const aggRow = (name, members, idx, extra) => {
+    const a = sumAgg(members);
+    const label = name === '' ? esc('全部') : esc(name)
+      + (extra && extra.hot ? ' <span class="badge" style="background:#dc2626;color:#fff;padding:0 4px;font-size:10px">热</span>' : '');
+    return `<tr${sel === name ? ' class="on"' : ''} onclick="fkSelect('${js(name)}')">`
+      + `<td class="kpl-uni">${idx}</td><td>${label}</td>`
+      + `<td class="kpl-uni" title="家数=该精选板块下上榜个股数（一股多板块各计一次；全部行=按个股去重）">${members.length}</td>`
+      + `<td class="kpl-uni">${a.strengthSum != null ? kfmtNum(a.strengthSum) : '--'}</td>`
+      + `<td class="kpl-uni ${kcls(a.pct)}">${fkPct(a.pct)}</td>`
+      + `<td class="kpl-uni">${a.net != null ? kfmtAmt(a.net) : '--'}</td></tr>`;
+  };
+  let pn = 0;
+  if (!q) pn++, ph += aggRow('', items, '--');
+  let bsort = fkBoardModel();
+  bsort.sort((a, b) => {
+    const k = FK.boardSort.key, d = FK.boardSort.dir;
+    const va = k === 'name' ? a.name : k === 'n' ? a.members.length
+      : k === 'pct' ? (sumAgg(a.members).pct ?? -Infinity)
+      : k === 'net' ? (sumAgg(a.members).net ?? -Infinity)
+      : (sumAgg(a.members).strengthSum ?? -Infinity);
+    const vb = k === 'name' ? b.name : k === 'n' ? b.members.length
+      : k === 'pct' ? (sumAgg(b.members).pct ?? -Infinity)
+      : k === 'net' ? (sumAgg(b.members).net ?? -Infinity)
+      : (sumAgg(b.members).strengthSum ?? -Infinity);
+    return k === 'name' ? d * String(va).localeCompare(String(vb), 'zh') : d * ((va > vb ? 1 : va < vb ? -1 : 0) || a.name.localeCompare(b.name, 'zh'));
+  });
+  for (const b of bsort){
+    if (q && !b.name.toLowerCase().includes(q)) continue;   // 过滤词只筛分组行
+    pn++;
+    const hot = (fkItems().some(it => (it.hot_boards || []).includes(b.name)));
+    ph += aggRow(b.name, b.members, pn, {hot});
+  }
+  $('fkPlateTable').innerHTML = pn ? ph + '</tbody>'
+    : '<tbody><tr><td class="empty">' + (q ? '无匹配板块（过滤词无命中）'
+      : (items.length ? '无板块分组（个股未带精选板块，fail-visible 不伪装）' : '暂无数据（等待读口返回）')) + '</td></tr></tbody>';
+  // ── 右：个股列表（选中板块过滤；未选中=全部，App 默认强度降序）──
+  let rightRows = items;
+  if (sel){ const b = bsort.find(x => x.name === sel); rightRows = b ? b.members : []; }
+  if (sq) rightRows = rightRows.filter(r =>
+    (String(r.stock_id || '') + String(r.name || '') + String((r.boards || []).join('·') || '')).toLowerCase().includes(sq));
+  $('fkStockTitle').textContent = sel ? sel + ' · 上榜个股' : '全部 · 上榜个股（点左侧板块筛选）';
+  const decorated = rightRows.map(r => ({...r,
+    strengthN: fkNum(r.strength), pctN: fkNum(r.change_pct),
+    netN: fkNum(r.main_net), buyN: fkNum(r.main_buy), sellN: fkNum(r.main_sell)}));
+  const skey = FK.stockSort.key, sdir = FK.stockSort.dir;
+  decorated.sort((a, b) => {
+    const va = skey === 'name' ? (a.name || '') : skey === 'code' ? String(a.stock_id || '')
+      : skey === 'peak' ? String(a.peak_time || '')
+      : skey === 'bk' ? String((a.boards || []).join('·') || '') : (a[skey] ?? -Infinity);
+    const vb = skey === 'name' ? (b.name || '') : skey === 'code' ? String(b.stock_id || '')
+      : skey === 'peak' ? String(b.peak_time || '')
+      : skey === 'bk' ? String((b.boards || []).join('·') || '') : (b[skey] ?? -Infinity);
+    const cmp = (typeof va === 'string' || typeof vb === 'string') ? String(va).localeCompare(String(vb), 'zh') : (va > vb ? 1 : va < vb ? -1 : 0);
+    return sdir * (cmp || String(a.stock_id).localeCompare(String(b.stock_id)));
+  });
+  let html = '<thead><tr><th>#</th>'
+    + lbThSort('股票名称', 'name', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('强度', 'strengthN', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('涨跌幅', 'pctN', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('精选板块', 'bk', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('主力净额', 'netN', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('主力买', 'buyN', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('主力卖', 'sellN', FK.stockSort, 'fkStockSortBy')
+    + lbThSort('峰值时点', 'peak', FK.stockSort, 'fkStockSortBy')
+    + '</tr></thead><tbody>';
+  decorated.forEach((r, i) => {
+    const t = parseInt(r.trend_state, 10);
+    const arrow = t > 0 ? ' <span style="color:#dc2626">↑</span>' : t < 0 ? ' <span style="color:#16a34a">↓</span>' : '';
+    const nameHtml = '<span' + (r.name_red ? ' style="color:#dc2626" title="name_red 标志位（App 红名同款；疑涨停，语义未确认仅样式）"' : '')
+      + '>' + esc(r.name || '--') + '</span>' + arrow;
+    const codeHtml = '<div class="kpl-sub">' + esc(String(r.stock_id || '--'))
+      + (r.peak_time ? ' <span class="badge" style="background:#fef3c7;color:#92400e;padding:0 4px;font-size:10px">' + esc(String(r.peak_time)) + '</span>' : '') + '</div>';
+    const boardsHtml = (r.boards || []).length
+      ? (r.boards || []).slice(0, 2).map(bn =>   // App 同款：最多展示前 2 个
+          '<div>' + esc(bn)
+          + ((r.hot_boards || []).includes(bn) ? ' <span class="badge" style="background:#dc2626;color:#fff;padding:0 4px;font-size:10px">热</span>' : '')
+          + '</div>').join('')
+      : '<span class="kpl-sub" title="上游未带精选板块（不猜不补）">--</span>';
+    html += `<tr><td class="kpl-uni">${i + 1}</td><td>${nameHtml}${codeHtml}</td>`
+      + `<td class="kpl-uni">${r.strengthN != null ? kfmtNum(r.strengthN) : '--'}</td>`
+      + `<td class="kpl-uni ${kcls(r.pctN)}">${fkPct(r.pctN)}</td>`
+      + `<td>${boardsHtml}</td>`
+      + `<td class="kpl-uni">${r.netN != null ? kfmtAmt(r.netN) : '--'}</td>`
+      + `<td class="kpl-uni">${r.buyN != null ? kfmtAmt(r.buyN) : '--'}</td>`
+      + `<td class="kpl-uni">${r.sellN != null ? kfmtAmt(r.sellN) : '--'}</td>`
+      + `<td class="kpl-uni">${r.peak_time ? esc(String(r.peak_time)) : '--'}</td></tr>`;
+  });
+  $('fkStockTable').innerHTML = decorated.length ? html + '</tbody>'
+    : '<tbody><tr><td class="empty">' + (sq ? '无匹配个股（搜索词无命中）'
+      : (FK.doc && FK.doc.ok) ? '当日全市场无上榜个股' : '等待读口返回') + '</td></tr></tbody>';
+  // ── 页头统计/降级横幅（fail-visible：登录态/付费墙/上游异常全部透出，不伪装空榜）──
+  const d = FK.doc || {};
+  $('fkStats').textContent = FK.error && !d.ok ? '最强风口 · 读口降级'
+    : `最强风口 · ${d.day || '--'} · ${d.n_rows != null ? d.n_rows : items.length} 只`
+      + (d.time_hhmm ? ' · 快照 ' + esc(String(d.time_hhmm)) : '');
+  const banner = $('fkBanner');
+  if (FK.error && !d.ok){
+    const tip = d.login_expired ? '登录态失效（errcode ' + esc(String(d.reason)) + '）：最强风口为登录态端点，共享凭据 Token 已被上游拒绝，请更新 quant-board/.env.local 的 QUANT_BOARD_KPL_APP_USERID/_DEVICEID/_TOKEN（提取路径见 mapping_refresh.py 注释）后重启后端刷新。'
+      : d.reason === 'vip_locked' ? '上游付费墙（State=0「开通功能」）：当前凭据未获该功能授权，不伪装空榜。'
+      : '读口降级：' + FK.error;
+    banner.textContent = tip; banner.style.display = '';
+    if (window.sbLog) sbLog('error', '[最强风口] ' + FK.error);
+  } else {
+    banner.style.display = 'none';
+    if ((d.partial_n || 0) > 0 && window.sbLog)
+      sbLog('warn', '[最强风口] ' + d.partial_n + ' 行字段缺位（partial，缺位不补 0）');
+  }
+  kplFitHeight('#tab-kplfk .kpl-layout');
 }
 
 setView('overview');

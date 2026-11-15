@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import time
 import urllib.error
 import urllib.request
@@ -30,20 +32,42 @@ from backend.core.settings import get_settings
 # ── longhuvip API 配置 ─────────────────────────────────────────────────────
 _LONGHUVIP_THEME_API = "https://applhb.longhuvip.com/w1/api/index.php"
 
+# 非机密公共参数（apiv/VerSion 组合为 2026-11-08 实测可用口径，随端点保留在代码）。
+# 机密凭据（UserID/DeviceID/Token）不进代码（红线 §1.2.3）：只进 quant-board/.env.local
+# （gitignored），键名 QUANT_BOARD_KPL_APP_USERID / _DEVICEID / _TOKEN。换绑路径
+# （2026-11-15 首次换绑实测）：雷电模拟器（LDPlayer9，adb root）已登录 App 内提取——
+# UserID/Token 取 databases/UserRelate.db UserInfo 表（Token 有效期同表可查），
+# DeviceID 取 shared_prefs/device.xml uid；提取后改 .env.local 三行即可，重启后端生效。
 _LONGHUVIP_PARAMS = {
     "a": "InfoGet",
     "apiv": "w43",
     "c": "Theme",
     "PhoneOSNew": "1",
-    "UserID": "397605",
-    "DeviceID": "548d826f-a2a7-301a-b148-920f31f15331",
     "VerSion": "5.22.0.2",
-    "Token": "df9cadb87bbba7d04e9fcbaa2aa229b3",
 }
 
+# .env.local 加载（backend.core.settings 导入时也会加载，这里幂等补载保证独立导入
+# 本模块时凭据同样在场；已存在的 os.environ 不覆盖）。
+from backend.core.settings import BASE_DIR, _load_env_file
+
+_load_env_file(BASE_DIR / ".env.local")
+
+_KPL_APP_USERID = os.environ.get("QUANT_BOARD_KPL_APP_USERID", "").strip()
+_KPL_APP_DEVICEID = os.environ.get("QUANT_BOARD_KPL_APP_DEVICEID", "").strip()
+_KPL_APP_TOKEN = os.environ.get("QUANT_BOARD_KPL_APP_TOKEN", "").strip()
+if not (_KPL_APP_USERID and _KPL_APP_DEVICEID and _KPL_APP_TOKEN):
+    logging.getLogger(__name__).warning(
+        "KPL App 凭据缺失（QUANT_BOARD_KPL_APP_USERID/_DEVICEID/_TOKEN 未配置于 "
+        "quant-board/.env.local）：登录态端点将结构化降级（login_expired），不伪装数据")
+
 # 开盘啦共用鉴权身份（UserID/DeviceID/Token）的**公共出口**：kpl_theme_fetch 等同账号
-# 体系端点从这里取，禁止另拷一份凭据常量（单一事实源；Token 失效只改这一处）。
-KPL_APP_BASE_PARAMS = dict(_LONGHUVIP_PARAMS)
+# 体系端点从这里取，禁止另拷一份凭据常量（单一事实源；Token 失效只改 .env.local 一处）。
+KPL_APP_BASE_PARAMS = {
+    **_LONGHUVIP_PARAMS,
+    "UserID": _KPL_APP_USERID,
+    "DeviceID": _KPL_APP_DEVICEID,
+    "Token": _KPL_APP_TOKEN,
+}
 
 # ── 限速 ────────────────────────────────────────────────────────────────────
 _BATCH_SIZE = 10
@@ -134,7 +158,13 @@ def _apply_theme_directory_diff(database: Any, repo: Any, result: Any) -> None:
 
 def _fetch_theme_detail(theme_id: str) -> dict[str, Any] | None:
     """调用 longhuvip API 获取单个题材的完整数据。"""
-    params = {**_LONGHUVIP_PARAMS, "ID": str(theme_id)}
+    # 凭据随公共出口注入（2026-11-15 凭据外移 .env.local 后，_LONGHUVIP_PARAMS 不再自带
+    # UserID/DeviceID/Token；登录态校验端点拒游客，缺失会批量 errcode≠0 → directoryDiffFailedIds 膨胀）
+    params = {
+        **_LONGHUVIP_PARAMS,
+        **{k: KPL_APP_BASE_PARAMS[k] for k in ("UserID", "DeviceID", "Token")},
+        "ID": str(theme_id),
+    }
     url = f"{_LONGHUVIP_THEME_API}?{urlencode(params)}"
     try:
         req = urllib.request.Request(url, method="GET")

@@ -12,6 +12,7 @@ pytest 纪律：本路由的测试仅 mock 上游，不触发真实连接。
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Optional
 
 import httpx
@@ -20,7 +21,7 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from backend.core.settings import get_settings
-from backend.services import kpl_ranking_service
+from backend.services import kpl_ranking_service, kpl_stock_fengkou
 from backend.services.kpl_ranking_service import KplRankingError
 from backend.api.lhb_fallback import walk_back
 
@@ -572,6 +573,35 @@ async def sector_stocks(plate: str = "", date: str = "", page: int = 0) -> JSONR
         return JSONResponse(content=kpl_ranking_service.get_sector_stocks(plate, date, page=page))
     except KplRankingError as exc:
         return JSONResponse(content=exc.to_payload(), status_code=502)
+
+
+@router.get("/fengkou")
+def fengkou(date: str = "", time: str = "") -> JSONResponse:
+    """最强风口个股强度榜（apphq StockFengKData/GetFengKListBest，2026-11-15 逆向）。
+
+    数据源=KPL App「最强风口」H5 页（web2/strongestTuyere.html）同款读口：
+    实时 date 空（Time=time 参数透传，App 时间滑条 HHMM）；历史 date=YYYY-MM-DD
+    （→ Day=YYYYMMDD 走 apphis，H5 原合同；2026-11-15 实测 apphis 1020，合同待有效
+    凭据核实，fail-visible）。**端点要求登录态**（1001）：凭据只进 quant-board/.env.local
+    （QUANT_BOARD_KPL_APP_USERID/_DEVICEID/_TOKEN），失效时换绑后重启后端即可。
+    参数校验：非法 time/date 直接 422 拒绝，不触上游（频控红线 9：垃圾值换真实上游调用
+    =风控记录，缓存键即原始入参不可作绕 TTL 通道）。频控预算：
+    服务层 30s TTL + 无重试循环；前端 60s 轮询 → ≤1 发/分钟。
+    协议层/行语义见 backend/services/kpl_stock_fengkou.py 模块头。
+    """
+    time_hhmm = (time or "")[:4]
+    if time_hhmm and not re.fullmatch(r"\d{4}", time_hhmm):
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "invalid_time",
+                     "error": "time 须为 HHMM 四位数字（App 时间滑条口径）"},
+            status_code=422)
+    date = (date or "")[:10]
+    if date:
+        bad = _validate_date(date)
+        if bad is not None:
+            return bad
+    return JSONResponse(content=kpl_stock_fengkou.get_fengkou(time_hhmm=time_hhmm,
+                                                              date=date))
 
 
 async def _proxy_get(path: str) -> JSONResponse:

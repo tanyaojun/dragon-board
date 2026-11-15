@@ -44,7 +44,17 @@ _SIGNVC_SHELL = os.environ.get(
     'export CLASSPATH=/data/local/tmp/signsvc.dex; '
     '/system/bin/app_process32 /system/bin com.yzj.kaipanh.newindex.data.SignSvc"',
 )
-_DEVICE_ID = os.environ.get("KPL_DEVICE_ID", "4a81acf4-b516-3e79-ae26-40a67af7b97c")  # 设备指纹（参与 WBE 签名，非 token 级机密；env 可覆盖）
+_DEVICE_ID = (
+    os.environ.get("KPL_DEVICE_ID")
+    or os.environ.get("QUANT_BOARD_KPL_APP_DEVICEID", "")
+).strip()   # 两支统一 strip：空白字符串不得当作「已配置」（评审 P2）
+if not _DEVICE_ID:
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "KPL DeviceID 缺失（KPL_DEVICE_ID / QUANT_BOARD_KPL_APP_DEVICEID 均未配置）："
+        "WBE 签名将用空设备指纹，登录态校验端点可能拒绝——请把模拟器提取的 DeviceID "
+        "写入 quant-board/.env.local（提取路径见 mapping_refresh.py 注释）")  # fail-visible
 
 # 龙虎榜采集开关（task-4）：默认开（2112 预测 + 3004/3101 实时）。
 # 显式关闭：KPL_DABAN_LHB=0 / KPL_LHB_REALTIME=0（切换需重启进程）。
