@@ -121,8 +121,9 @@ def evaluate(db, date: str) -> dict:
     gens: dict[str, list] = {}
     for d in docs:
         gens.setdefault(str(d.get("questionSetVersion") or "unknown"), []).append(d)
-    # 选龙源构成披露（2026-11-15 第三源预登记）：互斥优先级同锚
-    # （jiuyan_dragon > auction_push > auction_trial_strength；trial 桶=仅强度源股）
+    # 选龙源构成披露（2026-11-15 第三源预登记；vA4 退役 jiuyan）：互斥优先级同锚
+    # （auction_push > auction_trial_strength > 退役 jiuyan；trial 桶=仅强度源股；
+    #  jiuyan 桶仅历史代际档，vA4 起不再产生）
     src_groups: dict[str, list] = {}
     for d in docs:
         src_groups.setdefault(source_bucket(d.get("selectionSources")), []).append(d)

@@ -567,20 +567,11 @@ def test_hygiene_review_20261113f_fixes():
     assert TA._fmt_amount_yuan(2.5e8) == "2.50亿"
 
 
-def test_hygiene_auction_leader_vA2_dragon_line():
-    """vA2 龙序行/锚构成/板结构入选措辞接入 §1.2-8 黑名单回归（预登记 vA2 §5）。"""
+def test_hygiene_auction_leader_vA4_anchor_structure():
+    """vA4 锚构成/板结构入选措辞接入 §1.2-8 黑名单回归（龙序行已退役删除）。"""
     from backend.analysis.hotlist import auction_leader_ammo as AL
-    roles = [{"board": "半导体", "role": "龙一", "boards": 4, "days": 4,
-              "time": "09:30", "sealedN": 3},
-             {"board": "机器人", "role": "龙二", "boards": 2, "days": 2,
-              "time": "09:35", "sealedN": 5, "zhaban": True}]
-    ln = AL.auction_dragon_line(roles, prev_date="2026-11-12")
-    _assert_clean(ln, "auction_dragon_line")
-    assert ln.startswith("昨日（2026-11-12）韭研涨停分组龙序："), ln
-    _assert_absent(AL.auction_dragon_line([], prev_date="2026-11-12"),
-                   "auction_dragon_line(无龙序)")
     _assert_clean(AL.auction_base_rate_line(
-        {"n": 40, "rate": 32.5, "nPush": 25, "nJiuyan": 15,
+        {"n": 40, "rate": 32.5, "nPush": 25, "nTrial": 15,
          "start": "2026-11-13", "end": "2026-11-20"}), "auction_base_rate_line(构成)")
     bs = AL.auction_board_structure_line(
         [{"streak": 2, "sealedPrev": True}], prev_date="2026-11-12")
@@ -721,8 +712,8 @@ def test_hygiene_auction_trial_strength_lines():
                    "trial_selection(缺排名)")
     _assert_absent(AL.auction_trial_selection_line({**st, "posture": "maintain"}),
                    "trial_selection(非撤减)")
-    # 锚行第三桶构成（第三源样本在场）
-    ln3 = AL.auction_base_rate_line({"n": 10, "rate": 40.0, "nPush": 5, "nJiuyan": 3,
+    # 锚行双桶构成（vA4 退役 jiuyan；第三源样本在场）
+    ln3 = AL.auction_base_rate_line({"n": 10, "rate": 40.0, "nPush": 5,
                                      "nTrial": 2, "start": "2026-11-13", "end": "2026-11-14"})
-    _assert_clean(ln3, "auction_base_rate_line(三桶)")
-    assert "推送 5/韭研龙 3/竞价强度 2" in ln3
+    _assert_clean(ln3, "auction_base_rate_line(双桶)")
+    assert "推送 5/竞价强度 2" in ln3 and "韭研龙" not in ln3

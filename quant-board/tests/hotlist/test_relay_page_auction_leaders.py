@@ -112,14 +112,23 @@ def test_status_bar_routing_and_nits(html):
     assert "2 次 jev 调用" in _fn(html, "alRerun"), "confirm 须披露板块连带重烧"
 
 
-def test_dragon_source_badge_vA2(html):
-    """vA2 §7：韭研龙源徽章（title 披露具体龙序，review M3）；推送缺席徽章仅推送源行。"""
+def test_dragon_source_removed_vA4(html):
+    """vA4（2026-11-15 用户裁决）：韭研龙序第二源退役——韭研龙徽章/龙序/领涨列移除；
+    推送缺席徽章保留（仅推送源行）。守卫防回潮。"""
     body = _fn(html, "alRowHtml")
-    assert "jiuyan_dragon_t1" in body and "韭研龙" in body
+    assert "jiuyan_dragon_t1" not in body and "韭研龙" not in body
+    assert "dragonBad" not in body and "r.dragonRoles" not in body
+    assert "alLeadRole" not in body and "leadCell" not in body
     assert "srcs.includes('auction_push')" in body
-    assert "dragonBad" in body
-    assert "r.dragonRoles" in body, "title 必须由 dragonRoles 拼装具体龙序"
-    assert "esc(dragonTxt" in body, "龙序 title 注入前必须 esc"
+
+
+def test_auction_column_count_vA4(html):
+    """vA4 删领涨列后竞价表 14 列：表头无领涨、colspan 同步 14（防列数漂移）。"""
+    head = _fn(html, "alRenderRows")
+    assert "th('领涨'" not in head
+    assert 'colspan="14"' in head and 'colspan="15"' not in head
+    row = _fn(html, "alRowHtml")
+    assert 'colspan="14"' in row and 'colspan="15"' not in row
 
 
 def test_event_cell_single_source_with_theme(html):

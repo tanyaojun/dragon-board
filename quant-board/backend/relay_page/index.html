@@ -1008,7 +1008,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   alData: { loading: false, error: null, doc: null, rows: [] },
   alUi: { q: '', board: '', choice: '', outcome: '', hard: '', seat: '',
           openKey: null, page: 1, mode: 'detail', q1: '', q2: '' },
-  alSort: { key: 'lead', dir: -1 },   // 默认领涨降序（龙一在前；2026-11-14 用户需求）
+  alSort: { key: 'prob', dir: -1 },   // 默认封板概率降序（vA4 移除韭研龙序领涨列）
   alNarr: {},
   diebanEntries: [], diebanUi: { openKey: null },
   riseEntries: [], riseUi: { openKey: null },
@@ -3428,13 +3428,6 @@ function alProb(row){
   const est = parts.reduce((a, kv) => a + kv[0] * kv[1], 0) / total;
   return { text: Math.round(est * 100) + '%', val: est };
 }
-// 领涨=本股龙序（dragonRoles 主板命中，回退首条）；推送单源无龙序 → null（不伪造身位）
-function alLeadRole(r){
-  const roles = r.dragonRoles || [];
-  if (!roles.length) return null;
-  const hit = roles.find(x => x.board === r.board) || roles[0];
-  return hit ? (hit.role || null) : null;
-}
 // 涨幅格式化（兼容数字/数字字符串；缺位/非有限 → '-'，不伪造数）
 function alPctTxt(v){
   const n = typeof v === 'number' ? v : parseFloat(v);
@@ -3474,9 +3467,9 @@ function alSorted(list){
   const kv = { date: r => r.tradingDate || '', code: r => r.code || '', name: r => r.name || '',
     board: r => r.board || '', pct: r => r.auctionPct == null ? -999 : r.auctionPct,
     rpct: r => r.realtimePct == null ? -999 : r.realtimePct,
-    lead: r => leadStrength(alLeadRole(r)), prob: r => alProb(r).val };
+    prob: r => alProb(r).val };
   if (!kv[st.key]) return list;
-  const nullLast = st.key === 'lead' || st.key === 'prob';   // 缺身位/缺概率恒垫后（fail-visible）
+  const nullLast = st.key === 'prob';   // 缺概率恒垫后（fail-visible）
   return list.slice().sort((a, b) => { const va = kv[st.key](a), vb = kv[st.key](b);
     if (nullLast){ const ma = va == null, mb = vb == null;
       if (ma && mb) return 0; if (ma) return 1; if (mb) return -1; }
@@ -3606,11 +3599,11 @@ function alRenderRows(){
   const th = (label, key) => '<th class="sortable" onclick="alSortBy(\'' + key + '\')">'
     + esc(label) + sortMark(STATE.alSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
-    + th('板块', 'board') + th('领涨', 'lead') + th('竞价涨幅', 'pct') + th('实时涨幅', 'rpct')
+    + th('板块', 'board') + th('竞价涨幅', 'pct') + th('实时涨幅', 'rpct')
     + th('封板概率', 'prob') + '<th>档位</th><th>催化</th><th>身位</th>'
     + '<th>题材深度</th><th>延续性</th><th title="事件/新闻/题材证据窄徽章 + 监管风险徽章 监/停/异/触（T−1 收盘档；hover 看明细）">事件</th><th>结局</th></tr>'
     + (pg.rows.length ? pg.rows.map(r => alRowHtml(r, f)).join('')
-      : '<tr><td class="empty" colspan="15">无匹配竞价龙头（调整区间或筛选条件）</td></tr>');
+      : '<tr><td class="empty" colspan="14">无匹配竞价龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('alPagerHost'); if (ph) ph.innerHTML = alPager(pg.page, pg.total);
   regEnsureDates(pg.rows.map(r => (r.corpusState || {}).prevDate), alRenderRows);
 }
@@ -3646,16 +3639,8 @@ function alRowHtml(r, f){
     AL_CONT_BADGE[r.themeContinuation] || 'b-gray');
   const pctTxt = alPctTxt(r.auctionPct);       // 竞价涨幅（bid 通道真竞价值）
   const rpctTxt = alPctTxt(r.realtimePct);     // 实时涨幅（推送芯片 pct）
-  const leadRole = alLeadRole(r);
-  const leadCell = badge(leadRole, 'b-purple',
-    leadRole ? '领涨身位：' + leadRole + '（韭研 T−1 涨停分组龙序）' : '');
   const evid = evidenceCellHtml(r, (r.corpusState || {}).prevDate);   // 监管徽章=T−1 收盘档（语料同口径）
   const srcs = r.selectionSources || ['auction_push'];
-  const dragonTxt = (r.dragonRoles || []).map(x => (x.board || '') + (x.role || '')
-    + (x.boards > 1 ? '（' + (x.days > 1 ? x.days + '天' : '') + x.boards + '板' + (x.zhaban ? '，炸板' : '') + '）'
-       : (x.boards === 1 ? '（首板）' : ''))).filter(Boolean).join('；');
-  const dragonBad = srcs.includes('jiuyan_dragon_t1')
-    ? ' <span class="badge b-blue" title="' + esc(dragonTxt || '选龙源：韭研 T−1 涨停分组龙一/二/三（官方封板口径≥3家）') + '">韭研龙</span>' : '';
   // 第三源徽章（2026-11-15 预登记 auction-leader-trial-strength-source）：title 披露
   // jj_ratio/板内排名；trial 单源股推送缺席是预期态（pushBad 仅推送源行，不告警）
   const trialTxt = r.trialStrength
@@ -3678,14 +3663,13 @@ function alRowHtml(r, f){
       + esc((r.tradingDate || '').slice(5)) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
-    + '<td>' + esc(r.board || '未归属') + dragonBad + trialBad + pushBad + bidBad + '</td>'
-    + '<td>' + leadCell + '</td>'
+    + '<td>' + esc(r.board || '未归属') + trialBad + pushBad + bidBad + '</td>'
     + '<td class="num" title="竞价涨幅（09:25 匹配价，bid 通道 bidding_pct）">' + pctTxt + '</td>'
     + '<td class="num" title="实时涨幅（09:15 竞价看龙头推送芯片 pct）">' + rpctTxt + '</td>'
     + '<td class="num" title="由模型的四档概率按中值（75/55/35/12.5）加权换算"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td><td>' + hardCell + '</td><td>' + seatCell + '</td>'
     + '<td>' + depthCell + '</td><td>' + contCell + '</td><td>' + evid + '</td><td>' + outcome + '</td></tr>'
-    + (open ? '<tr class="lg-detail"><td colspan="15">' + alDetailHtml(r) + '</td></tr>' : '');
+    + (open ? '<tr class="lg-detail"><td colspan="14">' + alDetailHtml(r) + '</td></tr>' : '');
 }
 function alOpenRow(){
   const k = STATE.alUi.openKey;

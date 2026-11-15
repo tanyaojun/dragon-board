@@ -173,7 +173,7 @@ def test_fire_writes_docs_and_idempotent(env):
     sector = col.docs[f"{DATE}:board:机器人"]
     assert leader["docKind"] == "leader" and leader["status"] == "ok"
     assert leader["auctionSealToday"] == "mid_45_65"
-    assert leader["questionSetVersion"] == "vA3"
+    assert leader["questionSetVersion"] == "vA4"
     assert leader["outcomeSealedToday"] is None
     assert "竞价看龙头推送（09:15 试盘价）：" in leader["narrative"]
     assert sector["docKind"] == "sector"
@@ -425,337 +425,56 @@ def test_auction_ladder_line_filters_uncomputable():
     # 原共享函数保留「不可算」（theme 链裁决不动），仅竞价消费点过滤
     assert "不可算" in board_ladder_line({"ladderShape": {"first": 1, "two": 0, "threePlus": 0, "unknown": 1},
                                           "streak": None})
-# ── vA2 选龙双源（A4e / B1–B6，2026-11-14 用户裁决）─────────────────────────
-
-def _jiuyan_final(db, prev_date, fields):
-    """种 T−1 final（含 kind/tradingDate 供交易日历读口）。"""
-    db["jiuyan_action"].docs[f"{prev_date}:final"] = {
-        "_id": f"{prev_date}:final", "kind": "jiuyan_action",
-        "tradingDate": prev_date, "fields": fields}
+# ── vA4 选龙（2026-11-15 用户裁决：退役 jiuyan 龙序第二源，实测封板概率极低）───
+# 选龙 = 推送基源 ∪ 竞价强度第三源；jiuyan_dragon_roster/龙序叙事/韭研龙徽章已删。
+# 推送语义（缺席跳过/fetch_failed 退避/幂等/锚 look-ahead）由上方既有测试覆盖。
 
 
-def _ths_frame(db, date, failed_codes=()):
-    db["snapshot_frames"].docs[f"{date}:15:00"] = {
-        "_id": f"{date}:15:00", "datasetId": "dragonboard_live", "type": "half_hour",
-        "tradingDate": date, "slotTime": "15:00", "timestamp": 1, "snapshotId": "s1",
-        "limitSummary": {"thsPools": {"ok": True, "pools": {
-            "failed": {"items": [{"code": c} for c in failed_codes]}}}}}
-
-
-def _stock(code, name, num=None, time=None):
-    s = {"code": code, "name": name}
-    if num:
-        s["num"] = num
-    if time:
-        s["time"] = time
-    return s
-
-
-def test_jiuyan_dragon_selection_sealed_ge3(env, monkeypatch):
-    """B1/B2：官方封板口径 ≥3 家板块的龙一/二/三入选；炸板/ST 不计家数。"""
+def test_push_missing_third_source_not_alone(env, monkeypatch):
+    """vA4：推送缺席时第三源不单独触发（不兜底选龙）→ 零调用 skip。"""
     db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    import backend.operations.jev_label_jiuyan as J
-    monkeypatch.setattr(J, "_reseal_verdict", lambda date, code: "broken")
-    # 半导体：4 触板，1 炸板（600103 无 num 排龙四）→ 封板 3 家达标
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [
-            _stock("600100", "甲", "4天4板", "09:30"),
-            _stock("600101", "乙", "2天2板", "09:35"),
-            _stock("600102", "丙", "1天1板", "09:40"),
-            _stock("600103", "丁", None, "09:45")]},
-        # 触板 3 但 1 炸板 → 封板 2 家不达标
-        {"name": "不达标板", "stocks": [
-            _stock("600200", "戊", "3天3板", "09:30"),
-            _stock("600201", "己", "1天1板", "09:35"),
-            _stock("600202", "庚", None, "09:40")]},
-        # ST 剔除：触板 4 含 1 ST → 封板 3 达标，ST 不进家数
-        {"name": "含ST板", "stocks": [
-            _stock("600300", "ST辛", "2天2板", "09:30"),
-            _stock("600301", "壬", "1天1板", "09:35"),
-            _stock("600302", "癸", None, "09:40"),
-            _stock("600303", "子", None, "09:45")]}])
-    _ths_frame(db, "2026-11-12", failed_codes=["600103", "600202"])
-    rows, state = L.jiuyan_dragon_roster(db, "2026-11-12")
-    codes = {r["code"] for r in rows}
-    assert state["countCaliber"] == "sealed_official" and state["minSealed"] == 3
-    q = {b["board"]: b["sealedN"] for b in state["boardsQualified"]}
-    assert q == {"半导体": 3, "含ST板": 3}   # 不达标板封板 2 家被剔
-    assert "600200" not in codes            # 不达标板龙股不入选
-    assert {"600100", "600101", "600102"} <= codes
-    assert "600103" not in codes            # 龙四不投喂（top3）
-    r100 = next(r for r in rows if r["code"] == "600100")
-    assert r100["dragonRoles"][0]["role"] == "龙一"
-    assert r100["board"] == "半导体"
+    rows = {"600100": _srow(), "600101": _srow(), "600102": _srow()}
+    boards = {"机器人": ["600100", "600101", "600102"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        db["kpl_live_daily"].docs[DATE]["auctionPush"]["stocks"] = []
+        db["kpl_live_daily"].docs[DATE]["auctionPush"]["entries"] = []
+        res = L.run(DATE, confirm_budget=True)
+        assert res["ok"] and res["skippedReason"] == "auction_push_missing"
+        assert calls == []
+        assert "jiuyanDragonState" not in res
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
 
 
-def test_jiuyan_zhaban_dragon_kept_with_flag(env, monkeypatch):
-    """B4：龙序不排除炸板股——炸板高度龙仍列龙一，zhaban 旗标随行（叙事标「炸板」）。"""
+def test_max_leaders_truncates_union(env, monkeypatch):
+    """N5：max_leaders 截断对 推送∪trial 并集生效（其余记账 fail-visible）。"""
     db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    import backend.operations.jev_label_jiuyan as J
-    monkeypatch.setattr(J, "_reseal_verdict", lambda date, code: "broken")
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [
-            _stock("600100", "甲", "5天5板", "09:30"),   # 炸板但高度龙一
-            _stock("600101", "乙", "2天2板", "09:35"),
-            _stock("600102", "丙", "1天1板", "09:40"),
-            _stock("600103", "丁", None, "09:45")]}])
-    _ths_frame(db, "2026-11-12", failed_codes=["600100"])
-    rows, state = L.jiuyan_dragon_roster(db, "2026-11-12")
-    assert {b["board"]: b["sealedN"] for b in state["boardsQualified"]} == {"半导体": 3}
-    r100 = next(r for r in rows if r["code"] == "600100")
-    assert r100["dragonRoles"][0]["role"] == "龙一"
-    assert r100["dragonRoles"][0]["zhaban"] is True
-    res = L.run(DATE, confirm_budget=True)
-    n = db[L.COLLECTION].docs[f"{DATE}:600100"]["narrative"]
-    assert "炸板" in n and "触板 09:30" in n
+    rows = {"600100": _srow(), "600101": _srow(), "600102": _srow()}
+    boards = {"机器人": ["600100", "600101", "600102"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True, max_leaders=1)
+        assert res["leaders"] == 1
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
 
 
-def test_jiuyan_reseal_counts_as_sealed(env, monkeypatch):
-    """B2 含回封补证：THS 炸板池命中但尾盘回封 → 按封板计家数（不标 zhaban）。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    import backend.operations.jev_label_jiuyan as J
-    monkeypatch.setattr(J, "_reseal_verdict", lambda date, code: "sealed")
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [
-            _stock("600100", "甲", "4天4板", "15:00"),
-            _stock("600101", "乙", "2天2板", "09:35"),
-            _stock("600102", "丙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12", failed_codes=["600100"])
-    rows, state = L.jiuyan_dragon_roster(db, "2026-11-12")
-    # 无回封补证则封板 2 家不达标；回封 → 3 家达标
-    assert {b["board"]: b["sealedN"] for b in state["boardsQualified"]} == {"半导体": 3}
-    r100 = next(r for r in rows if r["code"] == "600100")
-    assert "zhaban" not in r100["dragonRoles"][0]
+def test_source_bucket_retires_jiuyan():
+    """vA4：source_bucket 推送>强度>退役jiuyan；重叠历史档归存活源。"""
+    assert L.source_bucket(["auction_push", "jiuyan_dragon_t1"]) == "auction_push"
+    assert L.source_bucket(["jiuyan_dragon_t1", "auction_trial_strength"]) == "auction_trial_strength"
+    assert L.source_bucket(["jiuyan_dragon_t1"]) == "jiuyan_dragon_t1"
+    assert L.source_bucket(None) == "auction_push"
 
-
-def test_jiuyan_dragon_union_with_push(env, monkeypatch):
-    """B6：推送 ∪ jiuyan 龙去重；双源股 selectionSources 双标 + 保留推送 pct。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    # 推送股 603135 同时是机器人板龙一 → 双源；600100 纯 jiuyan 源
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "机器人", "stocks": [
-            _stock("603135", "中重科技", "3天3板", "09:30"),
-            _stock("600100", "甲", "2天2板", "09:35"),
-            _stock("600101", "乙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12")
-    res = L.run(DATE, confirm_budget=True)
-    assert res["ok"]
-    col = db[L.COLLECTION]
-    d603 = col.docs[f"{DATE}:603135"]
-    assert set(d603["selectionSources"]) == {"auction_push", "jiuyan_dragon_t1"}
-    assert d603["realtimePct"] == 3.0         # 推送实时 pct → realtimePct（2026-11-14 修复）
-    assert d603["auctionPct"] is None         # 无 bid 通道档 → 竞价涨幅缺席（不拿实时冒充）
-    assert d603["dragonRoles"][0]["role"] == "龙一"
-    assert d603["boardMapping"]["pickedBy"] == "t1_group"   # A4b 映射不变
-    d100 = col.docs[f"{DATE}:600100"]
-    assert d100["selectionSources"] == ["jiuyan_dragon_t1"]
-    assert d100["auctionPct"] is None         # jiuyan 单源无 bid 档
-    assert d100["realtimePct"] is None        # jiuyan 单源无 09:15 试盘价
-    assert d100["boardMapping"]["pickedBy"] == "dragon_t1"
-    assert res["selection"]["overlapN"] == 1 and res["selection"]["unionN"] == 3
-    assert "韭研涨停分组龙序" in d100["narrative"]
-    assert "竞价看龙头推送" not in d100["narrative"]   # 推送行整行缺席
-    sec = col.docs[f"{DATE}:board:机器人"]
-    roles = {s["code"]: s["dragonRole"] for s in sec["segmentRows"]}
-    assert roles["603135"] == "龙一" and roles["600100"] == "龙二"
-    assert "入选 3 只" in sec["narrative"]
-
-
-def test_jiuyan_multi_board_dragon_primary(env, monkeypatch):
-    """B6：一股多板龙序 → 主板按封板家数降序→组名升序；全部龙序并列披露。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "小板", "stocks": [
-            _stock("600100", "甲", "4天4板", "09:30"),
-            _stock("600101", "乙", "1天1板", "09:35"),
-            _stock("600102", "丙", None, "09:40")]},
-        {"name": "大板", "stocks": [
-            _stock("600100", "甲", "4天4板", "09:30"),
-            _stock("600103", "丁", "2天2板", "09:35"),
-            _stock("600104", "戊", "1天1板", "09:40"),
-            _stock("600105", "己", None, "09:45")]}])
-    _ths_frame(db, "2026-11-12")
-    rows, state = L.jiuyan_dragon_roster(db, "2026-11-12")
-    r100 = next(r for r in rows if r["code"] == "600100")
-    assert r100["board"] == "大板"            # 封板 4 > 3
-    assert [x["board"] for x in r100["dragonRoles"]] == ["大板", "小板"]
-    res = L.run(DATE, confirm_budget=True)
-    d100 = db[L.COLLECTION].docs[f"{DATE}:600100"]
-    assert d100["board"] == "大板"
-    assert len(d100["dragonRoles"]) == 2
-    assert f"{DATE}:board:大板" in db[L.COLLECTION].docs
-    assert f"{DATE}:board:小板" in db[L.COLLECTION].docs
-
-
-def test_jiuyan_ths_pool_missing_source_absent(env, monkeypatch):
-    """B2 宁缺毋猜：THS 炸板池缺失 → jiuyan 整源缺席 + reason，不回退触板口径。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [_stock("600100", "甲", "4天4板", "09:30"),
-                                     _stock("600101", "乙", "2天2板", "09:35"),
-                                     _stock("600102", "丙", "1天1板", "09:40")]}])
-    # 不种 THS 帧 → thsPoolFound=False
-    rows, state = L.jiuyan_dragon_roster(db, "2026-11-12")
-    assert rows == [] and state["reason"] == "ths_pool_missing"
-    res = L.run(DATE, confirm_budget=True)
-    assert res["ok"]                          # 推送源照跑
-    assert res["jiuyanDragonState"]["reason"] == "ths_pool_missing"
-    assert f"{DATE}:600100" not in db[L.COLLECTION].docs
-
-
-def test_jiuyan_t1_final_missing(env, monkeypatch):
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    rows, state = L.jiuyan_dragon_roster(db, "2026-11-12")
-    assert rows == [] and state["reason"] == "t1_final_missing"
-
-
-def test_push_missing_runs_jiuyan_only(env, monkeypatch):
-    """B3：推送验证后缺席但 jiuyan 龙在场 → 跑 jiuyan 单源（不再零调用）。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    db["kpl_live_daily"].docs[DATE]["auctionPush"]["stocks"] = []
-    db["kpl_live_daily"].docs[DATE]["auctionPush"]["entries"] = []
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [_stock("600100", "甲", "4天4板", "09:30"),
-                                     _stock("600101", "乙", "2天2板", "09:35"),
-                                     _stock("600102", "丙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12")
-    res = L.run(DATE, confirm_budget=True)
-    assert res["ok"] and res["leaders"] == 3
-    d = db[L.COLLECTION].docs[f"{DATE}:600100"]
-    assert d["selectionSources"] == ["jiuyan_dragon_t1"]
-    assert d["auctionPushState"]["entryN"] == 0
-
-
-def test_push_fetch_failed_retries_even_with_jiuyan(env, monkeypatch):
-    """B3：fetch_failed 即使 jiuyan 源在场也 ok=False 交退避（不吃掉推送样本）。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [_stock("600100", "甲", "4天4板", "09:30"),
-                                     _stock("600101", "乙", "2天2板", "09:35"),
-                                     _stock("600102", "丙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12")
-    monkeypatch.setattr(L, "roster_for", lambda db, date, fetch_missing=True: (
-        None, {"pushState": "fetch_failed", "reason": "fetch_failed: boom"}))
-    res = L.run(DATE, confirm_budget=True)
-    assert res["ok"] is False and res["errorCode"] == "auction_push_fetch_failed"
-    assert calls == []
-    assert res["jiuyanDragonState"]["dragonN"] == 3
-
-
-def test_both_sources_missing_skips(env, monkeypatch):
-    """双源均缺席 → 零调用 skippedReason=auction_push_missing + 双状态留痕。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    db["kpl_live_daily"].docs[DATE]["auctionPush"]["stocks"] = []
-    res = L.run(DATE, confirm_budget=True)
-    assert res["ok"] and res["skippedReason"] == "auction_push_missing"
-    assert res["jiuyanDragonState"]["reason"] == "t1_final_missing"
-    assert calls == []
-
-
-def test_backfill_jiuyan_only_history(env, monkeypatch):
-    """B3/A4e：历史日推送不可回放，jiuyan T−1 + bid 日档在库 → backfill 可跑单源。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    db["kpl_live_daily"].docs.pop(DATE)       # 历史日无直播归档
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [_stock("600100", "甲", "4天4板", "09:30"),
-                                     _stock("600101", "乙", "2天2板", "09:35"),
-                                     _stock("600102", "丙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12")
-    res = L.run(DATE, confirm_budget=True)    # DATE=2026-11-13 固定历史日
-    assert res["ok"] and res["leaders"] == 3
-    d = db[L.COLLECTION].docs[f"{DATE}:600100"]
-    assert d["sampleOrigin"] == "backfill"
-    assert d["auctionPushState"]["reason"] == "auction_push_missing_history"   # N5 留痕断言
-
-
-def test_dragon_line_zhaban_annotation():
-    """B4：炸板高位股龙序行内标「炸板」+ 触板时点（纯事实，过卫生黑名单）。"""
-    from backend.analysis.hotlist import auction_leader_ammo as AL
-    roles = [{"board": "半导体", "role": "龙一", "boards": 4, "days": 4,
-              "time": "09:30", "sealedN": 3, "zhaban": True}]
-    ln = AL.auction_dragon_line(roles, prev_date="2026-11-12")
-    assert "炸板" in ln and "触板 09:30" in ln and "4天4板" in ln
-    assert AL.auction_dragon_line([], prev_date="2026-11-12") is None
-    assert AL.auction_dragon_line(roles, prev_date=None) is None
-    clean = [{"board": "机器人", "role": "龙二", "boards": 2, "days": 2,
-              "time": "09:35", "sealedN": 5}]
-    ln2 = AL.auction_dragon_line(clean, prev_date="2026-11-12")
-    assert "封板 09:35" in ln2 and "炸板" not in ln2 and "板涨停 5 家" in ln2
-    # N1：显式 boards=1 标「首板」（relay 同口径）；None 缺位省略
-    first = [{"board": "半导体", "role": "龙三", "boards": 1, "days": 1,
-              "time": "10:00", "sealedN": 3}]
-    assert "首板" in AL.auction_dragon_line(first, prev_date="2026-11-12")
-    nonum = [{"board": "半导体", "role": "龙三", "boards": None,
-              "time": "10:00", "sealedN": 3}]
-    ln3 = AL.auction_dragon_line(nonum, prev_date="2026-11-12")
-    assert "首板" not in ln3 and "天" not in ln3 and ln3.split("（")[-1].startswith("封板")
-
-
-def test_jiuyan_no_prev_date(env):
-    """N5：无 T−1 交易日 → reason=no_prev_date（直测）。"""
-    db, calls = env
-    rows, state = L.jiuyan_dragon_roster(db, None)
-    assert rows == [] and state["reason"] == "no_prev_date"
-
-
-def test_codes_filter_with_dual_source(env, monkeypatch):
-    """N5：codes 单只重跑与双源并集交互——只重建命中股 + 其板块。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [_stock("600100", "甲", "4天4板", "09:30"),
-                                     _stock("600101", "乙", "2天2板", "09:35"),
-                                     _stock("600102", "丙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12")
-    res = L.run(DATE, confirm_budget=True, codes={"600100"})
-    assert res["leaders"] == 1
-    col = db[L.COLLECTION]
-    assert f"{DATE}:600100" in col.docs
-    assert f"{DATE}:600101" not in col.docs
-    assert f"{DATE}:603135" not in col.docs      # 推送股不在 codes 内
-    assert f"{DATE}:board:半导体" in col.docs
-
-
-def test_max_leaders_truncates_dual_source(env, monkeypatch):
-    """N5：max_leaders 截断对双源并集生效（其余记账 fail-visible）。"""
-    db, calls = env
-    monkeypatch.setattr(L, "trading_dates_before", lambda *a, **k: ["2026-11-11", "2026-11-12"])
-    _jiuyan_final(db, "2026-11-12", [
-        {"name": "半导体", "stocks": [_stock("600100", "甲", "4天4板", "09:30"),
-                                     _stock("600101", "乙", "2天2板", "09:35"),
-                                     _stock("600102", "丙", "1天1板", "09:40")]}])
-    _ths_frame(db, "2026-11-12")
-    res = L.run(DATE, confirm_budget=True, max_leaders=1)
-    assert res["leaders"] == 1
-
-
-def test_base_rate_anchor_source_composition(env):
-    """vA2 锚行人群构成：双源股归韭研龙桶，vA1 旧档无 selectionSources 按推送计。"""
-    db, calls = env
-    col = db[L.COLLECTION]
-    col.docs["2026-11-13:600001"] = {
-        "_id": "2026-11-13:600001", "tradingDate": "2026-11-13", "docKind": "leader",
-        "status": "ok", "sampleOrigin": "live", "outcomeSealedToday": True}   # 旧档无源
-    col.docs["2026-11-13:600002"] = {
-        "_id": "2026-11-13:600002", "tradingDate": "2026-11-13", "docKind": "leader",
-        "status": "ok", "sampleOrigin": "live", "outcomeSealedToday": False,
-        "selectionSources": ["jiuyan_dragon_t1"]}
-    stats = L.auction_seal_base_rate(db, before="2026-11-14")
-    assert stats["n"] == 2 and stats["nPush"] == 1 and stats["nJiuyan"] == 1
-    from backend.analysis.hotlist import auction_leader_ammo as AL
-    ln = AL.auction_base_rate_line(stats)
-    assert "推送 1/韭研龙 1" in ln
 
 
 def test_evaluate_generation_breakdown():
@@ -1073,7 +792,6 @@ def test_trial_strength_third_source_new_leader(env, monkeypatch):
         assert d["boardSource"] == "jiuyan_root_trial"
         assert d["board"] == "机器人" and d["realtimePct"] is None
         assert d["boardMapping"]["pickedBy"] == "trial_root_strength"
-        assert d["dragonRoles"] == []
         assert d["trialStrength"]["rank"] == 1
         assert d["trialStrength"]["jjtier"] == "mid50_95"
         assert d["trialStrength"]["posture"] == "decrease"
@@ -1245,7 +963,7 @@ def test_trial_strength_non_theme_excluded(env, monkeypatch):
 
 
 def test_base_rate_anchor_third_bucket_priority(env):
-    """锚人群第三桶：互斥优先级 jiuyan_dragon > auction_push > auction_trial_strength。"""
+    """vA4 锚人群桶：互斥优先级 auction_push > auction_trial_strength；退役 jiuyan 单源历史档不计入。"""
     db, calls = env
     col = db[L.COLLECTION]
     base = {"tradingDate": "2026-11-13", "docKind": "leader", "status": "ok",
@@ -1257,12 +975,15 @@ def test_base_rate_anchor_third_bucket_priority(env):
     col.docs["2026-11-13:600003"] = {**base, "_id": "2026-11-13:600003",
                                      "selectionSources": ["auction_trial_strength"]}
     col.docs["2026-11-13:600004"] = {**base, "_id": "2026-11-13:600004"}   # vA1 旧档按推送
+    col.docs["2026-11-13:600005"] = {**base, "_id": "2026-11-13:600005",
+                                     "selectionSources": ["jiuyan_dragon_t1"]}   # 退役单源→不计入
     stats = L.auction_seal_base_rate(db, before="2026-11-14")
     assert stats["n"] == 4
-    assert stats["nPush"] == 2 and stats["nJiuyan"] == 1 and stats["nTrial"] == 1
+    assert stats["nPush"] == 2 and stats["nTrial"] == 2
+    assert "nJiuyan" not in stats
     from backend.analysis.hotlist import auction_leader_ammo as AL
     ln = AL.auction_base_rate_line(stats)
-    assert "推送 2/韭研龙 1/竞价强度 1" in ln
+    assert "推送 2/竞价强度 2" in ln and "韭研龙" not in ln
 
 
 def test_evaluate_selection_source_breakdown():
@@ -1271,7 +992,7 @@ def test_evaluate_selection_source_breakdown():
     db = FakeDb()
     col = db[E.COLLECTION]
     base = {"tradingDate": DATE, "docKind": "leader", "status": "ok",
-            "questionSetVersion": "vA3", "auctionSealToday": "mid_45_65"}
+            "questionSetVersion": "vA4", "auctionSealToday": "mid_45_65"}
     col.docs[f"{DATE}:600001"] = {**base, "_id": f"{DATE}:600001",
                                   "outcomeSealedToday": True,
                                   "selectionSources": ["auction_trial_strength"]}

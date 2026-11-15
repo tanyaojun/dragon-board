@@ -3,8 +3,8 @@
 
 合同镜像 /theme-leaders（date | start/end | with_narrative；500 档上限+truncated；
 sector doc 合入个股行；缺档行 labelMissing 披露——行源 = labels ∪ auctionPush roster
-∪ jiuyan 龙 roster ∪ 竞价强度 trial roster（同一 jiuyan_dragon_roster /
-trial_strength_roster 实现，禁第二套），打标停跑不阻断清单，fail-visible）。
+∪ 竞价强度 trial roster（同一 trial_strength_roster 实现，禁第二套；vA4 已退役
+jiuyan 龙序源），打标停跑不阻断清单，fail-visible）。
 """
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ def _row_of(d: dict, sector: dict | None, with_narrative: bool,
         "outcomeSealedToday": d.get("outcomeSealedToday"),
         "outcomeSource": d.get("outcomeSource"), "outcomeCross": d.get("outcomeCross"),
         "corpusState": d.get("corpusState"), "auctionPushState": d.get("auctionPushState"),
-        "selectionSources": d.get("selectionSources"), "dragonRoles": d.get("dragonRoles"),
+        "selectionSources": d.get("selectionSources"),
         "trialStrength": d.get("trialStrength"),
         "lhbState": d.get("lhbState"), "sectorJudgmentState": d.get("sectorJudgmentState"),
         "model": d.get("model"), "usage": d.get("usage"), "latencyMs": d.get("latencyMs"),
@@ -241,47 +241,14 @@ def get_auction_leaders(date: str | None = None, start: str | None = None,
                              "labelMissing": True})
     except Exception as exc:  # noqa: BLE001 — 直播归档读失败不阻断 labels 清单（fail-visible 留痕）
         roster_error = f"{type(exc).__name__}: {exc}"
-    # jiuyan 龙 roster 缺档行（vA2 A4e：同一 jiuyan_dragon_roster 实现按需计算；
-    # 日期集 = live 归档日 ∪ labels 日，单 date 模式即该日；失败留痕不阻断）
-    dragon_roster_error = None
+    # 缺档行日期集 = live 归档日 ∪ labels 日（单 date 模式即该日）；第三源 trial 按需补行
+    # （vA4：jiuyan 龙序源已退役 2026-11-15，不再补 jiuyan 缺档行）
     dates = ({date} if date else
              {str(ld.get("_id")) for ld in live_docs}
              | {str(r.get("tradingDate")) for r in rows})
     seen = {(r["tradingDate"], r["code"]) for r in rows}
     missing_by_key = {(r["tradingDate"], r["code"]): r for r in rows
                       if r.get("labelMissing")}
-    try:
-        from backend.operations.auction_leader_label import (
-            SOURCE_JIUYAN_DRAGON, jiuyan_dragon_roster)
-        from backend.operations.theme_leader_label import trading_dates_before
-        for d0 in sorted(dates):
-            if not d0:
-                continue
-            prevs = trading_dates_before(db, d0, 1)
-            jrows, _jstate = jiuyan_dragon_roster(db, prevs[-1] if prevs else None)
-            for jr in jrows:
-                key = (d0, jr["code"])
-                if key in seen:
-                    # 双源缺档行合并 jiuyan 披露（review N3：推送 roster 行补源/龙序）
-                    row0 = missing_by_key.get(key)
-                    if row0 is not None:
-                        row0["selectionSources"] = ["auction_push", SOURCE_JIUYAN_DRAGON]
-                        row0["dragonRoles"] = jr.get("dragonRoles")
-                    continue
-                seen.add(key)
-                missing += 1
-                jrow = {"tradingDate": d0, "code": jr["code"],
-                        "name": jr.get("name"), "board": jr.get("board"),
-                        "auctionPct": None,
-                        "selectionSources": [SOURCE_JIUYAN_DRAGON],
-                        "dragonRoles": jr.get("dragonRoles"),
-                        "labelMissing": True}
-                rows.append(jrow)
-                # 评审 P1-1（2026-11-15）：jiuyan 新增缺档行同步注册快照——
-                # 否则 trial 合并对 jiuyan∩trial 股查不到行，静默丢第三源披露
-                missing_by_key[key] = jrow
-    except Exception as exc:  # noqa: BLE001 — jiuyan roster 计算失败不阻断 labels/推送 roster
-        dragon_roster_error = f"{type(exc).__name__}: {exc}"
     # 竞价强度 roster 缺档行（第三源 2026-11-15 预登记：同一 trial_strength_roster
     # 实现按需计算；trial_rows 从 auction_trial_raw 日档加载，禁第二套；失败留痕不阻断）
     trial_roster_error = None
@@ -315,7 +282,7 @@ def get_auction_leaders(date: str | None = None, start: str | None = None,
                              "selectionSources": [SOURCE_TRIAL_STRENGTH],
                              "trialStrength": tr["trialStrength"],
                              "labelMissing": True})
-    except Exception as exc:  # noqa: BLE001 — trial roster 计算失败不阻断 labels/推送/jiuyan roster
+    except Exception as exc:  # noqa: BLE001 — trial roster 计算失败不阻断 labels/推送 roster
         trial_roster_error = f"{type(exc).__name__}: {exc}"
     rows.sort(key=lambda r: (str(r.get("tradingDate") or ""), str(r.get("board") or ""),
                              str(r.get("code") or "")), reverse=False)
@@ -323,8 +290,6 @@ def get_auction_leaders(date: str | None = None, start: str | None = None,
     nf: dict[str, Any] = {"labelMissingRows": missing}
     if roster_error:
         nf["rosterError"] = roster_error
-    if dragon_roster_error:
-        nf["dragonRosterError"] = dragon_roster_error
     if trial_roster_error:
         nf["trialRosterError"] = trial_roster_error
     if roster_truncated:

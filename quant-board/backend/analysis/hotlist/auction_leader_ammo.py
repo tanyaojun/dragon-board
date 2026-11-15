@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""竞价龙头链 vA2 题集 + 叙事行（预登记 auction-leader-vA2-preregistration-20261114，
-基线 vA1）。选龙双源：KPL 09:15 推送 ∪ 韭研 T−1 涨停分组龙一/二/三（官方封板口径
-≥3 家，B1/B2）；身位题措辞「同板推送股」→「同板入选股」（B5 换代）。
+"""竞价龙头链 vA4 题集 + 叙事行（预登记 auction-leader-vA2-preregistration-20261114，
+基线 vA1）。选龙双源：KPL 09:15 推送 ∪ 竞价试盘强度板块前三（2026-11-15 用户裁决
+移除韭研 T−1 龙序源——实测封板概率极低，vA4 清理身位题龙序判据）；身位题措辞
+「同板推送股」→「同板入选股」（B5 换代）。
 
 代际纪律：独立题集常量/独立 hash/独立 AMMO 戳（跨代不可比）；板块两题与催化硬度题
 **原文复用 v17**（import 不复制，单一事实源）；删除 leader_headroom /
@@ -27,8 +28,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     _questions_hash,
 )
 
-QUESTION_SET_VERSION_AUCTION_LEADER = "vA3"   # 换代登记：auction-leader-vA3-preregistration-20261114（三点裁决：资金并入判据/保留五档/板块聚合留 vA4）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-15b"   # 第三源语料供给换代：竞价强度两新行（仅 trial 源 leader，预登记 auction-leader-trial-strength-source-preregistration-20261115）；题面 vA3/hash 不动；前一版 2026-11-15a = 监管风险行（KPL 严重异动/重点监控，T−1 收盘档）；2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
+QUESTION_SET_VERSION_AUCTION_LEADER = "vA4"   # 换代登记：2026-11-15 用户裁决移除韭研龙序第二源（实测封板概率极低）；身位题清理「韭研龙序」判据（红线6）；前一版 vA3 = auction-leader-vA3-preregistration-20261114
+AMMO_VERSION_AUCTION_LEADER = "2026-11-15c"   # vA4：移除韭研龙序源（删龙序叙事行/锚第二桶/身位题龙序判据）；前一版 2026-11-15b = 第三源竞价强度两新行；2026-11-15a = 监管风险行；2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -91,11 +92,11 @@ QUESTIONS_AUCTION_LEADER = {
     },
     "auction_seat_durability": {
         "type": "choice",
-        "instructions": "仅依据所给证据（昨日梯队/结构行、昨日韭研龙序行、同板入选股间"
+        "instructions": "仅依据所给证据（昨日梯队/结构行、同板入选股间"
                         "竞价高开与竞价额对比、热度排名行、题材热度行、板块判定行），"
                         "判断该竞价龙头在板块内的**身位稳固度**——是稳固核心、被挑战，"
                         "还是可替代的接力位。只判身位性质，不预测价格、不给买卖建议。"
-                        "硬规则：①判档必须点名昨日梯队领先差/韭研龙序/同板竞价对比/"
+                        "硬规则：①判档必须点名昨日梯队领先差/同板竞价对比/"
                         "热度排名中至少一项具体事实；②同板竞价对比高开幅度与竞价额均"
                         "落后于同板其他入选股且无独立催化时默认 relay_seat，除非昨日"
                         "高度显著领先（领先差≥1 板）或热度排名 Top3；③板块判定=退潮期/"
@@ -369,46 +370,6 @@ def auction_trial_selection_line(strength: dict | None) -> str | None:
     return f"竞价强度入选：jj_ratio {ratio:g}%（{jjtier}），资金姿态撤减，板内强度排名 {rank}"
 
 
-def auction_dragon_line(roles: list[dict] | None, *, prev_date: str | None) -> str | None:
-    """昨日韭研涨停分组龙序行（vA2 A4e 双源，纯数据事实）。
-
-    roles = jiuyan_dragon_roster 的 dragonRoles（确定性序：封板家数降序→组名升序）：
-    [{board, role, boards, days, time, sealedN, zhaban?}]。无龙序（纯推送股）/prev_date
-    缺 → None（整行缺席）。字段缺位 = 缺位字段不出现（无占位符）；显式 boards=1 标「首板」（与 relay
-    `_range_height_text` 同口径，review N1；None=韭研首板不标 num，缺位省略）。
-    龙序 = dragon_rows 高度口径（含炸板高位股，B4）：炸板股行内标「炸板」事实，
-    时点语义随之用「触板」（封板股用「封板」）。
-    """
-    if not roles or not prev_date:
-        return None
-    parts: list[str] = []
-    for r in roles:
-        if not isinstance(r, dict) or not r.get("board") or not r.get("role"):
-            continue
-        seg = f"{r['board']}{r['role']}"
-        attrs: list[str] = []
-        boards, days = r.get("boards"), r.get("days")
-        if isinstance(boards, int) and boards > 1:
-            attrs.append(f"{days}天{boards}板"
-                         if isinstance(days, int) and days > 1 else f"{boards}板")
-        elif isinstance(boards, int) and boards == 1:
-            attrs.append("首板")
-        zb = bool(r.get("zhaban"))
-        if zb:
-            attrs.append("炸板")
-        t = str(r.get("time") or "")[:5]
-        if t:
-            attrs.append(f"{'触板' if zb else '封板'} {t}")
-        if isinstance(r.get("sealedN"), int):
-            attrs.append(f"板涨停 {r['sealedN']} 家")
-        if attrs:
-            seg += "（" + "，".join(attrs) + "）"
-        parts.append(seg)
-    if not parts:
-        return None
-    return f"昨日（{prev_date}）韭研涨停分组龙序：" + "、".join(parts)
-
-
 def auction_structure_line(facts: dict | None, *, prev_date: str) -> str | None:
     """昨日结构事实行（T−1 池档/龙头行直读）：高度/首封时点/昨日封板与否。
 
@@ -439,7 +400,7 @@ def auction_board_structure_line(members: list[dict] | None, *,
                                  prev_date: str | None) -> str | None:
     """板块级昨日结构行：板内入选股昨日封板家数 + 高度分布（纯事实）；prev_date 缺 → None。
 
-    vA2：成员 = 双源入选股全集（推送 ∪ 韭研龙），措辞「推送 N 只」→「入选 N 只」。
+    成员 = 双源入选股全集（推送 ∪ 竞价强度），措辞「推送 N 只」→「入选 N 只」。
     """
     if not prev_date:
         return None
@@ -462,8 +423,9 @@ def auction_board_structure_line(members: list[dict] | None, *,
 def auction_base_rate_line(stats: dict | None) -> str | None:
     """竞价封板基础率锚行（程序直算滚动；无已结算样本 → None 整行缺席）。
 
-    vA2：锚行披露人群构成（推送 a/韭研龙 b/竞价强度 c；互斥优先级 jiuyan_dragon >
-    auction_push > auction_trial_strength，trial 桶=仅竞价强度源股；vA1 旧档按推送计）。
+    vA4：锚行披露人群构成（推送 a/竞价强度 b；互斥优先级 auction_push >
+    auction_trial_strength，trial 桶=仅竞价强度源股；vA1 旧档按推送计；
+    已退役韭研龙序源历史档不计入）。
     """
     if not isinstance(stats, dict):
         return None
@@ -472,8 +434,8 @@ def auction_base_rate_line(stats: dict | None) -> str | None:
     if not isinstance(n, int) or n <= 0 or not isinstance(rate, (int, float)):
         return None
     comp = ""
-    if isinstance(stats.get("nPush"), int) and isinstance(stats.get("nJiuyan"), int):
-        comp = f"：推送 {stats['nPush']}/韭研龙 {stats['nJiuyan']}"
+    if isinstance(stats.get("nPush"), int):
+        comp = f"：推送 {stats['nPush']}"
         if isinstance(stats.get("nTrial"), int):
             comp += f"/竞价强度 {stats['nTrial']}"
     return (f"竞价封板基础率：历史竞价龙头当日封板率 {rate:.1f}%（{n} 样本{comp}，"
@@ -484,7 +446,6 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    leader_name: str, leader_code: str, board: str | None,
                                    push_line: str | None, bid_line: str | None,
                                    structure: str | None,
-                                   dragon_line: str | None = None,
                                    trial_line: str | None = None,
                                    board_strength: str | None = None,
                                    trial_selection: str | None = None,
@@ -513,7 +474,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
         if push_board and push_board != board:
             belong += f"（竞价推送概念：{push_board}）"
         lines.append(belong)
-    for ln in (push_line, dragon_line, trial_line, board_strength, trial_selection,
+    for ln in (push_line, trial_line, board_strength, trial_selection,
                bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
                notice_count_line, regulatory_line, lhb_facts_line):
@@ -526,7 +487,6 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
 def build_auction_sector_narrative(*, date: str, prev_date: str, market_line: str,
                                    board: str, push_line: str | None,
                                    board_structure: str | None,
-                                   dragon_line: str | None = None,
                                    bid_line: str | None = None,
                                    base_rate: str | None = None,
                                    lhb_facts_line: str | None = None,
@@ -538,7 +498,7 @@ def build_auction_sector_narrative(*, date: str, prev_date: str, market_line: st
     if market_line:
         lines.append(f"昨日（{prev_date}）{market_line}")
     lines.append(f"待判板块：{board}")
-    for ln in (push_line, dragon_line, board_structure, bid_line, base_rate, reason_line,
+    for ln in (push_line, board_structure, bid_line, base_rate, reason_line,
                regulatory_line, lhb_facts_line):
         if ln:
             lines.append(ln)

@@ -137,14 +137,14 @@ def test_relay_v9_phase_state_machine_criteria():
     assert "leader_strength" not in relay.QUESTIONS_RELAY
 
 
-def test_auction_leader_vA3_dedicated_stamps():
-    """竞价龙头晨间链独立版本戳（vA3，2026-11-14 预登记 auction-leader-vA3）：
+def test_auction_leader_vA4_dedicated_stamps():
+    """竞价龙头晨间链独立版本戳（vA4，2026-11-15 用户裁决退役 jiuyan 龙序第二源）：
     独立题集代际 + 独立 AMMO 戳；落档用独立戳（跨代不可比违规防范）。"""
     import inspect
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
-    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA3"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-15b"   # 第三源语料供给换代：竞价强度两新行（预登记 auction-leader-trial-strength-source-preregistration-20261115）；题面 vA3/hash 不动；前一版 2026-11-15a = 监管风险行
+    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA4"
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-15c"   # vA4：移除韭研龙序源（删龙序行/锚第二桶/身位题龙序判据）；前一版 2026-11-15b = 第三源竞价强度两新行
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）
     assert al.AUCTION_LEADER_QUESTIONS == (
@@ -155,7 +155,7 @@ def test_auction_leader_vA3_dedicated_stamps():
     seat = al.QUESTIONS_AUCTION_LEADER["auction_seat_durability"]
     seat_txt = seat["instructions"] + "".join(seat["criteria"].values())
     assert "入选股" in seat_txt and "推送股" not in seat_txt
-    assert "韭研龙序" in seat["instructions"]
+    assert "韭研龙序" not in seat["instructions"]   # vA4 清理：判据不引用已退役龙序证据（红线6）
     # A2 删题锁定：空间/人气题不在晨间题集
     assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
     assert "leader_rebound_popularity" not in al.QUESTIONS_AUCTION_LEADER
