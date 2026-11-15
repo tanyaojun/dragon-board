@@ -114,7 +114,7 @@ GET http://wzslinker.top/companys/api-auction.php?page=limit_up_bidding&date=YYY
 
 | 能力 | 证据 |
 |---|---|
-| 历史回看 | `dates[]` 覆盖 2026-06-29 起全部交易日；11-12 缓存 88 行、11-13 缓存 95 行完整试盘数据 | 
+| 历史回看 | `dates[]` 覆盖 2026-06-29 起全部交易日；11-12 缓存 88 行、11-13 缓存 95 行完整试盘数据（**2026-11-15 实测修正**：dates[] 实为 107 日 06-12..11-13，其中 7 日为假期冒充档——非交易日且 rows 与前一交易日逐值相同/价格源交叉证实，真实交易日 100；代理对无缓存历史日直接 400「暂无可用本地数据」不回源补拉，历史深度只随交易日向前增长） | 
 | 盘中刷新 | 涨停竞价页 60s 轮询此接口且不带 refresh → 代理盘中自更新缓存（**缓存龄待周一竞价时段 1 发验证**） |
 | 强制上游 | refresh=1 → fetched:true 回显（周一备用，不默认开） |
 | 行格式 | 15 列表头（stock_id + 14 业务列，勘误 2026-11-14：旧记 16 列系夹具裁剪前误记，与 §4 天普行逐列吻合） |
@@ -164,4 +164,6 @@ GET http://wzslinker.top/companys/api-auction.php?page=limit_up_bidding&date=YYY
 | 11-14 | api-auction.php ×2 | 11-12 / 11-13 缓存读落盘存档（data/backups/probe/） |
 | 11-14 | api-auction.php ×60 | 60 交易日窗口回填（scripts/backfill_auction_trial_raw.py，单发/日 ×2s 间隔，全 fetched:false 缓存读，60/60 落 auction_trial_raw 零失败；用户裁决授权） |
 | 周一 11-16 | **≤2 发** | 竞价时段缓存龄验证（date=今日，读 saved_at/数据时点；refresh=1 仅备用） |
+| 11-15 | api-auction.php ×3 | 扩窗深度探针（05-18→400 ×2、06-29 缓存读 dates[]；用户授权 120 日扩窗） |
+| 11-15 | api-auction.php ×48 | 107 日扩窗回填（1 发 dates[] 探针 + 47 新档，单发/日 ×2s 间隔，全 fetched:false 缓存读零 refresh；用户裁决授权。目标 120 日不可达→最大可得 100 交易日落库 9464 行。**事故与清理**：代理 dates[] 含 7 个假期冒充档（06-19 端午=06-18 数据、09-25 中秋=09-24、10-01..07 国庆=09-30，TDX 指数日历无棒 + 逐值/价格交叉证实），已全量归档 `data/backups/auction_trial_fake_holiday_docs_20261115.json` 后逐 _id 删除；教训：回填窗口必须取**交易日历 ∩ 代理 dates[]**，不得裸用 dates[]（官方脚本韭研轴天然免疫，tmp 变体裸用 dates[] 才暴露） |
 | 之后 | 盘中 ≤1 发/日（TTL ≥60s）+ 盘后历史补拉宽预算 | 与页面轮询节奏一致，不高于正常用户 |
