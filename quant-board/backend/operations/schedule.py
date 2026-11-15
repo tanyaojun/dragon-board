@@ -659,6 +659,30 @@ def run_auction_leader_settle_once(today: str | None = None) -> dict[str, Any]:
             "date": today, "settledDays": results}
 
 
+def fengkou_red_observation_enabled() -> bool:
+    """最强风口红名观察采集开关（2026-11-15 用户裁决「先观察再定」，默认开）。"""
+    return os.environ.get("FENGKOU_RED_OBS_ENABLED", "1") != "0"
+
+
+def run_fengkou_red_observation_once(today: str | None = None, *,
+                                     dry_run: bool = False,
+                                     force: bool = False) -> dict[str, Any]:
+    """最强风口红名观察采集（15:10 挂链，零 token）：日内多时点快照落
+    kpl_fengkou_red_obs 日档 + 历史 pending 日 T+1 回填。
+
+    不进锚人群、不烧 jev、不改 vA3 选龙合同（预登记 2026-11-15）。失败结构化
+    返回交 scheduler 限次退避，不抛不兜底。
+    """
+    from backend.operations.fengkou_red_observer import run_fengkou_red_observation
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    try:
+        return run_fengkou_red_observation(today, dry_run=dry_run, force=force)
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        return {"ok": False, "date": today,
+                "errorCode": "fengkou_red_obs_error",
+                "error": f"{type(exc).__name__}: {exc}"}
+
+
 def theme_leader_lhb_backfill_enabled() -> bool:
     """龙虎榜补齐开关（B，2026-11-11 用户裁决；默认开，随投喂总开关门控）。"""
     return os.environ.get("THEME_LEADER_LHB_BACKFILL_ENABLED", "1") != "0"

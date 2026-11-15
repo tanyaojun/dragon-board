@@ -575,6 +575,46 @@ async def sector_stocks(plate: str = "", date: str = "", page: int = 0) -> JSONR
         return JSONResponse(content=exc.to_payload(), status_code=502)
 
 
+@router.get("/fengkou/observation")
+def fengkou_red_observation(date: str = "") -> JSONResponse:
+    """最强风口红名观察日档（预登记 2026-11-15；只读，不进锚人群）。
+
+    date 缺省=最新一篇；无档时结构化 degraded 返回（fail-visible 读口，不硬门禁）。
+    doc 字段：probes（多时点快照含降级原因）/ redUnion（跨时点并集含首末时点、
+    T−1 在池标记）/ nextDay（T+1 收盘涨幅含 missing）/ quality / obsState。
+    """
+    from backend.operations import fengkou_red_observer
+    date = (date or "")[:10]
+    if date:
+        bad = _validate_date(date)
+        if bad is not None:
+            return bad
+    if get_settings().storage_backend != "mongodb":
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": "storage_backend_disabled"},
+            status_code=502)
+    try:
+        from backend.data.repositories.repository_factory import (
+            get_runtime_mongodb_database)
+        db = get_runtime_mongodb_database()
+        doc = (db[fengkou_red_observer.OBS_COLLECTION].find_one({"_id": date})
+               if date else
+               db[fengkou_red_observer.OBS_COLLECTION].find_one(sort=[("_id", -1)]))
+    except Exception as exc:  # noqa: BLE001 — 读口降级结构化透出
+        return JSONResponse(content={"ok": False, "degraded": True,
+                                     "reason": "observation_db_error",
+                                     "error": f"{type(exc).__name__}: {exc}"[:200]},
+                            status_code=200)
+    if not doc:
+        return JSONResponse(content={"ok": False, "degraded": True,
+                                     "reason": "no_observation_doc",
+                                     "date": date or None},
+                            status_code=200)
+    doc = dict(doc)
+    doc["date"] = str(doc.pop("_id"))
+    return JSONResponse(content={"ok": True, **doc})
+
+
 @router.get("/fengkou")
 def fengkou(date: str = "", time: str = "") -> JSONResponse:
     """最强风口个股强度榜（apphq StockFengKData/GetFengKListBest，2026-11-15 逆向）。

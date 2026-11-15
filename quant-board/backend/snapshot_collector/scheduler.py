@@ -88,6 +88,8 @@ class SnapshotCollectorScheduler:
         # 竞价龙头晨间链（vA1，2026-11-13 预登记：09:26 投喂 + 16:10 结局回填）
         self._auction_leader_last: dict[str, Any] | None = None
         self._auction_leader_settle_last: dict[str, Any] | None = None
+        # 最强风口红名观察（2026-11-15 用户裁决「先观察再定」：15:10 采集 + T+1 回填）
+        self._fengkou_red_obs_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -164,6 +166,7 @@ class SnapshotCollectorScheduler:
             "themeLeaderLhbBackfill": self._theme_leader_lhb_backfill_last,
             "auctionLeader": self._auction_leader_last,
             "auctionLeaderSettle": self._auction_leader_settle_last,
+            "fengkouRedObs": self._fengkou_red_obs_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -576,6 +579,9 @@ _THEME_LEADER_LHB_BACKFILL_SLOTS = (
 _AUCTION_LEADER_LABEL_AT = datetime.time(9, 26)
 _AUCTION_LEADER_MAX_ATTEMPTS = 3
 _AUCTION_LEADER_RETRY_AFTER = datetime.timedelta(minutes=5)
+_FENGKOU_RED_OBS_AT = datetime.time(15, 10)
+_FENGKOU_RED_OBS_MAX_ATTEMPTS = 2
+_FENGKOU_RED_OBS_RETRY_AFTER = datetime.timedelta(minutes=15)
 # 当日结局回填时点（16:10 盘后：daban pool 日档已收全；零 token，lookback 自愈）
 _AUCTION_LEADER_SETTLE_AT = datetime.time(16, 10)
 
@@ -710,6 +716,34 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                                 "at": now.isoformat(timespec="seconds")}
                             logger.info("auction leader label %s: %s", trading_date,
                                         json.dumps(auction_result, ensure_ascii=False,
+                                                   default=str)[:200])
+                # 最强风口红名观察（15:10，2026-11-15 用户裁决「先观察再定」）：盘后一次性
+                # 6 发快照落 kpl_fengkou_red_obs + 历史 pending 日 T+1 回填；纯观察，
+                # 不进锚人群不烧 jev（预登记 fengkou-red-name-observation-20261115）。
+                # 限次退避镜像上方链；全源降级 → ok=False 重试一愆后放弃当日（fail-visible）。
+                if now.time() >= _FENGKOU_RED_OBS_AT:
+                    from backend.operations.schedule import (
+                        run_fengkou_red_observation_once, fengkou_red_observation_enabled)
+                    if fengkou_red_observation_enabled():
+                        obs_attempts = int(state.get("fengkou_red_obs_attempts") or 0)
+                        obs_prev = sched._fengkou_red_obs_last or {}
+                        obs_prev_at = _parse_iso(obs_prev.get("at"))
+                        obs_retry_due = (
+                            not obs_prev.get("ok")
+                            and obs_attempts < _FENGKOU_RED_OBS_MAX_ATTEMPTS
+                            and (obs_prev_at is None
+                                 or (now - obs_prev_at).total_seconds()
+                                 >= _FENGKOU_RED_OBS_RETRY_AFTER.total_seconds()))
+                        if ("fengkou_red_obs" not in state["done"]) or obs_retry_due:
+                            state["done"].add("fengkou_red_obs")
+                            state["fengkou_red_obs_attempts"] = obs_attempts + 1
+                            obs_result = await asyncio.to_thread(
+                                run_fengkou_red_observation_once, trading_date)
+                            sched._fengkou_red_obs_last = {
+                                **obs_result, "attempt": obs_attempts + 1,
+                                "at": now.isoformat(timespec="seconds")}
+                            logger.info("fengkou red observation %s: %s", trading_date,
+                                        json.dumps(obs_result, ensure_ascii=False,
                                                    default=str)[:200])
                 # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时）：独立集合/独立题集代际。
                 # **限次退避重试**：失败（通道/取数/子进程）不一次判死——否则 8001 重启撞上

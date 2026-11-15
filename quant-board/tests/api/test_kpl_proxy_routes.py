@@ -812,3 +812,79 @@ def test_regulatory_route_explicit_and_invalid_and_missing(client, monkeypatch):
     monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: _RegRouteDb())
     r3 = client.get("/api/kpl/regulatory")
     assert r3.json()["ok"] is False and r3.json()["reason"] == "no_archive"
+
+
+# ── 最强风口红名观察读口（/fengkou/observation，2026-11-15 预登记；全 mock）──────
+
+class _ObsRouteCol:
+    def __init__(self, docs):
+        self.docs = {str(d["_id"]): dict(d) for d in docs}
+
+    def find_one(self, q=None, sort=None, **kw):
+        if sort:  # 缺省最新一篇（_id=YYYY-MM-DD 字典序即时序）
+            return dict(self.docs[max(self.docs)]) if self.docs else None
+        return self.docs.get(str((q or {}).get("_id")))
+
+
+class _ObsRouteDb:
+    def __init__(self, docs):
+        self._col = _ObsRouteCol(docs)
+
+    def __getitem__(self, name):
+        assert name == "kpl_fengkou_red_obs"
+        return self._col
+
+
+_OBS_DOC = {"_id": "2026-11-14", "date": "2026-11-14", "obsState": "pending_next_day",
+            "redUnionN": 10, "probes": [{"time": "final", "ok": True, "redN": 4}],
+            "quality": {"probeOkN": 6, "probeTotalN": 6}}
+
+
+def test_observation_route_latest_default(client, monkeypatch):
+    """缺 date=最新一篇（_id 降序）；doc 原样透传，_id 转 date。"""
+    from backend.data.repositories import repository_factory as rf
+    db = _ObsRouteDb([dict(_OBS_DOC, _id="2026-11-13", date="2026-11-13"),
+                      dict(_OBS_DOC)])
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: db)
+    r = client.get("/api/kpl/fengkou/observation")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["date"] == "2026-11-14"
+    assert body["redUnionN"] == 10 and body["obsState"] == "pending_next_day"
+
+
+def test_observation_route_explicit_no_doc_and_invalid(client, monkeypatch):
+    """显式 date 命中 / 无档 degraded（fail-visible 不伪装）/ 非法 date 400。"""
+    from backend.data.repositories import repository_factory as rf
+    db = _ObsRouteDb([dict(_OBS_DOC)])
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: db)
+    r = client.get("/api/kpl/fengkou/observation", params={"date": "2026-11-14"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    r2 = client.get("/api/kpl/fengkou/observation", params={"date": "2026-11-10"})
+    assert r2.status_code == 200 and r2.json()["ok"] is False
+    assert r2.json()["reason"] == "no_observation_doc"
+    r3 = client.get("/api/kpl/fengkou/observation", params={"date": "20261114"})
+    assert r3.status_code == 400 and r3.json()["degraded"] is True
+
+
+def test_observation_route_storage_disabled(client, monkeypatch):
+    """storage_backend != mongodb：502 结构化降级（不触 Mongo 工厂）。"""
+    class _S:
+        storage_backend = "sqlite"
+
+    monkeypatch.setattr(kpl_proxy_routes, "get_settings", lambda: _S())
+    r = client.get("/api/kpl/fengkou/observation")
+    assert r.status_code == 502 and r.json()["reason"] == "storage_backend_disabled"
+
+
+def test_observation_route_db_error_degraded(client, monkeypatch):
+    """DB 异常：observation_db_error 结构化降级（读口不硬门禁不抛 500）。"""
+    from backend.data.repositories import repository_factory as rf
+
+    def _boom():
+        raise ConnectionError("mongo down")
+
+    monkeypatch.setattr(rf, "get_runtime_mongodb_database", _boom)
+    r = client.get("/api/kpl/fengkou/observation")
+    assert r.status_code == 200 and r.json()["ok"] is False
+    assert r.json()["reason"] == "observation_db_error"
