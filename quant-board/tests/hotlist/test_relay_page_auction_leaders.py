@@ -77,18 +77,17 @@ def test_absence_badges_fail_visible(html):
     assert "待结算" in row                        # 结局 null=待结算，不伪装未封
 
 
-def test_morning_state_badge_20261114(html):
-    """早报晨间例外（2026-11-14）：morningState 非 ok/no_hit 时出缺席徽章（fail-visible）。
-    ok/no_hit 是正常态（早报已入库/已入判定），不出徽章。"""
+def test_morning_badge_removed_20261115(html):
+    """2026-11-15 用户裁决：早报行内缺席徽章移除（视觉噪声）；morningState 仍留
+    corpusState（明细卡原始 JSON）与叙事节，fail-visible 不丢。守卫防徽章回潮。"""
     row = _fn(html, "alRowHtml")
-    assert "morningState" in row and "早报" in row
-    assert "'ok'" in row and "'no_hit'" in row
+    assert "morningBad" not in row and '">早报' not in row
 
 
-def test_flash_state_badge_20261114(html):
-    """隔夜快讯兑底层（2026-11-14 C 阶段）：flashState 非 ok/no_hit 时出徽章。"""
+def test_flash_badge_removed_20261115(html):
+    """2026-11-15 用户裁决：快讯行内缺席徽章移除；flashState 仍留 corpusState/叙事。"""
     row = _fn(html, "alRowHtml")
-    assert "flashState" in row and "快讯" in row
+    assert "flashBad" not in row and '">快讯' not in row
 
 
 def test_choice_cn_and_midpoints(html):

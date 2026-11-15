@@ -3667,12 +3667,8 @@ function alRowHtml(r, f){
     ? ' <span class="badge b-amber" title="当日 09:15 推送缺席（结构化留痕）">推送缺席</span>' : '';
   const bidBad = (r.corpusState && String(r.corpusState.bidLane || '').startsWith('missing'))
     ? ' <span class="badge b-amber" title="竞价通道日档缺席：' + esc(String(r.corpusState.bidLane)) + '">竞价缺</span>' : '';
-  const morningBad = (r.corpusState && r.corpusState.morningState
-      && String(r.corpusState.morningState) !== 'ok' && String(r.corpusState.morningState) !== 'no_hit')
-    ? ' <span class="badge b-amber" title="早盘催化（韭研早报）状态：' + esc(String(r.corpusState.morningState)) + '">早报' + esc(String(r.corpusState.morningState)) + '</span>' : '';
-  const flashBad = (r.corpusState && r.corpusState.flashState
-      && String(r.corpusState.flashState) !== 'ok' && String(r.corpusState.flashState) !== 'no_hit')
-    ? ' <span class="badge b-amber" title="隔夜快讯（同花顺7×24）状态：' + esc(String(r.corpusState.flashState)) + '">快讯' + esc(String(r.corpusState.flashState)) + '</span>' : '';
+  // 2026-11-15 用户裁决：早报/快讯行内缺席徽章移除（视觉噪声）；morningState/flashState
+  // 仍留 corpusState（明细卡原始 JSON 可见）与叙事节，fail-visible 不丢，仅删行内徽章。
   const dkey = js(r.tradingDate || '');
   return '<tr class="lg-row' + (open ? ' open' : '')
       + (STATE.relayFocus === r.tradingDate ? ' focus' : '')
@@ -3682,7 +3678,7 @@ function alRowHtml(r, f){
       + esc((r.tradingDate || '').slice(5)) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
-    + '<td>' + esc(r.board || '未归属') + dragonBad + trialBad + pushBad + bidBad + morningBad + flashBad + '</td>'
+    + '<td>' + esc(r.board || '未归属') + dragonBad + trialBad + pushBad + bidBad + '</td>'
     + '<td>' + leadCell + '</td>'
     + '<td class="num" title="竞价涨幅（09:25 匹配价，bid 通道 bidding_pct）">' + pctTxt + '</td>'
     + '<td class="num" title="实时涨幅（09:15 竞价看龙头推送芯片 pct）">' + rpctTxt + '</td>'
