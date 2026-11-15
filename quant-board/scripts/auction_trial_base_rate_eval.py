@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -48,6 +49,33 @@ def _rate(sub: list[dict], pre: bool = False) -> str:
     base = f"{k}/{len(scored)} = {k / len(scored) * 100:.0f}%"
     return base + (f"（缺结局 {missing}）" if missing else "")
 
+def row_basis(code: str, r: dict) -> dict:
+    """limit/preseal 口径单源（load_rows 与竞价强度第三源 auction_strength 共用）。
+
+    ST 探测：pre_percent∈[4.9,5.1] → limit 5（昨涨停 5% 板，代码口径不可判；
+    review finding-5 同口径）；preseal = pre_percent ≥ limit×0.99（昨涨停）。"""
+    lim = limit_pct(code)
+    if 4.9 <= (r.get("pre_percent") or -1) <= 5.1:
+        lim = 5.0
+    return {"limit": lim, "preseal": (r.get("pre_percent") or 0) >= lim * 0.99}
+
+
+def st_name_fix(rows: list[dict], names: dict[str, str]) -> int:
+    """ST 名称修正（评估 main 与第三源 roster 单源）：stock_names 名含 ST 且
+    limit≠5 → limit=5 + 重算 preseal/sealed（代码口径不可判 ST 5%；row_basis 的
+    pre_percent 探测只覆盖昨涨停行，非昨涨停 ST 行靠名称补正）。返回修正行数。"""
+    n = 0
+    for r in rows:
+        if "ST" in str(names.get(r["code"], "")).upper() and r["limit"] != 5.0:
+            r["limit"] = 5.0
+            r["preseal"] = (r.get("pre_percent") or 0) >= 5.0 * 0.99
+            if "sealed" in r:
+                r["sealed"] = (None if r.get("percent") is None
+                               else r["percent"] >= 5.0 * 0.99)
+            n += 1
+    return n
+
+
 def load_rows(db, d_from: str | None, d_to: str | None) -> list[dict]:
     out = []
     for doc in db[COLLECTION_TRIAL_RAW].find({}, {"rows": 1, "tradingDate": 1}):
@@ -55,15 +83,12 @@ def load_rows(db, d_from: str | None, d_to: str | None) -> list[dict]:
         if d_from and d < d_from or d_to and d > d_to:
             continue
         for code, r in (doc.get("rows") or {}).items():
-            lim = limit_pct(code)
-            if 4.9 <= (r.get("pre_percent") or -1) <= 5.1:
-                lim = 5.0            # ST 探测（昨涨停 5% 板，代码口径不可判）
-            row = {"date": d, "code": code, "limit": lim, **r}
+            basis = row_basis(code, r)
+            row = {"date": d, "code": code, **basis, **r}
             # review finding-4：percent 缺位 ≠ 未封板（§4.0 缺失不伪装 0/负结局），
             # sealed=None → 缺结局计数，不进分母
-            row["preseal"] = (r.get("pre_percent") or 0) >= lim * 0.99
             row["sealed"] = (None if r.get("percent") is None
-                             else r["percent"] >= lim * 0.99)
+                             else r["percent"] >= basis["limit"] * 0.99)
             out.append(row)
     return out
 
@@ -117,7 +142,13 @@ def settlement_tier(r: dict) -> str:
 
 def posture(r: dict) -> str:
     f, l = r.get("first_amount"), r.get("last_amount")
-    if f is None or l is None:
+    try:
+        f, l = float(f), float(l)
+    except (TypeError, ValueError):
+        return "no_data"
+    # 非有限值（NaN/±Inf）→ no_data（评审 2026-11-15：NaN 比较恒 False 会误判
+    # decrease 致误纳入；与 auction_strength.fnum 同口径消毒）
+    if not (math.isfinite(f) and math.isfinite(l)):
         return "no_data"
     return "maintain" if l >= f else "decrease"
 

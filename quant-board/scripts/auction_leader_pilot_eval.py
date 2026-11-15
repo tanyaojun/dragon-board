@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.operations.auction_leader_label import (  # noqa: E402
-    COLLECTION, auction_seal_base_rate)
+    COLLECTION, auction_seal_base_rate, source_bucket)
 from backend.operations.theme_leader_baseline import sealed_and_info  # noqa: E402
 
 MIDPOINTS = {"high_ge65": 0.75, "mid_45_65": 0.55, "low_25_45": 0.35, "verylow_lt25": 0.125}
@@ -121,10 +121,20 @@ def evaluate(db, date: str) -> dict:
     gens: dict[str, list] = {}
     for d in docs:
         gens.setdefault(str(d.get("questionSetVersion") or "unknown"), []).append(d)
+    # 选龙源构成披露（2026-11-15 第三源预登记）：互斥优先级同锚
+    # （jiuyan_dragon > auction_push > auction_trial_strength；trial 桶=仅强度源股）
+    src_groups: dict[str, list] = {}
+    for d in docs:
+        src_groups.setdefault(source_bucket(d.get("selectionSources")), []).append(d)
     base = auction_seal_base_rate(db, before=date)
     return {"date": date, **_metrics(docs), "degradedDocs": degraded_n,
             "topLevelCaliber": "all_generations_mixed_observe_only",
             "byQuestionSetVersion": {g: _metrics(ds) for g, ds in sorted(gens.items())},
+            "bySelectionSource": {
+                s: {"settledDocs": len(ds),
+                    "sealedRate": round(sum(1 for d in ds if d.get("outcomeSealedToday"))
+                                        * 100.0 / len(ds), 1)}
+                for s, ds in sorted(src_groups.items())},
             "baseRateAnchor": base,
             "acceptanceMinTradingDays": ACCEPTANCE_MIN_TRADING_DAYS,
             "acceptanceGapPp": ACCEPTANCE_GAP_PP}

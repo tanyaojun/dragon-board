@@ -28,7 +28,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA3"   # 换代登记：auction-leader-vA3-preregistration-20261114（三点裁决：资金并入判据/保留五档/板块聚合留 vA4）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-15a"   # 纯语料供给换代：监管风险行（KPL 严重异动/重点监控，T−1 收盘档，预登记 theme-leader-regulatory-risk-20261115）；题面 hash 不动；前一版 2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
+AMMO_VERSION_AUCTION_LEADER = "2026-11-15b"   # 第三源语料供给换代：竞价强度两新行（仅 trial 源 leader，预登记 auction-leader-trial-strength-source-preregistration-20261115）；题面 vA3/hash 不动；前一版 2026-11-15a = 监管风险行（KPL 严重异动/重点监控，T−1 收盘档）；2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -334,6 +334,41 @@ def auction_trial_line(trial: dict | None) -> str | None:
     return head + "：" + body
 
 
+def auction_board_strength_line(board: str | None, strength: dict | None) -> str | None:
+    """板块竞价强度行（第三源 trial 龙头专属，root 粗桶口径；纯数据事实）。
+
+    strength = trialStrength 载荷（boardAmt/btier/boardTrialN）；板名/额/档/家数
+    任一缺 → None（整行缺席，不留占位）。双源 leader 不出本行（口径不同不混比）。
+    """
+    if not board or not isinstance(strength, dict):
+        return None
+    amt_txt = _trial_amount(strength.get("boardAmt"))
+    btier = strength.get("btier")
+    n = strength.get("boardTrialN")
+    if amt_txt is None or not btier or not isinstance(n, int):
+        return None
+    return f"板块竞价强度：{board} 试盘竞价成交 Σ{amt_txt}，强度档 {btier}，板内试盘 {n} 只"
+
+
+def auction_trial_selection_line(strength: dict | None) -> str | None:
+    """竞价强度入选行（第三源 trial 龙头专属；纯数据事实，无判据指引）。
+
+    strength = trialStrength 载荷（jjRatio/jjtier/posture/rank）；严格档入选股
+    posture 恒 decrease；任一字段缺/非撤减 → None（整行缺席）。
+    """
+    if not isinstance(strength, dict):
+        return None
+    ratio = strength.get("jjRatio")
+    jjtier = strength.get("jjtier")
+    rank = strength.get("rank")
+    if (not isinstance(ratio, (int, float)) or isinstance(ratio, bool)
+            or not jjtier or not isinstance(rank, int)):
+        return None
+    if strength.get("posture") != "decrease":
+        return None
+    return f"竞价强度入选：jj_ratio {ratio:g}%（{jjtier}），资金姿态撤减，板内强度排名 {rank}"
+
+
 def auction_dragon_line(roles: list[dict] | None, *, prev_date: str | None) -> str | None:
     """昨日韭研涨停分组龙序行（vA2 A4e 双源，纯数据事实）。
 
@@ -427,7 +462,8 @@ def auction_board_structure_line(members: list[dict] | None, *,
 def auction_base_rate_line(stats: dict | None) -> str | None:
     """竞价封板基础率锚行（程序直算滚动；无已结算样本 → None 整行缺席）。
 
-    vA2：锚行披露人群构成（推送 a/韭研龙 b；双源股归韭研龙桶，vA1 旧档按推送计）。
+    vA2：锚行披露人群构成（推送 a/韭研龙 b/竞价强度 c；互斥优先级 jiuyan_dragon >
+    auction_push > auction_trial_strength，trial 桶=仅竞价强度源股；vA1 旧档按推送计）。
     """
     if not isinstance(stats, dict):
         return None
@@ -438,6 +474,8 @@ def auction_base_rate_line(stats: dict | None) -> str | None:
     comp = ""
     if isinstance(stats.get("nPush"), int) and isinstance(stats.get("nJiuyan"), int):
         comp = f"：推送 {stats['nPush']}/韭研龙 {stats['nJiuyan']}"
+        if isinstance(stats.get("nTrial"), int):
+            comp += f"/竞价强度 {stats['nTrial']}"
     return (f"竞价封板基础率：历史竞价龙头当日封板率 {rate:.1f}%（{n} 样本{comp}，"
             f"窗 {stats.get('start') or '?'}~{stats.get('end') or '?'}）")
 
@@ -448,6 +486,8 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    structure: str | None,
                                    dragon_line: str | None = None,
                                    trial_line: str | None = None,
+                                   board_strength: str | None = None,
+                                   trial_selection: str | None = None,
                                    ladder_line: str | None = None,
                                    base_rate: str | None = None,
                                    sector_judgment: str | None = None,
@@ -473,7 +513,8 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
         if push_board and push_board != board:
             belong += f"（竞价推送概念：{push_board}）"
         lines.append(belong)
-    for ln in (push_line, dragon_line, trial_line, bid_line, structure, ladder_line, base_rate,
+    for ln in (push_line, dragon_line, trial_line, board_strength, trial_selection,
+               bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
                notice_count_line, regulatory_line, lhb_facts_line):
         if ln:

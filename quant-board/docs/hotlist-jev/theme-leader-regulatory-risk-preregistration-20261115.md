@@ -162,3 +162,14 @@ Index=0/1(2 发) + HQ `GetYDTP_ZDJK_Today` + HQ `GetYDTP_ZDJK_His`。CLI 历史�
 - 待用户验收：重启 :8000 后读口/新页生效（本轮不重启用户服务）；下一交易日 17:00
   槽自动首采，或 CLI `python -m backend.operations.kpl_regulatory_collect` 手动补采。
 - 2026-11-15 用户裁决：槽改 17:00；同日 CLI 手动补 2026-11-13 档（5 发，日预算内）。
+- 2026-11-15 用户需求：题材龙头/竞价龙头台账【事件】列增监管徽章（监/停/异/触，
+  与池行同源 `kplRegBadges`，经 `evidenceCellHtml(r, regDate)` 单源接入）；日期语义：
+  题材=`tradingDate` 当日档、竞价=`corpusState.prevDate` T−1 档（不跨日归因）；
+  页行日期集批量懒取本地读口+新到重渲一次；Playwright 运行时验证同步渲染/异步闭环/
+  T−1 语义/无档负例/池行无回归全过。
+- 2026-11-15 用户裁决：**维持落库**（曾议「只作 jev 补充语料、不落库」，被否）。
+  实测依据：reg_ 39.7KB/日（BSON，含 raw）≈ 既有日档 690.7KB 的 6%，年化 ~10MB；
+  不落库将断：跨进程 T−1 消费（label runner 与 archiver 异进程，内存活不过重启）、
+  前端新页/badge 源（裁决④）、审计回放与 fail-visible 留痕；替代载体（Redis/文件）
+  =平行双轨违 §1.2-1 单主链。缺源风险护栏：错过槽当轮自愈、部分端点失败仍落库、
+  全源失败不覆盖旧档、CLI 补采同写路径、降级整行缺席不阻断数据链。

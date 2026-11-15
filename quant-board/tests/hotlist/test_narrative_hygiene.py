@@ -694,3 +694,35 @@ def test_hygiene_regulatory_risk_line():
                    "regulatory_risk_line(空hit)")
     _assert_absent(A.regulatory_risk_line([{"label": "x", "hit": None}]),
                    "regulatory_risk_line(None hit)")
+
+
+def test_hygiene_auction_trial_strength_lines():
+    """第三源两新行（2026-11-15 预登记）：纯数据事实过黑名单；缺数据整行缺席。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    st = {"boardAmt": 2.7e8, "btier": "中热 2-5亿", "jjRatio": 70.0,
+          "jjtier": "mid50_95", "posture": "decrease", "rank": 2, "boardTrialN": 9}
+    ln1 = AL.auction_board_strength_line("机器人", st)
+    _assert_clean(ln1, "auction_board_strength_line")
+    assert "Σ2.70亿" in ln1 and "强度档 中热 2-5亿" in ln1 and "板内试盘 9 只" in ln1
+    ln2 = AL.auction_trial_selection_line(st)
+    _assert_clean(ln2, "auction_trial_selection_line")
+    assert "jj_ratio 70%" in ln2 and "mid50_95" in ln2 and "板内强度排名 2" in ln2
+    # 缺数据整行缺席（不留占位）
+    _assert_absent(AL.auction_board_strength_line(None, st), "board_strength(无板名)")
+    _assert_absent(AL.auction_board_strength_line("机器人", None), "board_strength(无载荷)")
+    _assert_absent(AL.auction_board_strength_line("机器人", {**st, "boardAmt": None}),
+                   "board_strength(缺额)")
+    _assert_absent(AL.auction_board_strength_line("机器人", {**st, "boardTrialN": None}),
+                   "board_strength(缺家数)")
+    _assert_absent(AL.auction_trial_selection_line(None), "trial_selection(无载荷)")
+    _assert_absent(AL.auction_trial_selection_line({**st, "jjRatio": None}),
+                   "trial_selection(缺强度比)")
+    _assert_absent(AL.auction_trial_selection_line({**st, "rank": None}),
+                   "trial_selection(缺排名)")
+    _assert_absent(AL.auction_trial_selection_line({**st, "posture": "maintain"}),
+                   "trial_selection(非撤减)")
+    # 锚行第三桶构成（第三源样本在场）
+    ln3 = AL.auction_base_rate_line({"n": 10, "rate": 40.0, "nPush": 5, "nJiuyan": 3,
+                                     "nTrial": 2, "start": "2026-11-13", "end": "2026-11-14"})
+    _assert_clean(ln3, "auction_base_rate_line(三桶)")
+    assert "推送 5/韭研龙 3/竞价强度 2" in ln3

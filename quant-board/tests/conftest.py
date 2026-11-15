@@ -107,6 +107,27 @@ def _forbid_real_jev_calls(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _forbid_real_tencent_calls(monkeypatch):
+    """硬护栏（AGENTS §1.2-9 频控红线，2026-11-15 评审 P1 根治）：测试禁真连
+    腾讯行情（qt/ifzq.gtimg.cn）。竞价补源/竞昨比原料漏 mock 时显式失败，
+    而非静默烧外部源预算（东财封 IP 既判案例同款纪律）。需要模拟行情的用例
+    自行 monkeypatch get_auction_snapshot_tencent / get_daban_prev_day_basis。"""
+    import urllib.request as _urllib_request
+
+    real_urlopen = _urllib_request.urlopen
+
+    def _guarded_urlopen(req, *args, **kwargs):
+        url = req.full_url if isinstance(req, _urllib_request.Request) else str(req)
+        if any(host in url for host in ("qt.gtimg.cn", "ifzq.gtimg.cn")):
+            raise AssertionError(
+                f"测试禁止真连腾讯行情（AGENTS §1.2-9）：必须 monkeypatch 补源/原料。url={url[:120]}")
+        return real_urlopen(req, *args, **kwargs)
+
+    monkeypatch.setattr(_urllib_request, "urlopen", _guarded_urlopen)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _slot_true_ladder_offline_guard(monkeypatch):
     """硬护栏（AGENTS §1.2-7 延伸，2026-10-22 语料口径修复）：默认把槽位真连板现查打成空。
 

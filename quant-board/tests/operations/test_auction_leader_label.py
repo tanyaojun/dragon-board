@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -31,8 +32,43 @@ class FakeCol:
         d.update(update.get("$set") or {})
 
     def find(self, query=None, projection=None):
-        return [dict(d) for d in self.docs.values()
-                if all(d.get(k) == v for k, v in (query or {}).items())]
+        out = []
+        for d in self.docs.values():
+            ok = True
+            for k, v in (query or {}).items():
+                val = d.get(k)
+                if isinstance(v, dict):
+                    # 评审 P2（2026-11-15）：补齐 run() 查询面算子（$lt/$regex 供
+                    # trading_dates_before 日轴，$ne/$nin/$exists 供承接链）；
+                    # 未知算子显式 raise（旧版静默放行会掩盖日期边界/look-ahead bug）
+                    for op, ov in v.items():
+                        if op == "$gt":
+                            ok = ok and (val is not None and val > ov)
+                        elif op == "$gte":
+                            ok = ok and (val is not None and val >= ov)
+                        elif op == "$lt":
+                            ok = ok and (val is not None and val < ov)
+                        elif op == "$lte":
+                            ok = ok and (val is not None and val <= ov)
+                        elif op == "$in":
+                            ok = ok and val in ov
+                        elif op == "$nin":
+                            ok = ok and val not in ov
+                        elif op == "$ne":
+                            ok = ok and val != ov
+                        elif op == "$exists":
+                            ok = ok and ((k in d) == bool(ov))
+                        elif op == "$regex":
+                            ok = ok and (isinstance(val, str)
+                                         and re.search(ov, val) is not None)
+                        else:
+                            raise NotImplementedError(
+                                f"FakeCol 未支持的查询算子：{op}（补齐而非静默放行）")
+                elif val != v:
+                    ok = False
+            if ok:
+                out.append(dict(d))
+        return out
 
     def find_one(self, query=None, projection=None, **kw):
         for d in self.docs.values():
@@ -979,3 +1015,394 @@ def test_build_one_wires_regulatory_line():
                                      "reason": "no_archive", "states": {}})
     assert "监管风险" not in built0["narrative"]
     assert built0["regulatoryState"]["laneOk"] is False
+
+
+# ── 第三源：竞价试盘强度板块前三（2026-11-15 预登记，严格档并集补充）─────────
+
+def _trial_strength_setup(monkeypatch, db, rows, boards):
+    """第三源集成夹具：root 树 + 窗内 fetch mock + 缓存清理（前后）。"""
+    from backend.services.jev import jiuyan_board, jiuyan_industry_root
+    jiuyan_board.reset_jiuyan_board_cache()
+    jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+    for board, codes in boards.items():
+        db["jiuyan_industry_stocks"].docs[f"node:{board}"] = {
+            "_id": f"node:{board}", "name": board, "stockN": len(codes),
+            "batchDate": "2026-10-25", "stocks": [{"code": c} for c in codes]}
+    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
+    # 评审 P1（2026-11-15）：窗内竞价补源与试盘采集同门控——未 mock 会真连
+    # qt.gtimg.cn（红线 9 频控预算）；离线确定性返回，补源缺席不阻断选龙
+    monkeypatch.setattr(L, "get_auction_snapshot_tencent",
+                        lambda codes: {"ok": False, "items": {}, "missing": list(codes)})
+    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: {
+        "state": "ok", "saved_at": f"{date}T09:25:30+08:00", "fetched": False,
+        "n_rows": len(rows), "actual_date": date, "message": "",
+        "attempts": [{"refresh": False, "state": "ok"}], "rows": rows})
+    yield
+    jiuyan_board.reset_jiuyan_board_cache()
+    jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+
+
+def _srow(jj_percent=7.0, jj_amount=6e7, first=1e7, last=5e6):
+    return {"jj_percent": jj_percent, "jj_amount": jj_amount,
+            "first_amount": first, "last_amount": last,
+            "start_time": "09:15:00", "end_time": "09:20:11"}
+
+
+def test_trial_strength_third_source_new_leader(env, monkeypatch):
+    """严格档第三源入 live 锚：新股 selectionSources/boardSource/boardMapping/
+    trialStrength + 两新叙事行 + sector_missing + sector doc 仅双源成员。"""
+    db, calls = env
+    rows = {"600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
+            "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}
+    boards = {"机器人": ["600100", "600101", "600102", "600103"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True)
+        assert res["ok"]
+        col = db[L.COLLECTION]
+        # 推送股 603135（push_concept 机器人）+ 3 trial 新股（600103 板内第 4 不入选）
+        assert res["selection"]["trialN"] == 3
+        assert res["selection"]["overlapTrialN"] == 0
+        assert res["selection"]["unionN"] == 4
+        ts_state = res["trialStrengthState"]
+        assert ts_state["state"] == "ok" and ts_state["selectedN"] == 3
+        assert ts_state["mappedN"] == 4 and ts_state["unmappedN"] == 0
+        d = col.docs[f"{DATE}:600102"]
+        assert d["selectionSources"] == ["auction_trial_strength"]
+        assert d["boardSource"] == "jiuyan_root_trial"
+        assert d["board"] == "机器人" and d["realtimePct"] is None
+        assert d["boardMapping"]["pickedBy"] == "trial_root_strength"
+        assert d["dragonRoles"] == []
+        assert d["trialStrength"]["rank"] == 1
+        assert d["trialStrength"]["jjtier"] == "mid50_95"
+        assert d["trialStrength"]["posture"] == "decrease"
+        assert d["sectorJudgmentState"] == "sector_missing"
+        assert "板块竞价强度：机器人 试盘竞价成交 Σ2.40亿" in d["narrative"]
+        assert "强度档 中热 2-5亿" in d["narrative"] and "板内试盘 4 只" in d["narrative"]
+        assert "竞价强度入选：jj_ratio 90%（mid50_95），资金姿态撤减，板内强度排名 1" in d["narrative"]
+        assert f"{DATE}:600103" not in col.docs          # 每板前三
+        # 双源股叙事不变（无新行）；sector doc 仅双源成员（trial 隔离）
+        d603 = col.docs[f"{DATE}:603135"]
+        assert "板块竞价强度" not in d603["narrative"]
+        assert "竞价强度入选" not in d603["narrative"]
+        sec = col.docs[f"{DATE}:board:机器人"]
+        assert [s["code"] for s in sec["segmentRows"]] == ["603135"]
+        assert len(calls) == 5                          # 1 板块 + 4 个股
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_trial_strength_overlap_keeps_dual_board(env, monkeypatch):
+    """重叠股追加源标签 + trialStrength，保留双源 board/龙序；双源叙事不出新行。"""
+    db, calls = env
+    rows = {"603135": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
+            "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}
+    boards = {"机器人": ["603135", "600101", "600102", "600103"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True)
+        col = db[L.COLLECTION]
+        d603 = col.docs[f"{DATE}:603135"]
+        assert d603["selectionSources"] == ["auction_push", "auction_trial_strength"]
+        assert d603["boardSource"] == "push_concept"    # 保留双源板块口径
+        assert d603["realtimePct"] == 3.0
+        assert d603["trialStrength"]["rank"] == 3
+        assert "板块竞价强度" not in d603["narrative"]
+        assert res["selection"]["overlapTrialN"] == 1
+        assert res["selection"]["unionN"] == 3          # 603135 + 600101 + 600102
+        assert col.docs[f"{DATE}:600101"]["boardSource"] == "jiuyan_root_trial"
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_trial_strength_peers_isolated_by_board_source(env, monkeypatch):
+    """同板竞价对比 peers 限同口径：root trial 股互为 peers，不与 ABM 双源股混比。"""
+    db, calls = env
+    rows = {"600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
+            "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}
+    boards = {"机器人": ["600100", "600101", "600102", "600103"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        for c, n in (("600100", "甲"), ("600101", "乙"), ("600102", "丙"),
+                     ("600103", "丁"), ("603135", "中重科技")):
+            db["stock_names"].docs[c] = {"code": c, "name": n}
+        db["kpl_daban_pool"].docs[DATE] = {
+            "_id": DATE, "bid_date": DATE,
+            "bid_items": [{"stock_id": c, "name": n, "bidding_pct": 5.0,
+                           "bidding_amount": 1e7}
+                          for c, n in (("600100", "甲"), ("600101", "乙"),
+                                       ("600102", "丙"), ("600103", "丁"),
+                                       ("603135", "中重科技"))]}
+        L.run(DATE, confirm_budget=True)
+        col = db[L.COLLECTION]
+        n_trial = col.docs[f"{DATE}:600100"]["narrative"]
+        cmp_seg = next(ln for ln in n_trial.split("\n") if ln.startswith("竞价（09:25 匹配价）"))
+        assert "乙" in cmp_seg and "丙" in cmp_seg
+        assert "中重科技" not in cmp_seg               # ABM 双源股不混入 trial peers
+        n_push = col.docs[f"{DATE}:603135"]["narrative"]
+        assert "甲" not in n_push and "乙" not in n_push and "丙" not in n_push
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_trial_strength_dry_run_reads_archive(env, monkeypatch):
+    """历史日 dry-run：窗采集缺席 → auction_trial_raw 日档回读（纯库读零外呼），
+    第三源候选出现；零 jev 零写。"""
+    db, calls = env
+    from backend.services.jev import jiuyan_board, jiuyan_industry_root
+    jiuyan_board.reset_jiuyan_board_cache()
+    jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+    db["jiuyan_industry_stocks"].docs["node:机器人"] = {
+        "_id": "node:机器人", "name": "机器人", "stockN": 4, "batchDate": "2026-10-25",
+        "stocks": [{"code": c} for c in ("600100", "600101", "600102", "600103")]}
+    db["auction_trial_raw"].docs[DATE] = {
+        "_id": DATE, "tradingDate": DATE, "nRows": 4, "savedAt": f"{DATE}T09:26:01",
+        "rows": {"600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
+                 "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}}
+    fired = []
+    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: fired.append(date) or {})
+    try:
+        res = L.run(DATE, dry_run=True)
+        assert res["ok"] and res["dryRun"]
+        assert fired == []                              # dry-run 零外呼
+        assert calls == [] and db[L.COLLECTION].docs == {}
+        assert res["selection"]["trialN"] == 3
+        assert res["trialStrengthState"]["state"] == "ok"
+        assert res["leaders"] == 4                      # 1 推送 + 3 trial
+    finally:
+        jiuyan_board.reset_jiuyan_board_cache()
+        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+
+
+def test_trial_strength_absent_fail_visible(env):
+    """trial 缺（窗外+无日档）→ 第三源整源缺席 + reason；双源不受影响。"""
+    db, calls = env
+    res = L.run(DATE, confirm_budget=True)
+    assert res["ok"]
+    assert res["trialStrengthState"]["state"] == "absent"
+    assert res["trialStrengthState"]["reason"] == "no_trial_rows"
+    assert res["selection"]["trialN"] == 0
+    assert res["leaders"] == 1                          # 推送股照跑
+    assert f"{DATE}:603135" in db[L.COLLECTION].docs
+
+
+def test_trial_strength_soft_cap_six(env, monkeypatch):
+    """软上限 ≤6 只/日：9 候选截断 6，记账留痕（全局 jj_ratio 降序保留）。"""
+    db, calls = env
+    rows, boards = {}, {}
+    for bi, board in enumerate(["板A", "板B", "板C"]):
+        codes = [f"6{bi}{i:02d}00" for i in range(3)]
+        boards[board] = codes
+        ratios = [[90, 80, 70], [85, 75, 65], [94, 60, 55]][bi]
+        for c, jp in zip(codes, ratios):
+            rows[c] = _srow(jj_percent=jp / 10.0, jj_amount=8e7)
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True)
+        assert res["selection"]["trialN"] == 6
+        st = res["trialStrengthState"]
+        assert st["cap"] == 6 and st["truncatedN"] == 3 and st["selectedN"] == 6
+        assert res["leaders"] == 7                      # 1 推送 + 6 trial
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_trial_strength_non_theme_excluded(env, monkeypatch):
+    """非题材行政桶剔除对第三源同规（root 板「其他」）。"""
+    db, calls = env
+    rows = {"600100": _srow(jj_amount=1e8), "600101": _srow(jj_percent=8.0, jj_amount=1e8),
+            "600102": _srow(jj_percent=9.0, jj_amount=1e8)}
+    boards = {"其他": ["600100", "600101", "600102"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True)
+        col = db[L.COLLECTION]
+        assert f"{DATE}:600100" not in col.docs
+        assert res["selection"]["trialN"] == 3          # roster 选中 3
+        assert res["selection"]["unionN"] == 1          # 行政桶剔除后仅推送股
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_base_rate_anchor_third_bucket_priority(env):
+    """锚人群第三桶：互斥优先级 jiuyan_dragon > auction_push > auction_trial_strength。"""
+    db, calls = env
+    col = db[L.COLLECTION]
+    base = {"tradingDate": "2026-11-13", "docKind": "leader", "status": "ok",
+            "sampleOrigin": "live", "outcomeSealedToday": True}
+    col.docs["2026-11-13:600001"] = {**base, "_id": "2026-11-13:600001",
+                                     "selectionSources": ["auction_push", "auction_trial_strength"]}
+    col.docs["2026-11-13:600002"] = {**base, "_id": "2026-11-13:600002",
+                                     "selectionSources": ["jiuyan_dragon_t1", "auction_trial_strength"]}
+    col.docs["2026-11-13:600003"] = {**base, "_id": "2026-11-13:600003",
+                                     "selectionSources": ["auction_trial_strength"]}
+    col.docs["2026-11-13:600004"] = {**base, "_id": "2026-11-13:600004"}   # vA1 旧档按推送
+    stats = L.auction_seal_base_rate(db, before="2026-11-14")
+    assert stats["n"] == 4
+    assert stats["nPush"] == 2 and stats["nJiuyan"] == 1 and stats["nTrial"] == 1
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    ln = AL.auction_base_rate_line(stats)
+    assert "推送 2/韭研龙 1/竞价强度 1" in ln
+
+
+def test_evaluate_selection_source_breakdown():
+    """pilot eval 按 selectionSources 披露第三源构成（互斥优先级同锚）。"""
+    E = _load_eval_module()
+    db = FakeDb()
+    col = db[E.COLLECTION]
+    base = {"tradingDate": DATE, "docKind": "leader", "status": "ok",
+            "questionSetVersion": "vA3", "auctionSealToday": "mid_45_65"}
+    col.docs[f"{DATE}:600001"] = {**base, "_id": f"{DATE}:600001",
+                                  "outcomeSealedToday": True,
+                                  "selectionSources": ["auction_trial_strength"]}
+    col.docs[f"{DATE}:600002"] = {**base, "_id": f"{DATE}:600002",
+                                  "outcomeSealedToday": False,
+                                  "selectionSources": ["auction_push", "auction_trial_strength"]}
+    res = E.evaluate(db, DATE)
+    bs = res["bySelectionSource"]
+    assert bs["auction_trial_strength"]["settledDocs"] == 1
+    assert bs["auction_trial_strength"]["sealedRate"] == 100.0
+    assert bs["auction_push"]["settledDocs"] == 1
+    assert bs["auction_push"]["sealedRate"] == 0.0
+
+
+# ── 评审修复 2026-11-15（review-contract P1-2 / review-correctness P2-1/4 / tests-docs P2）──
+
+def test_trial_strength_codes_rerun_trial_only(env, monkeypatch):
+    """P1-2：trial-only 股单只重跑（codes 过滤）不得被并集前早退截断。"""
+    db, calls = env
+    rows = {"600100": _srow(jj_percent=7.0, jj_amount=8e7),
+            "600101": _srow(jj_percent=8.0, jj_amount=8e7),
+            "600102": _srow(jj_percent=9.0, jj_amount=8e7)}
+    boards = {"机器人": ["600100", "600101", "600102"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True, force=True, codes={"600102"})
+        assert res["ok"] and "skippedReason" not in res
+        assert res["leaders"] == 1
+        assert res["selection"]["trialN"] == 3      # 全日 roster 口径
+        assert res["selection"]["unionN"] == 1      # codes 过滤后
+        col = db[L.COLLECTION]
+        d = col.docs[f"{DATE}:600102"]
+        assert d["selectionSources"] == ["auction_trial_strength"]
+        assert d["boardSource"] == "jiuyan_root_trial"
+        assert f"{DATE}:603135" not in col.docs     # codes 语义：双源股不重判
+        assert len(calls) == 1                      # 仅 1 个股（trial 无 sector doc）
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_codes_rerun_no_match_still_skips(env, monkeypatch):
+    """codes 未命中任何源（双源/trial）→ 保持 skip 语义（零调用零写）。"""
+    db, calls = env
+    rows = {"600100": _srow(jj_percent=7.0, jj_amount=8e7),
+            "600101": _srow(jj_percent=8.0, jj_amount=8e7),
+            "600102": _srow(jj_percent=9.0, jj_amount=8e7)}
+    boards = {"机器人": ["600100", "600101", "600102"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True, force=True, codes={"999999"})
+        assert res["ok"] and res["skippedReason"] == "no_leaders"
+        assert res["trialStrengthState"]["selectedN"] == 3
+        assert calls == []
+        assert db[L.COLLECTION].docs == {}
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_trial_strength_excluded_admin_dual_not_swallow_trial(env, monkeypatch):
+    """P2-1：双源行被行政桶剔除后，同 code 的 trial 候选须以 trial_new 入并集
+    （不得被排除前 by_code 的 overlap 判定吞掉）。另保一只存活双源股（全排除
+    仍 skip 是既有裁决语义，不在本例范围）。"""
+    db, calls = env
+    push = db["kpl_live_daily"].docs[DATE]["auctionPush"]
+    push["stocks"][0]["board"] = "其他"
+    push["stocks"][0]["boardRaw"] = "其他"
+    push["stocks"].append({"code": "600999", "name": "存活股", "pct": 2.0,
+                           "board": "机器人", "boardRaw": "机器人"})
+    rows = {"603135": _srow(jj_percent=7.0, jj_amount=8e7),
+            "600100": _srow(jj_percent=8.0, jj_amount=8e7),
+            "600101": _srow(jj_percent=9.0, jj_amount=8e7)}
+    boards = {"机器人": ["603135", "600100", "600101", "600999"]}
+    gen = _trial_strength_setup(monkeypatch, db, rows, boards)
+    next(gen)
+    try:
+        res = L.run(DATE, confirm_budget=True)
+        col = db[L.COLLECTION]
+        assert res["selection"]["overlapTrialN"] == 0
+        assert res["selection"]["trialN"] == 3
+        assert res["selection"]["unionN"] == 4      # 存活双源 1 + trial_new 3
+        d = col.docs[f"{DATE}:603135"]
+        assert d["selectionSources"] == ["auction_trial_strength"]
+        assert d["boardSource"] == "jiuyan_root_trial"
+        assert d["board"] == "机器人"
+        sec = col.docs[f"{DATE}:board:机器人"]
+        assert [s["code"] for s in sec["segmentRows"]] == ["600999"]  # trial 隔离
+        assert len(calls) == 5                      # 1 板块 + 4 个股
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+
+def test_trial_strength_roster_failure_dual_continues(env, monkeypatch):
+    """P2-4：run() roster 异常 → absent/roster_failed 留痕，双源打标不阻断
+    （与读口 trialRosterError 对称）。"""
+    db, calls = env
+
+    def boom(*a, **k):
+        raise RuntimeError("roster boom")
+
+    monkeypatch.setattr(L, "trial_strength_roster", boom)
+    res = L.run(DATE, confirm_budget=True)
+    assert res["ok"]
+    assert res["trialStrengthState"]["state"] == "absent"
+    assert "roster boom" in res["trialStrengthState"]["reason"]
+    assert f"{DATE}:603135" in db[L.COLLECTION].docs
+    assert len(calls) == 2                          # 双源照常：1 板块 + 1 个股
+
+
+def test_trial_strength_archive_read_error_fail_visible(env, monkeypatch):
+    """日档回读失败 → corpusState.trialState.archiveReadError 留痕，双源不阻断。"""
+    db, calls = env
+
+    def boom(*a, **k):
+        raise RuntimeError("archive read boom")
+
+    monkeypatch.setattr(db["auction_trial_raw"], "find_one", boom)
+    res = L.run(DATE, confirm_budget=True)
+    assert res["ok"]
+    assert res["trialStrengthState"]["state"] == "absent"
+    doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
+    ts = doc["corpusState"]["trialState"]
+    assert "archive read boom" in ts["archiveReadError"]
+    assert len(calls) == 2

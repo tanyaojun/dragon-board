@@ -352,7 +352,7 @@ def test_header_and_row_column_counts_match(html: str) -> None:
     # 表头块限定在 tlRenderRows 函数体内（避免匹配到页面其他表的「结局」列）
     block = _fn(html, "tlRenderRows")
     import re as _re
-    n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z0-9]+'\)", block)) + block.count("<th>")
+    n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z0-9]+'\)", block)) + block.count("<th>") + block.count("<th title=")  # 事件表头带 title（监管徽章 tooltip）；th() 助手模板 <th class=sortable> 不计入
     row = _fn(html, "tlRowHtml")
     # 展开明细行的 colspan 单独算：数据行 17 格（2026-11-12 删溢价列）+ 明细跨 17 列
     n_td = row.count("<td") - row.count("<td colspan")
@@ -387,7 +387,7 @@ def test_event_column_badge_only_with_full_text_tooltip(html: str) -> None:
     驱动上板的事件标题/题材标签只出窄徽章，完整事件文字描述进 tooltip；
     **题材名称（产业树节点）一律不显示**——首版铺文、二版残留名称文本均被用户纠偏。"""
     rows_fn = _fn(html, "tlRenderRows")
-    assert "<th>事件</th>" in rows_fn, "列名必须为「事件」"
+    assert re.search(r"<th[^>]*>事件</th>", rows_fn), "列名必须为「事件」（表头可带 title tooltip）"
     bar = _fn(html, "tlRenderBar")
     assert "tlSel('事件'" not in bar, "「事件」筛控件已删（2026-11-04 用户裁决），列/徽章保留"
     # 2026-11-14 复刻重构：事件格抽为共用 evidenceCellHtml（题材/竞价两页单源），

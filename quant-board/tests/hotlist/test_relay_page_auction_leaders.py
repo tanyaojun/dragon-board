@@ -127,7 +127,18 @@ def test_event_cell_single_source_with_theme(html):
     """2026-11-14 复刻：事件格 = evidenceCellHtml 单源，题材/竞价两页共用同一实现
     （防两处徽章口径漂移）；两页行渲染都必须经它出事件列。"""
     assert html.count("function evidenceCellHtml(") == 1, "事件格必须单一定义（单源）"
-    assert "evidenceCellHtml(r)" in _fn(html, "tlRowHtml"), "题材龙头行必须经共用事件格"
-    assert "evidenceCellHtml(r)" in _fn(html, "alRowHtml"), "竞价龙头行必须经共用事件格（复刻）"
+    assert "evidenceCellHtml(r, r.tradingDate)" in _fn(html, "tlRowHtml"), "题材龙头行必须经共用事件格（监管徽章=当日档，2026-11-15）"
+    assert "evidenceCellHtml(r, (r.corpusState || {}).prevDate)" in _fn(html, "alRowHtml"), "竞价龙头行必须经共用事件格（监管徽章=T−1 收盘档，不跨日归因）"
     ev = _fn(html, "evidenceCellHtml")
     assert "r.evidenceEventTitles" in ev and "r.evidenceNewsTitles" in ev and "r.evidenceKwordTags" in ev, "事件/新闻/题材三徽章同源消费"
+
+
+def test_trial_strength_source_badge_20261115(html):
+    """第三源徽章（预登记 auction-leader-trial-strength-source-preregistration-20261115）：
+    「竞价强度」源徽章 title 披露 jj_ratio/板内排名（esc 注入）；推送缺席徽章仅推送源行
+    （trial 单源股推送缺席是预期态，不告警——srcs.includes('auction_push') 门控沿用）。"""
+    body = _fn(html, "alRowHtml")
+    assert "auction_trial_strength" in body and "竞价强度" in body
+    assert "r.trialStrength" in body, "title 必须由 trialStrength 拼装 jj_ratio/板内排名"
+    assert "esc(trialTxt" in body, "强度 title 注入前必须 esc"
+    assert "trialBad" in body

@@ -3,6 +3,9 @@
 
 定位：每条投喂 = 当日选龙双源并集的一只个股（A4e：09:15「竞价看龙头」推送 ∪
 jiuyan T−1 涨停分组龙一/二/三，官方封板口径 ≥3 家，2026-11-14 用户裁决 B1–B3）；
+2026-11-15 起第三源并集补充：竞价试盘强度板块前三（严格档：中热 2-5亿 ×
+mid50_95 × 撤减，root 粗桶口径，仅 leader doc；预登记
+auction-leader-trial-strength-source-preregistration-20261115）；
 板块级 doc 判深度/延续（v12 A2 拆题同款）。09:26 挂链（9:25 竞价冻结 + archiver
 ≤60s 轮询 lag），失败限次退避（scheduler 侧）。
 
@@ -40,14 +43,17 @@ from backend.analysis.hotlist.auction_leader_ammo import (
     QUESTIONS_AUCTION_LEADER,
     auction_base_rate_line,
     auction_bid_line,
+    auction_board_strength_line,
     auction_board_structure_line,
     auction_dragon_line,
     auction_push_line,
     auction_structure_line,
     auction_trial_line,
+    auction_trial_selection_line,
     build_auction_leader_narrative,
     build_auction_sector_narrative,
 )
+from backend.analysis.hotlist.auction_strength import trial_strength_roster
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.services.kpl_ranking_service import (
     derive_bid_ratio_prev_vol,
@@ -67,7 +73,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     zt_gene_line,
 )
 from backend.operations.auction_trial_fetch import (
-    fetch_auction_trial, persist_trial_raw)
+    COLLECTION_TRIAL_RAW, fetch_auction_trial, persist_trial_raw)
 from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
                                                       trading_dates)
 from backend.operations.jev_label_jiuyan import jiuyan_streak_map
@@ -109,6 +115,25 @@ BASE_RATE_START = "2026-11-13"
 JIUYAN_DRAGON_MIN_SEALED = 3
 SOURCE_PUSH = "auction_push"
 SOURCE_JIUYAN_DRAGON = "jiuyan_dragon_t1"
+# 第三源（2026-11-15 预登记 auction-leader-trial-strength-source）：竞价试盘强度
+# 板块前三（严格档：中热 2-5亿 × mid50_95 × 撤减，root 粗桶口径）
+SOURCE_TRIAL_STRENGTH = "auction_trial_strength"
+BOARD_SOURCE_TRIAL = "jiuyan_root_trial"
+# 第三源每日软上限（可配；dry-run 实测校准写入预登记；超限全局 jj_ratio 降序截断记账）
+TRIAL_STRENGTH_MAX_PER_DAY = 6
+
+
+def source_bucket(selection_sources: list | None) -> str:
+    """锚人群构成桶（互斥优先级）：jiuyan_dragon > auction_push > auction_trial_strength。
+
+    trial 桶 = 仅竞价强度源股；vA1 旧档无 selectionSources 按推送计（单一事实源，
+    锚计算与 pilot eval 构成披露共用）。"""
+    srcs = selection_sources or [SOURCE_PUSH]
+    if SOURCE_JIUYAN_DRAGON in srcs:
+        return SOURCE_JIUYAN_DRAGON
+    if SOURCE_PUSH in srcs:
+        return SOURCE_PUSH
+    return SOURCE_TRIAL_STRENGTH
 
 
 def jiuyan_dragon_roster(db: Any, prev_date: str | None) -> tuple[list[dict], dict]:
@@ -191,7 +216,7 @@ def auction_seal_base_rate(db: Any, before: str) -> dict | None:
     无已结算行 → None（锚行整行缺席，封板题 confidence ≤0.6 规则承接）。
     """
     n = ok = 0
-    n_push = n_jiuyan = 0
+    n_push = n_jiuyan = n_trial = 0
     dates: list[str] = []
     for d in db[COLLECTION].find({}, {"tradingDate": 1, "docKind": 1, "status": 1,
                                       "sampleOrigin": 1, "outcomeSealedToday": 1,
@@ -208,16 +233,20 @@ def auction_seal_base_rate(db: Any, before: str) -> dict | None:
             continue
         n += 1
         ok += 1 if outcome else 0
-        # vA2 锚人群构成：双源股归韭研龙桶；vA1 旧档无 selectionSources 按推送计
-        if SOURCE_JIUYAN_DRAGON in (d.get("selectionSources") or [SOURCE_PUSH]):
+        # 锚人群构成（互斥优先级）：jiuyan_dragon > auction_push > auction_trial_strength；
+        # vA1 旧档无 selectionSources 按推送计（source_bucket 单源）
+        bucket = source_bucket(d.get("selectionSources"))
+        if bucket == SOURCE_JIUYAN_DRAGON:
             n_jiuyan += 1
+        elif bucket == SOURCE_TRIAL_STRENGTH:
+            n_trial += 1
         else:
             n_push += 1
         dates.append(date)
     if not n:
         return None
     return {"n": n, "rate": ok * 100.0 / n, "nPush": n_push, "nJiuyan": n_jiuyan,
-            "start": min(dates), "end": max(dates)}
+            "nTrial": n_trial, "start": min(dates), "end": max(dates)}
 
 
 def roster_for(db: Any, date: str, *, fetch_missing: bool = True) -> tuple[dict | None, dict]:
@@ -331,12 +360,15 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               basis_map: dict | None = None, basis_state: str = "missing",
               bid_supplement: str | None = None,
               prev_cross: dict | None = None, streak_map: dict | None = None,
-              trial: dict | None = None, reg_corpus: dict | None = None) -> dict:
+              trial: dict | None = None, reg_corpus: dict | None = None,
+              trial_strength: dict | None = None) -> dict:
     """个股级投喂组装（零网络零模型）：T−1 语料 + 当日竞价 + 推送行。
 
     trial = 试盘源载荷（增量2 骨架，合同定案前恒 None → trialState=contract_pending，
     叙事无试盘行；定案后 = {"row": 盯盘试盘行具名字段, "source", "fetchedAt",
-    "prevPercentCross"}，由晨间窗内采集器單股传入）。"""
+    "prevPercentCross"}，由晨间窗内采集器單股传入）。
+    trial_strength = 第三源 trialStrength 载荷（仅 trial 源 leader 传入；root 口径
+    两新行，双源 leader 恒 None 叙事不变）。"""
     code = str(row.get("code") or "")
     board = row.get("board")
     rows = [row]
@@ -389,6 +421,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         dragon_line=auction_dragon_line(row.get("dragonRoles"), prev_date=prev_date),
         bid_line=auction_bid_line(bid_entries),
         trial_line=auction_trial_line((trial or {}).get("row")),
+        board_strength=auction_board_strength_line(board, trial_strength),
+        trial_selection=auction_trial_selection_line(trial_strength),
         structure=auction_structure_line(facts, prev_date=prev_date),
         ladder_line=_auction_ladder_line(t1_row, prev_date),
         base_rate=auction_base_rate_line(base_rate_stats),
@@ -539,6 +573,8 @@ def _label_one(db, col, date: str, built: dict, *,
                "boardMapping": row.get("boardMapping"),
                "selectionSources": row.get("selectionSources") or [SOURCE_PUSH],
                "dragonRoles": row.get("dragonRoles") or [],
+               # 第三源强度载荷（仅 trial 源股；读口/relay 徽章透传，旧档缺→None）
+               "trialStrength": row.get("trialStrength"),
                # 竞价涨幅=bid 通道真竞价值（bidding_pct）；实时涨幅=推送芯片 pct。
                # 2026-11-14 修复：旧版把推送实时 pct 误存为 auctionPct（读口对历史档 join 兜底）
                "auctionPct": built.get("auctionBidPct"),
@@ -595,7 +631,7 @@ def _label_one(db, col, date: str, built: dict, *,
 def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         max_leaders: int | None = None, force: bool = False,
         codes: set[str] | None = None, dataset_id: str = DEFAULT_DATASET_ID,
-        sample_origin: str | None = None) -> dict:
+        sample_origin: str | None = None, trial_max: int | None = None) -> dict:
     """当日晨间投喂主流程。dry_run 全程零 jev 调用零写入（含不补拉直播/不写归档）。
 
     sample_origin 缺省自动裁决：当日=live、历史日=backfill（防事后补跑混入 live 锚人群）；
@@ -679,9 +715,15 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if excluded:
         print(f"{date} 排除非题材行政桶 {len(excluded)} 只（{'、'.join(sorted({r['board'] for r in excluded}))}）——仅日志留痕")
         rows = [r for r in rows if not (r["board"] and digest.is_not_a_theme(r["board"]))]
+        # 评审 P2-1（2026-11-15）：by_code 同步剔除——被排除双源行不得在第三源
+        # overlap 判定中吞掉同 code 的合法 trial 候选（应作 trial_new 入并集）
+        for r in excluded:
+            by_code.pop(r["code"], None)
     if codes:
         rows = [r for r in rows if r["code"] in codes]
-    if not rows:
+    # 评审 P1-2（2026-11-15）：codes 单股重跑时早退推迟到第三源并集之后——
+    # trial-only 股不在双源名单，旧早退会截断其重跑；全日无 codes 路径语义不变
+    if not rows and not codes:
         return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders",
                 "selection": selection, "jiuyanDragonState": jstate}
     rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
@@ -757,6 +799,72 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 trial_state["persistState"] = persist_trial_raw(db, date, tr)
         except Exception as exc:   # noqa: BLE001 试盘失败不阻断投喂（整行缺席留痕）
             trial_state = {"state": f"fetch_failed:{exc}"}
+    # 第三源日档回读（2026-11-15 预登记）：live 窗采集缺席（dry-run/窗外/历史日）时
+    # 读 auction_trial_raw 日档（纯库读零外呼零写），强度选龙与试盘语料可回放；
+    # 日档亦缺 → 第三源整源缺席（fail-visible，双源不受影响，不兑底选龙）
+    if not trial_rows:
+        try:
+            raw_doc = db[COLLECTION_TRIAL_RAW].find_one(
+                {"_id": date}, {"rows": 1, "savedAt": 1, "nRows": 1}) or {}
+            if raw_doc.get("rows"):
+                trial_rows = raw_doc["rows"]
+                trial_state = {"state": "ok", "source": "archive",
+                               "saved_at": raw_doc.get("savedAt"),
+                               "n_rows": raw_doc.get("nRows")}
+        except Exception as exc:   # noqa: BLE001 — 日档读失败不阻断（第三源缺席留痕）
+            trial_state = {**trial_state, "archiveReadError": f"{type(exc).__name__}: {exc}"}
+    # 第三源选龙（严格档 + 每板前三；与读口共用 trial_strength_roster 单一实现）：
+    # 中热 2-5亿 × mid50_95 × 撤减，root 粗桶；软上限 ≤6 只/日（超限截断记账）
+    try:
+        trows, tstate = trial_strength_roster(
+            db, date, trial_rows,
+            max_total=TRIAL_STRENGTH_MAX_PER_DAY if trial_max is None else trial_max)
+    except Exception as exc:  # noqa: BLE001 — roster 失败不阻断双源打标（评审 P2-4，与读口 trialRosterError 对称）
+        print(f"{date} 第三源 roster 计算失败：{exc}——双源继续（fail-visible）")
+        trows, tstate = [], {"state": "absent",
+                             "reason": f"roster_failed:{type(exc).__name__}: {exc}"}
+    overlap_trial_n = 0
+    trial_new: list[dict] = []
+    for tr in trows:
+        cur = by_code.get(tr["code"])
+        if cur is not None:
+            # 重叠股：追加源标签 + 强度载荷（保留双源 board/龙序/pct，叙事不变）
+            if SOURCE_TRIAL_STRENGTH not in cur["selectionSources"]:
+                cur["selectionSources"].append(SOURCE_TRIAL_STRENGTH)
+            cur["trialStrength"] = tr["trialStrength"]
+            overlap_trial_n += 1
+        else:
+            new = {"code": tr["code"], "name": tr.get("name"), "board": tr["board"],
+                   "pct": None, "pushBoard": None,
+                   "selectionSources": [SOURCE_TRIAL_STRENGTH], "dragonRoles": [],
+                   "boardSource": BOARD_SOURCE_TRIAL,
+                   "boardMapping": {"pickedBy": "trial_root_strength",
+                                    "candidates": [{"name": tr["board"],
+                                                     "n": tr["trialStrength"]["boardTrialN"]}]},
+                   "trialStrength": tr["trialStrength"]}
+            by_code[tr["code"]] = new
+            trial_new.append(new)
+    selection["trialN"] = len(trows)
+    selection["overlapTrialN"] = overlap_trial_n
+    if trial_new:
+        rows.extend(trial_new)
+        # 第三源同规：非题材行政桶剔除 + codes 过滤（双源行已处理，幂等）
+        excluded_t = [r for r in trial_new
+                      if r["board"] and digest.is_not_a_theme(r["board"])]
+        if excluded_t:
+            print(f"{date} 第三源排除非题材行政桶 {len(excluded_t)} 只（{'、'.join(sorted({r['board'] for r in excluded_t}))}）——仅日志留痕")
+            rows = [r for r in rows if not (r.get("boardSource") == BOARD_SOURCE_TRIAL
+                                            and r["board"]
+                                            and digest.is_not_a_theme(r["board"]))]
+        if codes:
+            rows = [r for r in rows if r["code"] in codes]
+        rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
+        selection["unionN"] = len(rows)
+    if not rows:
+        # codes 单股重跑：双源与 trial 均未命中 → 保持 skip 语义（评审 P1-2）
+        return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders",
+                "selection": selection, "jiuyanDragonState": jstate,
+                "trialStrengthState": tstate}
     gene_corpus = fetch_gene_corpus(db, prev_date) if prev_date else {}
     notice_corpus = fetch_notice_corpus(db, prev_date) if prev_date else {}
     heat_corpus = fetch_theme_heat(db, prev_date) if prev_date else {}
@@ -773,8 +881,14 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     base_rate_stats = auction_seal_base_rate(db, before=date)
     push_entries = (push or {}).get("entries") or []
     by_board: dict[str, list[dict]] = {}
+    by_board_trial: dict[str, list[dict]] = {}
     for r in rows:
-        by_board.setdefault(str(r.get("board") or "未归属"), []).append(r)
+        # 第三源隔离：trial（root 口径）不进双源 sector doc/peers，反之亦然
+        # （同板竞价对比限同 boardSource 口径，预登记 §3）
+        if r.get("boardSource") == BOARD_SOURCE_TRIAL:
+            by_board_trial.setdefault(str(r.get("board") or "未归属"), []).append(r)
+        else:
+            by_board.setdefault(str(r.get("board") or "未归属"), []).append(r)
     col = db[COLLECTION]
     done = {str(d.get("code")) for d in col.find({"tradingDate": date, "status": "ok"})
             if d.get("code")}
@@ -784,7 +898,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if max_leaders is not None and len(todo) > max_leaders:
         print(f"{date} {len(todo)} 只超上限 {max_leaders}，截断（其余记账，fail-visible）")
         todo = todo[:max_leaders]
-    todo_boards = ({str(r.get("board") or "未归属") for r in todo}
+    # 第三源仅产 leader doc，不新增 sector doc（控预算、避板块口径 _id 冲突）
+    todo_boards = ({str(r.get("board") or "未归属") for r in todo
+                    if r.get("boardSource") != BOARD_SOURCE_TRIAL}
                    - (set() if force else done_boards))
     if codes and not force:
         # 单只重跑同时自愈该日 degraded 板块 doc（题材链 P2-4 同款：龙头全 ok 但
@@ -812,6 +928,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     built_leaders: list[dict] = []
     for r in todo:
         board = str(r.get("board") or "未归属")
+        is_trial = r.get("boardSource") == BOARD_SOURCE_TRIAL
         # 〇 重跑语料冻结（2026-11-14b）：单只重跑（codes+force）复用晨间原件
         # narrative/corpusState，防盘后重跑用当日 final 重建注入 look-ahead
         # （天普 11-13 21:10 重跑教训）；全日 force 不受影响（有意重建）
@@ -828,10 +945,11 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           market_line=market_line, base_rate_stats=base_rate_stats,
                           basis_map=basis_map, basis_state=basis_state,
                           bid_supplement=bid_supplement,
-                          sector_judgment=sector_answers.get(board),
-                          board_codes=by_board.get(board, [r]),
+                          sector_judgment=None if is_trial else sector_answers.get(board),
+                          board_codes=(by_board_trial if is_trial else by_board).get(board, [r]),
                           prev_cross=prev_cross, streak_map=streak_map,
-                          trial=trial, reg_corpus=reg_corpus)
+                          trial=trial, reg_corpus=reg_corpus,
+                          trial_strength=r.get("trialStrength") if is_trial else None)
         if (frozen_doc and frozen_doc.get("status") == "ok"
                 and frozen_doc.get("narrative")):
             built["narrative"] = frozen_doc["narrative"]
@@ -862,8 +980,10 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                     _lines.insert(_i + 1, push_txt)
                     break
             built["narrative"] = "\n".join(_lines)
-        built["sectorJudgmentState"] = ("injected" if sector_answers.get(board)
-                                        else "sector_missing")
+        # trial 龙头：root 板无 ABM 板块判答 → sector_missing（fail-visible，预登记 §3）
+        built["sectorJudgmentState"] = (
+            "sector_missing" if is_trial
+            else ("injected" if sector_answers.get(board) else "sector_missing"))
         built_leaders.append(built)
     built_all = built_sectors + built_leaders
     est = sum(b["estimatedTokens"]["budgetGuard"] for b in built_all)
@@ -874,7 +994,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             print(b["narrative"])
         return {"ok": True, "date": date, "dryRun": True, "leaders": len(todo),
                 "docs": len(built_all), "estimatedTokens": est,
-                "selection": selection, "jiuyanDragonState": jstate}
+                "selection": selection, "jiuyanDragonState": jstate,
+                "trialStrengthState": tstate}
     if not confirm_budget:
         print(f"{date} 预计 {len(built_all)} 调用 ≈{est} tokens；真实开火需 --confirm-budget")
         raise SystemExit(2)
@@ -889,7 +1010,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             sector_answers[str(b["board"])] = b.get("answers") or {}
     for b in built_leaders:
         board = str((b.get("row") or {}).get("board") or "未归属")
-        if not b.get("corpusFrozen"):
+        # trial 龙头不注入板块判答（root 板无 ABM 判答，sector_missing 恒态）
+        if (not b.get("corpusFrozen")
+                and (b.get("row") or {}).get("boardSource") != BOARD_SOURCE_TRIAL):
             # 冻结叙事已含晨间注入，不二次注入；仍须重判（重跑=冻结语料+新判答）
             line = sector_judgment_line(sector_answers.get(board))
             if line:
@@ -907,6 +1030,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
               "okCount": ok_n, "degraded": degraded_n, "tokensUsed": tokens,
               "estimatedTokensBudgetGuard": est,
               "selection": selection, "jiuyanDragonState": jstate,
+              "trialStrengthState": tstate,
               "questionSetVersion": QUESTION_SET_VERSION_AUCTION_LEADER}
     return result
 
@@ -919,6 +1043,8 @@ def main() -> None:
     ap.add_argument("--confirm-budget", action="store_true")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--max-leaders", type=int, default=None)
+    ap.add_argument("--trial-max", type=int, default=None,
+                    help="第三源每日软上限（缺省 6；超限全局 jj_ratio 降序截断记账）")
     ap.add_argument("--codes", default=None, help="逗号分隔单只重跑")
     ap.add_argument("--sample-origin", default=None, choices=["live", "backfill"],
                     help="缺省自动：当日 live / 历史日 backfill")
@@ -928,7 +1054,7 @@ def main() -> None:
                  confirm_budget=args.confirm_budget, force=args.force,
                  max_leaders=args.max_leaders,
                  codes=set(args.codes.split(",")) if args.codes else None,
-                 sample_origin=args.sample_origin)
+                 sample_origin=args.sample_origin, trial_max=args.trial_max)
     # 标记行统一在 main 打（覆盖 skip/失败外全部返回路径；调度只认标记行）
     if not (args.dry_run or args.estimate):
         print(RESULT_MARKER + json.dumps(result, ensure_ascii=False))

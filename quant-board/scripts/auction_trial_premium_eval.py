@@ -47,23 +47,17 @@ _spec.loader.exec_module(bre)
 
 from backend.operations.market_dieban_tdx import read_lday, resolve_root  # noqa: E402
 from backend.operations import jev_label_jiuyan as jj  # noqa: E402
+from backend.analysis.hotlist.auction_strength import (  # noqa: E402
+    BOARD_TIERS, assign_root_boards, board_amt, board_tier, fnum, jj_ratio)
 
 EPS = 0.001
 ONLINE_MAX = 80
 
-# ── 板块竞价强度规则档（日 Σjj_amount，元）──
-BOARD_TIERS = [("冷 <5000万", 5e7), ("温 5000万-2亿", 2e8), ("中热 2-5亿", 5e8),
-               ("热 5-10亿", 1e9), ("过热 ≥10亿", float("inf"))]
+# 板块竞价强度规则档 BOARD_TIERS / board_tier / jj_ratio / fnum / board_amt 单源在
+# backend/analysis/hotlist/auction_strength.py（第三源选龙与本评估共用，禁第二套）。
 
 
 # ══════════ 纯函数（无 IO，单元测试覆盖）══════════
-def fnum(x):
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return None
-
-
 def bucket(v, edges, labels):
     """左闭右开分桶；None → 缺值（fail-visible，不伪装 0）。"""
     if v is None:
@@ -72,23 +66,6 @@ def bucket(v, edges, labels):
         if v < e:
             return lab
     return labels[-1]
-
-
-def board_tier(amt):
-    if amt is None:
-        return "未分板块"
-    for name, hi in BOARD_TIERS:
-        if amt < hi:
-            return name
-    return BOARD_TIERS[-1][0]
-
-
-def jj_ratio(jp, pre_percent, limit, preseal):
-    """竞价强度比（tier_jj 同锚）：PRESEAL 用 pre_percent，否则限价；缺值 → None。"""
-    denom = pre_percent if preseal else limit
-    if jp is None or not denom:
-        return None
-    return jp / denom * 100
 
 
 def is_one_word(o, l, lp, eps=EPS):
@@ -202,38 +179,9 @@ def load_bars(ctx, code, need_upto, offline):
 
 
 def board_map(rows, db):
-    """root 板块全链（线上读口同口径单源）：direct > bridge > hist；primary 单值。"""
-    from backend.services.jev import jiuyan_board, jiuyan_industry_root
-    from backend.api import hotlist_jev_auction_routes as rt
-    b_idx, b_meta = jiuyan_board.board_index(db)
-    root_idx = jiuyan_industry_root.root_index(db)
-    root_alias = jiuyan_industry_root.root_alias_map(db)
-    bridge = rt._bridge_maps(db)
-    need = set()
-    for r in rows:
-        c6 = r["code"]; b = b_idx.get(c6)
-        if b:
-            r["board"] = b; continue
-        bb = []
-        for n in rt._bridge_lookup(r.get("bk_name"), bridge["maps"], bridge["inds"]):
-            rn = root_idx.get(n) or n
-            if rn and rn not in bb:
-                bb.append(rn)
-        if bb:
-            r["board"] = bb[0]; continue
-        r["board"] = None; need.add(c6)
-    if need and bridge["hist"]:
-        hist = rt._bridge_hist(bridge["hist"], need)
-        for r in rows:
-            if r["code"] in need and hist.get(r["code"]):
-                seen = []
-                for n in hist[r["code"]]:
-                    rn = root_alias.get(n, n)
-                    if rn and rn not in seen:
-                        seen.append(rn)
-                if seen:
-                    r["board"] = seen[0]
-    return b_meta
+    """root 板块全链（线上读口同口径单源）：委托 auction_strength.assign_root_boards
+    （direct > bridge > hist；primary 单值；第三源选龙同一实现）。"""
+    return assign_root_boards(rows, db)
 
 
 # ══════════ 统计输出 ══════════
@@ -287,13 +235,7 @@ def main() -> int:
     assert db.name == "dragon_board_quant", f"评估只读生产库，禁测试库: {db.name}"
     rows = bre.load_rows(db, args.d_from, args.d_to)
     names = {d["code"]: d.get("name") or "" for d in db["stock_names"].find({}, {"code": 1, "name": 1, "_id": 0})}
-    st_fix = 0
-    for r in rows:
-        if "ST" in names.get(r["code"], "").upper() and r["limit"] != 5.0:
-            r["limit"] = 5.0
-            r["preseal"] = (r.get("pre_percent") or 0) >= 5.0*0.99
-            r["sealed"] = None if r.get("percent") is None else r["percent"] >= 5.0*0.99
-            st_fix += 1
+    st_fix = bre.st_name_fix(rows, names)
     dates = sorted({r["date"] for r in rows})
     b_meta = board_map(rows, db)
     mapped = sum(1 for r in rows if r["board"])
@@ -346,11 +288,11 @@ def main() -> int:
         print(f"[2] 封板非一字基率：开≥5% {h5:.1f}%  开均值 {sum(ops)/len(ops):+.2f}%  中位 {ops[len(ops)//2]:+.2f}%  "
               f"负溢价 {sum(1 for x in ops if x<0)/len(ops)*100:.1f}%")
 
-    # 板块强度 + 个股档
-    bd_amt = defaultdict(float)
-    for r in rows:
-        if r["board"]:
-            bd_amt[(r["date"], r["board"])] += fnum(r.get("jj_amount")) or 0.0
+    # 板块强度（board_amt 单源：每日每 root 板 Σjj_amount，缺值按 0）
+    bd_amt = {}
+    for d in dates:
+        for b, amt in board_amt([r for r in rows if r["date"] == d]).items():
+            bd_amt[(d, b)] = amt
     for r in rows:
         r["board_amt"] = bd_amt.get((r["date"], r["board"])) if r["board"] else None
         r["btier"] = board_tier(r["board_amt"])

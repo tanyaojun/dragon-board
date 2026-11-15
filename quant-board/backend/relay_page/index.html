@@ -2995,11 +2995,12 @@ function tlRenderRows(){
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
     + th('板块', 'board') + '<th>周期</th>' + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
     + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th>'
-    + '<th>催化</th><th>身位</th><th>事件</th>'
+    + '<th>催化</th><th>身位</th><th title="事件/新闻/题材证据窄徽章 + 监管风险徽章 监/停/异/触（当日档；hover 看明细）">事件</th>'
     + '<th>结局</th></tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
       : '<tr><td class="empty" colspan="17">无匹配龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('tlPagerHost'); if (ph) ph.innerHTML = tlPager(pg.page, pg.total);
+  regEnsureDates(pg.rows.map(r => r.tradingDate), tlRenderRows);
 }
 function tlPager(page, total){
   const nav = total > 1
@@ -3064,7 +3065,7 @@ function tlCycleBadge(r){
 // 题材证据分层「事件」格（题材龙头/竞价龙头共用单源，2026-11-14 复刻）：
 // 只出窄徽章（事件/新闻/题材），题材名称不显示（与「板块」列重复）；完整文本进 tooltip。
 // 缺失原因徽章 fail-visible；产业树已映射但无证据 → 灰 '-'。
-function evidenceCellHtml(r){
+function evidenceCellHtml(r, regDate){
   const evTitles = r.evidenceEventTitles || [];
   const evTags = r.evidenceKwordTags || [];
   const evNews = r.evidenceNewsTitles || [];
@@ -3077,12 +3078,17 @@ function evidenceCellHtml(r){
   const evTagBadge = evTags.length
     ? ' <span class="tl-ev" title="' + esc(evTags.join(' / ')) + '">+题材' + evTags.length + '</span>'
     : '';
-  return r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
+  const base = r.evidenceIndustry || r.evidenceBoardResolved || evTags.length
       ? (evTitleBadge + evNewsBadge + evTagBadge
         || '<span class="badge b-gray" title="产业树已映射但无事件/新闻/标签证据">-</span>')
       : (r.evidenceMissingReason
         ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
         : '<span class="badge b-gray">-</span>');
+  // 监管风险徽章（2026-11-15 用户需求）：与池行同源 kplRegBadges（监/停/异/触）；
+  // 日期语义由调用方钉死：题材龙头=当日档、竞价龙头=corpusState.prevDate（T−1），
+  // 不跨日归因；档缺失→空串（fail-visible，不伪造徽章）。
+  const reg = regDate ? kplRegBadges(r.code, regDate, '监管档 ' + regDate + '：') : '';
+  return reg ? base + ' ' + reg : base;
 }
 function tlRowHtml(r, f){
   const p = tlProb(r);
@@ -3117,7 +3123,7 @@ function tlRowHtml(r, f){
   // 2026-11-12 用户裁决：板内 L2 解析徽章下线（列表缩紧），摘要迁详情卡 meta 常显
   // 2026-10-27 用户裁决（两轮纠偏定稿）：事件列**只出窄徽章、题材名称一律不显示**
   //（名称与「板块」列重复，占宽）；完整题材驱动事件文字描述进 tooltip。
-  const evid = evidenceCellHtml(r);   // 与竞价龙头「事件」列共用单源（复刻）
+  const evid = evidenceCellHtml(r, r.tradingDate);   // 与竞价龙头「事件」列共用单源；监管徽章=当日档
   // 溢价列已删（2026-11-12 用户截图需求：列表缩紧）；T+2 溢价保留在详情卡 meta（fail-visible 出口）
   const dkey = js(r.tradingDate || '');
   return '<tr class="lg-row' + (open ? ' open' : '')
@@ -3602,10 +3608,11 @@ function alRenderRows(){
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
     + th('板块', 'board') + th('领涨', 'lead') + th('竞价涨幅', 'pct') + th('实时涨幅', 'rpct')
     + th('封板概率', 'prob') + '<th>档位</th><th>催化</th><th>身位</th>'
-    + '<th>题材深度</th><th>延续性</th><th>事件</th><th>结局</th></tr>'
+    + '<th>题材深度</th><th>延续性</th><th title="事件/新闻/题材证据窄徽章 + 监管风险徽章 监/停/异/触（T−1 收盘档；hover 看明细）">事件</th><th>结局</th></tr>'
     + (pg.rows.length ? pg.rows.map(r => alRowHtml(r, f)).join('')
       : '<tr><td class="empty" colspan="15">无匹配竞价龙头（调整区间或筛选条件）</td></tr>');
   const ph = $('alPagerHost'); if (ph) ph.innerHTML = alPager(pg.page, pg.total);
+  regEnsureDates(pg.rows.map(r => (r.corpusState || {}).prevDate), alRenderRows);
 }
 function alPager(page, total){
   const nav = total > 1
@@ -3642,13 +3649,20 @@ function alRowHtml(r, f){
   const leadRole = alLeadRole(r);
   const leadCell = badge(leadRole, 'b-purple',
     leadRole ? '领涨身位：' + leadRole + '（韭研 T−1 涨停分组龙序）' : '');
-  const evid = evidenceCellHtml(r);
+  const evid = evidenceCellHtml(r, (r.corpusState || {}).prevDate);   // 监管徽章=T−1 收盘档（语料同口径）
   const srcs = r.selectionSources || ['auction_push'];
   const dragonTxt = (r.dragonRoles || []).map(x => (x.board || '') + (x.role || '')
     + (x.boards > 1 ? '（' + (x.days > 1 ? x.days + '天' : '') + x.boards + '板' + (x.zhaban ? '，炸板' : '') + '）'
        : (x.boards === 1 ? '（首板）' : ''))).filter(Boolean).join('；');
   const dragonBad = srcs.includes('jiuyan_dragon_t1')
     ? ' <span class="badge b-blue" title="' + esc(dragonTxt || '选龙源：韭研 T−1 涨停分组龙一/二/三（官方封板口径≥3家）') + '">韭研龙</span>' : '';
+  // 第三源徽章（2026-11-15 预登记 auction-leader-trial-strength-source）：title 披露
+  // jj_ratio/板内排名；trial 单源股推送缺席是预期态（pushBad 仅推送源行，不告警）
+  const trialTxt = r.trialStrength
+    ? '竞价强度入选：jj_ratio ' + r.trialStrength.jjRatio + '%（' + (r.trialStrength.jjtier || '') + '），板内强度排名 ' + r.trialStrength.rank + '，板块强度档 ' + (r.trialStrength.btier || '')
+    : '';
+  const trialBad = srcs.includes('auction_trial_strength')
+    ? ' <span class="badge b-green" title="' + esc(trialTxt || '选龙源：竞价试盘强度板块前三（中热2-5亿×mid50_95×撤减）') + '">竞价强度</span>' : '';
   const pushBad = (srcs.includes('auction_push') && r.auctionPushState && r.auctionPushState.entryN === 0)
     ? ' <span class="badge b-amber" title="当日 09:15 推送缺席（结构化留痕）">推送缺席</span>' : '';
   const bidBad = (r.corpusState && String(r.corpusState.bidLane || '').startsWith('missing'))
@@ -3668,7 +3682,7 @@ function alRowHtml(r, f){
       + esc((r.tradingDate || '').slice(5)) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + '</td>'
-    + '<td>' + esc(r.board || '未归属') + dragonBad + pushBad + bidBad + morningBad + flashBad + '</td>'
+    + '<td>' + esc(r.board || '未归属') + dragonBad + trialBad + pushBad + bidBad + morningBad + flashBad + '</td>'
     + '<td>' + leadCell + '</td>'
     + '<td class="num" title="竞价涨幅（09:25 匹配价，bid 通道 bidding_pct）">' + pctTxt + '</td>'
     + '<td class="num" title="实时涨幅（09:15 竞价看龙头推送芯片 pct）">' + rpctTxt + '</td>'
@@ -8454,17 +8468,25 @@ async function kplRegEnsure(date){
   delete KPLREG.pending[date];
   return fresh;
 }
-function kplRegBadges(code, date){
+function kplRegBadges(code, date, tipPrefix){
   const hit = ((KPLREG.byDate[date] || {})[String(code || '')]);
   if (!hit) return '';
+  const tp = esc(tipPrefix || '');
   const b = [];
   const mc = hit.monitor_current;
-  if (mc) b.push(`<span class="badge" style="background:#fee2e2;color:#b91c1c" title="重点监控 ${esc(mc.start_date||'')}~${esc(mc.end_date||'')}">监</span>`);
+  if (mc) b.push(`<span class="badge" style="background:#fee2e2;color:#b91c1c" title="${tp}重点监控 ${esc(mc.start_date||'')}~${esc(mc.end_date||'')}">监</span>`);
   const rec = (hit.recent || [])[0];
-  if (rec && rec.suspended_flag) b.push(`<span class="badge" style="background:#7f1d1d;color:#fff" title="严重异动 ${esc(rec.abnormal_date||'')} 停牌 预计复牌 ${esc(rec.resume_date||'')}">停</span>`);
-  else if (rec && rec.triggered_flag) b.push(`<span class="badge" style="background:#ffedd5;color:#9a3412" title="严重异动 ${esc(rec.abnormal_date||'')}">异</span>`);
-  if (hit.today) b.push(`<span class="badge" style="background:#ffedd5;color:#9a3412" title="今日涨停即触发严重异动">触</span>`);
+  if (rec && rec.suspended_flag) b.push(`<span class="badge" style="background:#7f1d1d;color:#fff" title="${tp}严重异动 ${esc(rec.abnormal_date||'')} 停牌 预计复牌 ${esc(rec.resume_date||'')}">停</span>`);
+  else if (rec && rec.triggered_flag) b.push(`<span class="badge" style="background:#ffedd5;color:#9a3412" title="${tp}严重异动 ${esc(rec.abnormal_date||'')}">异</span>`);
+  if (hit.today) b.push(`<span class="badge" style="background:#ffedd5;color:#9a3412" title="${tp}今日涨停即触发严重异动">触</span>`);
   return b.join(' ');
+}
+// 龙头台账「事件」列监管徽章懒取（2026-11-15）：按页行日期集批量 ensure（本地读口，
+// 零上游负载）；任一档新到→重渲一次（byDate 缓存收敛，不循环）；失败缓存 null 不重试同款池行。
+function regEnsureDates(dates, rerender){
+  const uniq = [...new Set((dates || []).filter(Boolean))];
+  if (!uniq.length) return;
+  Promise.all(uniq.map(d => kplRegEnsure(d))).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
 function kplRegEnter(){ kplRegLoad(false); }
 function kplRegDateChange(){ kplRegLoad(false); }

@@ -437,3 +437,152 @@ def test_roster_row_contract_alignment(client):
     assert row["labelMissing"] is True
     assert row["auctionPct"] is None        # 不拿推送实时 pct 冒充竞价涨幅
     assert row["realtimePct"] == -8.64
+
+
+# ── 第三源：竞价试盘强度 roster 行源（2026-11-15 预登记）──────────────────
+
+def _seed_trial_raw(db, date=DATE):
+    from backend.services.jev import jiuyan_board, jiuyan_industry_root
+    jiuyan_board.reset_jiuyan_board_cache()
+    jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+    db["jiuyan_industry_stocks"].docs["node:机器人"] = {
+        "_id": "node:机器人", "name": "机器人", "stockN": 4, "batchDate": "2026-10-25",
+        "stocks": [{"code": c} for c in ("600100", "600101", "600102", "600103")]}
+    db["stock_names"].docs["600100"] = {"code": "600100", "name": "甲"}
+    db["stock_names"].docs["600102"] = {"code": "600102", "name": "丙"}
+    rows = {}
+    for c, jp in (("600100", 7.0), ("600101", 8.0), ("600102", 9.0), ("600103", 6.5)):
+        rows[c] = {"jj_percent": jp, "jj_amount": 6e7,
+                   "first_amount": 1e7, "last_amount": 5e6,
+                   "start_time": "09:15:00", "end_time": "09:20:11"}
+    db["auction_trial_raw"].docs[date] = {
+        "_id": date, "tradingDate": date, "nRows": 4,
+        "savedAt": f"{date}T09:26:01", "rows": rows}
+
+
+def test_get_trial_roster_labelmissing(client):
+    """行源 ∪ trial roster：未打标强度候选出 labelMissing 行 + 源/trialStrength 透传。"""
+    c, db = client
+    _seed_trial_raw(db)
+    try:
+        doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+        assert doc["ok"]
+        rows = {x["code"]: x for x in doc["leaders"]}
+        assert rows["600102"]["labelMissing"] is True
+        assert rows["600102"]["selectionSources"] == ["auction_trial_strength"]
+        assert rows["600102"]["board"] == "机器人"
+        assert rows["600102"]["trialStrength"]["rank"] == 1
+        assert rows["600102"]["trialStrength"]["jjtier"] == "mid50_95"
+        assert rows["600102"]["name"] == "丙"
+        assert "600103" not in rows                    # 每板前三
+        # 推送缺档 600327 + 3 trial = 4；已打标 603135 不重复
+        assert doc["nodeFilter"]["labelMissingRows"] == 4
+        assert "trialRosterError" not in doc["nodeFilter"]
+    finally:
+        from backend.services.jev import jiuyan_board, jiuyan_industry_root
+        jiuyan_board.reset_jiuyan_board_cache()
+        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+
+
+def test_get_trial_roster_failure_fail_visible(client, monkeypatch):
+    """trial roster 计算失败 → trialRosterError 留痕，labels/推送/jiuyan roster 不受阻。"""
+    c, db = client
+    from backend.analysis.hotlist import auction_strength as AS
+    _seed_trial_raw(db)
+
+    def boom(*a, **k):
+        raise RuntimeError("trial roster boom")
+    monkeypatch.setattr(AS, "trial_strength_roster", boom)
+    try:
+        doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+        assert doc["ok"]
+        assert "trial roster boom" in doc["nodeFilter"]["trialRosterError"]
+        rows = {x["code"]: x for x in doc["leaders"]}
+        assert rows["603135"]["labelMissing"] is False
+        assert rows["600327"]["labelMissing"] is True
+    finally:
+        from backend.services.jev import jiuyan_board, jiuyan_industry_root
+        jiuyan_board.reset_jiuyan_board_cache()
+        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+
+
+def test_trial_strength_passthrough_labeled_doc(client):
+    """已打标 trial 源 doc：selectionSources/trialStrength 直读透传。"""
+    c, db = client
+    d = db[R.COLLECTION].docs[f"{DATE}:603135"]
+    d["selectionSources"] = ["auction_push", "auction_trial_strength"]
+    d["trialStrength"] = {"boardAmt": 2.4e8, "btier": "中热 2-5亿", "jjRatio": 70.0,
+                          "jjtier": "mid50_95", "posture": "decrease", "rank": 3,
+                          "boardTrialN": 4}
+    doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+    row = next(x for x in doc["leaders"] if x["code"] == "603135")
+    assert row["selectionSources"] == ["auction_push", "auction_trial_strength"]
+    assert row["trialStrength"]["rank"] == 3
+
+
+def test_trial_merge_into_push_missing_row(client):
+    """推送缺档行同时是 trial 候选 → 合并源标签 + trialStrength（N3 同款）。"""
+    c, db = client
+    from backend.services.jev import jiuyan_board, jiuyan_industry_root
+    jiuyan_board.reset_jiuyan_board_cache()
+    jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+    db["jiuyan_industry_stocks"].docs["node:大消费"] = {
+        "_id": "node:大消费", "name": "大消费", "stockN": 3, "batchDate": "2026-10-25",
+        "stocks": [{"code": c} for c in ("600327", "600400", "600401")]}
+    rows = {}
+    for code, jp in (("600327", 7.0), ("600400", 8.0), ("600401", 9.0)):
+        rows[code] = {"jj_percent": jp, "jj_amount": 8e7,
+                      "first_amount": 1e7, "last_amount": 5e6}
+    db["auction_trial_raw"].docs[DATE] = {
+        "_id": DATE, "tradingDate": DATE, "nRows": 3, "rows": rows}
+    try:
+        doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+        rows_out = {x["code"]: x for x in doc["leaders"]}
+        r = rows_out["600327"]
+        assert r["labelMissing"] is True
+        assert r["selectionSources"] == ["auction_push", "auction_trial_strength"]
+        assert r["trialStrength"]["rank"] == 3
+        assert doc["nodeFilter"]["labelMissingRows"] == 3   # 600327 合并 + 2 纯 trial
+    finally:
+        jiuyan_board.reset_jiuyan_board_cache()
+        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+
+
+def test_trial_merge_into_jiuyan_only_missing_row(client, monkeypatch):
+    """评审 P1-1：jiuyan-only 缺档行 ∩ trial 候选 → 合并第三源标签 + 强度载荷
+    （missing_by_key 快照须含 jiuyan 新增行，不得静默丢源）。"""
+    c, db = client
+    import backend.operations.jev_label_jiuyan as J
+    monkeypatch.setattr(J, "_reseal_verdict", lambda date, code: "broken")
+    from backend.services.jev import jiuyan_board, jiuyan_industry_root
+    jiuyan_board.reset_jiuyan_board_cache()
+    jiuyan_industry_root.reset_jiuyan_industry_root_cache()
+    _seed_jiuyan_for_route(db)   # 600101 = 大消费龙二（jiuyan-only：无推送无打标）
+    db["jiuyan_industry_stocks"].docs["node:大消费"] = {
+        "_id": "node:大消费", "name": "大消费", "stockN": 3, "batchDate": "2026-10-25",
+        "stocks": [{"code": x} for x in ("600101", "600400", "600401")]}
+    rows = {}
+    for code, jp in (("600101", 7.0), ("600400", 8.0), ("600401", 9.0)):
+        rows[code] = {"jj_percent": jp, "jj_amount": 8e7,
+                      "first_amount": 1e7, "last_amount": 5e6,
+                      "start_time": "09:15:00", "end_time": "09:20:11"}
+    db["auction_trial_raw"].docs[DATE] = {
+        "_id": DATE, "tradingDate": DATE, "nRows": 3,
+        "savedAt": f"{DATE}T09:26:01", "rows": rows}
+    try:
+        doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
+        assert doc["ok"]
+        rmap = {x["code"]: x for x in doc["leaders"]}
+        r = rmap["600101"]
+        assert r["labelMissing"] is True
+        assert r["selectionSources"] == ["jiuyan_dragon_t1", "auction_trial_strength"]
+        assert r["trialStrength"]["rank"] == 3      # 板内 90/80/70 → 70 排第三
+        assert r["dragonRoles"][0]["role"] == "龙二"
+        assert rmap["600400"]["selectionSources"] == ["auction_trial_strength"]
+        # 600327 推送+jiuyan 合并 1 + 600101 jiuyan∩trial 合并 1 + 600102 纯龙 1
+        # + 600400/600401 纯 trial 2 = 5
+        assert doc["nodeFilter"]["labelMissingRows"] == 5
+        assert "trialRosterError" not in doc["nodeFilter"]
+    finally:
+        jiuyan_board.reset_jiuyan_board_cache()
+        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
