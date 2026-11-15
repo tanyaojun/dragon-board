@@ -21,6 +21,10 @@ TDX_HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
 # key=(code, offset)；值=bars dict 或 None（拉不到，负缓存防全池重扫拖垮挂链）。
 _BARS_CACHE: dict[tuple[str, int], dict[str, dict] | None] = {}
 
+# 覆盖式渐进 offset 阶梯（2026-11-16 自 leader_wzs 下沉为单源）：15≈近3周 → 250≈近1年；
+# 命中即停。同进程多日回填时各档位全部进 _BARS_CACHE，首日后零网络。
+_BAR_OFFSET_LADDER: tuple[int, ...] = (15, 40, 80, 160, 250)
+
 
 def _setup_no3(api) -> None:   # pragma: no cover - 网络协议层，真机验证
     from tdxpy.parser.setup_commands import SetupCmd1, SetupCmd2
@@ -77,6 +81,28 @@ def fetch_daily_bars(code: str, offset: int = 15, max_probe: int = 15,
     return None
 
 
+def bars_covering(code: str, end_date: str,
+                  min_dates: int = 1,
+                  offsets: tuple[int, ...] | None = None) -> dict[str, dict] | None:
+    """覆盖 `end_date` 的日线（含其前至少 min_dates 根）；不覆盖 → 最后一次结果。
+
+    **深历史回填必经此入口**（2026-11-16 用户裁决）：`fetch_daily_bars` 默认只取
+    最近 15 根，对距今 >4 个交易日的历史日，≤end_date 的棒不足 → gain10/当日涨幅
+    全 None → v5 空间龙一全板块被误判「TDX 日线不可用」跳过（11-12 00:27 回填把
+    ≤11-04 板块节点档清空的根因）。offsets 缺省阶梯式（15→…→250，逐档重试，每档
+    一次 TDX 连接）；深历史全量回填可传单档大 offset（如 (250,)）。
+    """
+    last: dict[str, dict] | None = None
+    for off in (offsets or _BAR_OFFSET_LADDER):
+        bars = fetch_daily_bars(str(code)[-6:], offset=off)
+        last = bars
+        if bars:
+            covered = sorted(d for d in bars if d <= end_date)
+            if len(covered) >= min_dates:
+                return bars
+    return last
+
+
 def gain10_from_bars(bars: dict[str, dict] | None, end_date: str,
                      window: int = 10) -> float | None:
     """截至 `end_date` 的 N 交易日收盘涨幅（%）：C(end)/C(endo−window) − 1。
@@ -95,6 +121,36 @@ def gain10_from_bars(bars: dict[str, dict] | None, end_date: str,
     return round((series[-1] / base - 1) * 100, 2)
 
 
-def fetch_gains10(codes, end_date: str, window: int = 10) -> dict[str, float | None]:
-    """批量 10 日涨幅：{code: gain%}；拉不到的 code 值为 None（fail-visible 由调用方处置）。"""
-    return {c: gain10_from_bars(fetch_daily_bars(c), end_date, window) for c in codes}
+def fetch_gains10(codes, end_date: str, window: int = 10,
+                  offsets: tuple[int, ...] | None = None) -> dict[str, float | None]:
+    """批量 10 日涨幅：{code: gain%}；拉不到的 code 值为 None（fail-visible 由调用方处置）。
+
+    走覆盖式日线（bars_covering，min_dates=window+1）：当日链在首档 15 根即命中
+    （零额外成本）；历史回填日自动升档，不再把深日期误判「TDX 日线不可用」。
+    """
+    return {c: gain10_from_bars(bars_covering(c, end_date, min_dates=window + 1,
+                                              offsets=offsets),
+                                end_date, window) for c in codes}
+
+
+def covering_day_change_fetcher(codes, date: str,
+                                offsets: tuple[int, ...] | None = None) -> dict[str, float | None]:
+    """当日涨跌幅%（close vs 前收，覆盖式；2026-11-16 自 leader_wzs 下沉单源）。
+
+    断板候选跌停剔除用；当日不在轴/前收缺失 → None（调用方不剔除，不猜）。
+    与 bars_covering 同一 (code, offset) 缓存。
+    """
+    out: dict[str, float | None] = {}
+    for c in codes:
+        out[c] = None
+        bars = bars_covering(c, date, min_dates=2, offsets=offsets)
+        if not bars or date not in bars:
+            continue
+        ds = sorted(bars)
+        i = ds.index(date)
+        if i == 0:
+            continue
+        pc, cc = bars[ds[i - 1]].get("close"), bars[date].get("close")
+        if pc and cc:
+            out[c] = round((cc / pc - 1) * 100, 2)
+    return out

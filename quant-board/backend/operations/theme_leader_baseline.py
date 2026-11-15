@@ -26,29 +26,15 @@ def _default_day_change_fetcher(codes: list[str], date: str) -> dict[str, float 
     """当日涨跌幅%（close vs 前一交易日 close）：断板候选跌停剔除用（v12「未跌停」条件）。
 
     拉不到日线/当日不在轴/前收缺失 → None（调用方不剔除，不猜，fail-visible）。
+    2026-11-16：改委托 tdx_daily_bars.covering_day_change_fetcher（覆盖式单源）——
+    原实现固定 15 根日线，深历史回填日不在轴 → 恒 None（跌停剔除失效），与 gain10
+    是同一坑（11-12 回填清空板块节点档事故的伴生缺陷）。
     """
-    from backend.operations.tdx_daily_bars import fetch_daily_bars
-    out: dict[str, float | None] = {}
-    for c in codes:
-        try:
-            bars = fetch_daily_bars(c)
-        except Exception:  # noqa: BLE001 — TDX 异常不阻断（不猜，缺者保留）
-            out[c] = None
-            continue
-        dates = sorted(bars)
-        try:
-            i = dates.index(str(date))
-        except ValueError:
-            out[c] = None
-            continue
-        if i == 0:
-            out[c] = None
-            continue
-        prev_close = bars[dates[i - 1]].get("close")
-        cur_close = bars[date].get("close")
-        out[c] = (round((cur_close / prev_close - 1) * 100, 2)
-                  if prev_close and cur_close else None)
-    return out
+    from backend.operations.tdx_daily_bars import covering_day_change_fetcher
+    try:
+        return covering_day_change_fetcher(codes, date)
+    except Exception:  # noqa: BLE001 — TDX 异常不阻断（不猜，缺者保留）
+        return {c: None for c in codes}
 
 
 def sealed_and_info(db: Any, date: str,
