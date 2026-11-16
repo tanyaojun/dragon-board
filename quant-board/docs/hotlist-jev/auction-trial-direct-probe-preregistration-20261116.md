@@ -280,10 +280,30 @@
   静默死亡；修复=同日 kpl_morning_bidding_raw col11 板块 join 注入 bk_name
   （plateJoinedN/plateMissing 结构化留痕）。pytest 版等价性测试因护栏（test 库
   无档）跳过，生产库验证以上表为准。
-- **明日窗内双源对拍**（退役验收）：kpl_bidding_series 首采日，WzsLinker 回退链
-  同窗可跑；对拍表（逐股 jj_percent/first/last/max/board_amt/roster 入选）记录于
-  本节，通过后删除 WzsLinker 采集路径（单主链红线，回退靠 git）。另验：MBL col11
-  板块名与试盘页 bk_name 命名族一致性。
+- **§7.9a 今日双验证补记（2026-11-16 下午，trial 84 + MBL 114 冻结态实算）**
+
+  **验证 2：MBL col11 vs 试盘页 bk_name 命名族——完全不同族，无法精确互推**。
+  23 重叠股字符串一致 0/23：bk_name=试盘页主板块归类（单值粗粒度：光伏/医药/
+  消费(1)），col11=KPL 概念标签串（双值顿号：稀土永磁、中特估/零售、谷子经济）。
+  桥接归同等效：整串过桥 5/23 归属差异（含 2 None）；顿号拆分逐 token 过桥
+  14/23 差异（含 6 None）——两策略都无法复原。且 trial bk 自身桥接产物可疑
+  （基建(1)→海峡两岸、算力(1)→海峡两岸、光伏→半导体，suggest_for 模糊引擎），
+  两边都是模糊近似、无真值。**结论：板块归属漂移是派生源固有属性**（量化：
+  漂移 14-18/23 量级），bk_name join 只解决 mappedN=0 静默死亡，不等价。
+
+  **验证 3：last 语义偏移 → posture 翻转与入选传导（实算）**。trial.last vs
+  MBL col4：涨停开盘股 6 重叠 0 翻转（比值 1.00-1.02）；非涨停开盘 17 只
+  **5 翻转（29%，4×maintain→decrease、1×decrease→maintain）**。入选传导四态
+  模拟：S0 真值形态 {002187}；S1 last→col4 {}（002187 posture 翻转掉出）；
+  S2 宇宙扩大(+91 MBL-only) {002187, 002748 新入}；S3 联合 {002748}。
+  **两个偏移（last 语义 + 宇宙扩大）各自独立改变入选集合**。
+
+  **明日双源对拍裁决维度（升级）**：①逐股 last/posture 翻转率（真实 tick 首
+  帧非代理）②boardAmt/中热档漂移（宇宙 114 vs 84）③板块归属漂移分布 ④入选
+  集合差异。裁决项（用户）：接受派生源三重漂移（推荐——分组权威=韭研板块体系，
+  KPL bk_name 本就是模糊桥；且非涨停开盘股 last 语义上我方 col4/官方冻结值
+  更接近 roster「撤减」本意）or 保留 WzsLinker 用于板块归属（混合形态，违背
+  退役目标）or 缩派生宇宙至 trial 84 同款（需宇宙判据，无官方来源）。
 - **语义偏移记录**：派生宇宙（序列委买额可见 ⊇ 试盘页宇宙）大于 WzsLinker 试盘页；
   board_amt 板块热度口径随之放宽，roster 过滤（中热×mid50_95×撤减）不变；
   5s tick 采样粒度粗于 WzsLinker 自采序列，首帧/峰值统计存在粒度差（观测值口径，
