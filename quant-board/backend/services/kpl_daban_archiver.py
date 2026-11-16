@@ -1289,6 +1289,16 @@ class DabanPoolArchiver:
         trading_today, latest_trading_day = await asyncio.to_thread(
             _trading_day_context, _ctx_now)
         stale_cutoff = (_ctx_now - timedelta(days=3)).date().isoformat()
+        # 竞价列表多帧采集（2026-11-16 col9=09:20 撤后余额假设验证；窗 09:15-09:26，
+        # 帧≤15/日，POST 走 _post_form ≥2s 锁，预算注释见 auction_bidding_direct）
+        if trading_today:
+            try:
+                from backend.operations.auction_bidding_direct import collect_mbl_frame_series
+                results["mblFrame"] = await asyncio.to_thread(
+                    collect_mbl_frame_series, self._database_factory(),
+                    _ctx_now.date().isoformat(), _ctx_now)
+            except Exception as error:  # noqa: BLE001 单通道失败不阻断（fail-visible）
+                results["mblFrame"] = {"state": f"frame_failed:{error}"}
         async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
             pool_date: str | None = None
             for key, url, fn in (

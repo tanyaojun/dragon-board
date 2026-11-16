@@ -126,3 +126,45 @@ def load_morning_bidding_raw(db: Any, date: str) -> dict[str, dict] | None:
     if not doc:
         return None
     return doc.get("rows") or {}
+
+# ══════ 窗内多帧采集（2026-11-16 col9 假设验证：col9 疑似 09:20 撤后余额）══════
+# 频控预算（红线 9）：仅竞价窗 09:15-09:26 内、随 archiver 60s 轮询每轮一帧；
+# 帧数硬上限 ≤15/日（≈窗内 11 轮 + 余量），每帧 2 POST（100/页翻页），走 _post_form
+# ≥2s 全局锁；窗外/非交易日静默跳过（fail-visible 进返回态）。
+COLLECTION_MBL_SERIES = "kpl_mbl_series"
+MBL_FRAME_MAX = 15
+MBL_WINDOW = ("09:15", "09:26")
+
+
+def _in_mbl_window(now: Any) -> bool:
+    hm = now.strftime("%H:%M")
+    return MBL_WINDOW[0] <= hm <= MBL_WINDOW[1]
+
+
+def collect_mbl_frame_series(db: Any, date: str, now: Any = None) -> dict[str, Any]:
+    """窗内一帧 MBL（raw 数组态）追加进 kpl_mbl_series（col9 时变行为验证用）。
+
+    col4/col8/col9/col10 为冻结态字段（已证），窗内各帧差异即其时变轨迹；
+    若 col9 在 09:20 后不再变化而 col4 变到 09:25，则 col9=09:20 撤后余额定案。
+    """
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    if not _in_mbl_window(now):
+        return {"state": "skipped_out_of_window", "window": list(MBL_WINDOW)}
+    doc = db[COLLECTION_MBL_SERIES].find_one({"_id": date}) or {}
+    frames = doc.get("frames") or []
+    if len(frames) >= MBL_FRAME_MAX:
+        return {"state": "skipped_budget_exhausted", "frames": len(frames)}
+    res = fetch_morning_bidding_list()
+    if res.get("state") != "ok":
+        return {"state": res.get("state"), "message": res.get("message"),
+                "frames": len(frames)}
+    raw_rows = [r["raw"] for r in res["rows"].values()]
+    frame = {"ts": now.isoformat(timespec="seconds"), "n_rows": len(raw_rows),
+             "day": res.get("day"), "rows": raw_rows}
+    db[COLLECTION_MBL_SERIES].update_one(
+        {"_id": date},
+        {"$set": {"date": date, "updatedAt": now.isoformat(timespec="seconds")},
+         "$push": {"frames": {"$each": [frame], "$slice": -MBL_FRAME_MAX}}},
+        upsert=True)
+    return {"state": "ok", "frameN": len(frames) + 1, "n_rows": len(raw_rows)}

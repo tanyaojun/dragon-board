@@ -104,3 +104,54 @@ def test_bidding_series_line_rendering():
     assert "观测值口径" not in line and "socket" not in line, "§1.2-8 开发注释禁进行文"
     assert bidding_series_line(None) is None
     assert bidding_series_line({"first": {"ts": 1, "bidding_pct": None}}) is None
+
+
+def _fake_series_db():
+    class FakeSeriesDb:
+        def __init__(self):
+            self.docs = {}
+        def __getitem__(self, name):
+            return self
+        def find_one(self, q):
+            import copy
+            doc = self.docs.get(q["_id"])
+            return copy.deepcopy(doc) if doc else None  # pymongo 快照语义（非活引用）
+        def update_one(self, q, upd, upsert=False):
+            doc = self.docs.setdefault(q["_id"], {"_id": q["_id"], "frames": []})
+            for fr in upd["$push"]["frames"]["$each"]:
+                doc["frames"].append(fr)
+            doc["frames"] = doc["frames"][-15:]
+            doc["updatedAt"] = upd["$set"]["updatedAt"]
+    return FakeSeriesDb()
+
+
+def test_mbl_frame_window_gate(monkeypatch):
+    import datetime as dt
+    from backend.operations import auction_bidding_direct as M
+    db = _fake_series_db()
+    # 窗外（10:00）静默跳过，零外呼
+    called = []
+    monkeypatch.setattr(M, "fetch_morning_bidding_list", lambda **k: called.append(1))
+    out = M.collect_mbl_frame_series(db, "2026-11-17", dt.datetime(2026, 11, 17, 10, 0, 0))
+    assert out["state"] == "skipped_out_of_window" and not called
+    # 预算耗尽
+    db.docs["2026-11-17"] = {"_id": "2026-11-17", "frames": [{"n": i} for i in range(15)]}
+    out = M.collect_mbl_frame_series(db, "2026-11-17", dt.datetime(2026, 11, 17, 9, 20, 0))
+    assert out["state"] == "skipped_budget_exhausted"
+
+
+def test_mbl_frame_append(monkeypatch):
+    import datetime as dt
+    from backend.operations import auction_bidding_direct as M
+    db = _fake_series_db()
+    monkeypatch.setattr(M, "fetch_morning_bidding_list", lambda **k: {
+        "state": "ok", "n_rows": 2, "day": "2026-11-17",
+        "rows": {"000831": {"code": "000831", "raw": [1, 2, 3]},
+                 "002242": {"code": "002242", "raw": [4, 5, 6]}}})
+    out = M.collect_mbl_frame_series(db, "2026-11-17", dt.datetime(2026, 11, 17, 9, 21, 0))
+    assert out["state"] == "ok" and out["frameN"] == 1 and out["n_rows"] == 2
+    doc = db.docs["2026-11-17"]
+    assert len(doc["frames"]) == 1 and doc["frames"][0]["rows"][0] == [1, 2, 3]
+    # 第二帧追加 + $slice 保持
+    out = M.collect_mbl_frame_series(db, "2026-11-17", dt.datetime(2026, 11, 17, 9, 22, 0))
+    assert out["frameN"] == 2 and len(db.docs["2026-11-17"]["frames"]) == 2
