@@ -255,3 +255,27 @@
   错误态；部分页失败已取回 rows 落库带 partial=true；非 ok 且 0 行不覆盖好档；
   MAX_PAGES 耗尽 truncated=true；attempts 原生数组、fetchedAt CST 时间戳。
 - relay_page 实时区门控修复：程序回填（当日值）不再触发历史档隐藏。
+
+### 7.9 WzsLinker 退役计划落地（2026-11-16 复盘代办 item11「今日必须解决」）
+
+**结论：试盘第三源不再依赖 WzsLinker 非官方代理端点**。官方端点路线（App 请求体
+加密、社区公开资料 66 接口无试盘族）今日证伪后，按 §7.7 用户裁决走自建派生：
+
+- **新模块** `backend/operations/auction_trial_derive.py`：`derive_trial_rows_from_series`
+  ——kpl_bidding_series（socket pid=8 官方序列，5s tick）→ 试盘语义行。口径：
+  jj_percent=末帧 bidding_pct；first/last/max_amount=首/末/峰值帧 zt_buy_amount；
+  jj_amount=末帧 bidding_amount（board_amt Σ口径）；pre_percent=None（roster 链
+  分母=代码口径 limit，与 WzsLinker 昨涨停行 pre_percent=limit 数学等价，测试
+  `test_derive_equivalence_ratio_math` 锁定）；universe=序列内委买额>0 的股。
+- **等价性锚点**：11-13 真值 605255 last_amount=8980000 == MBL col4 精确一致
+  （委买额同语义）；posture=首末帧比较同语义。
+- **打标链源序**（auction_leader_label.run）：自建派生（纯库读零外呼）→
+  WzsLinker 窗内 fetch（降级为迁移期回退，仅派生缺席时触发）→ auction_trial_raw
+  日档回读。派生可用时零 WzsLinker 外呼（红线 9 预算进一步收缩）。
+- **明日窗内双源对拍**（退役验收）：kpl_bidding_series 首采日，WzsLinker 回退链
+  同窗可跑；对拍表（逐股 jj_percent/first/last/max/board_amt/roster 入选）记录于
+  本节，通过后删除 WzsLinker 采集路径（单主链红线，回退靠 git）。
+- **语义偏移记录**：派生宇宙（序列委买额可见 ⊇ 试盘页宇宙）大于 WzsLinker 试盘页；
+  board_amt 板块热度口径随之放宽，roster 过滤（中热×mid50_95×撤减）不变；
+  5s tick 采样粒度粗于 WzsLinker 自采序列，首帧/峰值统计存在粒度差（观测值口径，
+  非判据字段，不影响选龙比值分母）。

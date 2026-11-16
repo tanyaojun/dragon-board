@@ -585,6 +585,9 @@ def test_trial_state_contract_pending_and_renderer_wiring(env, monkeypatch):
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
     assert doc["corpusState"]["trialState"] == {"state": "skipped_out_of_window"}
     assert "竞价试盘" not in doc["narrative"]
+    # 第三源选龙账随档落库（fail-visible 持久化，2026-11-16 复盘代办⑤）
+    assert doc["corpusState"]["trialStrengthState"]["state"] == "absent"
+    assert doc["corpusState"]["trialStrengthState"]["reason"] == "no_trial_rows"
 
     monkeypatch.setattr(L.digest, "build_theme_evidence_block",
                         lambda *a, **k: {"text": "题材证据块：测试", "state": {}})

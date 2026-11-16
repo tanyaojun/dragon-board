@@ -73,6 +73,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 from backend.operations.auction_bidding_direct import (
     collect_auction_bidding_direct)
+from backend.operations.auction_trial_derive import derive_trial_rows_from_series
 from backend.operations.auction_trial_fetch import (
     COLLECTION_TRIAL_RAW, fetch_auction_trial, persist_trial_raw)
 from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
@@ -708,7 +709,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 bid_supplement = f"fetch_failed:{exc}"
     if bid_items:
         lanes["bid"] = bid_items   # 写回（lanes 假件可能无 bid 键：保证注入传播）
-    # 试盘源采集（2026-11-14c 定案接线，勘察 §6 合同；WzsLinker api-auction.php）：
+    # 试盘源采集（2026-11-14c 定案接线，勘察 §6 合同；WzsLinker api-auction.php）
+    # 【降级为迁移期回退源（2026-11-16 item11）】：自建派生（上方序列派生）优先，
+    # 仅派生缺席时窗内回退 WzsLinker（非官方代理端点，双源对拍后删除）：
     # 仅 09:25–09:30 窗（试盘行已定格，与 bid 补源同窗）、裸读≤1 + 陈旧补拉≤1（红线 9
     # 台账 §6.4）；dry-run 零外呼；actual_date 守卫在解析层（回退数据不得冒充当日）
     # 竞价列表真源头直采（2026-11-16 MITM 定案合同：kaipanla.com MorningBiddingList
@@ -721,7 +724,17 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             mbl_state = {"state": f"fetch_failed:{exc}"}
     trial_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
     trial_rows: dict = {}
-    if not dry_run and _in_auction_window():
+    # 第三源自建派生（2026-11-16 item11：官方 socket 序列派生试盘字段，WzsLinker
+    # 退役第一步）：序列档有委买额数据即用，零 WzsLinker 外呼（红线 9 预算）；
+    # 纯库读，dry-run 亦可用（与 archive 回读同语义）
+    try:
+        derived_rows, derived_state = derive_trial_rows_from_series(db, date)
+    except Exception as exc:  # noqa: BLE001 派生失败不阻断（fail-visible 留痕）
+        derived_rows, derived_state = {}, {"state": f"derive_failed:{type(exc).__name__}"}
+    if derived_rows:
+        trial_rows = derived_rows
+        trial_state = derived_state
+    if not trial_rows and not dry_run and _in_auction_window():
         try:
             tr = fetch_auction_trial(date)
             trial_rows = tr.get("rows") or {}
@@ -902,6 +915,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 built["corpusState"]["trialState"] = (
                     {**trial_state, "state": "no_row"}
                     if trial_state.get("state") == "ok" else trial_state)
+            # 第三源选龙账（mapped/unmapped/selected/hotBoards）随档落库：
+            # 原仅随 run() 返回值透传、历史不可追溯（2026-11-16 复盘代办⑤）
+            built["corpusState"]["trialStrengthState"] = tstate
         built["auctionPushState"] = {"source": push_meta.get("source"),
                                      "entryN": len(push_entries),
                                      "reason": push_meta.get("reason")}
