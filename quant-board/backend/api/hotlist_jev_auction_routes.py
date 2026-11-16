@@ -502,3 +502,64 @@ def get_auction_trial(date: str | None = None) -> dict[str, Any]:
         return result
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"auction_trial_read_failed: {exc}"}
+
+
+# ══════════ 竞价过程事实序列读口（2026-11-16，用户裁决「页面实时看竞价过程」）══════════
+# 数据源 = kpl_bidding_series 日档（collector 单写者推送即落库，窗 09:10-09:35，
+# tick ≥5s 节流）；纯库读零外呼。派生逐股过程事实（first/max/last 观测值），
+# 不冒充 WzsLinker 试盘字段语义（fail-visible：first=观测首帧，max=观测峰值）。
+
+_BIDDING_SERIES_COLLECTION = "kpl_bidding_series"
+
+
+def _derive_stock_series_facts(ticks: list[dict]) -> dict[str, dict]:
+    """tick 序列 → 逐股过程事实（观测值）：first（首帧）/ max（委买额峰值帧）/
+    last（末帧）。缺字段如实缺失（不补 0）。"""
+    out: dict[str, dict] = {}
+    for tick in ticks or []:
+        ts = tick.get("ts")
+        for it in tick.get("it") or []:
+            sid = str(it.get("s") or "")
+            if not sid:
+                continue
+            rec = out.setdefault(sid, {"first": None, "max": None, "last": None})
+            row = {"ts": ts, **{f: it.get(f) for f in
+                                ("bidding_pct", "bidding_amount", "bidding_net",
+                                 "bidding_turnover", "zt_buy_amount", "price", "pct")}}
+            if rec["first"] is None:
+                rec["first"] = row
+            rec["last"] = row
+            zb = it.get("zt_buy_amount")
+            try:
+                zb_v = float(zb) if zb is not None else None
+            except (TypeError, ValueError):
+                zb_v = None
+            if zb_v is not None:
+                mx = rec["max"]
+                if mx is None or (mx.get("zt_buy_amount") is not None
+                                  and zb_v > float(mx.get("zt_buy_amount") or 0)):
+                    rec["max"] = row
+    return out
+
+
+@router.get("/auction-bidding-series")
+def get_auction_bidding_series(date: str | None = None) -> dict[str, Any]:
+    """竞价过程事实序列读口：日档 ticks + 逐股 first/max/last 派生（纯库读零外呼）。"""
+    from datetime import datetime as _dt
+    date = date or _dt.now().strftime("%Y-%m-%d")
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc = db[_BIDDING_SERIES_COLLECTION].find_one({"_id": date})
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"bidding_series_read_failed: {exc}"}
+    if not doc:
+        return {"ok": True, "date": date, "absent": True,
+                "reason": "no_series_today（采集窗未运行或 collector 未升级到序列落库）",
+                "ticks": [], "stockFacts": {}}
+    ticks = doc.get("ticks") or []
+    return {"ok": True, "date": date, "absent": False,
+            "tickN": len(ticks), "lastTs": doc.get("last_ts"),
+            "fields": doc.get("fields") or [],
+            "window": doc.get("window") or [],
+            "ticks": ticks,
+            "stockFacts": _derive_stock_series_facts(ticks)}

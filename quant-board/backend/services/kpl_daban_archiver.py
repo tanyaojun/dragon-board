@@ -57,7 +57,8 @@ import asyncio
 import contextlib
 import os
 import re
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, time as dtime, timedelta
 from typing import Any, Callable, Optional
 
 import httpx
@@ -296,6 +297,57 @@ def archive_zb_snapshot(db: Any, snapshot: dict[str, Any], *, now: Optional[date
 def archive_dt_snapshot(db: Any, snapshot: dict[str, Any], *, now: Optional[datetime] = None) -> dict[str, Any]:
     """跌停池通道（pidType=3，dt_ 前缀字段；2026-11-08 增补）入口；详见 archive_lane_snapshot。"""
     return archive_lane_snapshot(db, snapshot, lane="dt", now=now)
+
+
+# ── 竞价过程事实时间序列（2026-11-16 用户裁决「页面实时看竞价过程」的事实采集层）──
+# 单写者=collector（:8002）推送即落库先例（2013/2203 同款）；独立集合（与
+# kpl_daban_pool bid_ 通道的「终态覆盖」单一事实源并存，序列=过程事实、bid_=终态）。
+_SERIES_COLLECTION = "kpl_bidding_series"
+SERIES_WINDOW = (dtime(9, 10), dtime(9, 35))   # 事实采集窗：09:10 预热 → 09:35 冻结后余量
+SERIES_MIN_INTERVAL_S = 5.0                     # tick 节流：≥5s（25min 窗 ≤300 tick）
+SERIES_MAX_TICKS = 400                          # $slice 上限（防异常刷屏撑爆日档）
+_SERIES_FIELDS = ("bidding_pct", "bidding_amount", "bidding_net", "bidding_turnover",
+                  "zt_buy_amount", "price", "pct", "real_float")
+
+
+def archive_bidding_series(db: Any, snapshot: dict[str, Any], *, now: Optional[datetime] = None) -> dict[str, Any]:
+    """竞价过程事实序列追加（collector 推送即落库，单写者；append-only tick）。
+
+    - 窗门控：仅 09:10-09:35（CST）追加；窗外结构化拒绝（out_of_window，不猜不补）；
+    - 节流：距上一 tick <5s → skipped_throttled（非错误，fail-visible 计数）；
+    - tick 内容 = 合并快照压缩行（仅具名竞价字段短键，不全量 quotas，控量 ≤6MB/日）；
+    - fail-visible：空快照/无日期结构化拒绝；$slice 上限内追加。
+    """
+    now = now or datetime.now(TZ_SHANGHAI)
+    if not (SERIES_WINDOW[0] <= now.time() < SERIES_WINDOW[1]):
+        return {"ok": False, "reason": "out_of_window",
+                "window": [str(SERIES_WINDOW[0]), str(SERIES_WINDOW[1])],
+                "now": now.isoformat(timespec="seconds")}
+    date = str(snapshot.get("date") or "")
+    items = [it for it in (snapshot.get("items") or []) if isinstance(it, dict)]
+    if not date or not items:
+        return {"ok": False, "reason": "empty_snapshot" if not items else "no_date",
+                "date": date or None}
+    tick = {"ts": float(snapshot.get("ts") or time.time()),
+            "n": len(items),
+            "it": [{"s": str(it.get("stock_id") or "")[-6:],
+                    **{f: it.get(f) for f in _SERIES_FIELDS}}
+                   for it in items]}
+    prev = db[_SERIES_COLLECTION].find_one({"_id": date}) or {}
+    ticks = prev.get("ticks") or []
+    if ticks and (tick["ts"] - float(ticks[-1].get("ts") or 0)) < SERIES_MIN_INTERVAL_S:
+        return {"ok": True, "skipped": "throttled", "date": date,
+               "tick_n": len(ticks), "last_age": round(tick["ts"] - float(ticks[-1].get("ts") or 0), 1)}
+    db[_SERIES_COLLECTION].update_one(
+        {"_id": date},
+        {"$push": {"ticks": {"$each": [tick], "$slice": -SERIES_MAX_TICKS}},
+         "$set": {"date": date, "last_ts": tick["ts"], "last_n": len(items),
+                  "updated_at": now.isoformat(timespec="seconds"),
+                  "fields": list(_SERIES_FIELDS),
+                  "window": [str(SERIES_WINDOW[0]), str(SERIES_WINDOW[1])]}},
+        upsert=True)
+    return {"ok": True, "date": date, "tick_n": len(ticks) + 1,
+            "item_n": len(items), "ts": tick["ts"]}
 
 
 def load_day(db: Any, date: str, *, lane: str = "pool") -> dict[str, Any]:

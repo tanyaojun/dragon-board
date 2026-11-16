@@ -385,7 +385,11 @@ class KplCollectorService:
             "fc_ok": 0, "fc_fail": 0, "rt_ok": 0, "rt_fail": 0,
             "bdo_ok": 0, "bdo_fail": 0, "bf_ok": 0, "bf_fail": 0,
             "abn_ok": 0, "abn_fail": 0, "rplate_ok": 0, "rplate_fail": 0,
+            # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集落库）
+            "bid_series_ok": 0, "bid_series_fail": 0, "bid_series_throttled": 0,
             "last_error": ""}
+        # 竞价序列 tick 节流（采集线程内时间戳；窗内每 ≥5s 落一个合并快照 tick）
+        self._bid_series_last_ts: float = 0.0
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
@@ -589,6 +593,7 @@ class KplCollectorService:
         跨日残留/无交易日/空 payload 由归档函数结构化拒绝（不猜不补）。
         """
         from backend.services.kpl_daban_archiver import (
+            archive_bidding_series,
             archive_lhb_forecast,
             archive_lhb_realtime,
             archive_reason_corpus,
@@ -600,16 +605,23 @@ class KplCollectorService:
                "bdo": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="bdo"),
                "bf": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="bf"),
                "abn": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="abn"),
-               "rplate": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="rplate")}
+               "rplate": lambda db, snap: archive_stock_detail_corpus(db, snap, lane="rplate"),
+               "bid_series": archive_bidding_series}
         events = {"theme": "theme_heat_persist", "reason": "zt_reasons_persist",
                   "fc": "lhb_forecast_persist", "rt": "lhb_realtime_persist",
                   "bdo": "stock_detail_persist", "bf": "stock_detail_persist",
-                  "abn": "stock_detail_persist", "rplate": "stock_detail_persist"}
+                  "abn": "stock_detail_persist", "rplate": "stock_detail_persist",
+                  "bid_series": "bidding_series_persist"}
         try:
             # 2026-11-11 评审 nit-6：lane 校验入 try（拼错 lane 走 fail 计数不杀会话）
             if lane not in fns:
                 raise ValueError(f"unknown corpus lane: {lane}")
-            date = self._pool_date_for_corpus()
+            if lane == "bid_series":
+                # 竞价序列日期源=自身合并快照（pid=8 自带 date；早盘 pid=1 池可能无日期，
+                # 不能拿池快照当唯一日期源）
+                date = str((payload or {}).get("date") or "")
+            else:
+                date = self._pool_date_for_corpus()
             if not date:
                 raise RuntimeError("no_pool_date")
             db = self._corpus_db()
@@ -1906,6 +1918,25 @@ class KplCollectorService:
                         self._daban_lists.setdefault(pid, {})[idx] = {**data, "ts": time.time()}
                 except (TypeError, ValueError):
                     pass
+                if int(data.get("pid_type", 0) or 0) == 8 and new_items:
+                    # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集）。
+                    # 推送即落库（单写者先例）；采集线程内 ≥5s 节流（≥300 tick/窗），
+                    # 窗门控双层：此处 09:10-09:35 粗门（防空窗段白调），归档函数再细门
+                    # （fail-visible）；失败不阻断收流（fail-visible 进 corpus_persist_stats）。
+                    try:
+                        now_dt = datetime.datetime.now()
+                        hm = now_dt.hour * 60 + now_dt.minute
+                        if not (9 * 60 + 10 <= hm < 9 * 60 + 35):
+                            pass   # 窗外：静默跳过（归档层亦门控，不计数不告警）
+                        elif time.time() - self._bid_series_last_ts < 5.0:
+                            self._corpus_persist_stats["bid_series_throttled"] += 1
+                        else:
+                            self._bid_series_last_ts = time.time()
+                            self._persist_corpus("bid_series", self.get_daban_list(8))
+                    except Exception as exc:   # noqa: BLE001 — 落库失败不阻断收流
+                        self._corpus_persist_stats["bid_series_fail"] = \
+                            self._corpus_persist_stats.get("bid_series_fail", 0) + 1
+                        self._err(f"bid_series persist failed: {exc}")
                 if self._zt_reason_subs:
                     # 2203 试点钩子：涨停池（pid=1）新入池成员自动补订（去重；drain 在收流循环）
                     try:

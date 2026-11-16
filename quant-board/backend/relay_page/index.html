@@ -786,6 +786,15 @@
         <input type="date" id="atDate" onchange="atDateChange()">
         <button onclick="atBackToLatest()">回最新</button>
       </div>
+      <div class="card" id="atLiveCard" style="padding:10px 12px;margin-bottom:10px;display:none">
+        <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <span class="kpl-sub">竞价实时过程（socket 直采 · 2103 pid=8 集合竞价）</span>
+          <span class="kpl-sub" id="atLivePhase" style="font-weight:400"></span>
+          <span style="flex:1"></span>
+          <span class="kpl-sub" id="atLiveMeta" style="font-weight:400"></span>
+        </h3>
+        <div class="kpl-wrap" style="max-height:260px"><table id="atLiveTable"></table></div>
+      </div>
       <div class="kpl-layout">
         <div class="card" style="padding:10px 12px">
           <input class="lg-filter" id="atPlateSearch" style="margin:0 0 8px" placeholder="过滤板块…" oninput="atRender()">
@@ -9579,9 +9588,104 @@ function atEnter(){
     if (STATE.view !== 'kpltrial'){ clearInterval(AT.pollTimer); AT.pollTimer = null; return; }
     if (!AT.loading) atLoad();
   }, 60000);
+  atLiveEnter();   // 竞价实时过程区（socket 直采 pid=8，5s 本机轮询，零 KPL 外呼）
   kplFitHeight('#tab-kpltrial .kpl-layout');
 }
-function atLeave(){ if (AT.pollTimer){ clearInterval(AT.pollTimer); AT.pollTimer = null; } }
+function atLeave(){ if (AT.pollTimer){ clearInterval(AT.pollTimer); AT.pollTimer = null; } atLiveLeave(); }
+
+// ── 竞价实时过程区（2026-11-16 用户裁决：页面实时看竞价过程）──
+// 数据源 = :8002 collector 内存快照（2103 pid=8 集合竞价，socket 直采已在产），
+// 链路 :8008→:8000→:8002 全本机透传，零 KPL 上游外呼（红线 9：页面轮询纯读零预算）。
+// 轮询 5s 仅在页签可见 + 今日 + 窗口（09:10-09:35）内进行；窗外自动停轮并隐藏。
+// 频控预算：本机内存读 ×5s ≈ 0.2 QPS，无退避循环（读口失败展示降级原因，不重试风暴）。
+AT.live = {timer: null, data: null, err: null, fetching: false, seq: 0};
+function atLiveWindow(){
+  const now = new Date();
+  const hm = now.getHours() * 60 + now.getMinutes();
+  if (hm < 9 * 60 + 10) return 'pre';       // 09:10 前：等待
+  if (hm < 9 * 60 + 25) return 'live';      // 09:15-09:25：竞价进行中（09:10-09:15 预热也归 live 展示）
+  if (hm < 9 * 60 + 35) return 'frozen';    // 09:25-09:35：已冻结，展示最终竞价态
+  return 'ended';                            // 09:35 后：收场隐藏
+}
+function atLiveEnter(){
+  atLiveTick();
+  if (!AT.live.timer) AT.live.timer = setInterval(atLiveTick, 5000);
+}
+function atLiveLeave(){ if (AT.live.timer){ clearInterval(AT.live.timer); AT.live.timer = null; } }
+function atLiveIsToday(){
+  const sel = ($('atDate').value || '').trim();
+  if (sel) return false;                    // 查历史档 → 实时区隐藏
+  return true;
+}
+async function atLiveTick(){
+  const card = $('atLiveCard');
+  const phase = atLiveWindow();
+  if (phase === 'ended' || !atLiveIsToday() || STATE.view !== 'kpltrial'){
+    if (phase === 'ended' && AT.live.data){ atLiveRender(); }   // 收场后最后帧定格展示到 09:35
+    else { card.style.display = 'none'; }
+    if (phase === 'ended'){ atLiveLeave(); }
+    return;
+  }
+  card.style.display = '';
+  if (AT.live.fetching) return;
+  AT.live.fetching = true;
+  const seq = ++AT.live.seq;
+  let r = null;
+  try { r = await jget('/api/kpl/daban-list?pid_type=8'); }
+  catch (e){ r = {ok: false, degraded: true, reason: '读口失败：' + (e && e.message ? e.message : e)}; }
+  AT.live.fetching = false;
+  if (seq !== AT.live.seq) return;          // 过期响应守卫（与 atLoad 同款）
+  AT.live.data = r;
+  AT.live.err = (r && (r.ok === false || r.degraded)) ? (r.reason || r.error || '读口降级') : null;
+  atLiveRender();
+}
+function atLiveRender(){
+  const card = $('atLiveCard');
+  if (!card || card.style.display === 'none') return;
+  const phase = atLiveWindow();
+  const r = AT.live.data;
+  const phaseCn = {pre: '等待 09:15 集合竞价', live: '● 竞价进行中（09:25 冻结）',
+                   frozen: '已冻结（09:25）· 最终竞价态', ended: '已收场'}[phase] || '';
+  $('atLivePhase').textContent = phaseCn;
+  const tbl = $('atLiveTable');
+  if (!r || r.ok === false || r.degraded){
+    $('atLiveMeta').textContent = '读口降级：' + (AT.live.err || '未知');
+    tbl.innerHTML = '';
+    return;
+  }
+  const items = (r.items || []).slice();
+  // bidding_pct 降序（竞价涨幅）；缺值后置
+  items.sort((a, b) => (atNum(b.bidding_pct) ?? -Infinity) - (atNum(a.bidding_pct) ?? -Infinity));
+  const trialCodes = new Set(atRows().map(x => x.code6));
+  const fmtYi = v => { const n = atNum(v); return n == null ? '--' : (n / 1e8).toFixed(2) + '亿'; };
+  const fmtNum = v => { const n = atNum(v); return n == null ? '--' : String(n); };
+  const fmtPct = v => { const n = atNum(v); return n == null ? '--' : n.toFixed(2) + '%'; };
+  const cls = v => { const n = atNum(v); return n == null ? '' : (n > 0 ? 'kpl-up' : (n < 0 ? 'kpl-down' : '')); };
+  let html = '<thead><tr>'
+    + ['代码', '名称', '竞价涨幅', '竞价成交额', '竞价净额', '委买额', '板块', '流通市值', '试盘档'].map(h => `<th>${h}</th>`).join('')
+    + '</tr></thead><tbody>';
+  for (const it of items){
+    const c6 = String(it.stock_id || '').slice(-6);
+    const inTrial = trialCodes.has(c6);
+    html += `<tr>`
+      + `<td>${esc(c6)}</td>`
+      + `<td>${esc(it.name || '')}</td>`
+      + `<td class="${cls(it.bidding_pct)}">${fmtPct(it.bidding_pct)}</td>`
+      + `<td>${fmtYi(it.bidding_amount)}</td>`
+      + `<td>${fmtYi(it.bidding_net)}</td>`
+      + `<td>${fmtYi(it.zt_buy_amount)}</td>`
+      + `<td>${esc(it.plate || '--')}</td>`
+      + `<td>${fmtYi(it.real_float)}</td>`
+      + `<td>${inTrial ? '<span style="color:var(--ok,#4ade80)">✔</span>' : ''}</td>`
+      + `</tr>`;
+  }
+  html += '</tbody>';
+  tbl.innerHTML = html;
+  const now = new Date();
+  const mm = String(now.getMinutes()).padStart(2, '0'), ss = String(now.getSeconds()).padStart(2, '0');
+  $('atLiveMeta').textContent = `${items.length} 只 · 本机快照 ${now.getHours()}:${mm}:${ss}`
+    + (phase === 'live' ? ' · 距冻结 ' + Math.max(0, (9 * 60 + 25) - (now.getHours() * 60 + now.getMinutes())) + ' 分' : '');
+}
 function atDateChange(){ AT.sel = ''; atLoad(); kplRenderMarketKpi(); }   // KPI 卡跟随选日（历史分支内部拉指数/涨跌家数历史帧）
 function atBackToLatest(){ $('atDate').value = ''; AT.sel = ''; atLoad(); kplRenderMarketKpi(); }
 function atRows(){
