@@ -272,9 +272,18 @@
 - **打标链源序**（auction_leader_label.run）：自建派生（纯库读零外呼）→
   WzsLinker 窗内 fetch（降级为迁移期回退，仅派生缺席时触发）→ auction_trial_raw
   日档回读。派生可用时零 WzsLinker 外呼（红线 9 预算进一步收缩）。
+- **历史验证（11-13 真值 95 只，落地当日补跑）**：派生形态（pre_percent=None +
+  bk_name 保留）走完整 roster vs WzsLinker 真值形态——映射 74/74 一致、板块归属
+  差异 0、入选集合 {002148, 603666} 与 rank 完全一致；唯一差异 002148 jjRatio
+  70.5 vs 70.15（preseal 分母 pre_percent≠limit 的 0.5% 微差，tier/rank 不变）。
+  **验证命中要害并已修复**：初版派生行缺 bk_name → 桥接失败 mappedN=0 第三源
+  静默死亡；修复=同日 kpl_morning_bidding_raw col11 板块 join 注入 bk_name
+  （plateJoinedN/plateMissing 结构化留痕）。pytest 版等价性测试因护栏（test 库
+  无档）跳过，生产库验证以上表为准。
 - **明日窗内双源对拍**（退役验收）：kpl_bidding_series 首采日，WzsLinker 回退链
   同窗可跑；对拍表（逐股 jj_percent/first/last/max/board_amt/roster 入选）记录于
-  本节，通过后删除 WzsLinker 采集路径（单主链红线，回退靠 git）。
+  本节，通过后删除 WzsLinker 采集路径（单主链红线，回退靠 git）。另验：MBL col11
+  板块名与试盘页 bk_name 命名族一致性。
 - **语义偏移记录**：派生宇宙（序列委买额可见 ⊇ 试盘页宇宙）大于 WzsLinker 试盘页；
   board_amt 板块热度口径随之放宽，roster 过滤（中热×mid50_95×撤减）不变；
   5s tick 采样粒度粗于 WzsLinker 自采序列，首帧/峰值统计存在粒度差（观测值口径，

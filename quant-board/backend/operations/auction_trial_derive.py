@@ -17,6 +17,9 @@
   名称补正，不依赖 pre_percent 探测）
 - universe = 序列内 zt_buy_amount>0 的股（委买额可见 ⊇ 试盘页宇宙，语义偏移
   记录于 docs §7.9；roster 自带 中热×mid50_95×撤减 过滤）
+- bk_name = 同日 kpl_morning_bidding_raw col11 板块 join（板块归属主链靠 bk_name
+  桥接：11-13 真值验证无 bk_name → mappedN=0 第三源静默死亡；注入后 mappedN/
+  归属/入选与 WzsLinker 真值形态完全等价，见 tests test_historical_equivalence_1113）
 
 WzsLinker（api-auction.php 非官方代理端点）降级为迁移期回退源：明日窗内双源
 对拍（表进 docs §7.9）通过后删除采集路径（单主链红线，回退靠 git）。
@@ -27,6 +30,7 @@ import math
 from typing import Any
 
 COLLECTION_SERIES = "kpl_bidding_series"
+COLLECTION_MBL_RAW = "kpl_morning_bidding_raw"
 
 
 def _f(v: Any) -> float | None:
@@ -54,14 +58,31 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
     if not sdoc:
         return {}, {**state, "reason": "no_series_archive"}
     facts = derive_stock_series_facts(sdoc.get("ticks") or [])
+    # bk_name 板块 join（同日 MBL raw col11）：缺 bk_name → 桥接失败 → mappedN=0
+    # 第三源静默死亡（11-13 真值验证发现的要害，历史验证见测试）
+    plates: dict[str, str] = {}
+    plate_source_error = None
+    try:
+        mbl = db[COLLECTION_MBL_RAW].find_one({"_id": date}, {"rows": 1}) or {}
+        for c, r in (mbl.get("rows") or {}).items():
+            p = str((r or {}).get("plate") or "").strip()
+            if p:
+                plates[str(c)[-6:]] = p
+    except Exception as exc:  # noqa: BLE001 — join 失败结构化留痕，不阻断派生
+        plate_source_error = f"mbl_plate_join_failed:{type(exc).__name__}"
     rows: dict[str, dict] = {}
+    plate_hit = 0
     for code, f in facts.items():
         first, last, mx = f.get("first"), f.get("last"), f.get("max")
         last_amount = _f((last or {}).get("zt_buy_amount"))
         if not last or last_amount is None or last_amount <= 0:
             continue  # 委买额不可见 → 不在试盘宇宙（如实缺席，不补 0）
+        plate = plates.get(str(code)[-6:])
+        if plate:
+            plate_hit += 1
         rows[code] = {
             "code": code,
+            "bk_name": plate,   # 桥接主链靠它；缺 → 板块归属缺席（fail-visible）
             "jj_percent": _f(last.get("bidding_pct")),
             "jj_amount": _f(last.get("bidding_amount")),
             "jj_turnover": _f(last.get("bidding_turnover")),
@@ -71,5 +92,11 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         }
     if not rows:
         return {}, {**state, "reason": "no_ztbuy_visible"}
-    return rows, {**state, "state": "ok", "n_rows": len(rows),
-                  "tickN": len(sdoc.get("ticks") or [])}
+    out = {**state, "state": "ok", "n_rows": len(rows),
+           "tickN": len(sdoc.get("ticks") or []),
+           "plateJoinedN": plate_hit}
+    if plate_source_error:
+        out["plateSourceError"] = plate_source_error
+    if not plates:
+        out["plateMissing"] = True   # 板块 join 全缺席（如历史日 MBL raw 无档）
+    return rows, out
