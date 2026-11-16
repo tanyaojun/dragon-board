@@ -246,10 +246,11 @@
 
 ### 7.8 评审修复补记（2026-11-16 双 reviewer 评审后）
 
-- `GET /api/hotlist-jev/auction-bidding-series` 读口当前无前端消费者（relay_page
-  实时区走 `/api/kpl/daban-list?pid_type=8` 内存快照）：登记为「读口先建、消费方
-  后接」态——序列采满首日后（预计 2026-11-17）由 relay_page 历史档页接入首帧/
-  峰值/末帧展示；在此之前该读口仅供诊断。
+- `GET /api/hotlist-jev/auction-bidding-series` 读口消费方已接（2026-11-16）：
+  relay_page 竞价龙头明细卡新增「竞价过程」节（alSeriesSectionHtml）——展开行时
+  惰性拉取、按日缓存；absent/无该股 tick 如实展示；首帧竞价涨幅→委买额峰值→末帧
+  观测值链（口径留 title 提示，不参与判定）。今日（11-16）无序列档，展示缺席态；
+  11-17 窗内 collector 首采后自动生效。
 - MBL 直采错误路径加固（评审 blocker 1/2）：errcode≠0 / info 非列表 → 结构化
   错误态；部分页失败已取回 rows 落库带 partial=true；非 ok 且 0 行不覆盖好档；
   MAX_PAGES 耗尽 truncated=true；attempts 原生数组、fetchedAt CST 时间戳。

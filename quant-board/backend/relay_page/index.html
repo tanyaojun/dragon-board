@@ -1019,6 +1019,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
           openKey: null, page: 1, mode: 'detail', q1: '', q2: '' },
   alSort: { key: 'prob', dir: -1 },   // 默认封板概率降序（vA4 移除韭研龙序领涨列）
   alNarr: {},
+  alSeries: {},   // [date] -> {loading} | {doc} | {error}（竞价过程序列档缓存）
   diebanEntries: [], diebanUi: { openKey: null },
   riseEntries: [], riseUi: { openKey: null },
   slotEntries: [], relayEntries: [],
@@ -3828,7 +3829,7 @@ function alDetailHtml(r){
     + '<span><span class="k">题集版本</span> <code>' + esc(r.questionSetVersion || '-') + '</code></span>'
     + '</div>';
   return '<div class="lg-card" onclick="event.stopPropagation()">' + head + meta + rm + warn + err
-    + body + foot + '</div>';
+    + alSeriesSectionHtml(r) + body + foot + '</div>';
 }
 function alRow(date){ relayRow(date); alRenderRows(); }
 function alToggle(key){
@@ -3838,6 +3839,7 @@ function alToggle(key){
   alRenderRows();
   const r = alRows().find(x => alKey(x) === key);
   if (r && !STATE.alNarr[key]) void alLoadNarrative(r);
+  if (r) void alSeriesEnsure(r.tradingDate);   // 竞价过程序列档（按日缓存）
 }
 function alRerun(key){
   if (STATE.rerunBusy) return;
@@ -3891,6 +3893,74 @@ async function alLoadNarrative(r){
     STATE.alNarr[key] = { error: String(e) };
   }
   if (STATE.alUi.openKey === key) alRenderRows();
+}
+
+// ---------- 竞价过程事实（kpl_bidding_series 5s tick 观测值，2026-11-17 起产出） ----------
+// 读口 /api/hotlist-jev/auction-bidding-series：absent=结构化缺席如实展示；
+// 首帧/峰值/末帧为采集时点快照（观测值口径），不参与判定
+async function alSeriesEnsure(date){
+  if (!date) return;
+  STATE.alSeries = STATE.alSeries || {};
+  const cur = STATE.alSeries[date];
+  if (cur && !cur.loading) return;   // 已有结果（含错误态）按日缓存
+  STATE.alSeries[date] = { loading: true };
+  alRenderRows();
+  try {
+    const doc = await jget('/api/hotlist-jev/auction-bidding-series?date='
+      + encodeURIComponent(date));
+    STATE.alSeries[date] = { doc: doc };
+  } catch (e) {
+    STATE.alSeries[date] = { error: String(e && e.message ? e.message : e) };
+  }
+  alRenderRows();
+}
+function alSeriesTs(v){
+  const n = Number(v);
+  if (!v || !isFinite(n)) return '';
+  const d = new Date(n * 1000);
+  const p = x => String(x).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+function alSeriesPct(v){ const n = Number(v); return isFinite(n) ? n.toFixed(2) + '%' : ''; }
+function alSeriesYi(v){ const n = Number(v); return isFinite(n) ? (n / 1e8).toFixed(2) + '亿' : ''; }
+function alSeriesSectionHtml(r){
+  const date = r.tradingDate || '';
+  const entry = (STATE.alSeries || {})[date];
+  if (!entry) return '';
+  let inner;
+  if (entry.loading){
+    inner = '<span style="color:var(--muted,#888)">竞价序列载入中…</span>';
+  } else if (entry.error){
+    inner = '<span style="color:var(--amber)">竞价序列读取失败：' + esc(entry.error) + '</span>';
+  } else {
+    const doc = entry.doc || {};
+    if (doc.absent){
+      inner = '<span style="color:var(--muted,#888)">序列档缺席：'
+        + esc(doc.reason || 'no_series_today') + '</span>';
+    } else {
+      const sf = doc.stockFacts || {};
+      const f = sf[r.code] || sf[String(r.code || '').slice(-6)];
+      if (!f){
+        inner = '<span style="color:var(--muted,#888)">当日 tick '
+          + esc(String(doc.tickN != null ? doc.tickN : '-')) + ' 帧，无该股 tick（未进竞价池或中途退池）</span>';
+      } else {
+        const segs = [];
+        if (f.first) segs.push('首帧竞价涨幅 ' + alSeriesPct(f.first.bidding_pct)
+          + '（' + alSeriesTs(f.first.ts) + '）');
+        if (f.max) segs.push('委买额峰值 ' + alSeriesYi(f.max.zt_buy_amount)
+          + '（' + alSeriesTs(f.max.ts) + '）');
+        if (f.last) segs.push('末帧 ' + alSeriesPct(f.last.bidding_pct)
+          + '（' + alSeriesTs(f.last.ts) + '）');
+        inner = segs.length
+          ? esc(segs.join(' → ')) + ' <span style="color:var(--muted,#888)">tick '
+            + esc(String(doc.tickN)) + ' 帧</span>'
+          : '<span style="color:var(--muted,#888)">tick 存在但该股缺可读字段</span>';
+      }
+    }
+  }
+  return '<div class="prov" style="margin:10px 0 0" title="竞价过程事实（5s tick 观测值，'
+    + '采集窗 09:10-09:35）：首帧/峰值/末帧均为采集时点快照，观测值非判据"><b>竞价过程</b>　'
+    + inner + '</div>';
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------

@@ -157,3 +157,22 @@ def test_at_live_is_today_backfill_not_history(html):
     body = _fn(html, "atLiveIsToday")
     assert "if (sel) return false" not in body, "vA4 前旧门控（回填即隐藏）禁止回潮"
     assert "sel === today" in body, "门控必须是「选中日 == 今日」比较"
+
+
+def test_series_section_wired_into_detail(html):
+    """竞价过程事实节：读口消费方接线（2026-11-17 起序列产出后生效）。"""
+    detail = _fn(html, "alDetailHtml")
+    assert "alSeriesSectionHtml(r)" in detail, "明细卡必须挂竞价过程节"
+    body = _fn(html, "alSeriesSectionHtml")
+    assert "alSeriesEnsure" in _fn(html, "alToggle"), "展开行时必须惰性拉取序列档"
+    assert "auction-bidding-series" in _fn(html, "alSeriesEnsure")
+    # 缺席必须如实展示（fail-visible，不补 0/不隐藏）
+    assert "序列档缺席" in body and "doc.reason" in body
+    assert "无该股 tick" in body
+    # 观测值非判据口径留在 title 提示，不进行文
+    assert "观测值非判据" in body
+
+
+def test_series_cache_no_refetch(html):
+    body = _fn(html, "alSeriesEnsure")
+    assert "if (cur && !cur.loading) return" in body, "结果态按日缓存，防重复外呼"
