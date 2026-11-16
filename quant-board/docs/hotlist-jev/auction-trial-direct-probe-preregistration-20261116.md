@@ -145,7 +145,46 @@
 - 若 S1–S6 全空/非预期格式：当日不追加弹射，维持现状，把实测证据（errcode/格式）
   追加至勘察 §2，等下一交易日或改攻 MITM（另行预登记）。
 
-## 7. 定案结果（窗内填写）
+## 7. 定案结果（2026-11-16 窗内实测，决策 D：维持 WzsLinker，直采合同未定案）
 
-> 待 2026-11-16 09:35 后填写：决策（A/B/C/D）、弹射台账实测结果、列映射表、
-> 字段语义裁决（jj_percent 时点 / circulated_value 口径 / zt_buy_amount vs max/last）。
+### 7.1 弹射台账（6/6 预算用完，未追加）
+
+| # | 弹射 | 实测结果 | 判读 |
+|---|------|---------|------|
+| S1 | apphwhq DaBanList Type=7 w48（09:25:37） | errcode=0、day=2026-11-16 正确、list=[[37×"longhuvip.com"]] | 参数被接受但**返回占位垃圾**（非试盘数据） |
+| S2 | 同 S1、apiv=w30 | 同上垃圾 | 同上 |
+| S3 | 同 S1、+PidType=7 | 同上垃圾 | 同上 |
+| S4 | apphis HisDaBanList w30 Type=7 PidType=8 Day | 1020 | 与 S5 间隔 5s，疑共享分钟级限频（已知合同「超频 1020」），**不确定为参数错** |
+| S5 | apphis HisDaBanList w48 Day（10-27 已知好合同） | 1020 | 同上限频窗口内，结果不可信 |
+| S6 | **对照组** apphwhq DaBanList **Type=1**（涨停池必有数据，09:35） | errcode=0、同样 37×域名垃圾 | **垃圾非 Type=7 特有，端点级问题**（DaBanList 族对我们缺参数/会话被风控打标），Type=7 假设证伪 |
+
+### 7.2 socket pidType=7 试探（独立会话 09:12-09:30）
+
+- 服务端**接受** pidType=7（无 error 帧、Resp.pidType=7 回带），全程 91 帧全部空
+  items——2103 协议族不含试盘页数据（或试盘页不在 2103 cmd 上）；
+- 生产 pid=8（集合竞价）同窗正常：142 只含竞价全字段——**socket 直采集合竞价已
+  在产**（现有链，非新增）。
+
+### 7.3 WzsLinker 当日故障（依赖风险的实证）
+
+- 09:26 打标链窗内试盘拉取 `http_error:TimeoutError`（trialState 落档 fail-visible，
+  第三源缺席、trialStrength=null，双源照常选龙 5 龙一 8 ok——兑底设计按预期工作）；
+- 09:33 人工裸读仍超时；域名根 0.4s 可达，api-auction.php 连**历史档也超时**
+  → 故障在 WzsLinker→KPL 上游拉取链（与今晨 ths_flash 300s 超时同族）；
+- api-auction 前端 JS（auction-history-common.js）与 longhuvip-proxy-common.js
+  均只暴露前端→代理合同（page/variant/date/refresh、endpoint 名录），**代理→KPL
+  上游映射在服务端，无从逆推**。
+
+### 7.4 结论与后续
+
+1. **决策 D**：DaBanList 族（socket 2103 + HTTP）均不含试盘页数据；试盘页真源头
+   是 WzsLinker 服务端代理的未知 KPL 端点（code=10000/tab_list/stock_list 信封族，
+   非 DaBanList 族）。维持 WzsLinker 合同（存量链不动）；
+2. **今日数据缺口**：试盘语料/页面今日档缺席（fail-visible）；若代理恢复，手工
+   `fetch_auction_trial('2026-11-16')`→`persist_trial_raw` 补档，再 force 重跑
+   竞价链可恢复 trialStrength（第三源日档回读已设计）；
+3. **下一步（需新预登记）**：真源头合同需 MITM KPL App 盯盘页（抓 api-auction
+   上游请求）或用户与 WzsLinker 站长渠道确认代理转发参数；本预登记工具链
+   （tmp/probe_*.py 三脚本+对拍框架）可复用于第二窗口；
+4. **既有资产固化**：pid=8 集合竞价 socket 直采已在产，若「实时页面看竞价过程」
+   需求优先于试盘字段，可直接消费现有 :8002 流（bidding_pct/amount/turnover 全字段）。
