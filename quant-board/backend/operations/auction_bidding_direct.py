@@ -23,12 +23,12 @@
 """
 from __future__ import annotations
 
-import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-REQUEST_TIMEOUT_SECONDS = 10
 KBL_MBL_HOST = "https://apphwhq.kaipanla.com/w1/api/index.php"
 COLLECTION_MBL_RAW = "kpl_morning_bidding_raw"
+_TZ_CST = timezone(timedelta(hours=8))
 MAX_PAGES = 5
 
 # 17 列具名映射（未破译列保原名，语义待窗内 App 同屏对拍后补）
@@ -72,6 +72,7 @@ def fetch_morning_bidding_list(page_size: int = 100, max_pages: int = MAX_PAGES)
     all_rows: dict[str, dict] = {}
     attempts: list[dict] = []
     meta: dict[str, Any] = {}
+    truncated = False
     for page in range(max_pages):
         index = page * page_size
         params = _base_params()
@@ -85,28 +86,54 @@ def fetch_morning_bidding_list(page_size: int = 100, max_pages: int = MAX_PAGES)
             return {"state": f"http_error:{type(exc).__name__}", "rows": all_rows,
                     "n_rows": len(all_rows), "pages": page, "attempts": attempts,
                     "message": str(exc)[:120]}
-        rows_raw = data.get("info") or []
+        errcode = data.get("errcode")
+        if errcode is not None and errcode not in (0, "0"):
+            attempts.append({"index": index, "state": f"kpl_errcode:{errcode}",
+                             "message": str(data.get("msg") or "")[:120]})
+            return {"state": f"kpl_errcode:{errcode}", "rows": all_rows,
+                    "n_rows": len(all_rows), "pages": page, "attempts": attempts,
+                    "message": str(data.get("msg") or "")[:120]}
+        rows_raw = data.get("info")
+        if not isinstance(rows_raw, list):
+            attempts.append({"index": index, "state": "parse_error:info_not_list",
+                             "got": type(rows_raw).__name__})
+            return {"state": "parse_error:info_not_list", "rows": all_rows,
+                    "n_rows": len(all_rows), "pages": page, "attempts": attempts,
+                    "message": f"info type={type(rows_raw).__name__}"}
         page_rows = parse_mbl_rows(rows_raw)
         all_rows.update(page_rows)
         meta = {k: data.get(k) for k in ("day", "time", "status") if data.get(k) is not None}
         attempts.append({"index": index, "state": "ok", "n_rows": len(page_rows)})
         if len(rows_raw) < page_size or not page_rows:
             break
+    else:   # 页数耗尽且末页仍满页 → 无法确认全量（审计可见）
+        truncated = True
     return {"state": "ok", "rows": all_rows, "n_rows": len(all_rows),
-            "pages": len(attempts), "attempts": attempts, **meta}
+            "pages": len(attempts), "attempts": attempts, "truncated": truncated,
+            **meta}
 
 
 def persist_morning_bidding_raw(db: Any, date: str, result: dict[str, Any]) -> dict[str, Any]:
-    """真源头日档落库（_id=日期，rows 键=6 位代码；仅 ok 态写，空档也是事实）。"""
+    """真源头日档落库（_id=日期，rows 键=6 位代码）。
+
+    红线 1：空档（ok 且 0 行=当日无竞价股）也是事实照写；部分页失败但已取回 rows
+    时同样落库并打 partial=true 质量标记；非 ok 且 0 行不写（不覆盖同日既有好档）。
+    """
     rows = result.get("rows") or {}
+    state = result.get("state")
+    partial = bool(state and state != "ok")
+    now = datetime.now(_TZ_CST).isoformat(timespec="seconds")
     doc = {"_id": date, "date": date, "source": "kpl_direct_morning_bidding",
            "rows": rows, "n_rows": len(rows),
            "pages": result.get("pages"), "day": result.get("day"),
            "time": result.get("time"), "status": result.get("status"),
-           "fetchedAt": json.dumps(result.get("attempts") or [], ensure_ascii=False),
-           "updatedAt": __import__("datetime").datetime.now().isoformat(timespec="seconds")}
+           "state": state, "partial": partial,
+           "truncated": bool(result.get("truncated")),
+           "attempts": result.get("attempts") or [],
+           "fetchedAt": now, "updatedAt": now}
     db[COLLECTION_MBL_RAW].replace_one({"_id": date}, doc, upsert=True)
-    return {"ok": True, "collection": COLLECTION_MBL_RAW, "n_rows": len(rows)}
+    return {"ok": True, "collection": COLLECTION_MBL_RAW, "n_rows": len(rows),
+            "partial": partial, "state": state}
 
 
 def collect_auction_bidding_direct(db: Any, date: str) -> dict[str, Any]:
@@ -115,7 +142,10 @@ def collect_auction_bidding_direct(db: Any, date: str) -> dict[str, Any]:
     out = {k: result.get(k) for k in ("state", "n_rows", "pages", "day", "time",
                                       "status", "message") if result.get(k) is not None}
     out["attempts"] = result.get("attempts") or []
-    if result.get("state") == "ok":
+    out["truncated"] = bool(result.get("truncated"))
+    # 红线 1：ok 照写（含当日无股空档事实）；非 ok 但有部分 rows 也写（partial 标记
+    # 在 persist 内）；非 ok 且 0 行不写、不覆盖既有好档
+    if result.get("state") == "ok" or result.get("rows"):
         out["persistState"] = persist_morning_bidding_raw(db, date, result)
     return out
 

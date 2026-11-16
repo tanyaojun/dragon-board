@@ -346,7 +346,8 @@ def archive_bidding_series(db: Any, snapshot: dict[str, Any], *, now: Optional[d
                   "fields": list(_SERIES_FIELDS),
                   "window": [str(SERIES_WINDOW[0]), str(SERIES_WINDOW[1])]}},
         upsert=True)
-    return {"ok": True, "date": date, "tick_n": len(ticks) + 1,
+    return {"ok": True, "date": date,
+            "tick_n": min(len(ticks) + 1, SERIES_MAX_TICKS),
             "item_n": len(items), "ts": tick["ts"]}
 
 

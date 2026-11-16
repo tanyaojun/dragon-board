@@ -165,7 +165,7 @@ def _row_of(d: dict, sector: dict | None, with_narrative: bool,
 @router.get("/auction-leaders")
 def get_auction_leaders(date: str | None = None, start: str | None = None,
                         end: str | None = None, with_narrative: int = 0) -> Any:
-    """竞价龙头投喂读口（合同镜像 theme-leaders；行源 = labels ∪ 推送 roster ∪ jiuyan 龙 roster ∪ 竞价强度 trial roster）。"""
+    """竞价龙头投喂读口（合同镜像 theme-leaders；行源 = labels ∪ 推送 roster ∪ 竞价强度 trial roster）。"""
     try:
         db = repository_factory.get_runtime_mongodb_database()
     except Exception as exc:  # noqa: BLE001 — 读库降级结构化（不伪装空）
@@ -340,7 +340,7 @@ def post_auction_leader_rerun(payload: AuctionLeaderRerunPayload) -> dict[str, A
         return {"ok": False, "degraded": True, "reason": f"auction_leader_rerun_failed: {exc}"}
     if doc is None:
         return {"ok": False, "errorCode": "not_written",
-                "error": f"{date}:{code} 无存档（该 code 不在当日选龙名单：推送/韭研/竞价强度）"}
+                "error": f"{date}:{code} 无存档（该 code 不在当日选龙名单：推送/竞价强度）"}
     if before is not None and doc.get("computedAt") == before_at:
         return {"ok": False, "errorCode": "not_rerun",
                 "error": f"{date}:{code} computedAt 未刷新（入口跳过或幂等命中，未真重判）"}

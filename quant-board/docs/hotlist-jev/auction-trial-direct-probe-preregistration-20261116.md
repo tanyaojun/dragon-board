@@ -243,3 +243,14 @@
   是其自家实时缓存，php 导出口未恢复），今日试盘 raw 按预算放弃；MBL 直采已覆盖
   冻结态同语义字段（col4=最终额/col8=成交/col5=竞价涨幅），首开/首加/峰值自明日起
   由我方序列自算，不再依赖 WzsLinker。
+
+### 7.8 评审修复补记（2026-11-16 双 reviewer 评审后）
+
+- `GET /api/hotlist-jev/auction-bidding-series` 读口当前无前端消费者（relay_page
+  实时区走 `/api/kpl/daban-list?pid_type=8` 内存快照）：登记为「读口先建、消费方
+  后接」态——序列采满首日后（预计 2026-11-17）由 relay_page 历史档页接入首帧/
+  峰值/末帧展示；在此之前该读口仅供诊断。
+- MBL 直采错误路径加固（评审 blocker 1/2）：errcode≠0 / info 非列表 → 结构化
+  错误态；部分页失败已取回 rows 落库带 partial=true；非 ok 且 0 行不覆盖好档；
+  MAX_PAGES 耗尽 truncated=true；attempts 原生数组、fetchedAt CST 时间戳。
+- relay_page 实时区门控修复：程序回填（当日值）不再触发历史档隐藏。

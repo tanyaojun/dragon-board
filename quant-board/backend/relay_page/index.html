@@ -9613,9 +9613,14 @@ function atLiveEnter(){
 }
 function atLiveLeave(){ if (AT.live.timer){ clearInterval(AT.live.timer); AT.live.timer = null; } }
 function atLiveIsToday(){
+  // 只有「选中日期 != 今日」才隐藏实时区；程序回填（atLoad 首载/atBackToLatest）
+  // 回填的就是最新生效日，不视为历史查询（2026-11-16 评审 P1 修复）
   const sel = ($('atDate').value || '').trim();
-  if (sel) return false;                    // 查历史档 → 实时区隐藏
-  return true;
+  if (!sel) return true;
+  const now = new Date();
+  const today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0')
+    + '-' + String(now.getDate()).padStart(2, '0');
+  return sel === today;
 }
 async function atLiveTick(){
   const card = $('atLiveCard');

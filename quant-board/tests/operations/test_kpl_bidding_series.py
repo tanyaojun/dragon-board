@@ -37,7 +37,9 @@ class FakeSeriesDb:
         return self
 
     def find_one(self, q):
-        return self.docs.get(q["_id"])
+        import copy
+        doc = self.docs.get(q["_id"])
+        return copy.deepcopy(doc) if doc else None  # pymongo 快照语义（非活引用）
 
     def update_one(self, q, upd, upsert=False):
         d = self.docs.setdefault(q["_id"], {"_id": q["_id"], "ticks": []})
@@ -86,7 +88,7 @@ def test_in_window_append_and_compact():
     assert set(it.keys()) == {"s", "bidding_pct", "bidding_amount", "bidding_net",
                               "bidding_turnover", "zt_buy_amount", "price", "pct",
                               "real_float"}, "tick 必须是压缩行（短键、无 quotas）"
-    assert it["quotas"] if False else "quotas" not in it
+    assert "quotas" not in it
 
 
 def test_throttle_within_5s_skipped_not_appended():

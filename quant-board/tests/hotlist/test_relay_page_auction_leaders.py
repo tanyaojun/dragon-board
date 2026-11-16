@@ -150,3 +150,10 @@ def test_trial_strength_source_badge_20261115(html):
     assert "r.trialStrength" in body, "title 必须由 trialStrength 拼装 jj_ratio/板内排名"
     assert "esc(trialTxt" in body, "强度 title 注入前必须 esc"
     assert "trialBad" in body
+
+
+def test_at_live_is_today_backfill_not_history(html):
+    """评审 P1 回潮守卫：程序回填（当日值）不得隐藏实时区；仅显式选历史日才隐藏。"""
+    body = _fn(html, "atLiveIsToday")
+    assert "if (sel) return false" not in body, "vA4 前旧门控（回填即隐藏）禁止回潮"
+    assert "sel === today" in body, "门控必须是「选中日 == 今日」比较"

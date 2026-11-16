@@ -291,7 +291,8 @@ def bidding_series_line(facts: dict | None) -> str | None:
     def _ts(v):
         try:
             import datetime as _dt
-            return _dt.datetime.fromtimestamp(float(v)).strftime("%H:%M:%S")
+            cst = _dt.timezone(_dt.timedelta(hours=8))   # 序列层/归档层同为 CST 口径
+            return _dt.datetime.fromtimestamp(float(v), cst).strftime("%H:%M:%S")
         except (TypeError, ValueError, OSError):
             return None
     def _pct(v):

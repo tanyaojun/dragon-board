@@ -717,3 +717,16 @@ def test_hygiene_auction_trial_strength_lines():
                                      "nTrial": 2, "start": "2026-11-13", "end": "2026-11-14"})
     _assert_clean(ln3, "auction_base_rate_line(双桶)")
     assert "推送 5/竞价强度 2" in ln3 and "韭研龙" not in ln3
+
+
+def test_hygiene_auction_bidding_series_line():
+    """§1.2-8：竞价过程事实行过中心黑名单；缺帧整段缺席。"""
+    from backend.analysis.hotlist.auction_leader_ammo import bidding_series_line
+    facts = {"first": {"ts": 1765275305, "bidding_pct": 2.1},
+             "max": {"ts": 1765275760, "zt_buy_amount": 3.0e8},
+             "last": {"ts": 1765275910, "bidding_pct": 4.2}}
+    line = bidding_series_line(facts)
+    assert line, "正常 facts 应产出事实行"
+    _assert_clean(line, "bidding_series_line(facts)")
+    assert bidding_series_line(None) is None
+    assert bidding_series_line({"first": {"ts": 1, "bidding_pct": None}}) is None

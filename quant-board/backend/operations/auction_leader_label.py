@@ -283,18 +283,31 @@ def _auction_ladder_line(t1_row: dict | None, prev_date: str | None) -> str | No
     return f"昨日（{prev_date}）{out}" if out else None
 
 
-def _bidding_series_line_for(db: Any, date: str, code: str) -> str | None:
-    """竞价过程事实行（kpl_bidding_series 派生；纯库读零外呼；缺档/异常=None 整行缺席）。"""
+def _bidding_series_line_for(db: Any, date: str, code: str,
+                             state_out: dict | None = None) -> str | None:
+    """竞价过程事实行（kpl_bidding_series 派生；纯库读零外呼；缺档/异常=None 整行缺席）。
+
+    state_out 缺席原因结构化透出（§4.0：缺席与缺档不可静默合并）：
+    no_series_archive=当日无序列档 / stock_absent=序列档无该股 /
+    series_read_failed:*=读口异常。
+    """
     try:
         from backend.analysis.hotlist.auction_leader_ammo import bidding_series_line
         from backend.services.kpl_daban_archiver import (
             derive_stock_series_facts, load_bidding_series)
         sdoc = load_bidding_series(db, date)
         if not sdoc:
+            if state_out is not None:
+                state_out["state"] = "no_series_archive"
             return None
         facts_all = derive_stock_series_facts(sdoc.get("ticks") or [])
-        return bidding_series_line(facts_all.get(str(code)[-6:]))
-    except Exception:  # noqa: BLE001 — 语料行缺席不阻断投喂（fail-visible 在读口层）
+        line = bidding_series_line(facts_all.get(str(code)[-6:]))
+        if state_out is not None:
+            state_out["state"] = "ok" if line else "stock_absent"
+        return line
+    except Exception as exc:  # noqa: BLE001 — 语料行缺席不阻断投喂；原因进 corpusState
+        if state_out is not None:
+            state_out["state"] = f"series_read_failed:{type(exc).__name__}"
         return None
 
 
@@ -360,6 +373,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         db, board_name=board or "", date=date, leader_code=code, sealed_codes=None,
         l2_fallback_date=prev_date, leader_expound_chars=1200, include_morning=True,
         include_flash=True)
+    series_state: dict = {}
     narrative = build_auction_leader_narrative(
         date=date, prev_date=prev_date, market_line=market_line,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
@@ -367,7 +381,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
         bid_line=auction_bid_line(bid_entries),
         trial_line=auction_trial_line((trial or {}).get("row")),
-        bidding_series_line=_bidding_series_line_for(db, date, code),
+        bidding_series_line=_bidding_series_line_for(db, date, code, series_state),
         board_strength=auction_board_strength_line(board, trial_strength),
         trial_selection=auction_trial_selection_line(trial_strength),
         structure=auction_structure_line(facts, prev_date=prev_date),
@@ -406,7 +420,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
                                             "fetchedAt": trial.get("fetchedAt"),
                                             "prevPercentCross": trial.get("prevPercentCross")}
                                            if trial else {"state": "contract_pending"}),
-                            "mblState": mbl_state or None},
+                            "mblState": mbl_state or None,
+                            "seriesState": series_state or None},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 
 
