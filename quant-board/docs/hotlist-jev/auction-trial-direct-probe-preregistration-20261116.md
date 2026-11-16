@@ -202,3 +202,20 @@
 - **语义边界**：首开/首加/峰值/撤后余额是 KPL 服务端委托簿统计，自建序列只能
   产出**观测值事实**（首帧/峰值/末帧委买额与竞价涨幅），两者语义不等价，
   不冒充；打标链消费待后续预登记。
+
+### 7.6 真源头合同定案（同日，雷电模拟器 mitmproxy 实抓）
+
+用户开启雷电模拟器后 MITM 抓包成功（CA bind-mount 系统信任 + 全局代理）：
+- **KPL 现行 API 域 = *.kaipanla.com**（longhuvip.com 为旧代际，对 DaBanList 族
+  一律返回 37×域名占位垃圾——上午六发矩阵垃圾之谜解开）；
+- **试盘页源头 = POST apphwhq.kaipanla.com/w1/api/index.php，form
+  a=MorningBiddingList&c=HomeDingPan&Type=4&PidType=0&Order=1&st=100&Index=0
+  + 五件套+凭据**，响应 errcode=0/info=统一数组位 17 列行，翻页 100+14=114 只
+  （实测）；委买额/竞价净额/竞价成交额三列与 :8002 pid=8 快照逐值吻合；
+- **落地**：`auction_bidding_direct.py` 直采器（分页≤5 页+fail-visible）→
+  kpl_morning_bidding_raw 日档（source=kpl_direct_morning_bidding）；打标链窗内
+  09:25-09:30 采集一次（mblState 入 corpusState）；竞价过程事实行
+  （bidding_series_line）入个股叙事（观测值口径，行文无开发注释，hygiene 过）；
+  AMMO 2026-11-15d（纯语料供给换代，题面 hash 不动）；
+- **未破译列**：col9/col10/col13/col14/col15（疑似首开/首加/峰值/撤后语义）
+  保原名不猜，待明日窗内 App 同屏对拍后补名。

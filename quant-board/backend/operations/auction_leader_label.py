@@ -71,6 +71,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     theme_heat_line,
     zt_gene_line,
 )
+from backend.operations.auction_bidding_direct import (
+    collect_auction_bidding_direct)
 from backend.operations.auction_trial_fetch import (
     COLLECTION_TRIAL_RAW, fetch_auction_trial, persist_trial_raw)
 from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
@@ -281,8 +283,23 @@ def _auction_ladder_line(t1_row: dict | None, prev_date: str | None) -> str | No
     return f"昨日（{prev_date}）{out}" if out else None
 
 
+def _bidding_series_line_for(db: Any, date: str, code: str) -> str | None:
+    """竞价过程事实行（kpl_bidding_series 派生；纯库读零外呼；缺档/异常=None 整行缺席）。"""
+    try:
+        from backend.analysis.hotlist.auction_leader_ammo import bidding_series_line
+        from backend.services.kpl_daban_archiver import (
+            derive_stock_series_facts, load_bidding_series)
+        sdoc = load_bidding_series(db, date)
+        if not sdoc:
+            return None
+        facts_all = derive_stock_series_facts(sdoc.get("ticks") or [])
+        return bidding_series_line(facts_all.get(str(code)[-6:]))
+    except Exception:  # noqa: BLE001 — 语料行缺席不阻断投喂（fail-visible 在读口层）
+        return None
+
+
 def build_one(db: Any, date: str, prev_date: str | None, row: dict,
-              *, t1_row: dict | None, pool_prev: dict, lanes: dict,
+              *, t1_row: dict | None, pool_prev: dict, lanes: dict, mbl_state: dict | None = None,
               gene_corpus: dict, notice_corpus: dict, heat_corpus: dict,
               reason_corpus: dict, lhb_facts: dict | None,
               market_line: str, base_rate_stats: dict | None,
@@ -350,6 +367,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
         bid_line=auction_bid_line(bid_entries),
         trial_line=auction_trial_line((trial or {}).get("row")),
+        bidding_series_line=_bidding_series_line_for(db, date, code),
         board_strength=auction_board_strength_line(board, trial_strength),
         trial_selection=auction_trial_selection_line(trial_strength),
         structure=auction_structure_line(facts, prev_date=prev_date),
@@ -387,7 +405,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
                                             "source": trial.get("source"),
                                             "fetchedAt": trial.get("fetchedAt"),
                                             "prevPercentCross": trial.get("prevPercentCross")}
-                                           if trial else {"state": "contract_pending"})},
+                                           if trial else {"state": "contract_pending"}),
+                            "mblState": mbl_state or None},
             "chars": len(narrative), "estimatedTokens": estimate_tokens(len(narrative))}
 
 
@@ -677,6 +696,14 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     # 试盘源采集（2026-11-14c 定案接线，勘察 §6 合同；WzsLinker api-auction.php）：
     # 仅 09:25–09:30 窗（试盘行已定格，与 bid 补源同窗）、裸读≤1 + 陈旧补拉≤1（红线 9
     # 台账 §6.4）；dry-run 零外呼；actual_date 守卫在解析层（回退数据不得冒充当日）
+    # 竞价列表真源头直采（2026-11-16 MITM 定案合同：kaipanla.com MorningBiddingList
+    # Type=4 PidType=0；与试盘 fetch 同窗一次，冻结态全量快照落 kpl_morning_bidding_raw）
+    mbl_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
+    if not dry_run and _in_auction_window():
+        try:
+            mbl_state = collect_auction_bidding_direct(db, date)
+        except Exception as exc:  # noqa: BLE001 失败不阻断投喂（fail-visible）
+            mbl_state = {"state": f"fetch_failed:{exc}"}
     trial_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
     trial_rows: dict = {}
     if not dry_run and _in_auction_window():
@@ -841,6 +868,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           board_codes=(by_board_trial if is_trial else by_board).get(board, [r]),
                           prev_cross=prev_cross, streak_map=streak_map,
                           trial=trial, reg_corpus=reg_corpus,
+                          mbl_state=mbl_state,
                           trial_strength=r.get("trialStrength") if is_trial else None)
         if (frozen_doc and frozen_doc.get("status") == "ok"
                 and frozen_doc.get("narrative")):

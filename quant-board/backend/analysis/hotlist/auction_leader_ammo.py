@@ -29,7 +29,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA4"   # 换代登记：2026-11-15 用户裁决移除韭研龙序第二源（实测封板概率极低）；身位题清理「韭研龙序」判据（红线6）；前一版 vA3 = auction-leader-vA3-preregistration-20261114
-AMMO_VERSION_AUCTION_LEADER = "2026-11-15c"   # vA4：移除韭研龙序源（删龙序叙事行/锚第二桶/身位题龙序判据）；前一版 2026-11-15b = 第三源竞价强度两新行；2026-11-15a = 监管风险行；2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
+AMMO_VERSION_AUCTION_LEADER = "2026-11-15d"   # 纯语料供给换代：竞价过程事实行（socket 序列观测值）+ MorningBiddingList 真源头日档（kaipanla.com 域 MITM 定案合同）；前一版 2026-11-15c = vA4：移除韭研龙序源（删龙序叙事行/锚第二桶/身位题龙序判据）；2026-11-15b = 第三源竞价强度两新行；2026-11-15a = 监管风险行；2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -277,6 +277,57 @@ def _trial_turnover(v: Any) -> str | None:
     return s or None
 
 
+def bidding_series_line(facts: dict | None) -> str | None:
+    """竞价过程事实行（2026-11-16 socket 序列观测值；与 WzsLinker 试盘行并列不互替）。
+
+    facts = 逐股过程事实（kpl_bidding_series 派生：first/max/last 观测帧）。
+    语义纪律（只留 docstring/结构化字段，§1.2-8 开发注释禁进行文）：first=观测首帧、
+    max=委买额观测峰值、last=末帧——观测值事实，非 KPL 委托簿统计语义（首开/首加/
+    撤后余额），不冒充试盘行；缺帧/缺字段整段缺席（不补 0，§红线8）；来源与时点
+    溯源走 corpusState.mblState/trialState 与序列读口。
+    """
+    if not isinstance(facts, dict):
+        return None
+    def _ts(v):
+        try:
+            import datetime as _dt
+            return _dt.datetime.fromtimestamp(float(v)).strftime("%H:%M:%S")
+        except (TypeError, ValueError, OSError):
+            return None
+    def _pct(v):
+        try:
+            return f"{float(v):.2f}%"
+        except (TypeError, ValueError):
+            return None
+    def _yi(v):
+        try:
+            return f"{float(v) / 1e8:.2f}亿"
+        except (TypeError, ValueError):
+            return None
+    first, mx, last = facts.get("first"), facts.get("max"), facts.get("last")
+    if not first and not last:
+        return None
+    segs = []
+    if first:
+        p = _pct(first.get("bidding_pct"))
+        t = _ts(first.get("ts"))
+        if p and t:
+            segs.append(f"首帧竞价涨幅 {p}（{t}）")
+    if mx:
+        y = _yi(mx.get("zt_buy_amount"))
+        t = _ts(mx.get("ts"))
+        if y and t:
+            segs.append(f"委买额峰值 {y}（{t}）")
+    if last:
+        p = _pct(last.get("bidding_pct"))
+        t = _ts(last.get("ts"))
+        if p and t:
+            segs.append(f"末帧 {p}（{t}）")
+    if not segs:
+        return None
+    return "竞价过程事实：" + " → ".join(segs)
+
+
 def auction_trial_line(trial: dict | None) -> str | None:
     """当日竞价试盘行（KPL 盯盘试盘页签 Type=7；2026-11-14c 骨架，合同定案前不接线）。
 
@@ -447,6 +498,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    push_line: str | None, bid_line: str | None,
                                    structure: str | None,
                                    trial_line: str | None = None,
+                                   bidding_series_line: str | None = None,
                                    board_strength: str | None = None,
                                    trial_selection: str | None = None,
                                    ladder_line: str | None = None,
@@ -474,7 +526,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
         if push_board and push_board != board:
             belong += f"（竞价推送概念：{push_board}）"
         lines.append(belong)
-    for ln in (push_line, trial_line, board_strength, trial_selection,
+    for ln in (push_line, trial_line, bidding_series_line, board_strength, trial_selection,
                bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
                notice_count_line, regulatory_line, lhb_facts_line):

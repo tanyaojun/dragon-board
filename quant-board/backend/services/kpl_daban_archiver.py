@@ -1457,3 +1457,40 @@ async def close_daban_pool_archiver() -> None:
     if _daban_pool_archiver is not None:
         await _daban_pool_archiver.stop()
         _daban_pool_archiver = None
+
+def derive_stock_series_facts(ticks: list[dict]) -> dict[str, dict]:
+    """tick 序列 → 逐股竞价过程事实（观测值）：first（首帧）/ max（委买额峰值帧）/
+    last（末帧）。缺字段如实缺失（不补 0）；ts 为采集时点。"""
+    out: dict[str, dict] = {}
+    for tick in ticks or []:
+        ts = tick.get("ts")
+        for it in tick.get("it") or []:
+            sid = str(it.get("s") or "")
+            if not sid:
+                continue
+            rec = out.setdefault(sid, {"first": None, "max": None, "last": None})
+            row = {"ts": ts, **{f: it.get(f) for f in
+                                ("bidding_pct", "bidding_amount", "bidding_net",
+                                 "bidding_turnover", "zt_buy_amount", "price", "pct")}}
+            if rec["first"] is None:
+                rec["first"] = row
+            rec["last"] = row
+            zb = it.get("zt_buy_amount")
+            try:
+                zb_v = float(zb) if zb is not None else None
+            except (TypeError, ValueError):
+                zb_v = None
+            if zb_v is not None:
+                mx = rec["max"]
+                if mx is None or (mx.get("zt_buy_amount") is not None
+                                  and zb_v > float(mx.get("zt_buy_amount") or 0)):
+                    rec["max"] = row
+    return out
+
+
+def load_bidding_series(db: Any, date: str) -> dict[str, Any] | None:
+    """竞价序列日档读（纯库读）；无档返回 None。"""
+    doc = db[_SERIES_COLLECTION].find_one({"_id": date})
+    if not doc:
+        return None
+    return doc
