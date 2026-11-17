@@ -57,7 +57,22 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         return {}, {**state, "reason": f"series_read_failed:{type(exc).__name__}"}
     if not sdoc:
         return {}, {**state, "reason": "no_series_archive"}
-    facts = derive_stock_series_facts(sdoc.get("ticks") or [])
+    all_ticks = sdoc.get("ticks") or []
+    # 迟到 tick 防御（2026-11-17 对拍教训）：09:27 后为冻结后/连续竞价 regime，
+    # 混入会污染「末帧=竞价冻结值」口径（当日实证：09:32 tick 使 selectedN 1→0）；
+    # 旧档已含迟到 tick 时在此过滤（lateTicksFiltered 计数，不静默）。
+    from datetime import datetime, timedelta, timezone as _tz
+    _CST = _tz(timedelta(hours=8))
+    _CUT = 9 * 3600 + 27 * 60
+    ticks = []
+    for t in all_ticks:
+        ts = t.get("ts")
+        if not isinstance(ts, (int, float)):
+            continue
+        dt = datetime.fromtimestamp(ts, _CST)
+        if dt.hour * 3600 + dt.minute * 60 + dt.second < _CUT:
+            ticks.append(t)
+    facts = derive_stock_series_facts(ticks)
     # bk_name 板块 join（同日 MBL raw col11）：缺 bk_name → 桥接失败 → mappedN=0
     # 第三源静默死亡（11-13 真值验证发现的要害，历史验证见测试）
     plates: dict[str, str] = {}
@@ -93,7 +108,8 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
     if not rows:
         return {}, {**state, "reason": "no_ztbuy_visible"}
     out = {**state, "state": "ok", "n_rows": len(rows),
-           "tickN": len(sdoc.get("ticks") or []),
+           "tickN": len(ticks),
+           "lateTicksFiltered": len(all_ticks) - len(ticks),
            "plateJoinedN": plate_hit}
     if plate_source_error:
         out["plateSourceError"] = plate_source_error

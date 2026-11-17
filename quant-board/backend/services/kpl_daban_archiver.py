@@ -303,8 +303,10 @@ def archive_dt_snapshot(db: Any, snapshot: dict[str, Any], *, now: Optional[date
 # 单写者=collector（:8002）推送即落库先例（2013/2203 同款）；独立集合（与
 # kpl_daban_pool bid_ 通道的「终态覆盖」单一事实源并存，序列=过程事实、bid_=终态）。
 _SERIES_COLLECTION = "kpl_bidding_series"
-SERIES_WINDOW = (dtime(9, 10), dtime(9, 35))   # 事实采集窗：09:10 预热 → 09:35 冻结后余量
-SERIES_MIN_INTERVAL_S = 5.0                     # tick 节流：≥5s（25min 窗 ≤300 tick）
+SERIES_WINDOW = (dtime(9, 10), dtime(9, 27))   # 采集窗：09:10 预热 → 09:25 冻结+2min；
+#   2026-11-17 对拍教训：09:30 后为连续竞价 regime（zt_buy 语义变），窗收 09:35 会
+#   污染「末帧=冻结值」口径（09:32 tick 使 selectedN 1→0 实证）
+SERIES_MIN_INTERVAL_S = 5.0                     # tick 节流：≥5s（17min 窗 ≤204 tick）
 SERIES_MAX_TICKS = 400                          # $slice 上限（防异常刷屏撑爆日档）
 _SERIES_FIELDS = ("bidding_pct", "bidding_amount", "bidding_net", "bidding_turnover",
                   "zt_buy_amount", "price", "pct", "real_float")

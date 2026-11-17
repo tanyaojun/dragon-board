@@ -1926,7 +1926,7 @@ class KplCollectorService:
                     try:
                         now_dt = datetime.datetime.now()
                         hm = now_dt.hour * 60 + now_dt.minute
-                        if not (9 * 60 + 10 <= hm < 9 * 60 + 35):
+                        if not (9 * 60 + 10 <= hm < 9 * 60 + 27):
                             pass   # 窗外：静默跳过（归档层亦门控，不计数不告警）
                         elif time.time() - self._bid_series_last_ts < 5.0:
                             self._corpus_persist_stats["bid_series_throttled"] += 1

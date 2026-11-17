@@ -144,6 +144,33 @@ def test_derive_equivalence_ratio_math():
     assert AS.bre.posture(wzs) == AS.bre.posture(drv) == "maintain"
 
 
+def test_derive_filters_late_ticks():
+    """迟到 tick 防御：09:27 后 tick（冻结后/连续竞价 regime）不进派生，计数留痕。
+
+    2026-11-17 对拍实证：09:32:10 开盘后 tick 混入使 selectedN 1→0（last 语义被
+    连续竞价 zt_buy 污染）。"""
+    import datetime as dt
+    TZ = dt.timezone(dt.timedelta(hours=8))
+    doc = _doc()
+    # _doc 的 tick ts 是小整数（会被判 1970 年）→ 全部过滤；先给合法早盘 ts
+    base = dt.datetime(2026, 11, 17, 9, 16, tzinfo=TZ).timestamp()
+    doc["ticks"][0]["ts"] = base
+    doc["ticks"][1]["ts"] = base + 10
+    doc["ticks"][2]["ts"] = base + 20
+    late = dict(doc["ticks"][2])
+    late["ts"] = dt.datetime(2026, 11, 17, 9, 32, 10, tzinfo=TZ).timestamp()
+    late["it"] = [{"s": "605255", "bidding_pct": 99.0, "bidding_amount": 1.0,
+                   "bidding_turnover": 0.0, "zt_buy_amount": 1.0}]
+    doc["ticks"].append(late)
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(doc, _mbl_rows()), "2026-11-17")
+    assert state["state"] == "ok" and state["lateTicksFiltered"] == 1
+    assert state["tickN"] == 3
+    r = rows["605255"]
+    assert r["last_amount"] == 8980000.0, "末帧必须是 09:16:20 tick，非 09:32 开盘后污染帧"
+    assert r["jj_percent"] == 4.78
+
+
 def test_historical_equivalence_1113():
     """历史验证（11-13 WzsLinker 真值 95 只）：派生形态（pre_percent=None + bk_name
     保留）走完整 roster，与真值形态入选集合/映射/板块归属完全等价。
