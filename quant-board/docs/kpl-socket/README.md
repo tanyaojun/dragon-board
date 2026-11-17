@@ -262,15 +262,16 @@ QuantBoard 主后端 :8000
   重构方案（注册表化主轴 + 211 批量可选增强 + 402 退订 + 610 保活 A/B，
   五阶段/频控预算/探针预登记）唯一来源：
   [sub-registry-refactor-plan.md](sub-registry-refactor-plan.md)（**P0-P4 全部实施 +
-  探针全部开火裁决**：全 mock 413 passed；211 有条件受理——item.data 必须 GCM
+  探针全部开火裁决**：全 mock 418 passed；211 有条件受理——item.data 必须 GCM
   （明文→2008 杀连），且仅 hqDaban 全局族可批（2103/2203/2013 批内逐项拒 2000，
   cmd 110 错误通知通道）；可批仅 ~8 帧/会话 ~170，**裁决保持 KPL_SUB_BATCH=direct
   默认不启用**；逐项 ack seq=item.seqId/subId=cmd 回声/推送 ext==ack attr3 topic
   逐字节匹配实弹验证；**批内盘中推送交付已验证**（pushbatch vs pushdirect
   11/18/16 vs 12/19/17 同量级）；**402 已裁决**：kind5 ack=28B 不透明状态块，
   subIds 按 seq 从原请求取（App qn0.d/q 同款），退订后推送即停差分实弹成立，
-  KPL_UNSUB_ENABLED 仍默认关——**per-stock 共享 subId 误退阻塞**（生产 collision_n=133），
-  需唯一 subId/topic 退订设计+探针后方可启用（方案 §12）；**P4 已裁决：610 重发第 5 次→1106 确定性
+  KPL_UNSUB_ENABLED 仍默认关——per-stock 共享 subId 误退阻塞（生产 collision_n=133）已实现
+  **唯一 subId hint** 修复（KPL_SUB_UNIQUE_ID 门控默认关，base 0x4000 会话内递增，M3 冲突护栏
+  fail-safe），待 uid/uidcmd 探针裁决服务端是否回声唯一 hint 后启用（方案 §12）；**P4 已裁决：610 重发第 5 次→1106 确定性
   杀连（3/3 中位 67s），off 3/3 零错误 >120s → 默认已切 KPL_KA_MODE=off**；
   裁决与证据链见方案 §1.3/§7.1/§11）。
 - **已对齐项（逐项比对确认）**：TLS+SNI(socket.kaipan.com) ✓、connType=99 ✓
@@ -416,11 +417,11 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 - **2026-11-17 订阅注册表化 P0-P3 落地后基线**：新增 `test_kpl_sub_registry.py`
   （注册表纯逻辑 25 用例）；协议层增 SubReqs/UnsubIdReq/ext 属性/kind5/kind1
   用例；collector 增 ack 捕获/220 选择性/211 批信封+熔断/402 退订用例。
-  KPL 九文件专项实跑 **413 passed**（含 211 开火后修正：110 错误通道/内联
+  KPL 九文件专项实跑 **418 passed**（含 211 开火后修正：110 错误通道/内联
   3001/3006 登记/codec 安全默认；下午盘增 P4 ka_mode + 402 不透明 ack seq 回填；
   独立 review 修复 M1 heartbeat/M2 白名单/M3 冲突护栏/m1-m8 等，见方案 §13）；
   `backend/services/__tests__ + tests/api`
-  合计 **573 passed**；`tests/hotlist` **1582 passed, 6 skipped**（全 mock，
+  合计 **578 passed**；`tests/hotlist` **1582 passed, 6 skipped**（全 mock，
   零真实连接/signsvc/jev；211/402/P4 探针为预登记开火路径，非 pytest）。
 - **红线：pytest 一律全 mock（FakeCodec/FakeSocket/FakeCore），零真实 KPL 连接、零真实 WBE 调用、零真实 ELF 加载**。真实连接与 PC 模拟核差分只走预登记的开火路径（人工运维诊断 / 开发期差分脚本）。
 - 会话状态机测试覆盖：全帧序（260/610/602/2301/2303/2304/3001/3006）、fail-visible 断言（解码失败必须广播 error 事件，不静默丢弃）。

@@ -17,6 +17,10 @@
   unsub —— P3：direct 订 2114+2116 → 20s 后只退 2114（生产 _drain_unsub 路径）
            → 差分验证：2114 推送停 / 2116 继续 + kind5 ack 形态
   ka610/kaoff —— P4 A/B：同配置唯一变量 ka_mode，观察窗 120s 计寿命/推送量
+  uid/uidcmd —— §12 唯一 subId hint：direct 订 2114（保活）+ 3 股 per-stock 2203，
+           uid 用生产 _stock_sub_ext 唯一 hint（sub_unique_id=1）/ uidcmd 沿用 cmd；
+           25s 后按 key 只退 000002（生产 _drain_unsub）→ 裁决服务端是否回声唯一
+           hint（entries.sub_id）+ 差分验证（000002 推送停 / 他股继续）
 
 实现：100% 复用生产 KplCollectorService 会话链（260/610/602/23xx/3001/3006 +
 拟人延迟 + 211 信封构造 + 注册表 ack 捕获 + 熔断 + 402 退订），仅子类注入
@@ -79,6 +83,13 @@ def make_items(variant: str) -> list:
              "ext": _ext(daban.CMD_MARKET_OVERVIEW)},
             {"cmd": 2116, "req": daban.build_empty_req_pb(), "ext": _ext(2116)},
         ]
+    if variant in ("uid", "uidcmd"):
+        # §12：仅 2114 全局保活项；per-stock 2203 由 ProbeCollector 用生产
+        # _stock_sub_ext 注入（唯一 hint vs cmd 对照）
+        return [
+            {"cmd": daban.CMD_ZD_STAT, "req": daban.build_market_energy_req_pb(1),
+             "ext": _ext(daban.CMD_ZD_STAT)},
+        ]
     # 2114 QxMarketEnergyReq{type=1} + 2116 空 Req（P1 基线 / unsub / ka A/B）
     return [
         {"cmd": daban.CMD_ZD_STAT, "req": daban.build_market_energy_req_pb(1),
@@ -95,10 +106,13 @@ class ProbeCollector(KplCollectorService):
     会话数超预登记上限（首轮 6 会话/5 帧，披露于方案 §10）。探针一律
     单会话，失败不重开，冷却后下一变体。"""
 
-    def __init__(self, codec, items, unsub_plan=None, **kw):
+    def __init__(self, codec, items, unsub_plan=None, per_stock=None, **kw):
         super().__init__(codec, **kw)
         self._probe_items = items
         self._probe_injected = False
+        # §12 per-stock 订阅面：[(cmd, sid)]，首 drain 用生产 _stock_sub_ext 构 ext
+        # （sub_unique_id flag 决定唯一 hint vs cmd）→ 探针走真实生产路径。
+        self._per_stock = per_stock or []
         # P3 退订计划：(延迟秒, subIds)——读循环启动后计时，到点把 ids 入
         # _pending_unsub + mark_unsub_sent（与 _sync_unsub_surface 同款语义），
         # 后续由生产 _drain_unsub 真实路径发出（防抖/频控/回队全继承）。
@@ -123,7 +137,11 @@ class ProbeCollector(KplCollectorService):
 
     def _drain_setup_subs(self, sock, next_seq):
         if not self._probe_injected:
-            self._pending_setup_frames[0:0] = [dict(it) for it in self._probe_items]
+            inj = [dict(it) for it in self._probe_items]
+            for cmd, sid in self._per_stock:
+                inj.append({"cmd": cmd, "req": proto.build_hq_req_pb(sid),
+                            "ext": self._stock_sub_ext(cmd), "key": sid})
+            self._pending_setup_frames[0:0] = inj
             self._probe_injected = True
         super()._drain_setup_subs(sock, next_seq)
 
@@ -131,10 +149,16 @@ class ProbeCollector(KplCollectorService):
         if self._unsub_plan is not None:
             if self._unsub_t0 is None:
                 self._unsub_t0 = time.time()
-            delay, ids = self._unsub_plan
+            delay, sel = self._unsub_plan
             if not self._unsub_fired and time.time() - self._unsub_t0 >= delay:
-                entries = [e for e in self._sub_registry.entries()
-                           if e.sub_id in ids and e.state == "acked"]
+                if isinstance(sel, str):   # §12：按 key 选股 → 取其服务端授予 subId
+                    entries = [e for e in self._sub_registry.entries()
+                               if e.key == sel and e.state == "acked"]
+                    ids = [e.sub_id for e in entries if e.sub_id is not None]
+                else:
+                    ids = sel
+                    entries = [e for e in self._sub_registry.entries()
+                               if e.sub_id in ids and e.state == "acked"]
                 self._pending_unsub.extend(ids)
                 self._sub_registry.mark_unsub_sent(entries)
                 self._unsub_fired = True
@@ -146,8 +170,12 @@ class ProbeCollector(KplCollectorService):
 # 每变体默认观察窗（--observe-s 显式覆盖）：推送交付/退订差分需盘中推送样本；
 # P4 寿命对照窗 120s（生产会话寿命典型 57-80s，README §9.5，窗要盖过典型死亡点）
 _OBSERVE_DEFAULTS = {"pushbatch": 90.0, "pushdirect": 90.0, "unsub": 90.0,
-                     "ka610": 120.0, "kaoff": 120.0}
-_DIRECT_VARIANTS = ("control", "dmulti", "pushdirect", "unsub", "ka610", "kaoff")
+                     "ka610": 120.0, "kaoff": 120.0, "uid": 90.0, "uidcmd": 90.0}
+_DIRECT_VARIANTS = ("control", "dmulti", "pushdirect", "unsub", "ka610", "kaoff",
+                    "uid", "uidcmd")
+_UID_PER_STOCK = [(proto.CMD_HQ_REASONS, "000001"),
+                  (proto.CMD_HQ_REASONS, "000002"),
+                  (proto.CMD_HQ_REASONS, "600000")]
 
 
 def run_session(idx: int, variant: str, codec, observe_s: float, tag: str) -> dict:
@@ -157,7 +185,9 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str) -> di
     items = make_items(variant)
     svc = ProbeCollector(
         codec, items,
-        unsub_plan=((20.0, [daban.CMD_ZD_STAT]) if variant == "unsub" else None),
+        unsub_plan=((20.0, [daban.CMD_ZD_STAT]) if variant == "unsub"
+                    else (25.0, "000002") if variant == "uid" else None),
+        per_stock=(_UID_PER_STOCK if variant in ("uid", "uidcmd") else None),
         device_id=os.environ.get("KPL_DEVICE_ID")
         or os.environ.get("QUANT_BOARD_KPL_APP_DEVICEID", ""),
         user_id=os.environ.get("KPL_USER_ID", "0"),
@@ -169,8 +199,9 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str) -> di
         sub_batch_mode=("direct" if variant in _DIRECT_VARIANTS else "211"),
         # U2 实弹定案（2026-11-17）：item.data 必须 GCM（codec=1），明文→2008 断连
         sub_batch_codec=(0 if variant in ("plain", "control") else 1),
-        unsub_enabled=(variant == "unsub"),
-        ka_mode=("off" if variant == "kaoff" else "610"),
+        unsub_enabled=(variant in ("unsub", "uid")),
+        sub_unique_id=(variant == "uid"),
+        ka_mode=("off" if variant in ("kaoff", "uid", "uidcmd") else "610"),
         human_delay=True, auth_phase_delay=5.0, auth_phase_jitter=3.0,
         loop_send_grace_s=0.0, enforce_trading_hours=False)
     print(f"[s{idx}] variant={variant} items={len(items)} observe={observe_s}s "
@@ -182,7 +213,7 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str) -> di
     if svc._thread is not None:
         svc._thread.join(timeout=15)
     events = list(svc._history)
-    entries = [{"cmd": e.cmd, "seq": e.seq, "sub_id": e.sub_id,
+    entries = [{"cmd": e.cmd, "seq": e.seq, "sub_id": e.sub_id, "key": e.key,
                 "topic": (e.topic or b"").hex(), "state": e.state,
                 "batch_seq": e.batch_seq, "lane": e.lane}
                for e in svc._sub_registry.entries()]
@@ -216,6 +247,11 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str) -> di
         "entries": entries,
         "frame_counts": frame_counts,
         "ka_mode": svc._ka_mode,
+        "sub_unique_id": svc._sub_unique_id,
+        "stock_push_timeline": [{"ts": e["ts"], "type": e["type"],
+                                 "cmd": e.get("cmd"), "stock_id": e.get("stock_id")}
+                                for e in events if e["type"] in
+                                ("zt_reasons", "theme_heat")],
         "unsub": [e for e in events if e["type"] in
                   ("probe_unsub_fired", "sub_unsub", "sub_unsub_ack", "sub_unsub_dropped")],
         "daban_push_timeline": [{"ts": e["ts"], "cmd": e.get("cmd"),

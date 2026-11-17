@@ -306,6 +306,7 @@ class KplCollectorService:
         sub_batch_ack_timeout_s: float = 10.0,
         unsub_enabled: bool = False,
         ka_mode: str = "off",
+        sub_unique_id: bool = False,
     ):
         if ka_mode not in ("610", "off"):
             raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off）")
@@ -384,6 +385,10 @@ class KplCollectorService:
         self._sub_batch_ack_timeout_s = max(1.0, float(sub_batch_ack_timeout_s))
         self._batch_broken = False   # 会话级熔断：批 ack 超时/ErrResp → 本会话回退单帧
         self._unsub_enabled = bool(unsub_enabled)
+        # per-stock 唯一 subId hint（KPL_SUB_UNIQUE_ID，方案 §12）：默认关沿用 cmd
+        # （App w30 同款，多股共享 subId）；开启后会话内单调递增 unique hint。
+        self._sub_unique_id = bool(sub_unique_id)
+        self._sub_id_hint_next = self._SUB_ID_HINT_BASE   # _session 复位
         self._pending_unsub: List[int] = []   # 待退订 subId（防抖 ≥5s，≤1 帧/tick）
         # 402 已发帧 seq→subIds（2026-11-17 P3' 实弹：kind5 ack payload=28B 不透明
         # 状态块非 UnsubIdReq 回声，App qn0.d/q 同款按 seq 从原请求取 subIds）
@@ -729,6 +734,9 @@ class KplCollectorService:
     # detail per-stock 批内逐项拒 2000+无 topic。仅 2114/2115/2116 经探针验证，
     # 其余同族推定；flag 默认 direct 不启用，白名单为灰度前置硬护栏，review M2）。
     _BATCHABLE_CMDS = frozenset(daban.DABAN_SUB_CMDS)
+    # per-stock 唯一 subId hint 基址（方案 §12）：高于 cmd 域（max cmd ~0x0C1D），
+    # 避免与全局族 subId=cmd 撞；会话内单调递增，每股独立 subId → 402 精准退单股。
+    _SUB_ID_HINT_BASE = 0x4000
 
     # ---- 订阅注册表化 + 211 批量增强（2026-11-17 P0-P3）----
 
@@ -870,7 +878,7 @@ class KplCollectorService:
                     req = self._detail_req_for(dcmd, sid)
                     enc = self._codec.enc(req)
                     seq = next_seq()
-                    dext = bytes([0x02]) + struct.pack(">H", dcmd)
+                    dext = self._stock_sub_ext(dcmd)   # per-stock 唯一 subId hint（§12）
                     frame = proto.build_frame(dcmd, seq, enc or req, d=0,
                                               encrypted=bool(enc), pkg=proto.PKG_ROUTE,
                                               ext=dext)
@@ -886,12 +894,11 @@ class KplCollectorService:
         with lock:
             batch = list(pending_ref)
             pending_ref.clear()
-        ext = bytes([0x02]) + struct.pack(
-            ">H", proto.CMD_HQ_REASONS if lane == "zt_reason" else proto.CMD_STOCK_RELATED_THEME)
+        cmd = proto.CMD_HQ_REASONS if lane == "zt_reason" else proto.CMD_STOCK_RELATED_THEME
         for sid in batch:
             req = proto.build_hq_req_pb(sid)
             enc = self._codec.enc(req)
-            cmd = proto.CMD_HQ_REASONS if lane == "zt_reason" else proto.CMD_STOCK_RELATED_THEME
+            ext = self._stock_sub_ext(cmd)   # per-stock 唯一 subId hint（§12）
             seq = next_seq()
             frame = proto.build_frame(cmd, seq, enc or req, d=0,
                                       encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
@@ -935,6 +942,21 @@ class KplCollectorService:
         # 队深观测随 drain 递减（评审 P2：否则 status 读到的是会话初队深非当前队深）
         self._stats["queued_setup_subs"] = len(self._pending_setup_frames)
 
+    def _stock_sub_ext(self, cmd: int) -> bytes:
+        """per-stock 订阅 ext attr2（subId hint）。唯一 hint 模式（KPL_SUB_UNIQUE_ID）
+        会话内单调递增，使服务端授予每股独立 subId → 402 可精准退单股（方案 §12）；
+        否则沿用 cmd（App w30 同款，多股共享 subId，402 仅全局族可用）。
+        仅改 ext hint，帧头 cmd 与 req{stockId} 不变 → 推送按 topic 路由不受影响。"""
+        hint = self._next_sub_id_hint() if self._sub_unique_id else cmd
+        return bytes([0x02]) + struct.pack(">H", hint)
+
+    def _next_sub_id_hint(self) -> int:
+        v = self._sub_id_hint_next
+        self._sub_id_hint_next += 1
+        if self._sub_id_hint_next > 0x7FFF:   # Short 正域上限（理论上 ~110/会话远不及）
+            self._sub_id_hint_next = self._SUB_ID_HINT_BASE
+        return v
+
     def _drain_zt_reason_subs(self, sock: Any, next_seq: Any) -> None:
         """发送待订阅 2203 帧（仅会话线程调用；异常 fail-visible 不杀会话）。
 
@@ -952,9 +974,8 @@ class KplCollectorService:
         if rest:
             with self._zt_reason_lock:
                 self._pending_zt_reason[:0] = rest   # 回队头保序，下一 tick 续发
-        ext = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_REASONS)
         items = [{"cmd": proto.CMD_HQ_REASONS, "req": proto.build_hq_req_pb(sid),
-                  "ext": ext, "key": sid} for sid in batch]
+                  "ext": self._stock_sub_ext(proto.CMD_HQ_REASONS), "key": sid} for sid in batch]
         try:
             self._drain_send(sock, next_seq, items, "zt_reason")
         except OSError as exc:
@@ -1031,9 +1052,8 @@ class KplCollectorService:
         if rest:
             with self._theme_lock:
                 self._pending_theme[:0] = rest
-        ext = bytes([0x02]) + struct.pack(">H", proto.CMD_STOCK_RELATED_THEME)
         items = [{"cmd": proto.CMD_STOCK_RELATED_THEME, "req": proto.build_hq_req_pb(sid),
-                  "ext": ext, "key": sid} for sid in batch]
+                  "ext": self._stock_sub_ext(proto.CMD_STOCK_RELATED_THEME), "key": sid} for sid in batch]
         try:
             self._drain_send(sock, next_seq, items, "theme")
         except OSError as exc:
@@ -1082,9 +1102,8 @@ class KplCollectorService:
             with self._detail_locks[lane]:
                 batch = list(self._pending_detail[lane])
                 self._pending_detail[lane] = []
-            dext = bytes([0x02]) + struct.pack(">H", cmd)
             items = [{"cmd": cmd, "req": self._detail_req_for(cmd, sid),
-                      "ext": dext, "key": sid} for sid in batch]
+                      "ext": self._stock_sub_ext(cmd), "key": sid} for sid in batch]
             try:
                 self._drain_send(sock, next_seq, items, f"detail:{lane}",
                                  block_pause=True)
@@ -1195,6 +1214,7 @@ class KplCollectorService:
             "unsub_sent_n": self._stats.get("unsub_sent_n", 0),
             "unsub_pending_n": len(self._pending_unsub),
             "ka_mode": self._ka_mode,
+            "sub_unique_id": self._sub_unique_id,
             # 订阅构成观测（2026-11-11 行业页签空态排查）：hy=881 行业板块数，
             # 页面引导/补引导是否落地一眼可核（fail-visible，不藏状态）
             "subscriptions": {
@@ -1443,6 +1463,7 @@ class KplCollectorService:
         self._pending_unsub = []     # 退订队随会话重建作废（订阅面本就要全量重建）
         self._unsub_seq_ids = {}
         self._unsub_frames_sent = 0
+        self._sub_id_hint_next = self._SUB_ID_HINT_BASE   # 唯一 hint 会话级复位（§12）
         try:
             sock.settimeout(2)
             # 1) 260 challenge

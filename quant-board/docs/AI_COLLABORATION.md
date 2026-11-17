@@ -232,12 +232,12 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   （仅 proto+ack 展开在）；实际订阅=单帧 0x40+ext attr2=subId（hint=cmd）+客户端注册表，
   权威 subId/topic 取 ack attr2/attr3，退订=402/pkg 0x50。已落地：`kpl_sub_registry.py`
   注册表（替代旧 _resub_cache，单一事实源）+ 220 选择性重发 + 402 退订（flag 默认关）
-  + 211 批量信封（KPL_SUB_BATCH 默认 direct，会话级熔断回退）；全 mock 413 passed，
+  + 211 批量信封（KPL_SUB_BATCH 默认 direct，会话级熔断回退）；全 mock 418 passed，
   direct 订阅帧形态逐字节零变更。**探针全部开火裁决（2026-11-17）**：211 item.data
   必须 GCM（明文→2008 杀连），仅 hqDaban 全局族可批（2103/2203/2013 批内拒
   2000/cmd 110），收益 ~7 帧/会话不抵风控面 → 保持 direct 不启用；批内盘中推送
   交付==direct 实弹验证；402 语义钉死（ack=28B 状态块，subIds 按 seq 取原请求，
-  退订推送即停差分成立，KPL_UNSUB_ENABLED 仍默认关——per-stock 共享 subId 误退阻塞见方案 §12）；**P4：610 重发第 5 次
+  退订推送即停差分成立，KPL_UNSUB_ENABLED 仍默认关——per-stock 共享 subId 误退阻塞已实现唯一 subId hint 修复（KPL_SUB_UNIQUE_ID 门控，待 uid/uidcmd 探针裁决，方案 §12）；**P4：610 重发第 5 次
   →1106 确定性杀连（受控实验 3/3 中位 67s），off 3/3 零错误 >120s →
   默认已切 KPL_KA_MODE=off**。方案唯一来源
   [kpl-socket/sub-registry-refactor-plan.md](kpl-socket/sub-registry-refactor-plan.md)

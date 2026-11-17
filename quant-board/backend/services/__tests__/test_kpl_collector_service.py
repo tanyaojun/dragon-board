@@ -2103,6 +2103,68 @@ class TestSubBatch211:
         assert [x for x in _drain_q(q) if x["type"] == "error"] == []
 
 
+class TestSubUniqueId:
+    """方案 §12：per-stock 唯一 subId hint（KPL_SUB_UNIQUE_ID）→ 402 精准退单股。"""
+
+    def _zt_hints(self, svc, sids):
+        svc._zt_reason_subs = True
+        svc._pending_zt_reason = list(sids)
+        fake = FakeSocket([])
+        svc._drain_zt_reason_subs(fake, _seq_gen())
+        return [proto.parse_ext_attrs(proto.parse_incoming(f)["ext"]).get(2)
+                for f in fake.sent]
+
+    def test_default_off_hint_is_cmd(self):
+        svc = _mk_svc()                       # sub_unique_id 默认 False
+        hints = self._zt_hints(svc, ["600001", "600002"])
+        assert hints == [2203, 2203]          # 沿用 cmd（App w30 同款，向后兼容）
+
+    def test_unique_hints_distinct_per_stock(self):
+        svc = _mk_svc(sub_unique_id=True)
+        hints = self._zt_hints(svc, ["600001", "600002", "600003"])
+        assert len(set(hints)) == 3           # 每股独立
+        assert all(h >= svc._SUB_ID_HINT_BASE for h in hints)   # 高于 cmd 域
+        assert all(h != 2203 for h in hints)
+
+    def test_global_subs_keep_cmd_hint(self):
+        svc = _mk_svc(sub_unique_id=True)
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")}]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        # 全局族 ext 由 setup 队列原样携带（cmd），不受 per-stock 分配器影响
+        assert proto.parse_ext_attrs(
+            proto.parse_incoming(fake.sent[0])["ext"]).get(2) == 2114
+
+    def test_unique_hint_enables_per_stock_unsub(self):
+        """唯一 hint → collision_n=0 → 掉池股可被 402 精准退订（不误退同 cmd 他股）。"""
+        from backend.services.kpl_sub_registry import SubEntry
+        svc = _mk_svc(sub_unique_id=True, unsub_enabled=True)
+        e1 = svc._sub_registry.register(SubEntry(
+            cmd=2203, req=proto.build_hq_req_pb("600001"),
+            ext=bytes([2]) + (0x4000).to_bytes(2, "big"), seq=1,
+            lane="zt_reason", key="600001"))
+        e2 = svc._sub_registry.register(SubEntry(
+            cmd=2203, req=proto.build_hq_req_pb("600002"),
+            ext=bytes([2]) + (0x4001).to_bytes(2, "big"), seq=2,
+            lane="zt_reason", key="600002"))
+        svc._sub_registry.on_ack(1, sub_id=0x4000, topic=b"t1")
+        svc._sub_registry.on_ack(2, sub_id=0x4001, topic=b"t2")
+        assert svc._sub_registry.stats()["sub_id_collision_n"] == 0
+        cands = svc._sub_registry.unsub_candidates("zt_reason", 2203, {"600002"})
+        assert [e.sub_id for e in cands] == [0x4000]   # 600001 掉池 → 只退 e1
+        svc._sub_registry.mark_unsub_sent(cands)
+        assert svc._sub_registry.on_unsub_ack([0x4000]) == 1
+        assert e1.state == "unsubscribed" and e2.state == "acked"   # 他股不受影响
+
+    def test_hint_allocator_base_and_wrap(self):
+        svc = _mk_svc(sub_unique_id=True)
+        assert svc._next_sub_id_hint() == svc._SUB_ID_HINT_BASE
+        svc._sub_id_hint_next = 0x7FFF
+        assert svc._next_sub_id_hint() == 0x7FFF
+        assert svc._sub_id_hint_next == svc._SUB_ID_HINT_BASE   # Short 正域回绕
+
+
 class TestUnsub402:
     """P2：402/pkg 0x50 退订（flag 门控默认关）。"""
 

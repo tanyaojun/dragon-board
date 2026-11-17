@@ -1,6 +1,6 @@
 # KPL 订阅注册表化 + 211 批量订阅重构方案（2026-11-17）
 
-> 状态：**P0-P4 全部实施，探针全部开火裁决（2026-11-17，全 mock 413 passed）**。
+> 状态：**P0-P4 全部实施，探针全部开火裁决（2026-11-17，全 mock 418 passed）**。
 > 211：有条件受理、仅 hqDaban 族可批、收益不抵风控面 → 保持 direct 不启用；
 > 402：语义钉死（ack=28B 状态块，subIds 按 seq 取原请求），flag 仍默认关——
 > per-stock 共享 subId 误退阻塞（§12），需唯一 subId/topic 退订设计+探针后启用；
@@ -288,8 +288,8 @@ App 保活红线不动。每探针独立会话，间隔 ≥180s。
 | `backend/serve_kpl_socket.py` | env KPL_SUB_REGISTRY（默认开）/KPL_SUB_BATCH（direct\|211，非法值 fail-fast）/KPL_SUB_BATCH_CODEC（0\|1）/KPL_SUB_BATCH_MAX_ITEMS（10）/KPL_SUB_BATCH_ACK_TIMEOUT（10s）/KPL_UNSUB_ENABLED（默认关） |
 | 测试 | 新 `test_kpl_sub_registry.py`（25）；`test_kpl_socket_protocol.py` +17（SubReqs/UnsubIdReq/ext/kind5/kind1/ext_raw）；`test_kpl_collector_service.py` 旧 2 个 _resub_cache 用例改注册表语义 + 新增 P1/P2/P3 集成用例（ack 捕获/批信封字节/批 ack 展开/逐项 ack/超时熔断/ErrResp 熔断/codec1/inline 保持 direct/会话级 211/退订 diff+防抖+ack） |
 
-**验证（全 mock，零真实连接）**：KPL 九文件专项 **413 passed**；
-`backend/services/__tests__ + tests/api` **573 passed**；`tests/hotlist`
+**验证（全 mock，零真实连接）**：KPL 九文件专项 **418 passed**；
+`backend/services/__tests__ + tests/api` **578 passed**；`tests/hotlist`
 **1582 passed, 6 skipped**。direct 模式会话帧序旧用例逐字节断言全过
 （test_full_session_emits_auth_and_quotes 等）= 订阅帧形态零变更实证。
 
@@ -388,7 +388,7 @@ zd_stat/market_overview/plate_strength 致「推送恒 0」假象——已修脚
 **证据工件**：tmp/kplprobe_r3/r4_*（帧转储/事件/摘要）分析完毕已按 AGENTS
 临时产物纪律逐个删除；结论固化 §1.3/§7.1.1 与 README §3.5/§六/§9.5。
 
-**开火后代码修正（同轮落地，413/573/1582 passed）**：
+**开火后代码修正（同轮落地，418/578/1582 passed）**：
 - 402 ack subIds 按 seq 从 `_unsub_seq_ids` 原请求映射回填（App qn0.d/q 同款）；
   payload 可解时兼容旧路径；双源皆空 → `unsub_ack_unmatched_n` fail-visible。
 - **ka_mode 默认 610→off**（collector + serve `KPL_KA_MODE`）：P4 3/3 确定性裁决。
@@ -407,19 +407,50 @@ zd_stat/market_overview/plate_strength 致「推送恒 0」假象——已修脚
   （确定误退）。加「仅退唯一 subId」护栏则 per-stock 全被跳过 → 启用=空操作。
 - P3' 探针只验证单订阅全局通道（2114，subId 唯一），未覆盖多股同 cmd。
 
-**正确路径（待用户裁决 + 开火批准）**：
-1. per-stock 改**唯一 subId hint**（每股一个，App 对齐）使 ack attr2 回填唯一 id；
-   **或**改 `UnsubReq{topics}`（Base.java 另有此消息，按 topic 退，per-stock topic
-   天然唯一 `hqStock|…/2203-1/<stock>`）——两条均需先验证服务端多股语义。
-2. 确认探针：多股同 cmd 订阅 → 退一股 → 差分验证其余继续。
-3. 验证后再启用 KPL_UNSUB_ENABLED。
+**裁决（2026-11-17 用户「唯一 subId hint」）——已实现，待探针裁决服务端语义**：
 
-在此之前 flag 维持默认关；402 代码作为 flag 门控实验能力提交（休眠，不影响生产）。
+选定方向 1（唯一 subId hint），代码已落地（flag 门控默认关）：
+
+- collector `_stock_sub_ext(cmd)`：per-stock ext attr2 在 `KPL_SUB_UNIQUE_ID=1` 时
+  用会话内单调递增 hint（`_SUB_ID_HINT_BASE=0x4000`，高于 cmd 域 <0x1000，避免与
+  全局族 subId=cmd 撞；`_next_sub_id_hint` 分配，Short 正域 0x7FFF 回绕，_session
+  复位）；默认关沿用 cmd（App w30 同款，向后兼容）。**仅改 ext hint，帧头 cmd 与
+  req{stockId} 不变** → 推送按 topic（attr3）路由不受影响（待探针证实）。
+- 五处 per-stock ext 构造点统一走 helper：zt/theme/detail drain + detail/zt-theme
+  inline flush。全局族（setup 队列）ext 原样携带 cmd，不受分配器影响。
+- serve `KPL_SUB_UNIQUE_ID`（默认 0）接线 + status `sub_unique_id` 观测。
+- M3 冲突护栏仍在：唯一 hint 生效后 `sub_id_collision_n→0`，`unsub_candidates`
+  返回掉池股 → 402 精准退单股；若服务端**忽略 hint 仍授 cmd**（collision  persist），
+  护栏使退订安全空操作（fail-safe，不误退）。
+- mock 测试 TestSubUniqueId（5 用例）：默认 off=cmd / 唯一 hint 每股独立且 ≥base /
+  全局族保持 cmd / 唯一 hint 下 collision=0 且退单股不误退他股 / 分配器 base+回绕。
+
+**关键未知（探针裁决）**：U6 只证服务端回声 `hint=cmd`；**自定义唯一 hint 是否被
+回声/受理未知**。探针变体 `uid`（sub_unique_id=1）/ `uidcmd`（对照 hint=cmd）：
+direct 订 2114 保活 + 3 股 per-stock 2203（000001/000002/600000，生产 _stock_sub_ext
+路径），25s 后按 key 只退 000002（生产 _drain_unsub）。裁决点：
+1. `entries.sub_id`：uid 变体是否回声 0x4000+ 唯一值（vs uidcmd 全 2203）；
+   `registry.sub_id_collision_n` uid 应=0。
+2. 推送交付：uid 变体 zt_reasons 推送是否仍按 topic 正常到达（stock_push_timeline）。
+3. 402 差分：退 000002 后其推送停 / 000001+600000 继续 + kind5 ack removed=1。
+若服务端忽略 hint（sub_id 仍=cmd）→ 唯一 hint 方案不成立，转方向 2（UnsubReq{topics}）。
+
+**开火预登记（待用户批准）**：变体 uid,uidcmd（2 会话），观察窗 90s/会话，冷却 ≥180s；
+新增帧/会话 = 1（2114）+ 3（per-stock 2203）+ 1（402，仅 uid）= ≤5 ≤12；402 首射 1 帧
+（当日累计 ≤2）；211 帧 0。开火前 :8002 stop，完毕 start。验证通过后启用
+`KPL_SUB_UNIQUE_ID=1` + `KPL_UNSUB_ENABLED=1`（需重启进程）。
+
+在此之前两 flag 维持默认关；402/唯一 hint 代码作为 flag 门控能力提交（休眠，不影响生产）。
+
+**验证（全 mock）**：TestSubUniqueId 5 用例 + 全套件 KPL 九文件 **418 passed** /
+`backend/services/__tests__ + tests/api` **578 passed** / `tests/hotlist` **1582 passed,
+6 skipped**；serve `KPL_SUB_UNIQUE_ID` 默认 0、非法值不引入（bool flag）。默认生产路径
+（direct + 注册表观测 + ka off + 402/211/唯一 hint 全关）行为零变更。
 
 ## 13. 独立 code review 修复（2026-11-17，reviewer fresh-context 只读审查）
 
 裁决 **OK with notes，无 blocker**；4 major + 8 minor + 3 nit 全部同批修复
-（修复后 KPL 九文件 413 / services+api 573 / hotlist 1582 passed）：
+（修复后 KPL 九文件 418 / services+api 578 / hotlist 1582 passed）：
 
 - **M1 heartbeat 接线**：kind1（pkg 0x10）帧无 cmd 键，`_dispatch` 首行加
   heartbeat skip+`heartbeat_n` 计数；260/610 auth 等待窗 `fr["cmd"]`→`fr.get("cmd")`

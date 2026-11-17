@@ -81,7 +81,8 @@ _STOCK_DETAIL_SUBS = os.environ.get("KPL_STOCK_DETAIL_SUBS", "0").strip().lower(
 # KPL_SUB_BATCH=direct|211 → 订阅帧形态；默认 direct（现状逐字节），211 需探针
 #   U1-U8 钉死 + 用户批准后灰度；会话级熔断自动回退单帧。
 # KPL_SUB_BATCH_CODEC=0|1 → 211 item.data 明文/GCM（U2 实弹定案：必须 GCM，默认 1）。
-# KPL_UNSUB_ENABLED=1 → 402/pkg 0x50 退订（探针 P3 钉死前默认关）。
+# KPL_UNSUB_ENABLED=1 → 402/pkg 0x50 退订（需先 KPL_SUB_UNIQUE_ID=1 使 per-stock
+#   subId 唯一，否则冲突护栏使 per-stock 退订为安全空操作；方案 §12）。
 # KPL_KA_MODE=610|off → 保活模式（P4 A/B 实弹裁决 2026-11-17：610 重发第 5 次
 #   →1106 确定性杀连（3/3 中位 67s）；off 3/3 零错误 >120s 且更贴 App（每连接
 #   仅认证一次）→ 默认 off；回退置 610。生产短命双因素：610 重发第 5 次→1106
@@ -99,6 +100,10 @@ _UNSUB_ENABLED = os.environ.get("KPL_UNSUB_ENABLED", "0").strip().lower() in (
 _KA_MODE = os.environ.get("KPL_KA_MODE", "off").strip().lower()
 if _KA_MODE not in ("610", "off"):
     raise RuntimeError(f"KPL_KA_MODE 非法值 {_KA_MODE!r}（仅支持 610|off）")
+# KPL_SUB_UNIQUE_ID=1 → per-stock 订阅 ext attr2 用会话内唯一 subId hint（base 0x4000）
+#   而非 cmd，使服务端授予每股独立 subId → 402 精准退单股（方案 §12，探针裁决后启用）。
+_SUB_UNIQUE_ID = os.environ.get("KPL_SUB_UNIQUE_ID", "0").strip().lower() in (
+    "1", "true", "on", "yes")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
 _LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
@@ -145,7 +150,8 @@ _service = KplCollectorService(
     sub_batch_max_items=int(os.environ.get("KPL_SUB_BATCH_MAX_ITEMS", "10") or 10),
     sub_batch_ack_timeout_s=float(os.environ.get("KPL_SUB_BATCH_ACK_TIMEOUT", "10") or 10),
     unsub_enabled=_UNSUB_ENABLED,
-    ka_mode=_KA_MODE)
+    ka_mode=_KA_MODE,
+    sub_unique_id=_SUB_UNIQUE_ID)
 
 
 def _get_service() -> KplCollectorService:
