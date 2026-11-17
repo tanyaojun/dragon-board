@@ -208,9 +208,11 @@ class TestSessionStateMachine:
         assert fake.sent[5][7:9] == (3001).to_bytes(2, "big")
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
         from backend.services import kpl_daban_protocol as daban
-        # 已发 16 帧（2 tick×8）：7 个 21xx cmd + 前 9 页 2103；队列剩余 33 页
+        # 已发 16 帧（2 tick×8）：pid8 竞价池 7 页最前（2026-11-17 订阅爆发时序
+        # 修复：priority 前插，首迭代即发，服务端初始页推送提前到会话 ~5-15s）+
+        # 7 个 21xx cmd + pid0 前 2 页；队列剩余 33 页
         sent_cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
-        assert sent_cmds == [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 9
+        assert sent_cmds == [2103] * 7 + [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 2
         # 队列余量：body=0xAA+req → pidType=f1、index=f4、count=f5=30（从 (0,60) 续起）
         pages = [(daban.pb_first(daban.parse_pb_f32(it["req"]), 1, -1),
                   daban.pb_first(daban.parse_pb_f32(it["req"]), 4, -1),
@@ -1156,8 +1158,10 @@ class TestTradingHoursGate:
 
     def test_session_boundaries(self, svc):
         f = svc._in_trading_session
-        assert not f(self._ts(hour=9, min=14))       # 竞价前
-        assert f(self._ts(hour=9, min=15))           # 集合竞价开始
+        assert not f(self._ts(hour=8, min=59))       # 开市前
+        assert f(self._ts(hour=9, min=0))            # 09:00 建连（2026-11-17 裁决：
+        # 交易门禁 09:15→09:00，竞价池订阅留 15min 预热，首帧基线覆盖 09:15:00 竞价起点）
+        assert f(self._ts(hour=9, min=14))           # 竞价预热段
         assert f(self._ts(hour=11, min=29))
         assert not f(self._ts(hour=11, min=30))      # 午间休市
         assert not f(self._ts(hour=12, min=59))

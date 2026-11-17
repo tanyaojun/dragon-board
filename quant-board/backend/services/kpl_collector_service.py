@@ -1181,7 +1181,10 @@ class KplCollectorService:
     def _in_trading_session(self, ts: Optional[float] = None) -> bool:
         """A 股交易时段判断（2026-11-11 交易时段门控）。
 
-        窗口：09:15（含集合竞价）-11:30、13:00-15:35（下午收盘 15:30——交易所规则
+        窗口：09:00-11:30、13:00-15:35（2026-11-17 用户裁决 09:15→09:00：序列
+        首帧基线须覆盖 09:15:00 竞价起点——09:15 建连+订阅爆发时序使首 tick 恒晚
+        ~1min，涨停开盘股拉升段被跳过（11-17 对拍 first比 2-3.5× 实证）；09:00
+        建连给竞价池订阅留 15min 预热；下午收盘 15:30——交易所规则
         调整，用户口径 2026-11-11；收盘后 5min 缓冲收尾盘推送）。
         周末不采集；法定节假日不识别（节假日会空转重连——与旧行为一致，不倒退；
         如需节假日静默由上层手动 stop）。ts 参数仅供测试注入（UTC epoch）。
@@ -1192,7 +1195,7 @@ class KplCollectorService:
         if dt.weekday() >= 5:   # 周六/周日
             return False
         hm = dt.hour * 60 + dt.minute
-        return (9 * 60 + 15 <= hm < 11 * 60 + 30) or (13 * 60 <= hm < 15 * 60 + 35)
+        return (9 * 60 <= hm < 11 * 60 + 30) or (13 * 60 <= hm < 15 * 60 + 35)
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
@@ -1202,7 +1205,7 @@ class KplCollectorService:
                 if self._status != "idle_offhours":
                     self._status = "idle_offhours"
                     self._emit(KplEvent(type="status", ts=time.time(), status="idle_offhours",
-                                        note="非交易时段，采集挂起（不建连；09:15/13:00 自动恢复）"))
+                                        note="非交易时段，采集挂起（不建连；09:00/13:00 自动恢复）"))
                 if self._stop.wait(60.0):
                     break
                 continue
@@ -1487,7 +1490,17 @@ class KplCollectorService:
                         self._pending_setup_frames.append({
                             "cmd": daban.CMD_DABAN_STOCK_LIST, "req": req_pb,
                             "ext": bytes([0x02]) + struct.pack(">H", daban.CMD_DABAN_STOCK_LIST),
+                            # 2026-11-17 订阅爆发时序修复：竞价池（pid=8）页前插。
+                            # 根因：原排序在情绪帧之后（setup 队列第 9-15 位），
+                            # drain 速率 8 帧/迭代×4 队列×0.3s 拟人停顿 → 订阅帧
+                            # 落地会话 ~15-40s，服务端初始页推送（仅订阅后到达）
+                            # 实测 ~40-50s，与 ~50s 会话寿限贴线 → 序列首 tick
+                            # 恒晚（11-17 实证 09:15:57）。前插后首迭代即发
+                            # （~2-5s），每个短命会话都收到竞价池初始爆发。
+                            "priority": pid == 8,
                         })
+                # 稳定前插：pid=8 页保持页序移至 setup 队列最前（其余帧序不变）
+                self._pending_setup_frames.sort(key=lambda f: not f.get("priority"))
             # 6e) 2112 会不会上龙虎榜预测订阅（2026-10-29 逆向）：0x40 通道同 daban 家族，
             #     ForecastLHBReq 基线 count=30/sortType=1/quotaType=0（LhbWillStockModel.k(2112)）；
             #     开关独立于 daban_subs（与打板/情绪订阅解耦）
@@ -1921,12 +1934,14 @@ class KplCollectorService:
                 if int(data.get("pid_type", 0) or 0) == 8 and new_items:
                     # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集）。
                     # 推送即落库（单写者先例）；采集线程内 ≥5s 节流（≥300 tick/窗），
-                    # 窗门控双层：此处 09:10-09:35 粗门（防空窗段白调），归档函数再细门
+                    # 窗门控双层：此处 09:15-09:27 粗门（09:15=集合竞价起点，09:00
+                    # 门禁后盘前会话爆发会推昨日终态页——防陈旧态入档污染 first
+                    # 基线；09:27=冻结+2min，防连续竞价 regime），归档函数再细门
                     # （fail-visible）；失败不阻断收流（fail-visible 进 corpus_persist_stats）。
                     try:
                         now_dt = datetime.datetime.now()
                         hm = now_dt.hour * 60 + now_dt.minute
-                        if not (9 * 60 + 10 <= hm < 9 * 60 + 27):
+                        if not (9 * 60 + 15 <= hm < 9 * 60 + 27):
                             pass   # 窗外：静默跳过（归档层亦门控，不计数不告警）
                         elif time.time() - self._bid_series_last_ts < 5.0:
                             self._corpus_persist_stats["bid_series_throttled"] += 1

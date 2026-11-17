@@ -44,15 +44,20 @@ def _tick(ts, items):
     return {"ts": ts, "it": items}
 
 
+import datetime as _dt
+_TZ = _dt.timezone(_dt.timedelta(hours=8))
+_BASE = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
+
+
 def _doc():
     return {"_id": "2026-11-17", "ticks": [
-        _tick(1000.0, [{"s": "605255", "bidding_pct": 4.0, "bidding_amount": 1.0e6,
+        _tick(_BASE + 0, [{"s": "605255", "bidding_pct": 4.0, "bidding_amount": 1.0e6,
                         "bidding_turnover": 0.1, "zt_buy_amount": 7.0e6},
                        {"s": "600000", "bidding_pct": 2.0, "bidding_amount": 5.0e5,
                         "bidding_turnover": 0.05, "zt_buy_amount": None}]),
-        _tick(1010.0, [{"s": "605255", "bidding_pct": 4.5, "bidding_amount": 1.2e6,
+        _tick(_BASE + 10, [{"s": "605255", "bidding_pct": 4.5, "bidding_amount": 1.2e6,
                         "bidding_turnover": 0.12, "zt_buy_amount": 9.0e6}]),
-        _tick(1020.0, [{"s": "605255", "bidding_pct": 4.78, "bidding_amount": 1.3979616e7,
+        _tick(_BASE + 20, [{"s": "605255", "bidding_pct": 4.78, "bidding_amount": 1.3979616e7,
                         "bidding_turnover": 0.15, "zt_buy_amount": 8.98e6}]),
     ]}
 
@@ -169,6 +174,24 @@ def test_derive_filters_late_ticks():
     r = rows["605255"]
     assert r["last_amount"] == 8980000.0, "末帧必须是 09:16:20 tick，非 09:32 开盘后污染帧"
     assert r["jj_percent"] == 4.78
+
+
+def test_derive_filters_early_ticks():
+    """早 tick 防御：09:15 前盘前陈旧态（09:00 门禁后会话爆发推昨日终态页）
+    不进派生，计数留痕（防污染 first 基线）。"""
+    import datetime as dt
+    TZ = dt.timezone(dt.timedelta(hours=8))
+    doc = _doc()
+    early = dict(doc["ticks"][0])
+    early["ts"] = dt.datetime(2026, 11, 17, 9, 11, 30, tzinfo=TZ).timestamp()
+    early["it"] = [{"s": "605255", "bidding_pct": -5.0, "bidding_amount": 1.0,
+                    "bidding_turnover": 0.0, "zt_buy_amount": 999.0e6}]
+    doc["ticks"].insert(0, early)
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(doc, _mbl_rows()), "2026-11-17")
+    assert state["state"] == "ok" and state["earlyTicksFiltered"] == 1
+    r = rows["605255"]
+    assert r["first_amount"] == 7.0e6, "首帧必须是 09:16:00 竞价帧，非 09:11 盘前陈旧帧"
 
 
 def test_historical_equivalence_1113():

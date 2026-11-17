@@ -58,19 +58,25 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
     if not sdoc:
         return {}, {**state, "reason": "no_series_archive"}
     all_ticks = sdoc.get("ticks") or []
-    # 迟到 tick 防御（2026-11-17 对拍教训）：09:27 后为冻结后/连续竞价 regime，
-    # 混入会污染「末帧=竞价冻结值」口径（当日实证：09:32 tick 使 selectedN 1→0）；
-    # 旧档已含迟到 tick 时在此过滤（lateTicksFiltered 计数，不静默）。
+    # tick 时效窗防御 [09:15, 09:27)（2026-11-17 双教训，档内已污染时保护重导出）：
+    # ① 早于 09:15 = 盘前陈旧态（09:00 交易门禁后会话爆发推昨日终态页，污染
+    #   first 基线）；② 晚于 09:27 = 冻结后/连续竞价 regime（09:32 tick 使
+    #   selectedN 1→0 实证，污染 last 口径）。early/lateTicksFiltered 计数留痕。
     from datetime import datetime, timedelta, timezone as _tz
     _CST = _tz(timedelta(hours=8))
-    _CUT = 9 * 3600 + 27 * 60
-    ticks = []
+    _LO, _CUT = 9 * 3600 + 15 * 60, 9 * 3600 + 27 * 60
+    ticks, n_early, n_late = [], 0, 0
     for t in all_ticks:
         ts = t.get("ts")
         if not isinstance(ts, (int, float)):
             continue
         dt = datetime.fromtimestamp(ts, _CST)
-        if dt.hour * 3600 + dt.minute * 60 + dt.second < _CUT:
+        hm = dt.hour * 3600 + dt.minute * 60 + dt.second
+        if hm < _LO:
+            n_early += 1
+        elif hm >= _CUT:
+            n_late += 1
+        else:
             ticks.append(t)
     facts = derive_stock_series_facts(ticks)
     # bk_name 板块 join（同日 MBL raw col11）：缺 bk_name → 桥接失败 → mappedN=0
@@ -109,7 +115,7 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         return {}, {**state, "reason": "no_ztbuy_visible"}
     out = {**state, "state": "ok", "n_rows": len(rows),
            "tickN": len(ticks),
-           "lateTicksFiltered": len(all_ticks) - len(ticks),
+           "earlyTicksFiltered": n_early, "lateTicksFiltered": n_late,
            "plateJoinedN": plate_hit}
     if plate_source_error:
         out["plateSourceError"] = plate_source_error
