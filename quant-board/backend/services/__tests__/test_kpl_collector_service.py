@@ -143,9 +143,11 @@ def _quotes_payload() -> bytes:
 
 @pytest.fixture
 def svc() -> KplCollectorService:
+    # daban_list_pages=7：保留旧页数做页循环数学的显式覆盖（P1 默认已收敛 1 页）
     return KplCollectorService(
         FakeCodec(), device_id="test-dev", user_id="0", token="",
         stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+        daban_list_pages=7,
     )
 
 
@@ -169,7 +171,7 @@ class TestSessionStateMachine:
         svc = KplCollectorService(
             FakeCodec(), device_id="test-dev", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
-            loop_send_grace_s=1000,
+            loop_send_grace_s=1000, daban_list_pages=7,
         )
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
@@ -560,7 +562,7 @@ class TestForecastLHB2112:
         svc = KplCollectorService(
             FakeCodec(), device_id="test-dev", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
-            daban_subs=False, daban_lhb=True,
+            daban_subs=False, daban_lhb=True, daban_list_pages=7,
         )
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
@@ -612,6 +614,7 @@ class TestRealtimeLHB3004:
             FakeCodec(), device_id="test-dev", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
             daban_subs=False, lhb_realtime=True, lhb_realtime_count=120,
+            daban_list_pages=7,
         )
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
@@ -660,7 +663,7 @@ class TestLhbSnapshots:
         svc = KplCollectorService(
             FakeCodec(), device_id="d", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
-            daban_subs=False, daban_lhb=True, lhb_realtime=True,
+            daban_subs=False, daban_lhb=True, lhb_realtime=True, daban_list_pages=7,
         )
         fc = svc.get_lhb_forecast()
         rl = svc.get_lhb_realtime()
@@ -1169,19 +1172,19 @@ class TestStagedSubs:
         fake = FakeSocket(self._auth_responses())
         svc._tls_connect = lambda: fake   # monkeypatch 不必需（直接属性赋值）
         svc._session()                    # 响应耗尽后服务器关连 → 正常 return
-        # wave1：7 globals + pid8 的 7 页（默认 pids 含 8）
-        assert len(svc._pending_setup_frames) == 14
+        # wave1：7 globals + pid8 的 1 页（P1 收敛默认 pages=1）
+        assert len(svc._pending_setup_frames) == 8
         assert all(f["cmd"] != daban.CMD_DABAN_STOCK_LIST or f.get("priority")
                    for f in svc._pending_setup_frames)
         assert len(svc._staged_waves) == 2
         w2, w3 = svc._staged_waves
-        assert w2["kind"] == "pages" and len(w2["frames"]) == 35   # 5 非竞价 pid × 7 页
+        assert w2["kind"] == "pages" and len(w2["frames"]) == 5    # 5 非竞价 pid × 1 页
         assert w3["kind"] == "perstock"
         assert w3["pool"] == ["000001", "000002"] and w3["remaining"] == 2
         assert w3["zt"] is True and w3["theme"] is True
         assert len(svc._pending_zt_reason) == 0 and len(svc._pending_theme) == 0
         st = svc.status()
-        assert st["sub_staged"] is True and st["staged_pending_n"] == 37
+        assert st["sub_staged"] is True and st["staged_pending_n"] == 7
         assert st["staged_pool_cursor"] == 0
 
     def test_release_funnel_and_pages(self):
@@ -1195,9 +1198,9 @@ class TestStagedSubs:
         # +46s：pages(@15) 与漏斗首批(@45) 均到点（1 id → zt/theme 各 1）
         svc._release_staged_waves(svc._staged_t0 + 46)
         assert svc._staged_waves == []   # 漏斗 remaining=1 → 首批即轮完 cycle_done
-        assert len(svc._pending_setup_frames) == 14 + 35
+        assert len(svc._pending_setup_frames) == 8 + 5
         assert len(svc._pending_zt_reason) == 1 and len(svc._pending_theme) == 1
-        assert svc._stats["staged_released_n"] == 37
+        assert svc._stats["staged_released_n"] == 7
         assert svc._stats["staged_funnel_batches"] == 1
         releases = [e for e in svc._history if e.get("type") == "staged_release"]
         assert len(releases) == 2 and {e["kind"] for e in releases} == {"pages", "perstock"}
@@ -2198,7 +2201,7 @@ class TestSubBatch211:
         assert svc._stats["batch_frames_sent"] == 2
 
     def test_batch_ack_expansion_then_item_ack(self):
-        svc = _mk_svc(sub_batch_mode="211")
+        svc = _mk_svc(sub_batch_mode="211", daban_list_pages=7)
         svc._pending_setup_frames = [
             {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")},
             {"cmd": 2116, "req": b"", "ext": bytes.fromhex("020844")}]
@@ -2248,7 +2251,7 @@ class TestSubBatch211:
         assert fr["cmd"] == 2116   # 不再是 211 信封
 
     def test_errresp_with_unacked_batch_fallback(self):
-        svc = _mk_svc(sub_batch_mode="211")
+        svc = _mk_svc(sub_batch_mode="211", daban_list_pages=7)
         svc._pending_setup_frames = [
             {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")}]
         svc._drain_setup_subs(FakeSocket([]), _seq_gen())
@@ -2290,7 +2293,7 @@ class TestSubBatch211:
             _echo(6, 3001, 0x01, _quotes_payload()),
             _push(3001, b"hqList|1:20030/3001-0/", _quotes_payload()),
         ]
-        svc = _mk_svc(sub_batch_mode="211")
+        svc = _mk_svc(sub_batch_mode="211", daban_list_pages=7)
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
@@ -2395,7 +2398,7 @@ class TestSubBatch211:
     def test_opaque_batch_ack_no_fallback(self):
         """m8/U5：28B 不透明批 ack（本服务端真实形态）→ expanded=0、不熔断、
         逐项 ack 仍匹配。"""
-        svc = _mk_svc(sub_batch_mode="211")
+        svc = _mk_svc(sub_batch_mode="211", daban_list_pages=7)
         svc._pending_setup_frames = [
             {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")},
             {"cmd": 2116, "req": b"", "ext": bytes.fromhex("020844")}]

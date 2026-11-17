@@ -265,7 +265,10 @@ class KplCollectorService:
         daban_market_type: int = 1,
         daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1, 2, 3),
         daban_list_page_size: int = 30,
-        daban_list_pages: int = 7,
+        # P1 收敛（2026-11-17 用户裁决「按股票代码落库」）：默认 1 页/池——归档层
+        # 本就按 stock_id 并集落库（全日成员覆盖），涨停时间倒序下进池瞬间必在页首，
+        # 1 页即可捕获全部进池成员；同刻池深度快照无消费者。回滚 KPL_DABAN_LIST_PAGES=7。
+        daban_list_pages: int = 1,
         daban_lhb: bool = False,
         lhb_realtime: bool = False,
         lhb_realtime_count: int = 120,
