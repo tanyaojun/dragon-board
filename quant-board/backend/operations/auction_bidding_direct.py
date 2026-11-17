@@ -14,7 +14,7 @@
 17 列语义（已对齐 ↔ socket pid=8 具名字段；未对齐列保留原名 colN 不猜）：
   0 code / 1 name / 2 price / 3 pct(实时涨幅) / 4 zt_buy_amount(委买额) /
   5 bidding_pct(竞价涨幅) / 6 bidding_net(竞价净额) / 7 bidding_turnover(竞价换手) /
-  8 bidding_amount(竞价成交额) / 9 col9(未破译) / 10 col10(未破译) /
+  8 bidding_amount(竞价成交额) / 9 col9(未破译,09:20后累计量) / 10 col10(col8近似重复) /
   11 plate(板块) / 12 circulated_value(流通市值) / 13 col13(未破译) /
   14 col14(未破译) / 15 col15(未破译) / 16 state(连板态「首板/4连板」)
 
@@ -157,7 +157,7 @@ def load_morning_bidding_raw(db: Any, date: str) -> dict[str, dict] | None:
         return None
     return doc.get("rows") or {}
 
-# ══════ 窗内多帧采集（2026-11-16 col9 假设验证：col9 疑似 09:20 撤后余额）══════
+# ══════ 窗内多帧采集（2026-11-17 col9 判约定案：主假设证伪，09:20 后累计量）══════
 # 频控预算（红线 9）：仅竞价窗 09:15-09:26 内、随 archiver 60s 轮询每轮一帧；
 # 帧数硬上限 ≤15/日（≈窗内 11 轮 + 余量），每帧 2 POST（100/页翻页），走 _post_form
 # ≥2s 全局锁；窗外/非交易日静默跳过（fail-visible 进返回态）。
@@ -172,10 +172,10 @@ def _in_mbl_window(now: Any) -> bool:
 
 
 def collect_mbl_frame_series(db: Any, date: str, now: Any = None) -> dict[str, Any]:
-    """窗内一帧 MBL（raw 数组态）追加进 kpl_mbl_series（col9 时变行为验证用）。
+    """窗内一帧 MBL（raw 数组态）追加进 kpl_mbl_series（时变行为观测档）。
 
-    col4/col8/col9/col10 为冻结态字段（已证），窗内各帧差异即其时变轨迹；
-    若 col9 在 09:20 后不再变化而 col4 变到 09:25，则 col9=09:20 撤后余额定案。
+    2026-11-17 六帧判约定案：col9 主假设（09:20 撤后余额）证伪——09:20 前恒 0、09:20:18 起从零单调累计（002685: 0→93M→187M→205M→216M），为 09:20 参照的累计量非余额，语义未破译保 colN 原名（§7.7）；col4≈socket zt_buy_amount（多只精确相等锚定）；col10≈col8 非严格重复（帧间时点采样差）。
+    通道保留供后续语义勘察。
     """
     from datetime import datetime as _dt
     now = now or _dt.now()
