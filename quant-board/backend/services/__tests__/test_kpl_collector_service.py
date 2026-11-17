@@ -19,6 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from backend.services import kpl_daban_protocol as daban  # noqa: E402
 from backend.services import kpl_socket_protocol as proto  # noqa: E402
 from backend.services.kpl_collector_service import (  # noqa: E402
     AntiCheatError,
@@ -1134,6 +1135,91 @@ class TestThemeHeat2013:
         assert sock.sent[1][0] == proto.PKG_ROUTE
 
 
+class TestStagedSubs:
+    """分波订阅（2026-11-17 iso1 体积阈值定案，KPL_SUB_STAGED 默认关）：
+    wave1=critical（globals+pid8 页），wave2(+45s)=非竞价页/lhb，
+    wave3(+90s)=per-stock 池 ids；+150s failsafe；会话死亡波次作废重建。"""
+
+    def _svc(self, **kw) -> KplCollectorService:
+        return KplCollectorService(
+            FakeCodec(), device_id="t", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            sub_staged=True, zt_reason_subs=True, theme_subs=True, **kw)
+
+    def _auth_responses(self):
+        auth = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        return [_make_260(),
+                _echo(1, 610, 0x11, auth),
+                _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+                _echo(3, 2301, 0x09, vr),
+                _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+                _echo(5, 2304, 0x01, b"\xaa\x08\x00")]
+
+    def test_staged_requires_drain_architecture(self):
+        with pytest.raises(ValueError):
+            self._svc(setup_inline_subs=True)
+
+    def test_wave1_composition_and_wave_contents(self):
+        """wave1 仅 globals(7)+pid8 页(7)；非竞价页(35)入 wave2；池 ids 入 wave3；
+        zt/theme 队列起始为空（爆发体积 ~20 帧远低于阈值）。"""
+        svc = self._svc()
+        svc._daban_lists = {1: {0: {"items": [{"stock_id": "000001"},
+                                              {"stock_id": "000002"}]}}}
+        fake = FakeSocket(self._auth_responses())
+        svc._tls_connect = lambda: fake   # monkeypatch 不必需（直接属性赋值）
+        svc._session()                    # 响应耗尽后服务器关连 → 正常 return
+        # wave1：7 globals + pid8 的 7 页（默认 pids 含 8）
+        assert len(svc._pending_setup_frames) == 14
+        assert all(f["cmd"] != daban.CMD_DABAN_STOCK_LIST or f.get("priority")
+                   for f in svc._pending_setup_frames)
+        assert len(svc._staged_waves) == 2
+        w2, w3 = svc._staged_waves
+        assert w2["kind"] == "pages" and len(w2["frames"]) == 35   # 5 非竞价 pid × 7 页
+        assert w3["kind"] == "perstock"
+        assert w3["ids_zt"] == ["000001", "000002"] and w3["ids_theme"] == ["000001", "000002"]
+        assert len(svc._pending_zt_reason) == 0 and len(svc._pending_theme) == 0
+        st = svc.status()
+        assert st["sub_staged"] is True and st["staged_pending_n"] == 39
+
+    def test_release_failsafe_and_counters(self):
+        svc = self._svc()
+        svc._daban_lists = {1: {0: {"items": [{"stock_id": "000001"}]}}}
+        svc._tls_connect = lambda: FakeSocket(self._auth_responses())
+        svc._session()
+        # 未到点：不释放
+        svc._release_staged_waves(svc._staged_t0 + 10)
+        assert len(svc._staged_waves) == 2
+        # 过 failsafe（+150s）：全部释放
+        svc._release_staged_waves(svc._staged_t0 + 200)
+        assert svc._staged_waves == []
+        assert len(svc._pending_setup_frames) == 14 + 35
+        assert len(svc._pending_zt_reason) == 1 and len(svc._pending_theme) == 1
+        assert svc._stats["staged_released_n"] == 37
+        releases = [e for e in svc._history if e.get("type") == "staged_release"]
+        assert len(releases) == 2 and releases[0]["kind"] == "pages"
+
+    def test_staged_waves_dropped_on_new_session(self):
+        svc = self._svc()
+        svc._staged_waves = [{"release_at": 0, "failsafe_at": 1, "kind": "pages",
+                              "frames": [{}, {}], "ids_zt": ["x"],
+                              "ids_theme": None, "ids_detail": None}]
+        svc._tls_connect = lambda: FakeSocket([])   # 立即关连 → 260 前死亡
+        with pytest.raises(proto.FrameDecodeError):
+            svc._session()
+        assert svc._staged_waves == []
+        assert svc._stats["staged_dropped_n"] == 3
+
+    def test_staged_off_zero_change(self):
+        """默认关：全量入队（现有字节级会话用例已证帧序不变），无 staged 状态。"""
+        svc = KplCollectorService(FakeCodec(), device_id="t", user_id="0", token="",
+                                  stock_ids=["801044"], host="127.0.0.1", port=1,
+                                  human_delay=False, daban_list_pages=7)
+        assert svc._sub_staged is False
+        assert svc._staged_waves == []
+        assert svc.status()["sub_staged"] is False
+
+
 class TestDeathCause:
     """死因分类观测（2026-11-17 纯观测，零行为变更）：爆发指纹 RST(10054) vs
     ErrResp 杀连(1106/1002/2008) vs 干净 EOF；隔离探针与螺旋判据重标定底座。"""
@@ -1182,8 +1268,10 @@ class TestDeathCause:
 
     def test_run_loop_server_reject_single_backoff(self, svc, monkeypatch):
         """_run_loop 记录死因+发 session_death 事件；单次服务端拒绝（rst_10054）走
-        死因感知退避（§14）：base 3s + 螺旋 streak=1 → backoff=4.0（与原 <60s 螺旋同值）。"""
+        App 忠实退避（§15）：梯[0]=0 + server_extra 3s → backoff=3.0（jitter 受控）。"""
+        import backend.services.kpl_collector_service as mod
         monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
+        monkeypatch.setattr(mod.random, "uniform", lambda a, b: 0.0)
 
         def _rst_session():
             raise ConnectionResetError(10054, "burst fingerprint RST")
@@ -1204,21 +1292,22 @@ class TestDeathCause:
         assert svc.status()["last_death_cause"] == "rst_10054"
         deaths = [e for e in svc._history if e.get("type") == "session_death"]
         assert deaths and deaths[-1]["cause"] == "rst_10054"
-        # 死因感知退避（§14）：rst_10054=服务端拒绝 → base 3s + 螺旋 streak=1 → 4.0
-        assert svc._short_session_streak == 1
-        assert svc._server_reject_streak == 1
-        assert waits == [4.0]
+        # App 忠实退避（§15）：rst_10054=服务端主动断开 → 梯[0]0 + 3s = 3.0
+        assert svc._retry_fail_count == 1
+        assert svc._server_disconnect_count == 1
+        assert waits == [3.0]
 
 
-class TestCauseAwareBackoff:
-    """§14 死因感知退避（App ReconnectManager 对齐）：服务端拒绝 base3s+螺旋+连续>3→60s；
-    干净瞬态健康长会话→快 retry 1s；短命非干净/未知→原 <60s 螺旋兜底（fail-safe）。全 mock。"""
+class TestAppRetryBackoff:
+    """§15 App ReconnectManager 忠实移植：梯{0,1,2,4,8,15,30}s±20% + 服务端主动断开
+    +3s（从未 auth 且断连计数>3→+60s）；健康长会话>=60s 归零（PC 适配）。jitter 受控全 mock。"""
 
-    def _run_sessions(self, svc, monkeypatch, sessions):
+    def _run_sessions(self, svc, monkeypatch, sessions, jitter=lambda a, b: 0.0):
         """sessions: [(duration_s, exc|None, err_code|None, streaming)]。假钟控制会话时长，
-        逐会话跑 _run_loop，记录每次退避 wait。末会话后 _stop.set() 退出。"""
+        jitter 默认 0（确定性）；逐会话跑 _run_loop 记录退避 wait，末会话后 _stop.set()。"""
         import backend.services.kpl_collector_service as mod
         monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
+        monkeypatch.setattr(mod.random, "uniform", jitter)
         clock = [1000.0]
         monkeypatch.setattr(mod.time, "time", lambda: clock[0])
         idx = [0]
@@ -1252,45 +1341,59 @@ class TestCauseAwareBackoff:
         rst = lambda: ConnectionResetError(10054, "burst RST")
         waits = self._run_sessions(svc, monkeypatch,
                                    [(0.5, rst(), None, False) for _ in range(4)])
-        # App r(): base3s+螺旋 4/8/16；第4次服务端拒绝 streak>3 → 降级 60s（a.d）
-        assert waits == [4.0, 8.0, 16.0, 60.0]
-        assert svc._server_reject_streak == 4
-        assert svc._short_session_streak == 4
+        # App 梯[0..3]=0/1/2/4 + server_extra 3s；第4次 sd_count>3 且未 streaming → +60s
+        assert waits == [3.0, 4.0, 5.0, 64.0]
+        assert svc._server_disconnect_count == 4
+        assert svc._retry_fail_count == 4
 
     def test_errresp_kill_is_server_reject(self, svc, monkeypatch):
         waits = self._run_sessions(svc, monkeypatch, [(0.5, None, 1106, True)])
         assert svc._last_death_cause == "errresp_1106"
-        assert svc._server_reject_streak == 1
-        assert waits == [4.0]
+        assert svc._server_disconnect_count == 1
+        assert waits == [3.0]                 # 梯[0]0 + 3s（streaming=True 不降 60）
         assert svc.status()["last_backoff_cause"] == "errresp_1106"
 
     def test_healthy_clean_eof_fast_retry(self, svc, monkeypatch):
         waits = self._run_sessions(svc, monkeypatch, [(75.0, None, None, True)])
         assert svc._last_death_cause == "eof_clean"
-        assert waits == [1.0]                 # App v(0) 干净轮换快 retry
-        assert svc._short_session_streak == 0
-        assert svc._server_reject_streak == 0
+        assert waits == [0.0]                 # App v(0) 干净轮换首 retry ~0s
+        assert svc._retry_fail_count == 1
+        assert svc._server_disconnect_count == 0
 
     def test_healthy_network_transient_fast_retry(self, svc, monkeypatch):
         waits = self._run_sessions(svc, monkeypatch, [(80.0, TimeoutError(), None, False)])
         assert svc._last_death_cause == "timeout"
-        assert waits == [1.0]
+        assert waits == [0.0]
 
-    def test_short_clean_eof_still_spirals_failsafe(self, svc, monkeypatch):
-        # 短命干净 EOF（<60s）不享快 retry → 原螺旋兜底（不弱化防护）
-        waits = self._run_sessions(svc, monkeypatch, [(30.0, None, None, True)])
-        assert svc._last_death_cause == "eof_clean"
-        assert waits == [4.0]
-        assert svc._short_session_streak == 1
+    def test_consecutive_clean_failures_escalate_ladder(self, svc, monkeypatch):
+        # 连续短命干净 EOF（非服务端拒绝）→ App 梯随 fail_count 递增（0/1/2/4）
+        waits = self._run_sessions(svc, monkeypatch,
+                                   [(30.0, None, None, True) for _ in range(4)])
+        assert waits == [0.0, 1.0, 2.0, 4.0]
+        assert svc._retry_fail_count == 4
+        assert svc._server_disconnect_count == 0
 
-    def test_healthy_session_resets_server_reject_streak(self, svc, monkeypatch):
+    def test_healthy_session_resets_counters(self, svc, monkeypatch):
         rst = lambda: ConnectionResetError(10054, "RST")
         waits = self._run_sessions(
             svc, monkeypatch,
             [(0.5, rst(), None, False), (0.5, rst(), None, False), (75.0, None, None, True)])
-        assert waits == [4.0, 8.0, 1.0]
-        assert svc._server_reject_streak == 0   # App u() resetFailCount：健康长会话归零
-        assert svc._short_session_streak == 0
+        assert waits == [3.0, 4.0, 0.0]
+        assert svc._server_disconnect_count == 0   # App u()/j()：健康长会话归零
+        assert svc._retry_fail_count == 1
+
+    def test_signsvc_floor_preserved(self, svc, monkeypatch):
+        # signsvc 故障 5s 地板保留（本地服务恢复需时）；App 梯[0]0 不抵消地板
+        waits = self._run_sessions(svc, monkeypatch, [(0.5, SignSvcError("boom"), None, False)])
+        assert svc._last_death_cause == "signsvc"
+        assert waits == [5.0]
+
+    def test_ladder_jitter_upper_bound(self, svc, monkeypatch):
+        # jitter 取上界 +20%：第2次干净失败 base=1s → 1.2s（App v() ±20%）
+        waits = self._run_sessions(svc, monkeypatch,
+                                   [(30.0, None, None, True), (30.0, None, None, True)],
+                                   jitter=lambda a, b: b)
+        assert waits == [0.3, 1.2]            # base0→uniform(0,0.3)上界0.3；base1→1*1.2
 
 
 class TestTradingHoursGate:

@@ -307,9 +307,12 @@ class KplCollectorService:
         unsub_enabled: bool = False,
         ka_mode: str = "off",
         sub_unique_id: bool = False,
+        sub_staged: bool = False,
     ):
         if ka_mode not in ("610", "off"):
             raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off）")
+        if sub_staged and setup_inline_subs:
+            raise ValueError("sub_staged 与 setup_inline_subs 不兼容（分波依赖读循环 drain 架构）")
         self._codec = codec
         self._host = host
         self._port = port
@@ -334,16 +337,24 @@ class KplCollectorService:
         self._setup_inline_subs = bool(setup_inline_subs)
         self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
         self._DETAIL_BLOCK_MAX_STOCKS = self._stock_detail_max_stocks
-        self._short_session_streak = 0   # 重连螺旋防线：连续短命会话连击数（<60s 计连击）
-        # 死因感知退避（2026-11-17 App ReconnectManager 对齐，§14）：服务端拒绝类
-        # （rst_10054/errresp_*）连续连击 >3 → 降级 60s（App r()/a.d）；健康长会话归零。
-        self._server_reject_streak = 0
+        self._retry_fail_count = 0        # App ReconnectManager.c：重连失败计数（退避梯索引）
+        # App 忠实移植（§15）：服务端主动断连计数（SocketRepository.b）+ 上次时刻
+        # （>10min 衰减）；健康长会话归零（App u()/j()，PC 适配判据 >=60s）。
+        self._server_disconnect_count = 0
+        self._last_server_disconnect_ts = 0.0
         # 死因分类观测：区分爆发指纹 RST(10054) / ErrResp 杀连(1106/1002/2008) /
         # 干净 EOF / 网络/auth/反作弊失败，供隔离探针与退避决策（README §3.4）。
         self._last_death_cause = ""
         self._death_cause_counts: Dict[str, int] = {}
         self._session_err_code: Optional[int] = None   # 本会话最近 ErrResp code（每会话复位）
         self._session_streaming = False                # 本会话是否进入收流（setup 早退判别）
+        # 分波订阅（2026-11-17 iso1 探针体积阈值定案，KPL_SUB_STAGED 默认关）：
+        # 订阅爆发 rst_10054 是**总体积阈值**触发（S3 全面 ~129 帧出 rst ~48s 与生产
+        # 同款；S1 55/S2 87 帧稳定）——非盘中专属。分波把初始爆发压到 ~20 帧
+        # （wave1=critical），wave2/3 错峰补齐；会话死亡未释放波次随会话作废重建。
+        self._sub_staged = bool(sub_staged)
+        self._staged_waves: List[Dict[str, Any]] = []
+        self._staged_t0 = 0.0
         self._enforce_trading_hours = bool(enforce_trading_hours)
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
@@ -738,6 +749,19 @@ class KplCollectorService:
     # 限量+帧间拟人停顿对齐 setup 订阅链已验证安全节奏（0.3+U(0,0.15)s/帧）；余量
     # 回队头由下一收流 tick 续发（保活/读流不被长时间阻塞）。
     _DRAIN_TICK_FRAMES = 8
+
+    # App ReconnectManager 忠实移植（§15，替换 §14 拍脑袋 2·2^n/<60s/120s）：
+    # 退避梯 j={0,1,2,4,8,15,30}s（App j 数组，末项 WorkRequest.DEFAULT_BACKOFF_DELAY=30000），
+    # ±20% 抖动（App v()）；服务端主动断开 base 3s、从未 auth 且断连计数>3 → 60s
+    # （App r()/a.d）；服务端断连计数 >10min 间隔衰减（App SocketRepository.i）。
+    _APP_RETRY_LADDER_S = (0.0, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
+    _APP_RETRY_JITTER = 0.2
+    _APP_SERVER_REJECT_BASE_S = 3.0
+    _APP_SERVER_REJECT_DEGRADE_S = 60.0
+    _APP_SERVER_DISCONNECT_DECAY_S = 600.0
+    # PC 适配：App auth-success≈健康长会话（故归零）；PC auth 后仍 ~60s 被杀，
+    # 归零判据用健康长会话 >=60s（仅 auth 归零会致每次快重连螺旋）。
+    _APP_HEALTHY_SESSION_S = 60.0
 
     # 211 可批白名单（U1 实弹：仅 hqDaban 全局族受理；2103 列表页/2203/2013/
     # detail per-stock 批内逐项拒 2000+无 topic。仅 2114/2115/2116 经探针验证，
@@ -1224,6 +1248,13 @@ class KplCollectorService:
             "unsub_pending_n": len(self._pending_unsub),
             "ka_mode": self._ka_mode,
             "sub_unique_id": self._sub_unique_id,
+            # 分波订阅观测（2026-11-17 iso1 体积阈值定案；KPL_SUB_STAGED 默认关）
+            "sub_staged": self._sub_staged,
+            "staged_pending_n": sum(len(w.get("frames") or []) for w in self._staged_waves)
+                                + sum(len(w.get("ids_zt") or []) + len(w.get("ids_theme") or [])
+                                      + len(w.get("ids_detail") or []) for w in self._staged_waves),
+            "staged_released_n": self._stats.get("staged_released_n", 0),
+            "staged_dropped_n": self._stats.get("staged_dropped_n", 0),
             # 订阅构成观测（2026-11-11 行业页签空态排查）：hy=881 行业板块数，
             # 页面引导/补引导是否落地一眼可核（fail-visible，不藏状态）
             "subscriptions": {
@@ -1246,9 +1277,9 @@ class KplCollectorService:
             "loop_send_grace_s": self._loop_send_grace_s,
             # 重连螺旋防线观测（2026-11-10）：连续短命会话退避秒数 + 当前连击数
             "reconnect_backoff_s": self._stats.get("reconnect_backoff_s"),
-            "short_session_streak": self._short_session_streak,
-            # 死因感知退避观测（§14）：服务端拒绝连击 + 本次退避决策依据死因
-            "server_reject_streak": self._server_reject_streak,
+            "retry_fail_count": self._retry_fail_count,
+            # App 忠实移植观测（§15）：服务端断连计数 + 本次退避决策依据死因
+            "server_disconnect_count": self._server_disconnect_count,
             "last_backoff_cause": self._stats.get("last_backoff_cause"),
             # 死因分类观测：爆发指纹 RST(10054) vs ErrResp 杀连 vs 干净 EOF；退避决策底座
             "last_death_cause": self._last_death_cause,
@@ -1456,7 +1487,7 @@ class KplCollectorService:
             self._session_no += 1
             self._stats["sessions"] += 1
             t_session = time.time()
-            backoff = 2.0
+            backoff = 0.0   # App 梯从 0 起（§15）；signsvc/anticheat 下方设 5s 地板
             death_exc: Optional[BaseException] = None   # 死因观测：捕获会话异常（不改退避）
             try:
                 self._session()
@@ -1491,34 +1522,42 @@ class KplCollectorService:
                                     session_s=self._stats["last_session_s"],
                                     err_code=self._session_err_code,
                                     sock_dead=self._sock_dead))
-            # 死因感知退避（2026-11-17 App ReconnectManager 对齐，§14）：
-            # ① 服务端拒绝类（rst_10054/errresp_*）→ App r() base 3s + 螺旋；连续 >3
-            #    降级 60s（App a.d=60000「服务端连续拒绝」）。严格不弱化原防护。
-            # ② 干净/瞬态类（eof_clean/timeout/network/abort）且健康长会话(>=60s)→
-            #    App v(0) 干净轮换快 retry（PC 保守 1s）。
-            # ③ 其余（短命非干净/本地故障/未知）→ 保留原 <60s 螺旋兜底（fail-safe）。
-            # 实证底座：冷却 3min 后单会话 6s→67.6s；不退避风控打标停 ~50s 平台期。
+            # App ReconnectManager 忠实移植（§15，替换 §14 拍脑袋 2·2^n/<60s/120s）：
+            # backoff = 梯[min(fail,6)]±20% + server_extra；fail++；健康长会话(>=60s)归零。
+            # server_extra：服务端主动断开(rst_10054/errresp_*) +3s；从未 auth(未 streaming)
+            #   且服务端断连计数>3 → +60s（App r()/a.d）。干净/网络 → 仅梯（首 retry ~0s）。
+            # PC 适配：App auth-success 归零（App auth≈健康）；PC auth 后仍 60s 被杀，故
+            #   归零用健康长会话>=60s；「从未 auth」用 per-session _session_streaming。
+            # 实证底座：冷却 3min 后单会话 6s→67.6s。App 梯封顶 30s(+3s=33s) < 旧 120s，
+            #   首 retry ~0s < 旧 2s——对 PC 不可信指纹防护可能偏弱，须探针验证后加载生产。
             cause = self._last_death_cause
-            healthy = self._stats["last_session_s"] >= 60.0
-            if self._is_server_reject(cause):
-                self._server_reject_streak += 1
-            elif healthy:
-                self._server_reject_streak = 0   # App u() resetFailCount：健康长会话证明恢复
-            if self._is_server_reject(cause):
-                self._short_session_streak += 1
-                backoff = max(backoff, 3.0,
-                              min(2.0 * (2 ** min(self._short_session_streak, 6)), 120.0))
-                if self._server_reject_streak > 3:
-                    backoff = max(backoff, 60.0)   # App 服务端连续拒绝降级 60000ms
-            elif self._is_clean_transient(cause) and healthy:
-                self._short_session_streak = 0
-                backoff = min(backoff, 1.0)        # App v(0) 干净轮换快 retry
-            elif self._stats["last_session_s"] < 60.0:
-                self._short_session_streak += 1
-                backoff = max(backoff, min(2.0 * (2 ** min(self._short_session_streak, 6)), 120.0))
+            healthy = self._stats["last_session_s"] >= self._APP_HEALTHY_SESSION_S
+            if healthy:
+                # App u()/j() resetFailCount：健康长会话证明恢复（PC 适配判据）
+                self._retry_fail_count = 0
+                self._server_disconnect_count = 0
+            server_active = self._is_server_reject(cause)
+            now = time.time()
+            if server_active:
+                if now - self._last_server_disconnect_ts > self._APP_SERVER_DISCONNECT_DECAY_S:
+                    self._server_disconnect_count = 0   # App i()：>10min 间隔衰减
+                self._server_disconnect_count += 1      # App i()：服务端断连计数
+                self._last_server_disconnect_ts = now
+            base = self._APP_RETRY_LADDER_S[
+                min(self._retry_fail_count, len(self._APP_RETRY_LADDER_S) - 1)]
+            if base > 0:
+                jittered = base * (1.0 + random.uniform(-self._APP_RETRY_JITTER,
+                                                        self._APP_RETRY_JITTER))
             else:
-                self._short_session_streak = 0
-            self._stats["reconnect_backoff_s"] = backoff
+                jittered = random.uniform(0.0, 0.3)     # App v()：j3==0 → nextInt(301)ms
+            server_extra = 0.0
+            if server_active:
+                server_extra = self._APP_SERVER_REJECT_BASE_S
+                if not self._session_streaming and self._server_disconnect_count > 3:
+                    server_extra = self._APP_SERVER_REJECT_DEGRADE_S
+            backoff = max(jittered + server_extra, backoff)   # backoff=signsvc/anticheat 5s 地板或 0
+            self._retry_fail_count += 1                       # App v()：c++
+            self._stats["reconnect_backoff_s"] = round(backoff, 3)
             self._stats["last_backoff_cause"] = cause
             if self._stop.is_set():
                 break
@@ -1555,6 +1594,14 @@ class KplCollectorService:
         self._sock_dead = False  # 新会话新 socket：drain 失败门禁复位
         self._session_err_code = None   # 死因观测：本会话 ErrResp code 复位
         self._session_streaming = False  # 死因观测：收流标志复位
+        # 分波订阅：上会话未释放波次随会话作废（下会话重建；fail-visible 计数）
+        if self._staged_waves:
+            dropped = sum(len(w.get("frames") or []) for w in self._staged_waves)
+            dropped += sum(len(w.get("ids_zt") or []) + len(w.get("ids_theme") or [])
+                           + len(w.get("ids_detail") or []) for w in self._staged_waves)
+            self._stats["staged_dropped_n"] = self._stats.get("staged_dropped_n", 0) + dropped
+        self._staged_waves = []
+        self._staged_t0 = time.time()
         self._pending_setup_frames = []   # 新会话重建订阅面：上会话残留待发帧作废
         self._sub_registry.clear_session()   # App qn0.f：断线清空注册表（c/d/e）
         self._batch_broken = False   # 熔断会话级复位（新会话重新尝试 211，若 flag 开）
@@ -1749,6 +1796,8 @@ class KplCollectorService:
                 self._sub_registry.register(SubEntry(
                     cmd=proto.CMD_HQ_ID_LIST, req=hq, ext=ext6, seq=hq_seq,
                     lane="setup", key=",".join(chunk), sent_at=time.time()))
+            # 分波订阅（KPL_SUB_STAGED=1）：wave2 收集非竞价 2103 页 + lhb 帧
+            staged_wave2_frames: List[Dict[str, Any]] = []
             # 6c) 打板/情绪订阅（service_hq_daban.proto，2026-10-27 逆向）：
             #     2114/2115/2118/2119/2116/2126/2120/2121 发 QxMarketEnergyReq{type}；2116/2126 空 Req；
             #     2120/2121 发 QxZtSituationStockReq{bsType}。逐 cmd 一帧，同 0x40 通道与 ext 路由头。
@@ -1781,7 +1830,7 @@ class KplCollectorService:
                         req_pb = daban.build_daban_stock_list_req_pb(
                             pid, index=page * self._daban_list_page_size,
                             count=self._daban_list_page_size)
-                        self._pending_setup_frames.append({
+                        frame = {
                             "cmd": daban.CMD_DABAN_STOCK_LIST, "req": req_pb,
                             "ext": bytes([0x02]) + struct.pack(">H", daban.CMD_DABAN_STOCK_LIST),
                             # 2026-11-17 订阅爆发时序修复：竞价池（pid=8）页前插。
@@ -1792,17 +1841,26 @@ class KplCollectorService:
                             # 恒晚（11-17 实证 09:15:57）。前插后首迭代即发
                             # （~2-5s），每个短命会话都收到竞价池初始爆发。
                             "priority": pid == 8,
-                        })
-                # 稳定前插：pid=8 页保持页序移至 setup 队列最前（其余帧序不变）
-                self._pending_setup_frames.sort(key=lambda f: not f.get("priority"))
+                        }
+                        if self._sub_staged and pid != 8:
+                            staged_wave2_frames.append(frame)   # 分波：非竞价页入 wave2(+45s)
+                        else:
+                            self._pending_setup_frames.append(frame)
+                if not self._sub_staged:
+                    # 稳定前插：pid=8 页保持页序移至 setup 队列最前（其余帧序不变）
+                    self._pending_setup_frames.sort(key=lambda f: not f.get("priority"))
             # 6e) 2112 会不会上龙虎榜预测订阅（2026-10-29 逆向）：0x40 通道同 daban 家族，
             #     ForecastLHBReq 基线 count=30/sortType=1/quotaType=0（LhbWillStockModel.k(2112)）；
             #     开关独立于 daban_subs（与打板/情绪订阅解耦）
             if self._daban_lhb:
-                self._pending_setup_frames.append({
+                lhb_frame = {
                     "cmd": daban.CMD_FORECAST_LHB, "req": daban.build_forecast_lhb_req_pb(),
                     "ext": bytes([0x02]) + struct.pack(">H", daban.CMD_FORECAST_LHB),
-                })
+                }
+                if self._sub_staged:
+                    staged_wave2_frames.append(lhb_frame)   # 分波：lhb 非关键延后
+                else:
+                    self._pending_setup_frames.append(lhb_frame)
             # 6f) 3004 RealtimeLHB 订阅 + 3101 当日区间单发（ServiceHqList 族，同 0x40 通道
             #     ext 路由头；Req 基线见 kpl_lhb_protocol.REALTIME_LHB_BASELINE，App 原 UI
             #     count=1，采集放宽 30；3101 无区间实测零应答（2026-10-29 开火），改带
@@ -1815,10 +1873,22 @@ class KplCollectorService:
                                  count=self._lhb_realtime_count,
                                  start_time=925, end_time=int(time.strftime("%H%M"))))]
                 for lhb_cmd, req_rl in reqs_lhb:
-                    self._pending_setup_frames.append({
+                    lhb_frame = {
                         "cmd": lhb_cmd, "req": req_rl,
                         "ext": bytes([0x02]) + struct.pack(">H", lhb_cmd),
-                    })
+                    }
+                    if self._sub_staged:
+                        staged_wave2_frames.append(lhb_frame)   # 分波：lhb 非关键延后
+                    else:
+                        self._pending_setup_frames.append(lhb_frame)
+            if self._sub_staged:
+                # wave2（+45s）：非竞价 2103 页 + lhb 帧（iso1：S1 55 帧级别稳定）
+                self._staged_waves.append({
+                    "release_at": self._staged_t0 + self._STAGED_WAVE2_S,
+                    "failsafe_at": self._staged_t0 + self._STAGED_FAILSAFE_S,
+                    "kind": "pages", "frames": staged_wave2_frames,
+                    "ids_zt": None, "ids_theme": None, "ids_detail": None,
+                })
             # 6g-pre) 2026-11-10 探针实锤：0x40 帧只许在 setup 窗口内发送，内联模式下
             # daban 家族先发（池数据+页面优先于语料订阅），再 2203/2013
             if self._setup_inline_subs and self._pending_setup_frames:
@@ -1832,18 +1902,21 @@ class KplCollectorService:
             # 已订阅集合再全量补订；页帧到达后的新增成员由 _dispatch 自动入队，drain 在收流循环内
             # 2026-11-10 补充：setup_inline_subs=True 时 2203/2013 改为 setup 窗口内内联发送
             # （探针实锤：窗口关闭后任何 0x40 帧→ErrResp 1002 断连），循环期仅限新入队不发送。
+            pool_ids = self._pool_stock_ids()
             if self._zt_reason_subs:
                 with self._zt_reason_lock:
                     self._zt_reason_subscribed.clear()
                     self._pending_zt_reason.clear()
-                self._queue_zt_reason_new(self._pool_stock_ids())
+                if not self._sub_staged:
+                    self._queue_zt_reason_new(pool_ids)   # staged: 池 ids 入 wave3(+90s)
                 if self._setup_inline_subs:
                     self._flush_pending_inline(sock, next_seq, "zt_reason")
             if self._theme_subs:
                 with self._theme_lock:
                     self._theme_subscribed.clear()
                     self._pending_theme.clear()
-                self._queue_theme_new(self._pool_stock_ids())
+                if not self._sub_staged:
+                    self._queue_theme_new(pool_ids)   # staged: 池 ids 入 wave3(+90s)
                 if self._setup_inline_subs:
                     self._flush_pending_inline(sock, next_seq, "theme")
             # 6h) 个股详情四通道（2026-11-11 ④，默认关）：每会话重建订阅（同 2203/2013
@@ -1853,11 +1926,21 @@ class KplCollectorService:
                     with self._detail_locks[lane]:
                         self._detail_subscribed[lane].clear()
                         self._pending_detail[lane].clear()
-                self._queue_detail_new(self._pool_stock_ids())
+                self._queue_detail_new(pool_ids) if not self._sub_staged else None   # staged: wave3
                 if self._setup_inline_subs:
                     # 2026-11-11 评审 major-2：inline 模式下详情订阅同 2203/2013
                     # 改 setup 窗口内内联发送（否则 6h 只入队、循环期永久静默）
                     self._flush_pending_inline(sock, next_seq, "detail")
+            if self._sub_staged:
+                # wave3（+90s）：per-stock 2203/2013/detail 池 ids（iso1：S2 87 帧级别稳定）
+                self._staged_waves.append({
+                    "release_at": self._staged_t0 + self._STAGED_WAVE3_S,
+                    "failsafe_at": self._staged_t0 + self._STAGED_FAILSAFE_S,
+                    "kind": "perstock", "frames": [],
+                    "ids_zt": list(pool_ids) if self._zt_reason_subs else None,
+                    "ids_theme": list(pool_ids) if self._theme_subs else None,
+                    "ids_detail": list(pool_ids) if self._stock_detail_subs else None,
+                })
             # setup 打点在 6g（2203/2013 订阅入队）之后：口径=「连接到内联订阅链
             # （3001/3006）全部完成」；daban 家族已重排为读循环续发，不占此口径
             # （实弹口径见 _drain_setup_subs 注释）
@@ -1959,6 +2042,8 @@ class KplCollectorService:
                 # 贴线竞争（13:10 生产 79.8s 会话才落地）；提前后块尾 ~25-30s，flush
                 # 批回落在会话中段。代价：本 tick 内 zt/theme/setup 延后一个块长（
                 # 与原顺序下块在会话中段 stall 同量级，无新增风控面）。
+                # 分波订阅到点释放（KPL_SUB_STAGED=1；iso1 体积阈值定案，+150s failsafe）
+                self._release_staged_waves(now)
                 self._drain_detail_subs(sock, next_seq)
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)
@@ -2165,6 +2250,44 @@ class KplCollectorService:
                 if e.sub_id not in self._pending_unsub:
                     self._pending_unsub.append(e.sub_id)
             self._sub_registry.mark_unsub_sent(cands)
+
+    # 分波订阅波次参数（2026-11-17 iso1 探针体积阈值定案；KPL_SUB_STAGED 默认关）
+    _STAGED_WAVE2_S = 45.0      # wave2：非竞价 2103 页 + lhb 帧（S1 55 帧级别稳定）
+    _STAGED_WAVE3_S = 90.0      # wave3：per-stock 2203/2013/detail 池 ids（S2 87 帧级别稳定）
+    _STAGED_FAILSAFE_S = 150.0  # 到点强制清空剩余波次（防漏，fail-visible）
+
+    def _release_staged_waves(self, now: float) -> None:
+        """分波订阅到点释放（KPL_SUB_STAGED=1 时读循环每 tick 调用）。
+
+        iso1 探针定案：订阅爆发 rst_10054 是**总体积阈值**触发——S3 全面
+        （2103 页+per-stock+globals+行情宇宙）出 rst（~48s，与生产同款），
+        S1(55)/S2(87) 稳定。分波把初始爆发压到 ~20 帧（wave1=critical），
+        wave2/3 错峰补齐，+150s failsafe 强制清空防漏。会话死亡未释放波次
+        随会话作废（下会话重建，staged_dropped_n fail-visible）。"""
+        if not self._staged_waves:
+            return
+        released = 0
+        for wave in list(self._staged_waves):
+            if now < wave["release_at"] and now < wave["failsafe_at"]:
+                continue
+            frames = wave.get("frames") or []
+            if frames:
+                self._pending_setup_frames.extend(frames)
+            ids_n = 0
+            for key, fn in (("ids_zt", self._queue_zt_reason_new),
+                            ("ids_theme", self._queue_theme_new),
+                            ("ids_detail", self._queue_detail_new)):
+                ids = wave.get(key) or []
+                if ids:
+                    fn(ids)
+                    ids_n += len(ids)
+            self._staged_waves.remove(wave)
+            released += len(frames) + ids_n
+            self._emit(KplEvent(type="staged_release", ts=time.time(),
+                                kind=wave.get("kind"), frames=len(frames), ids=ids_n,
+                                at_s=round(now - self._staged_t0, 1)))
+        if released:
+            self._stats["staged_released_n"] = self._stats.get("staged_released_n", 0) + released
 
     def _drain_unsub(self, sock: Any, next_seq: Any) -> None:
         """发送 402/pkg 0x50 UnsubIdReq 退订帧（≤1 帧/tick，防抖 ≥5s）。

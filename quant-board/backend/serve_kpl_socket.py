@@ -88,6 +88,9 @@ _STOCK_DETAIL_SUBS = os.environ.get("KPL_STOCK_DETAIL_SUBS", "0").strip().lower(
 #   仅认证一次）→ 默认 off；回退置 610。生产短命双因素：610 重发第 5 次→1106
 #   （最小订阅面受控实验）+ 全订阅面爆发指纹→10054（主导，方案 §7.1.1）。
 _SUB_REGISTRY = _env_flag("KPL_SUB_REGISTRY")
+# 分波订阅（2026-11-17 iso1 体积阈值定案：初始爆发 rst_10054 阈值触发，非盘中专属；
+# wave1=critical ~20 帧，wave2/3 (+45s/+90s) 错峰补齐，+150s failsafe）
+_SUB_STAGED = _env_flag("KPL_SUB_STAGED")
 _SUB_BATCH_MODE = os.environ.get("KPL_SUB_BATCH", "direct").strip().lower()
 if _SUB_BATCH_MODE not in ("direct", "211"):
     raise RuntimeError(f"KPL_SUB_BATCH 非法值 {_SUB_BATCH_MODE!r}（仅支持 direct|211）")
@@ -151,7 +154,8 @@ _service = KplCollectorService(
     sub_batch_ack_timeout_s=float(os.environ.get("KPL_SUB_BATCH_ACK_TIMEOUT", "10") or 10),
     unsub_enabled=_UNSUB_ENABLED,
     ka_mode=_KA_MODE,
-    sub_unique_id=_SUB_UNIQUE_ID)
+    sub_unique_id=_SUB_UNIQUE_ID,
+    sub_staged=_SUB_STAGED)
 
 
 def _get_service() -> KplCollectorService:
