@@ -91,8 +91,9 @@ _SUB_REGISTRY = _env_flag("KPL_SUB_REGISTRY")
 # 分波订阅（2026-11-17 iso1 体积阈值定案：初始爆发 rst_10054 阈值触发，非盘中专属；
 # wave1=critical ~20 帧，wave2/3 (+45s/+90s) 错峰补齐，+150s failsafe）
 _SUB_STAGED = _env_flag("KPL_SUB_STAGED")
-# 2103 每池页数（P1 收敛默认 1 页/池；回滚=KPL_DABAN_LIST_PAGES=7）
-_DABAN_LIST_PAGES = int(os.environ.get("KPL_DABAN_LIST_PAGES", "1"))
+# 2103 竞价池（pid=8）页数：竞价链 universe 依赖页深，默认保持 7；非竞价池
+# 恒 1 页（P1 收敛，README §3.6）。回滚口=本 env（仅作用于 pid=8）。
+_DABAN_LIST_PAGES = int(os.environ.get("KPL_DABAN_LIST_PAGES", "7"))
 _SUB_BATCH_MODE = os.environ.get("KPL_SUB_BATCH", "direct").strip().lower()
 if _SUB_BATCH_MODE not in ("direct", "211"):
     raise RuntimeError(f"KPL_SUB_BATCH 非法值 {_SUB_BATCH_MODE!r}（仅支持 direct|211）")

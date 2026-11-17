@@ -265,10 +265,15 @@ class KplCollectorService:
         daban_market_type: int = 1,
         daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1, 2, 3),
         daban_list_page_size: int = 30,
-        # P1 收敛（2026-11-17 用户裁决「按股票代码落库」）：默认 1 页/池——归档层
+        # P1 收敛（2026-11-17 用户裁决「按股票代码落库」）：非竞价池 1 页/池——归档层
         # 本就按 stock_id 并集落库（全日成员覆盖），涨停时间倒序下进池瞬间必在页首，
-        # 1 页即可捕获全部进池成员；同刻池深度快照无消费者。回滚 KPL_DABAN_LIST_PAGES=7。
-        daban_list_pages: int = 1,
+        # 1 页即可捕获全部进池成员；同刻池深度快照无消费者。
+        # **例外 pid=8 竞价池保持 _daban_list_pages 页（默认 7）**：竞价池非「进池即
+        # 页首」成员表（按委买类排序，小委买股恒沉尾部），且竞价链 universe
+        # （派生源/序列 n≈78-114）直接依赖其页深——1 页会把 universe 砍到 ≤30
+        # （§7.12 宇宙漂移恶化）。11-18 实测后若竞页面深可降（委买额排序头部
+        # 覆盖足够）再收敛。回滚 KPL_DABAN_LIST_PAGES。
+        daban_list_pages: int = 7,
         daban_lhb: bool = False,
         lhb_realtime: bool = False,
         lhb_realtime_count: int = 120,
@@ -1827,7 +1832,9 @@ class KplCollectorService:
                 # 6d) 2103 打板个股列表订阅：每页签按 index 偏移逐页一帧（推送页固定 30 行，
                 #     count=200 实测无效——见 __init__ 注释）；Resp.pidType+index 回带区分页归属
                 for pid in self._daban_list_pids:
-                    for page in range(self._daban_list_pages):
+                    # P1 例外（见 __init__ 注）：仅 pid=8 竞价池保页深，其余池 1 页
+                    n_pages = self._daban_list_pages if pid == 8 else 1
+                    for page in range(n_pages):
                         req_pb = daban.build_daban_stock_list_req_pb(
                             pid, index=page * self._daban_list_page_size,
                             count=self._daban_list_page_size)

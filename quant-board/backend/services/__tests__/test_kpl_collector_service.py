@@ -178,7 +178,8 @@ class TestSessionStateMachine:
         svc._session()
         # 内联订阅链照发（7 帧）；循环期（会话在宽限期内被服务器关连而结束）零发送
         assert len(fake.sent) == 7
-        assert len(svc._pending_setup_frames) == 49          # daban 队列原封不动
+        assert len(svc._pending_setup_frames) == 19          # 7 globals + pid8 7 页 + 5 池×1 页（P1）
+        # 原 49（全池 7 页）——队列原封不动
         assert "grace_end_pending" not in svc._stats         # 宽限期未结束，无打点
 
     def test_full_session_emits_auth_and_quotes(self, svc, monkeypatch):
@@ -222,12 +223,9 @@ class TestSessionStateMachine:
                   daban.pb_first(daban.parse_pb_f32(it["req"]), 4, -1),
                   daban.pb_first(daban.parse_pb_f32(it["req"]), 5, -1))
                  for it in svc._pending_setup_frames]
-        assert len(pages) == 33
-        assert pages == ([(0, i * 30, 30) for i in range(2, 7)]
-                         + [(6, i * 30, 30) for i in range(7)]
-                         + [(1, i * 30, 30) for i in range(7)]
-                         + [(2, i * 30, 30) for i in range(7)]
-                         + [(3, i * 30, 30) for i in range(7)])
+        assert len(pages) == 3   # 19 - 16（drain 2 tick×8）
+        # P1 收敛：pid8 竞价池保 7 页，其余池 1 页；drain 2 tick×8 后余 3 帧
+        assert pages == [(1, 0, 30), (2, 0, 30), (3, 0, 30)]
         for f, c in zip(fake.sent[7:14], sent_cmds[:7]):
             assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
@@ -1172,13 +1170,13 @@ class TestStagedSubs:
         fake = FakeSocket(self._auth_responses())
         svc._tls_connect = lambda: fake   # monkeypatch 不必需（直接属性赋值）
         svc._session()                    # 响应耗尽后服务器关连 → 正常 return
-        # wave1：7 globals + pid8 的 1 页（P1 收敛默认 pages=1）
-        assert len(svc._pending_setup_frames) == 8
+        # wave1：7 globals + pid8 的 7 页（竞价池例外保页深，universe 依赖）
+        assert len(svc._pending_setup_frames) == 14
         assert all(f["cmd"] != daban.CMD_DABAN_STOCK_LIST or f.get("priority")
                    for f in svc._pending_setup_frames)
         assert len(svc._staged_waves) == 2
         w2, w3 = svc._staged_waves
-        assert w2["kind"] == "pages" and len(w2["frames"]) == 5    # 5 非竞价 pid × 1 页
+        assert w2["kind"] == "pages" and len(w2["frames"]) == 5    # 5 非竞价池 × 1 页（P1）
         assert w3["kind"] == "perstock"
         assert w3["pool"] == ["000001", "000002"] and w3["remaining"] == 2
         assert w3["zt"] is True and w3["theme"] is True
@@ -1198,7 +1196,7 @@ class TestStagedSubs:
         # +46s：pages(@15) 与漏斗首批(@45) 均到点（1 id → zt/theme 各 1）
         svc._release_staged_waves(svc._staged_t0 + 46)
         assert svc._staged_waves == []   # 漏斗 remaining=1 → 首批即轮完 cycle_done
-        assert len(svc._pending_setup_frames) == 8 + 5
+        assert len(svc._pending_setup_frames) == 14 + 5
         assert len(svc._pending_zt_reason) == 1 and len(svc._pending_theme) == 1
         assert svc._stats["staged_released_n"] == 7
         assert svc._stats["staged_funnel_batches"] == 1
@@ -2309,7 +2307,7 @@ class TestSubBatch211:
         assert sum(len(proto.parse_sub_reqs_pb(f[16:])) for f in batch_frames) == 7
         assert len(svc._sub_registry.entries()) == 18   # 16 drain + 内联 3001/3006 各 1
         assert svc._stats["batch_frames_sent"] == 2
-        assert len(svc._pending_setup_frames) == 33    # 49 - 16
+        assert len(svc._pending_setup_frames) == 3     # 19 - 16（P1 面收敛）
 
     def test_default_codec_is_gcm(self):
         """U2 实弹定案（2026-11-17 探针）：明文 item.data → 2008 杀连，默认必须 1。"""
