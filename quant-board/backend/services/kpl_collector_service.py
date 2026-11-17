@@ -335,9 +335,11 @@ class KplCollectorService:
         self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
         self._DETAIL_BLOCK_MAX_STOCKS = self._stock_detail_max_stocks
         self._short_session_streak = 0   # 重连螺旋防线：连续短命会话连击数（<60s 计连击）
-        # 死因分类观测（2026-11-17 纯观测，零行为变更）：区分爆发指纹 RST(10054) /
-        # ErrResp 杀连(1106/1002/2008) / 干净 EOF / 网络/auth/反作弊失败，供隔离探针
-        # 与螺旋判据重标定实证底座；不参与退避计算（README §3.4 爆发指纹议题）。
+        # 死因感知退避（2026-11-17 App ReconnectManager 对齐，§14）：服务端拒绝类
+        # （rst_10054/errresp_*）连续连击 >3 → 降级 60s（App r()/a.d）；健康长会话归零。
+        self._server_reject_streak = 0
+        # 死因分类观测：区分爆发指纹 RST(10054) / ErrResp 杀连(1106/1002/2008) /
+        # 干净 EOF / 网络/auth/反作弊失败，供隔离探针与退避决策（README §3.4）。
         self._last_death_cause = ""
         self._death_cause_counts: Dict[str, int] = {}
         self._session_err_code: Optional[int] = None   # 本会话最近 ErrResp code（每会话复位）
@@ -1245,8 +1247,10 @@ class KplCollectorService:
             # 重连螺旋防线观测（2026-11-10）：连续短命会话退避秒数 + 当前连击数
             "reconnect_backoff_s": self._stats.get("reconnect_backoff_s"),
             "short_session_streak": self._short_session_streak,
-            # 死因分类观测（2026-11-17 纯观测，零行为变更）：爆发指纹 RST(10054) vs
-            # ErrResp 杀连(1106/1002/2008) vs 干净 EOF；隔离探针与螺旋判据重标定底座
+            # 死因感知退避观测（§14）：服务端拒绝连击 + 本次退避决策依据死因
+            "server_reject_streak": self._server_reject_streak,
+            "last_backoff_cause": self._stats.get("last_backoff_cause"),
+            # 死因分类观测：爆发指纹 RST(10054) vs ErrResp 杀连 vs 干净 EOF；退避决策底座
             "last_death_cause": self._last_death_cause,
             "death_cause_counts": dict(self._death_cause_counts),
             "last_session_err_code": self._session_err_code,
@@ -1312,8 +1316,8 @@ class KplCollectorService:
         """会话死因分类（2026-11-17 纯观测，零行为变更）。
 
         区分爆发指纹 RST(10054) / ErrResp 杀连(1106/1002/2008) / 干净 EOF /
-        网络/auth/反作弊失败，供隔离探针（README §3.4 爆发指纹议题）与螺旋判据
-        重标定提供实证底座。**不参与退避计算**——重连时机/阈值仍由 _run_loop 原逻辑决定。
+        网络/auth/反作弊失败，供隔离探针（README §3.4 爆发指纹议题）与**死因感知
+        退避**（§14，App ReconnectManager 对齐）提供实证底座。
 
         判据优先级：异常类型/winerror → 本会话 ErrResp code → drain send 失败门禁 →
         setup 早退 → 干净 EOF。10054=服务器 RST（爆发指纹主导，§7.1.1）；1106/1002=
@@ -1341,6 +1345,19 @@ class KplCollectorService:
         if not self._session_streaming:
             return "setup_fail"
         return "eof_clean"
+
+    @staticmethod
+    def _is_server_reject(cause: str) -> bool:
+        """服务端拒绝类死因（App f6127a==20 「服务器主动断开」）：风控 RST/ErrResp 杀连。
+        这类退避走 App r()：base 3s + 螺旋，连续 >3 降级 60s。"""
+        return cause == "rst_10054" or cause.startswith("errresp_")
+
+    @staticmethod
+    def _is_clean_transient(cause: str) -> bool:
+        """干净/瞬态类死因（App 网络瞬断 v(0) 快 retry）：干净轮换 EOF / 超时 /
+        本地 abort / 其他网络异常。仅健康长会话(>=60s)才享快 retry（短命仍走螺旋兜底）。"""
+        return (cause in ("eof_clean", "timeout", "abort_10053")
+                or cause.startswith("network:"))
 
     def _err(self, msg: str, **extra: Any) -> None:
         self._last_error = msg
@@ -1474,17 +1491,35 @@ class KplCollectorService:
                                     session_s=self._stats["last_session_s"],
                                     err_code=self._session_err_code,
                                     sock_dead=self._sock_dead))
-            # 重连螺旋防线（2026-11-10 根因复盘）：连续短命会话说明设备已被风控打标
-            # 或本端异常，固定 2s 高频重连只会把风险分越拉越高（实弹验证：冷却 3min
-            # 后单会话寿命 6s→67.6s）。阈值 60s（健康 TTL 档 75-160s，<60 均视为
-            # 不健康——生产实测 50s 会话期若不退避，风控打标停在 ~50s 平台期不衰减）。
-            # 指数退避封顶 120s；长命会话归零。
-            if self._stats["last_session_s"] < 60.0:
+            # 死因感知退避（2026-11-17 App ReconnectManager 对齐，§14）：
+            # ① 服务端拒绝类（rst_10054/errresp_*）→ App r() base 3s + 螺旋；连续 >3
+            #    降级 60s（App a.d=60000「服务端连续拒绝」）。严格不弱化原防护。
+            # ② 干净/瞬态类（eof_clean/timeout/network/abort）且健康长会话(>=60s)→
+            #    App v(0) 干净轮换快 retry（PC 保守 1s）。
+            # ③ 其余（短命非干净/本地故障/未知）→ 保留原 <60s 螺旋兜底（fail-safe）。
+            # 实证底座：冷却 3min 后单会话 6s→67.6s；不退避风控打标停 ~50s 平台期。
+            cause = self._last_death_cause
+            healthy = self._stats["last_session_s"] >= 60.0
+            if self._is_server_reject(cause):
+                self._server_reject_streak += 1
+            elif healthy:
+                self._server_reject_streak = 0   # App u() resetFailCount：健康长会话证明恢复
+            if self._is_server_reject(cause):
+                self._short_session_streak += 1
+                backoff = max(backoff, 3.0,
+                              min(2.0 * (2 ** min(self._short_session_streak, 6)), 120.0))
+                if self._server_reject_streak > 3:
+                    backoff = max(backoff, 60.0)   # App 服务端连续拒绝降级 60000ms
+            elif self._is_clean_transient(cause) and healthy:
+                self._short_session_streak = 0
+                backoff = min(backoff, 1.0)        # App v(0) 干净轮换快 retry
+            elif self._stats["last_session_s"] < 60.0:
                 self._short_session_streak += 1
                 backoff = max(backoff, min(2.0 * (2 ** min(self._short_session_streak, 6)), 120.0))
             else:
                 self._short_session_streak = 0
             self._stats["reconnect_backoff_s"] = backoff
+            self._stats["last_backoff_cause"] = cause
             if self._stop.is_set():
                 break
             self._status = "reconnecting"

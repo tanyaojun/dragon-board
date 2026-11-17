@@ -502,3 +502,42 @@ collision=0（r5 证）；聚合计数非 0 不代表 per-stock 退订受阻。M
 **灰度前置硬条件复核**：M2/M3/m1/m2 已修——`KPL_SUB_BATCH=211` 现有白名单+enc 护栏；
 `KPL_UNSUB_ENABLED=1` 现有冲突护栏（per-stock 安全空操作，精准退订待 §12 设计）。
 默认生产路径（direct + 注册表观测 + ka off + 402/211 关）行为不变。
+
+## 14. 死因感知退避（2026-11-17，App ReconnectManager 对齐，用户「按你建议优化」）
+
+**问题**：原重连螺旋仅看会话时长 `<60s`，不分死因——干净轮换/网络瞬断与风控 kill
+一视同仁，且缺 App 的「服务端连续拒绝降级 60s」。用户问「高频重连是 App 保活机制，
+PC 不可以吗」——逆向核实**前提不成立**：App 保活=会话内 3001 心跳，重连另有退避梯。
+
+**App 证据（`.tmp_review/main_src/.../socket/ReconnectManager.java`）**：
+- `j={0,1000,2000,4000,8000,15000,30000}`（:17）+ `v():255-271` 按 failCount 取梯 +±20%
+  抖动；`u():246` 成功归零。网络瞬断首 retry ~0s， repeated 失败指数梯封顶 30s。
+- `r():217-229`：`f6127a==20`（服务器主动断开）base 3s；`i>3` → `a.d=60000ms`
+  （log「服务端连续拒绝，降级为60000ms重试」）。**App 被风控连续 kill 时降级 60s，
+  非高频硬重连**——与 PC 实弹底座（冷却 3min→6s→67.6s）同构。
+
+**改法（collector `_run_loop` 退避块，fail-safe 不弱化）**：死因分三类——
+1. **服务端拒绝类** `_is_server_reject`（`rst_10054` / `errresp_*`）→ App r()：
+   `backoff=max(base,3.0,螺旋)`；`_server_reject_streak>3` → `max(backoff,60.0)`。
+   `_short_session_streak` 同步递增（保留螺旋防护）。
+2. **干净/瞬态类** `_is_clean_transient`（`eof_clean`/`timeout`/`network:*`/`abort_10053`）
+   且健康长会话 `>=60s` → App v(0) 快 retry `backoff=min(base,1.0)`，两 streak 归零。
+3. **其余**（短命非干净/本地故障 signsvc/anti_cheat/setup_fail/send_dead/未知）→
+   **保留原 `<60s` 螺旋兜底**（streak++ 指数封顶 120s）。健康长会话归零 streak。
+- `_server_reject_streak` 跨会话累计，健康长会话（>=60s）归零（App u() resetFailCount）。
+- status 新增 `server_reject_streak` / `last_backoff_cause`（退避决策依据死因，fail-visible）。
+- `_classify_death_cause` 由纯观测升级为退避决策底座（docstring 同步）。
+
+**单次 rst_10054 退避值不变**（base3+螺旋 streak1→4.0，与原 <60s 螺旋同值）——原
+`TestDeathCause` 退避断言数值兼容，仅语义注脚更新。**严格不弱化**：服务端拒绝只会被
+更快/更硬退避（>3→60s）；快 retry 仅给已证干净的健康长会话轮换。
+
+**与爆发指纹议题（§3.4/§7.1.1）关系**：rst_10054 仍走硬退避，防护不松；本精化不解决
+10054 爆发指纹本身（独立议题，用户并行开发 `probe_kpl_burst_surface.py --reconnect`
+验证中）。死因感知退避使该探针的重连模式更贴 App。
+
+**验证（全 mock）**：新增 `TestCauseAwareBackoff` 6 用例（>3→60s / errresp_1106 归类 /
+干净 EOF 快 retry / 网络瞬态快 retry / 短命干净兜底螺旋 / 健康归零）；collector
+**131 passed**；KPL 九文件 **428 passed** / `services+api` **600 passed** / `tests/hotlist`
+**1585 passed, 6 skipped**（计数含用户并行新增 `/api/kpl/subscription-ids` 路由枚举测试）。
+serve 无新 env（保护性精化默认开，回退靠 git）。

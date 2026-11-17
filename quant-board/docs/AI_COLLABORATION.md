@@ -241,7 +241,11 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   →1106 确定性杀连（受控实验 3/3 中位 67s），off 3/3 零错误 >120s →
   默认已切 KPL_KA_MODE=off**。方案唯一来源
   [kpl-socket/sub-registry-refactor-plan.md](kpl-socket/sub-registry-refactor-plan.md)
-  （§1.3 裁决/§7.1 下午盘/§11 开火记录）。
+  （§1.3 裁决/§7.1 下午盘/§11 开火记录/§12 唯一 subId hint 启用/§14 死因感知退避）。
+  **重连退避 App 对齐（§14）**：高频重连非 App 保活机制（保活=会话内 3001 心跳）；App
+  ReconnectManager 服务端拒绝 base3s+连续>3降级60s / 网络瞬断退避梯。PC 死因感知：
+  rst_10054/errresp_*→硬退避（>3→60s），干净健康长会话→快 retry 1s，其余保留 <60s 螺旋兜底
+  （fail-safe 不弱化）；status `server_reject_streak`/`last_backoff_cause`。
 - **已知缺陷与待办（2026-10-27 待办轮已全部收口）**：3006 负数 varint 已修复（`_signed64` 补码还原）；
   3001 quotas 关键位语义已独立源核实（[0]板块标签/[1]最新价(板块=点位)/[2]涨跌幅%/[3]成交额/
   [7]-[9]主力流入流出净额，东财接口交叉对照精确匹配）；signsvc readline 阻塞已改守护读线程

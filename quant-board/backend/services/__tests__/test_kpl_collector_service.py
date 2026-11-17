@@ -1180,9 +1180,9 @@ class TestDeathCause:
         assert "death_cause_counts" in st and isinstance(st["death_cause_counts"], dict)
         assert "last_session_err_code" in st
 
-    def test_run_loop_records_death_without_changing_backoff(self, svc, monkeypatch):
-        """_run_loop 记录死因+发 session_death 事件，但退避/螺旋逻辑零变更：
-        10054 短命会话仍走 <60s 指数退避（streak=1 → backoff=4.0）。"""
+    def test_run_loop_server_reject_single_backoff(self, svc, monkeypatch):
+        """_run_loop 记录死因+发 session_death 事件；单次服务端拒绝（rst_10054）走
+        死因感知退避（§14）：base 3s + 螺旋 streak=1 → backoff=4.0（与原 <60s 螺旋同值）。"""
         monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
 
         def _rst_session():
@@ -1204,9 +1204,93 @@ class TestDeathCause:
         assert svc.status()["last_death_cause"] == "rst_10054"
         deaths = [e for e in svc._history if e.get("type") == "session_death"]
         assert deaths and deaths[-1]["cause"] == "rst_10054"
-        # 零行为变更实证：退避仍由原 <60s 螺旋逻辑决定（session_s≈0 → streak=1 → 4.0）
+        # 死因感知退避（§14）：rst_10054=服务端拒绝 → base 3s + 螺旋 streak=1 → 4.0
         assert svc._short_session_streak == 1
+        assert svc._server_reject_streak == 1
         assert waits == [4.0]
+
+
+class TestCauseAwareBackoff:
+    """§14 死因感知退避（App ReconnectManager 对齐）：服务端拒绝 base3s+螺旋+连续>3→60s；
+    干净瞬态健康长会话→快 retry 1s；短命非干净/未知→原 <60s 螺旋兜底（fail-safe）。全 mock。"""
+
+    def _run_sessions(self, svc, monkeypatch, sessions):
+        """sessions: [(duration_s, exc|None, err_code|None, streaming)]。假钟控制会话时长，
+        逐会话跑 _run_loop，记录每次退避 wait。末会话后 _stop.set() 退出。"""
+        import backend.services.kpl_collector_service as mod
+        monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
+        clock = [1000.0]
+        monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+        idx = [0]
+
+        def _session():
+            dur, exc, code, streaming = sessions[idx[0]]
+            idx[0] += 1
+            clock[0] += dur
+            svc._session_err_code = code
+            svc._session_streaming = streaming
+            svc._sock_dead = False
+            if exc is not None:
+                raise exc
+
+        monkeypatch.setattr(svc, "_session", _session)
+        waits = []
+
+        def _wait(s):
+            waits.append(s)
+            if idx[0] >= len(sessions):
+                svc._stop.set()
+                return True
+            return False
+
+        monkeypatch.setattr(svc, "_stop", type(svc._stop)())
+        monkeypatch.setattr(svc._stop, "wait", _wait)
+        svc._run_loop()
+        return waits
+
+    def test_server_reject_degrades_to_60s_after_3(self, svc, monkeypatch):
+        rst = lambda: ConnectionResetError(10054, "burst RST")
+        waits = self._run_sessions(svc, monkeypatch,
+                                   [(0.5, rst(), None, False) for _ in range(4)])
+        # App r(): base3s+螺旋 4/8/16；第4次服务端拒绝 streak>3 → 降级 60s（a.d）
+        assert waits == [4.0, 8.0, 16.0, 60.0]
+        assert svc._server_reject_streak == 4
+        assert svc._short_session_streak == 4
+
+    def test_errresp_kill_is_server_reject(self, svc, monkeypatch):
+        waits = self._run_sessions(svc, monkeypatch, [(0.5, None, 1106, True)])
+        assert svc._last_death_cause == "errresp_1106"
+        assert svc._server_reject_streak == 1
+        assert waits == [4.0]
+        assert svc.status()["last_backoff_cause"] == "errresp_1106"
+
+    def test_healthy_clean_eof_fast_retry(self, svc, monkeypatch):
+        waits = self._run_sessions(svc, monkeypatch, [(75.0, None, None, True)])
+        assert svc._last_death_cause == "eof_clean"
+        assert waits == [1.0]                 # App v(0) 干净轮换快 retry
+        assert svc._short_session_streak == 0
+        assert svc._server_reject_streak == 0
+
+    def test_healthy_network_transient_fast_retry(self, svc, monkeypatch):
+        waits = self._run_sessions(svc, monkeypatch, [(80.0, TimeoutError(), None, False)])
+        assert svc._last_death_cause == "timeout"
+        assert waits == [1.0]
+
+    def test_short_clean_eof_still_spirals_failsafe(self, svc, monkeypatch):
+        # 短命干净 EOF（<60s）不享快 retry → 原螺旋兜底（不弱化防护）
+        waits = self._run_sessions(svc, monkeypatch, [(30.0, None, None, True)])
+        assert svc._last_death_cause == "eof_clean"
+        assert waits == [4.0]
+        assert svc._short_session_streak == 1
+
+    def test_healthy_session_resets_server_reject_streak(self, svc, monkeypatch):
+        rst = lambda: ConnectionResetError(10054, "RST")
+        waits = self._run_sessions(
+            svc, monkeypatch,
+            [(0.5, rst(), None, False), (0.5, rst(), None, False), (75.0, None, None, True)])
+        assert waits == [4.0, 8.0, 1.0]
+        assert svc._server_reject_streak == 0   # App u() resetFailCount：健康长会话归零
+        assert svc._short_session_streak == 0
 
 
 class TestTradingHoursGate:
