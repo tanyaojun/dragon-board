@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 from backend.analysis.hotlist.jev_lhb_ammo import _fmt_yi
+from backend.analysis.hotlist.theme_event_digest import _compress_enum
 from backend.services.kpl_socket_protocol import RPLATE_INC_IS_PERCENT, bdo_item_yuan
 
 # ── 代际戳 ──
@@ -246,7 +247,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v17"
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-15a"   # 纯语料供给换代：监管风险行（KPL 异动提醒页 严重异动/重点监控 五组，预登记 theme-leader-regulatory-risk-20261115）；题面 hash 不动；前一版 2026-11-14a = S3 成分验证门+产业树残桩正文剔除
+AMMO_VERSION_THEME_LEADER = "2026-11-17a"   # 语料精简（用户裁决，西陇科学 002584 案例审计）：①无损压缩（热度序列连续零日区间化/解析摘录句界截断+长枚举压缩/基因互补字段留一）；②龙头题集零消费行删除（盘面事实/盘面总结/上榜预测/实时龙虎榜，结构事实行只留周期状态+未封板场景标记；板块级叙事不动）；③措辞修复（live已结算→样本/收盘槽省略/前6按热度删/单龙一前缀省略/昨日承接措辞/涨停原因套话小句删除）；题面 hash 不动；前一版 2026-11-15a = 监管风险行（预登记 theme-leader-regulatory-risk-20261115）；再前 2026-11-14a = S3 成分验证门+产业树残桩正文剔除
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -892,8 +893,16 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
 
 
 def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
-                      prev_still: Any, history: list[tuple[str, int]] | None) -> tuple[str, str]:
-    """昨日承接与家数序列两段文本（structure_line / structure_line_dual 共用，禁第二套）。"""
+                      prev_still: Any, history: list[tuple[str, int]] | None,
+                      hist_missing_note: bool = True) -> tuple[str, str]:
+    """昨日承接与家数序列两段文本（structure_line / structure_line_dual 共用，禁第二套）。
+
+    2026-11-17 语料精简（用户裁决）：①「昨日该板块封板」改「昨日涨停」（短且
+    不与今日封板家数混淆）；prev_total=0 时仍封数恒 0 可推导，改「无承接」；
+    ②hist_missing_note=False（龙头路径）时家数序列缺席不出「不可考」注——
+    龙头四题不消费家数序列，缺席状态留 build_one 结构化 boardHistoryState；
+    板块级路径保留（theme_continuation 题面明文消费「家数序列不可考」）。
+    """
     still_txt = (f"今日仍封 {prev_still} 只" if isinstance(prev_still, int)
                  else (f"今日仍封 {prev_board_n} 只" if isinstance(prev_board_n, int)
                        else "今日仍封不可考"))
@@ -901,19 +910,20 @@ def _prev_history_txt(prev_peers: Any, prev_board_n: Any, prev_total: Any,
         prev_txt = "昨日同板块不可考"
     elif isinstance(prev_still, int) and prev_total is not None:
         # 2026-10-30d 语料精简：断板 = 两数之差可推导，不再复述（断板不可算分支保留）
-        prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}"
+        prev_txt = ("昨日涨停 0 只（无承接）" if prev_total == 0
+                    else f"昨日涨停 {prev_total} 只，{still_txt}")
     elif prev_total is None:
-        prev_txt = f"昨日该板块封板总数不可考（{still_txt}）"
+        prev_txt = f"昨日涨停总数不可考（{still_txt}）"
     else:
         duan = prev_total - prev_board_n if isinstance(prev_board_n, int) else None
         duan_txt = (f"断板 {duan}" if duan is not None and duan >= 0 else "断板不可算")
-        prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}（{duan_txt}）"
+        prev_txt = f"昨日涨停 {prev_total} 只，{still_txt}（{duan_txt}）"
     hist_txt = ""
     # 2026-10-30d 语料精简：序列 <3 日时与昨日承接行几乎全重叠，不出行（≥3 日才列）
     if history and len(history) >= 3:
         seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
         hist_txt = f"；近 {len(history)} 日该板块封板家数：{seq}"
-    elif history is not None and not history:
+    elif history is not None and not history and hist_missing_note:
         hist_txt = "；近数日家数序列不可考"
     return prev_txt, hist_txt
 
@@ -1173,7 +1183,7 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
         leader_txt = (f"龙头 {leader.get('name')}（{leader.get('code')}）"
                       f"{streak_txt}，首封 {time_txt}")
     prev_txt, hist_txt = _prev_history_txt(prev_peers, prev_board_n, prev_total,
-                                           prev_still, history)
+                                           prev_still, history, hist_missing_note=False)
     follow_txt = (f"板块内真连板≥{max(1, ((leader.get('streak') or 1)) - 1)} 的跟风 "
                   f"{followers_ge_ladder} 家"
                   if isinstance(followers_ge_ladder, int)
@@ -1353,8 +1363,10 @@ def driver_cross_line(label_doc: dict | None) -> str | None:
     if not label_doc:
         return None
     slot = str(label_doc.get("labelSlot") or "")
-    slot_cn = {"final": "收盘槽", "midday": "午盘槽"}.get(slot, slot or "槽位不可考")
-    head = f"个股打标交叉（{slot_cn}）："
+    # 2026-11-17 语料精简：收盘槽不标注（封板质量行时点已确立收盘语境）；
+    # 午盘槽保留区分（非收盘语境）；槽位事实留 driverCross.labelSlot 结构化字段。
+    slot_cn = {"midday": "午盘槽"}.get(slot, "")
+    head = f"个股打标交叉（{slot_cn}）：" if slot_cn else "个股打标交叉："
     # 驱动类别概率真身=driverProbabilities（labelProbabilities 为 API 层旧别名，兜底旧档）
     label_seg = _top2(label_doc.get("driverProbabilities")
                       or label_doc.get("labelProbabilities"), DRIVER_LABEL_CN) \
@@ -1381,6 +1393,39 @@ def driver_cross_line(label_doc: dict | None) -> str | None:
 
 # ── 涨停原因行 / 板块强度行（AMMO 2026-10-28a，v12 批次；预登记 §4.1/§4.3） ──
 
+# 2026-11-17 语料精简（用户裁决，西陇科学案例）：zt 原文中的纯套话小句
+# （战略布局/产能扩张/提供支撑/扩充优化升级类年报公关措辞）不进叙事——
+# 只留日期+来源+硬事实；含来源/日期关键词的小句永不删（硬事实保护）。
+# 落库 reason_items 原文不动（单一事实源在库），仅叙事渲染层压缩。
+_REASON_BOILERPLATE_RES = (
+    re.compile(r"加大.*战略布局"),
+    re.compile(r"推动.*产能扩张"),
+    re.compile(r"提供.*支撑"),
+    re.compile(r"持续扩充优化升级"),
+)
+_REASON_SOURCE_RE = re.compile(
+    r"\d{4}年|公告|研报|纪要|互动|记录表|中标|订单|合同|半年报|年报|季报|盘后|讯")
+
+
+def _slim_reason_text(zt: str) -> str:
+    """涨停原因叙事压缩：长枚举压缩（_compress_enum）+ 套话小句删除。
+
+    小句按 ，。； 切分；命中套话模式且不含来源/日期关键词的小句整句丢弃；
+    尾部残留分隔符清理。压缩后为空 → 调用方整段缺席（§1.2-8）。
+    """
+    txt = _compress_enum(zt)
+    parts = re.split(r"([，。；])", txt)
+    out: list[str] = []
+    for i in range(0, len(parts), 2):
+        clause = parts[i]
+        sep = parts[i + 1] if i + 1 < len(parts) else ""
+        if clause and any(p.search(clause) for p in _REASON_BOILERPLATE_RES) \
+                and not _REASON_SOURCE_RE.search(clause):
+            continue    # 纯套话小句不投喂
+        out.append(clause + sep)
+    return re.sub(r"[，；]+\s*$", "", "".join(out)).strip()
+
+
 def limitup_reason_line(entries: list[dict]) -> str | None:
     """涨停原因行（v12，裁决③；2026-11-11 ①升级）：join 2203 语料（已落库零外呼），
 
@@ -1390,6 +1435,9 @@ def limitup_reason_line(entries: list[dict]) -> str | None:
     （AGENTS §1.2-8）；全部缺原因 → None（整行不出）。
     2026-11-11 ①：item.plate 非空时追加「热点摘引」（与题材新闻行可能重复，
     用户裁决接受，保真异动解析页全文）。
+    2026-11-17 语料精简（用户裁决）：zt 叙事层压缩（_slim_reason_text：长枚举
+    前3+等、套话小句删除，硬事实/日期/来源保留）；plate 热点摘引保真不动；
+    单龙一 label 空时不出前缀（待判龙头行已锚定身份）。
     """
     if not entries:
         return None
@@ -1399,7 +1447,11 @@ def limitup_reason_line(entries: list[dict]) -> str | None:
         zt = str(item.get("zt") or "").strip()
         if not zt:
             continue    # 原因缺位 → 该股整段缺席（缺数据不占行）
-        seg = f"{entry.get('label') or '该股'}={zt}"
+        zt = _slim_reason_text(zt)
+        if not zt:
+            continue    # 压缩后无剩余事实 → 整段缺席
+        label = str(entry.get("label") or "").strip()
+        seg = f"{label}={zt}" if label else zt
         plate = str(item.get("plate") or "").strip()
         if plate:
             seg += f"；热点摘引：{plate}"
@@ -1425,7 +1477,8 @@ def popularity_rank_line(entries: list[dict]) -> str | None:
         if not (isinstance(rank, int) and not isinstance(rank, bool) and rank > 0
                 and isinstance(total, int) and not isinstance(total, bool) and total > 0):
             continue    # 排名不可考/不在榜 → 该股整段缺席
-        seg = f"{entry.get('label') or '该股'} {rank}/{total}"
+        label = str(entry.get("label") or "").strip()
+        seg = f"{label} {rank}/{total}".strip()
         top = [str(x).strip() for x in (item.get("rank_top") or []) if str(x).strip()]
         if top:
             seg += f"（Top3：{'、'.join(top[:3])}）"
@@ -1457,7 +1510,8 @@ def risk_profile_line(entries: list[dict]) -> str | None:
             if v:
                 segs.append(f"{cn}：{v}")
         if segs:
-            parts.append(f"{entry.get('label') or '该股'} " + "；".join(segs))
+            label = str(entry.get("label") or "").strip()
+            parts.append((f"{label} " if label else "") + "；".join(segs))
     return "风险：" + "；".join(parts) if parts else None
 
 
@@ -1559,7 +1613,8 @@ GENE_CN = (
     ("premium5_count", "溢价5%", "次"),
     ("next_day_red_pct", "次日红盘", "%"),
     ("first_seal_pct", "首板封板", "%"),
-    ("first_broken_pct", "首板炸板", "%"),   # v17 错字修复（原「首板被板」，光洋 11-11 案例）
+    # 2026-11-17 语料精简：first_broken_pct 与 first_seal_pct 互补（和恒 100%），
+    # 只留首板封板率；落库 gene_items 六字段不动（单一事实源在库）。
     ("lianban_pct", "连板", "%"),
 )
 
@@ -1595,7 +1650,7 @@ def theme_heat_line(entries: list[dict]) -> str | None:
         return None
     parts: list[str] = []
     for entry in entries:
-        label = str(entry.get("label") or "").strip() or "该股"
+        label = str(entry.get("label") or "").strip()
         themes = entry.get("themes")
         # 信息量门槛：无题材条目（缺语料/不在池/题材库为空）→ 该股缺席，不占行
         if not isinstance(themes, list) or not themes:
@@ -1618,8 +1673,10 @@ def theme_heat_line(entries: list[dict]) -> str | None:
             segs.append(f"{name} {num}")
         txt = "；".join(segs) if segs else "题材库为空"
         if len(ordered) > _THEME_HEAT_TOP_N:
-            txt += f"（前 {_THEME_HEAT_TOP_N} 按热度，共 {len(ordered)} 个）"
-        parts.append(f"{label}：{txt}")
+            # 2026-11-17 语料精简：「前 6 按热度」是程序选取口径注（§1.2-8），
+            # 只留总数事实；单龙一时 label 空（待判龙头行已锚定身份）不出前缀。
+            txt += f"（共 {len(ordered)} 个）"
+        parts.append(f"{label}：{txt}" if label else txt)
     if not parts:
         # 全员无题材条目 → 整行缺席，不留空头（AGENTS §1.2-8）
         return None
@@ -2385,36 +2442,26 @@ def rebound_popularity_line(event: dict | None, pool_row: dict | None,
 from backend.analysis.hotlist.theme_cycle import STATE_LABELS_CN as CYCLE_STATE_CN
 
 
-def structure_facts_line(row: dict, cycle: dict | None = None) -> str:
-    """v15 P1（预登记 theme-leader-v15-seal-calibration-preregistration-20261104）：
-    结构事实行——程序直读的强校准变量并列披露，随龙头叙事投喂。
+def structure_facts_line(row: dict, cycle: dict | None = None) -> str | None:
+    """结构事实行（v15 P1 引入；2026-11-17 语料精简收窄，用户裁决）。
 
-    Q8:A 边界：行首「供校准参考 · 不作判据」标注已随语料卫生红线（AGENTS §1.2-8）
-    撤出叙事。**v17 D5（用户批准）**：周期状态解禁为续板题调档佐证之一（转弱=降档
-    佐证、主升=升档佐证，不得单独定档，仍须对锚）；其余三字段题面判据仍不引用、
-    不仲裁档位，约束由题面与结构化记录承载。
-    （原行首标注进语料属开发注释，浪费 token 且每次构建叙事都会重新堆积。）
-    四字段（归因文档 §2 分判度排序头部）：周期状态（theme_cycle 当态，join 于 operations 层）/
-    当日封板（False=断板反包候选，v12/v13 语义）/ 真连板高度 / 板内梯队家数。
-    缺失字段显式「不可考」，不伪造不缺行（§4.0：fail-visible，行恒在）。
+    题面消费面（v17 四题+rebound 逐条核对）：只有周期状态（v17 D5 调档佐证）
+    与未封板场景标记（v13 断板反包分支）被引用。真连板高度/板内梯队与板块行/
+    梯队形态行逐字重复，今日已封板=是 与封板质量行/板块行重叠——均不再投喂。
+    封板状态未知（None）保留最简不可考标注（fail-visible）；周期缺席留
+    build_one 结构化 cycleState 字段。全字段无在场 → 整行缺席（§1.2-8）。
     """
     cycle = cycle or {}
     st_cn = cycle.get("stateCn") or CYCLE_STATE_CN.get(cycle.get("state"))
-    parts = ["周期状态=" + (str(st_cn) if st_cn else "不可考")]
+    parts: list[str] = []
+    if st_cn:
+        parts.append("周期状态=" + str(st_cn))
     sealed = row.get("leaderSealedToday")
-    if sealed is True:
-        parts.append("今日已封板=是")
-    elif sealed is False:
+    if sealed is False:
         parts.append("今日已封板=否（断板反包候选）")
-    else:
+    elif sealed is None:
         parts.append("今日封板状态=不可考")
-    streak = row.get("streak")
-    parts.append("真连板高度=" + (f"{streak} 板" if streak is not None else "不可考"))
-    ladder = row.get("ladderFollowers")
-    parts.append("板内梯队=" + (f"{ladder} 家" if ladder is not None else "不可考"))
-    # 全字段不可考 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）；行恒在仅对
-    # 「有任一字段在场」成立，全缺时不留一行字
-    if all("不可考" in p for p in parts):
+    if not parts:
         return None
     return "结构事实：" + "｜".join(parts)
 
@@ -2467,7 +2514,7 @@ def base_rate_line(stats: dict | None) -> str | None:
     """
     if not isinstance(stats, dict) or not stats.get("n"):
         return None
-    seg = (f"续板基础率（live已结算{stats['n']}行，{stats.get('start')}~{stats.get('end')}）："
+    seg = (f"续板基础率（{stats['n']} 样本，{stats.get('start')}~{stats.get('end')}）："
            f"总体{stats['ratePct']:.1f}%")
     subs = []
     for key, label in (("sealed", "封板行"), ("broken", "断板行")):
@@ -2479,11 +2526,11 @@ def base_rate_line(stats: dict | None) -> str | None:
     return seg
 
 
-def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
+def build_leader_narrative(*, date: str, market_line: str | None = None,
+                           structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
                            leader_code: str, headroom: str | None = None,
                            forward_axis: str | None = None,
-                           market_summary: str | None = None,
                            ladder_line: str | None = None,
                            zhaban_line: str | None = None,
                            dt_line: str | None = None,
@@ -2501,9 +2548,7 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
                            abnormal_price_line: str | None = None,
                            gene_line: str | None = None,
                            notice_count_line: str | None = None,
-                           forecast_line: str | None = None,
                            lhb_facts_line: str | None = None,
-                           realtime_lhb_line: str | None = None,
                            rebound_line: str | None = None,
                            plate_strength: str | None = None,
                            series_line: str | None = None,
@@ -2542,22 +2587,25 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     `bid_line`（竞价承接行，紧炸板面后、封板质量前）、`zt_big_order_line`（封板大单行，
     紧封板质量后）、`related_plate_line`（板块归属行，题材热度后）、`bf_reason_line`
     （爆发原因行，紧涨停原因后）、`popularity_rank_line`（热度排名行）、`risk_line`
-    （风险画像行）、`abnormal_price_line`（异动提醒行）、`forecast_line`（上榜预测行，
-    公告计数后、龙虎榜前）、`realtime_lhb_line`（实时龙虎榜行，龙虎榜行后）；均 None
-    不出行（缺数据整行缺席，AGENTS §1.2-8）。
-    `facts_line`（v15 P1）= 结构事实行（structure_facts_line 产出：周期/封板/高度/梯队），
+    （风险画像行）、`abnormal_price_line`（异动提醒行）；均 None
+    不出行（缺数据整行缺席，AGENTS §1.2-8）。原 `forecast_line`/`realtime_lhb_line`
+    参数已随 2026-11-17 语料精简删除（龙头题面零消费，板块级叙事仍保留）。
+    `facts_line`（v15 P1；2026-11-17 收窄）= 结构事实行（structure_facts_line 产出：
+    周期状态+未封板场景标记），
     校准参考行与锚行相邻：排在基线后、空间锚前；None 不出行（旧行为不变，板块级叙事不消费）。
     `base_rate_line`（v17）= 续板基础率锚行（base_rate_line 产出，取数单一源
     theme_leader_seal_stats.live_base_rate），排基线后、结构事实行前；None 不出行。
     `sector_judgment_line`（v17）= 板块判定行（sector_judgment_line 产出，板块级 doc
     判答 join），排结构事实行后、空间锚前；None 不出行（degraded/insufficient 整行缺席，
     结构化 sectorJudgmentState 留痕）。两新行均旧调用形状不变（不传=不出行）。
+    **2026-11-17 语料精简（用户裁决，西陇科学案例审计）**：龙头四题+rebound 题面
+    零消费行删除——盘面事实（market_line 改可选，None 时头部只留日期）/盘面总结/
+    上榜预测/实时龙虎榜不再进龙头叙事（参数已删；板块级叙事 build_sector_narrative
+    不受影响，落库 fc_items/rt_items 不动）；结构事实行收窄见 structure_facts_line。
     """
     lines = [
-        f"{date} 交易日 · {market_line}",
+        f"{date} 交易日 · {market_line}" if market_line else f"{date} 交易日",
     ]
-    if market_summary:
-        lines.append(market_summary)
     if forward_axis:
         lines.append(forward_axis)
     # P1-4（review）：轨别身位必须在叙事头部显式标注（题面规则⑥/空间题⑤的前提
@@ -2634,14 +2682,8 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
         # 2026-11-08e：公告计数行（公告/研报/新闻密度，事件/风险画像），排涨停原因行后、
         # 龙虎榜行前；None 不出行（旧行为不变）
         lines.append(notice_count_line)
-    if forecast_line:
-        # 2026-11-11 ③：上榜预测行（2112 fc_items，人气值口径）
-        lines.append(forecast_line)
     if lhb_facts_line:
         lines.append(lhb_facts_line)
-    if realtime_lhb_line:
-        # 2026-11-11 ③：实时龙虎榜行（3004/3101 rt_items）
-        lines.append(realtime_lhb_line)
     if rebound_line:
         # v14（P3 工作流 B）：人气证据链行组，事件股专属；仅事件日出行，
         # 与本题判答条件（事件门）同源。None（非事件日）不出行，旧行为不变

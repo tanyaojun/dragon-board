@@ -211,7 +211,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v17"
     assert doc["questionSetHash"] == "8c6c94429abd"   # v17 题集×语料匹配+两新题+开火前修订 b（v1-v16 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-15a"   # 纯语料供给换代：监管风险行（预登记 theme-leader-regulatory-risk-20261115）
+    assert doc["ammoVersion"] == "2026-11-17a"   # 语料精简（用户裁决，西陇科学案例）；前一版 2026-11-15a = 监管风险行
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -311,9 +311,9 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     real_build = L.build_one
     real_build_sector = L.build_sector_one
 
-    def fake_build_one(db_, date, row, rows_baseline, dataset_id, market_line,
+    def fake_build_one(db_, date, row, rows_baseline, dataset_id,
                        board_history=None, **kwargs):
-        built = real_build(db_, date, row, rows_baseline, dataset_id, market_line,
+        built = real_build(db_, date, row, rows_baseline, dataset_id,
                            board_history=board_history, **kwargs)
         built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
                              "evidenceMissingReason": None}
@@ -469,14 +469,13 @@ def test_build_one_and_sector_wire_lhb_line():
     ]}
     row = dict(ROWS[0], boardCodes=["603278", "002639"])
     built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
-                        market_line="涨停 46 家", lhb_facts=facts)
+                        lhb_facts=facts)
     n = built["narrative"]
     assert "待判龙一 大业股份（603278）：主力净额 0.52亿" in n
     assert "相关个股 雪人股份（002639）：主力净额 --" in n
     assert n.index("龙虎榜：") < n.index("【题材证据")
     # 未传入（旧行为）→ 不出行
-    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                         market_line="涨停 46 家")
+    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE)
     assert "龙虎榜" not in built0["narrative"]
     # 板块级：双龙一轨别身位；不在榜的龙一不出现
     brows = [dict(ROWS[0], segment="main", boardCodes=["603278", "002639"]),
@@ -488,7 +487,6 @@ def test_build_one_and_sector_wire_lhb_line():
     assert "雪人股份（002639）" in ns and "双创龙一 亚邦股份（603188）：" not in ns, "不在榜的龙一不出现在龙虎榜行（结构行身位不受影响）"
     # 取数失败 → fail-visible 行（不伪装无上榜）
     built_f = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
-                          market_line="涨停 46 家",
                           lhb_facts={"ok": False, "reason": "fetch_failed: x"})
     assert "龙虎榜" not in built_f["narrative"], "缺数据整行缺席（AGENTS §1.2-8）"
 
@@ -508,7 +506,6 @@ def test_build_one_wires_history_and_headroom_anchor():
          "time": "13:20:00", "continued": False},
     ]
     built = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), rows_baseline,
-                        market_line="涨停 46 家",
                         board_history={"机器人": [("2026-10-15", 4), ("2026-10-16", 3),
                                                 ("2026-10-17", 5)]})
     n = built["narrative"]
@@ -519,7 +516,7 @@ def test_build_one_wires_history_and_headroom_anchor():
     # （2026-10-19 是周一；weekday 桩=周一~五交易日）
     assert "交易日轴：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \
         "（节假日顺延未经验证）" in n and "日历源" not in n
-    assert "昨日该板块封板 6 只，今日仍封 3 只" in n, "2026-10-30d：断板=差值可推导不复述"
+    assert "昨日涨停 6 只，今日仍封 3 只" in n, "2026-10-30d：断板=差值可推导不复述；2026-11-17 措辞精简"
     assert "板块梯队形态：首板 3 家 / 2板 1 家 / 3板+ 1 家；龙头 3 板，次高 2 板（领先 +1）" in n
     assert "板内炸板面：今日触板未封 2 家（昨日 1 家）" in n
     i_struct, i_lad = n.index("板块「机器人」今日封板"), n.index("板块梯队形态")
@@ -530,14 +527,16 @@ def test_build_one_wires_history_and_headroom_anchor():
     rows0["ladderShape"] = None   # 旧形状行：两行 None 不出行，不报错
     rows0["zhabanN"] = None
     built_legacy = L.build_one(FakeDb(), "2026-10-19", rows0, rows_baseline,
-                               market_line="涨停 46 家", board_history={})
+                               board_history={})
     assert "板块梯队形态" not in built_legacy["narrative"]
     assert "板内炸板面" not in built_legacy["narrative"]
     # 旧形状基线（无 code/date）→ 锚不出；空 history dict → 不可考文案
     built2 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                         market_line="涨停 46 家", board_history={})
+                         board_history={})
     assert "空间锚" not in built2["narrative"]
-    assert "家数序列不可考" in built2["narrative"]
+    assert "家数序列不可考" not in built2["narrative"], \
+        "2026-11-17：龙头路径缺席注不投喂，结构化留痕"
+    assert built2["boardHistoryState"] == "missing"
 
 
 def test_build_one_driver_cross_join_and_fail_visible():
@@ -550,7 +549,7 @@ def test_build_one_driver_cross_join_and_fail_visible():
                        "label": "capital_flow", "catalystDepth": "core_main_business",
                        "freshness": "fresh_catalyst", "buySideLogic": "high_board_relay",
                        "computedAt": "2026-10-27T12:35:14"}
-    built = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
+    built = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE)
     assert "个股打标交叉（午盘槽）：" in built["narrative"], \
         "2026-10-30d：工程注记删，版本+槽位保留"
     assert built["driverCross"] == {"found": True, "labelSlot": "midday",
@@ -559,18 +558,19 @@ def test_build_one_driver_cross_join_and_fail_visible():
     dcol.docs["x2"] = {"tradingDate": "2026-10-19", "code": "603278",
                        "labelSlot": "final", "questionSetVersion": "v3.1",
                        "label": "policy", "computedAt": "2026-10-27T16:19:04"}
-    built2 = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
-    assert "收盘槽" in built2["narrative"] and built2["driverCross"]["labelSlot"] == "final"
+    built2 = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE)
+    assert "收盘槽" not in built2["narrative"] and built2["driverCross"]["labelSlot"] == "final", \
+        "2026-11-17：收盘槽不标注（槽位事实留 driverCross.labelSlot）"
     # phase_band_daily 日级哨兵不充当个股交叉源
     dcol.docs["x3"] = {"tradingDate": "2026-10-19", "code": "603278",
                        "labelSlot": "final", "origin": "phase_band_daily",
                        "label": "policy", "computedAt": "2026-10-27T17:00:00"}
-    built2b = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE, market_line="涨停 46 家")
+    built2b = L.build_one(db, "2026-10-19", dict(ROWS[0]), BASELINE)
     assert built2b["driverCross"]["labelSlot"] == "final" \
-        and "个股打标交叉（收盘槽）" in built2b["narrative"], "2026-10-30f：题集版本披露删，槽位区分保留"
+        and "个股打标交叉：" in built2b["narrative"] \
+        and "收盘槽" not in built2b["narrative"], "2026-11-17：收盘槽标注撤出，槽位留结构化"
     # 无任何打标行 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）
-    built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                         market_line="涨停 46 家")
+    built3 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE)
     assert "个股打标交叉" not in built3["narrative"]
     assert built3["driverCross"] == {"found": False, "labelSlot": None,
                                      "questionSetVersion": None}
@@ -750,7 +750,7 @@ def test_day_leader_rows_prev_still_same_board_scope(monkeypatch):
                           followers_ge_ladder=2, prev_board_n=row["prevBoardN"],
                           prev_peers=row["prevPeers"], prev_total=row["prevTotal"],
                           prev_still=row["prevStill"])
-    assert "昨日该板块封板 1 只，今日仍封 1 只" in line
+    assert "昨日涨停 1 只，今日仍封 1 只" in line
     assert "断板" not in line and "今日仍封 3 只" not in line, "成员口径的负数/失真不得进叙事；断板不复述（2026-10-30d）"
 
 
@@ -1418,16 +1418,13 @@ def test_market_summary_entry_and_narrative_placement(monkeypatch):
     line = L.market_summary_line(entry)
     assert line.startswith("盘面总结：15:00三大指数低开低走")
     assert L.market_summary_line(None) is None
-    # 两级叙事：紧跟盘面事实行、在交易日轴前
+    # 2026-11-17 语料精简：盘面总结龙头题面零消费，不再进龙头叙事（参数已删）；
+    # 板块级叙事保留（紧跟盘面事实行、在交易日轴前）
     from backend.analysis.hotlist.theme_leader_ammo import build_leader_narrative, build_sector_narrative
-    n = build_leader_narrative(date=day, market_line="涨停 46 家", forward_axis="交易日轴：X",
-                               market_summary=line, structure="结构行", baseline="基线行",
-                               evidence_block="【题材证据】", leader_name="X", leader_code="1")
-    assert n.index("涨停 46 家") < n.index("盘面总结：") < n.index("交易日轴")
-    n2 = build_leader_narrative(date=day, market_line="涨停 46 家", structure="结构行",
+    n2 = build_leader_narrative(date=day, structure="结构行",
                                 baseline="基线行", evidence_block="【题材证据】",
                                 leader_name="X", leader_code="1")
-    assert "盘面总结" not in n2, "缺席不出行"
+    assert "盘面总结" not in n2
     s = build_sector_narrative(date=day, board="冰雪经济", market_line="涨停 46 家",
                                forward_axis="交易日轴：X",
                                market_summary=line, structure="结构行", baseline="基线行",
@@ -1488,11 +1485,13 @@ def test_v14_event_gate_wires_rebound_question_only_for_event_stock(env, monkeyp
     assert "人气证据链" in doc_hit["narrative"], "事件股叙事含人气证据链行组"
     assert "形式①人气股反包" in doc_hit["narrative"]
     assert "主升·第2轮" in doc_hit["narrative"], "周期背景只披露"
-    # v15 P1 接线（review 2026-11-05）：run→build_one 的 cycle 透传被误删时此处先红
-    assert "结构事实：" in doc_hit["narrative"], "v15 事实行恒在（fail-visible）"
+    # v15 P1 接线（2026-11-17 收窄）：周期在场 → 事实行只留周期状态；无周期文档
+    # 且已封板 → 整行缺席（结构化 cycleState 留痕，fail-visible）
+    assert "结构事实：周期状态=主升" in doc_hit["narrative"], "cycle 文档透传到事实行"
+    assert "真连板高度" not in doc_hit["narrative"] and "板内梯队=" not in doc_hit["narrative"]
     assert "供校准参考" not in doc_hit["narrative"], "行首标注已撤出（AGENTS §1.2-8）"
-    assert "周期状态=主升" in doc_hit["narrative"], "cycle 文档透传到事实行"
-    assert "周期状态=不可考" in doc_miss["narrative"], "无周期文档时显式不可考不伪造"
+    assert "周期状态" not in doc_miss["narrative"], "无周期文档 → 周期段缺席（不伪造）"
+    assert doc_miss.get("cycleState") is None
     # 非事件股：2 题判答（B1:A 零额外调用）
     assert L.REBOUND_QUESTION not in doc_miss["questionsRaw"]
     assert "人气证据链" not in doc_miss["narrative"]
@@ -1656,23 +1655,22 @@ def test_run_feeds_kpl_reason_corpus_into_leader_docs(env, monkeypatch):
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
     assert leader_docs, "至少一条个股级 doc"
     assert any("涨停原因：" in d["narrative"]
-               and "=机器人概念+PCB概念" in d["narrative"] for d in leader_docs), \
-        "涨停原因行取 kpl_daban_pool 语料"
+               and "机器人概念+PCB概念" in d["narrative"] for d in leader_docs), \
+        "涨停原因行取 kpl_daban_pool 语料（2026-11-17：单龙一无重复前缀）"
 
 
 def test_build_one_wires_gene_line_before_reason_line():
     """个股级叙事：涨停基因行排涨停原因行前；未传入 → 不出行（旧行为不变）。"""
     row = dict(ROWS[0], segment="main", boardCodes=["603278"])
-    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
                         gene_entries=L.gene_entries_for_leaders([row],
                                                                 {"603278": GENE_ITEM}),
                         reason_entries=[{"label": "主板龙一 大业股份",
                                          "item": {"zt": "机器人"}}])
     n = built["narrative"]
-    assert "涨停基因：主板龙一 大业股份=涨停4次" in n, "口径注不进叙事（AGENTS §1.2-8）"
+    assert "涨停基因：涨停4次" in n, "2026-11-17：单龙一不出重复前缀；口径注不进叙事（AGENTS §1.2-8）"
     assert n.index("涨停基因：") < n.index("涨停原因：")
-    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                         market_line="涨停 46 家")
+    built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE)
     assert "涨停基因" not in built0["narrative"]
 
 
@@ -1768,14 +1766,14 @@ def test_seal_quality_entries_for_leaders_labels_and_unsealed():
 def test_build_one_wires_seal_quality_line_after_zhaban():
     """个股级叙事：封板质量行在板内炸板面行之后；未传入 → 不出行（旧行为不变）。"""
     row = dict(ROWS[0], segment="main", boardCodes=["603278"])
-    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+    built = L.build_one(FakeDb(), "2026-10-19", row, BASELINE,
                         seal_quality_entries=L.seal_quality_entries_for_leaders(
                             [row], _quality([dict(QUALITY_ITEM, stock_id="603278")])))
     n = built["narrative"]
     assert "封板质量（14:35，非收盘帧）：主板龙一 大业股份" in n
     assert n.index("板内炸板面：") < n.index("封板质量（")
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                         market_line="涨停 46 家")
+                         )
     assert "封板质量" not in built0["narrative"]
 
 
@@ -2040,15 +2038,17 @@ def test_run_feeds_20261111_new_lines(env, monkeypatch):
     leader_docs = [d for d in col.docs.values() if d.get("docKind") == "leader"]
     n = leader_docs[0]["narrative"]
     assert "热点摘引：机器人" in n, "①涨停原因行热点摘引"
-    assert "热度排名：龙一 大业股份 15/5575" in n, "①热度排名行"
-    assert "风险：龙一 大业股份 减持：股东拟减持" in n, "①风险画像行"
+    assert "热度排名：15/5575" in n, "①热度排名行（2026-11-17：单龙一无重复前缀）"
+    assert "风险：减持：股东拟减持" in n, "①风险画像行（单龙一无重复前缀）"
     assert "竞价：龙一 大业股份 +4.32%" in n, "②竞价承接行"
     assert "板内无跌停" in n, "②板内跌停（验证缺席）"
-    assert "上榜预测：待判龙一 603278 大业股份 热度 35214" in n, "③上榜预测行"
+    assert "上榜预测" not in n, "2026-11-17：龙头题面零消费，上榜预测不进龙头叙事"
     assert "实时龙虎榜" not in n, "③rt 无档 → 整行缺席"
     sector_docs = [d for d in col.docs.values() if d.get("docKind") == "sector"]
     assert sector_docs and any("热度排名：" in d["narrative"] for d in sector_docs), \
         "板块级消费热度排名/风险画像（双龙一并一行）"
+    assert any("上榜预测：" in d["narrative"] for d in sector_docs), \
+        "2026-11-17：上榜预测板块级叙事保留（fc 语料在场）"
 
 
 def test_build_one_lhb_state_payload():
@@ -2063,18 +2063,17 @@ def test_build_one_lhb_state_payload():
              "stocks": [], "stock_board": {"603278": {"buy_in": 1e8}},
              "agency": {}, "empty_structured": False, "order_sign_count": 0}
     built = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0], boardCodes=["603278"]),
-                        BASELINE, market_line="涨停 46 家", lhb_facts=facts)
+                        BASELINE, lhb_facts=facts)
     st = built["lhbState"]
     assert st["mainAvailable"] is True and st["listOk"] is True and st["stockOk"] is False
     assert st["degraded"] is True and st["reason"] == "lhb_stock_fetch_failed: boom"
     assert st["seatN"] == 1 and st["agencyN"] == 0 and st["lineRendered"] is True
     # facts=None → lhbState=None（旧行为：不出行）
     built0 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                         market_line="涨停 46 家")
+                         )
     assert built0["lhbState"] is None
     # 主榜缺席（结构化空态）→ mainAvailable=False，行缺席但留痕在
     built_e = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
-                          market_line="涨停 46 家",
                           lhb_facts={"ok": False, "list_ok": True, "stock_ok": True,
                                      "empty_structured": True, "order_sign_count": 11,
                                      "groups": [], "stocks": [],
@@ -2112,9 +2111,9 @@ def _evidence_present_builds(monkeypatch):
     real_build = L.build_one
     real_build_sector = L.build_sector_one
 
-    def fake_build_one(db_, date, row, rows_baseline, dataset_id, market_line,
+    def fake_build_one(db_, date, row, rows_baseline, dataset_id,
                        board_history=None, **kwargs):
-        built = real_build(db_, date, row, rows_baseline, dataset_id, market_line,
+        built = real_build(db_, date, row, rows_baseline, dataset_id,
                            board_history=board_history, **kwargs)
         built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
                              "evidenceMissingReason": None}
@@ -2173,8 +2172,11 @@ def test_v17_sector_judgment_injected_same_run(env, monkeypatch):
     assert "板块判定：炒作深度=发酵期；延续性=强延续" in doc["narrative"]
     assert doc["sectorJudgmentState"] == "injected"
     lines = doc["narrative"].split("\n")
-    i_facts = next(i for i, ln in enumerate(lines) if ln.startswith("结构事实："))
-    assert lines[i_facts + 1].startswith("板块判定："), "注入位置=结构事实行后、空间锚前"
+    i_base = next(i for i, ln in enumerate(lines) if ln.startswith("结构基线："))
+    j = i_base + 1
+    while j < len(lines) and lines[j].startswith(("续板基础率", "结构事实：")):
+        j += 1
+    assert lines[j].startswith("板块判定："), "注入位置=基线块后、空间锚前（事实行可缺席）"
     sec = db[L.COLLECTION].docs["2026-10-19:board:机器人"]
     assert "板块判定：" not in sec["narrative"], "板块级不注入（不循环）"
     # 下发文本与落库叙事一致（注入在 dispatch 前）
@@ -2259,7 +2261,7 @@ def test_v17_base_rate_line_wiring_and_lookahead(env):
     L.run("2026-11-11", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-11-11:603278"]
     ln = next(ln for ln in doc["narrative"].split("\n") if ln.startswith("续板基础率"))
-    assert "live已结算3行，2026-10-23~2026-10-27" in ln
+    assert "3 样本，2026-10-23~2026-10-27" in ln
     assert "总体33.3%" in ln and "封板行50.0%" in ln and "断板行0.0%" in ln
     # 位置：基线后、结构事实前
     lines = doc["narrative"].split("\n")
@@ -2470,7 +2472,7 @@ def test_regulatory_fetch_and_build_one_wiring():
     c0 = L.fetch_regulatory_corpus(db, "2026-10-19")
     assert c0["laneOk"] is False
     e0 = L.regulatory_entries_for_codes(["603278"], roles, c0)
-    b0 = L.build_one(db, "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+    b0 = L.build_one(db, "2026-10-19", row, BASELINE,
                      regulatory_line=L.regulatory_risk_line(e0),
                      regulatory_state=L._regulatory_state(c0, e0))
     assert "监管风险" not in b0["narrative"]
@@ -2480,7 +2482,7 @@ def test_regulatory_fetch_and_build_one_wiring():
     c1 = L.fetch_regulatory_corpus(db, "2026-10-19")
     assert c1["laneOk"] is True
     e1 = L.regulatory_entries_for_codes(["603278"], roles, c1)
-    b1 = L.build_one(db, "2026-10-19", row, BASELINE, market_line="涨停 46 家",
+    b1 = L.build_one(db, "2026-10-19", row, BASELINE,
                      regulatory_line=L.regulatory_risk_line(e1),
                      regulatory_state=L._regulatory_state(c1, e1))
     n = b1["narrative"]

@@ -91,7 +91,7 @@ def test_question_set_frozen_hash_and_versions():
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v17"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-15a"   # 纯语料供给换代：监管风险行（预登记 theme-leader-regulatory-risk-20261115，题面 hash 不动）
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-17a"   # 语料精简（用户裁决，西陇科学案例审计）：无损压缩+龙头题集零消费行删除+措辞修复；题面 hash 不动；前一版 2026-11-15a = 监管风险行
     assert A.QUESTION_SET_HASH_THEME_LEADER == "8c6c94429abd"
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -174,23 +174,23 @@ def test_question_set_frozen_hash_and_versions():
 
 
 def test_structure_facts_line_v15_p1():
-    """v15 P1 结构事实行：四字段程序直读、Q8:A 边界（行首标注不作判据）、fail-visible
-    （缺字段显式不可考、行恒在），叙事排在基线后、空间锚前（校准参考行与锚行相邻）。"""
-    # 四字段全在：周期（stateCn 优先）/封板/高度/梯队
+    """结构事实行（v15 P1 引入；2026-11-17 语料精简收窄）：只留周期状态（v17 D5
+    佐证）+未封板场景标记（v13 断板反包分支）；真连板高度/板内梯队/已封板=是
+    与板块行/梯队行/封板质量行重复不再投喂；周期缺+已封 → 整行缺席。"""
     ln = A.structure_facts_line({"streak": 3, "ladderFollowers": 11, "leaderSealedToday": True},
                                 {"state": "mainrise", "stateCn": "主升"})
-    assert "周期状态=主升" in ln and "今日已封板=是" in ln
-    assert "真连板高度=3 板" in ln and "板内梯队=11 家" in ln
-    assert ln.startswith("结构事实："), "行首标注已撤出（语料卫生红线 AGENTS §1.2-8）"
+    assert ln == "结构事实：周期状态=主升"
+    assert "真连板高度" not in ln and "板内梯队" not in ln and "今日已封板" not in ln
     assert "供校准参考" not in ln and "不作判据" not in ln
-    # 缺字段 fail-visible：不可考显式、不伪造
-    ln0 = A.structure_facts_line({"leaderSealedToday": False}, None)
-    assert "不可考" in ln0 and "断板反包候选" in ln0
-    assert A.structure_facts_line({}, {"state": "wzs"}).count("不可考") >= 3
-    assert "弱转强" in A.structure_facts_line({}, {"state": "wzs"}), "stateCn 缺失时回退 CYCLE_STATE_CN"
-    # 叙事接线：基线 < 事实行 < 空间锚（旧行为不变：facts_line=None 不出行）
-    common = dict(date="2026-11-05", market_line="涨停 46 家",
-                  structure="结构行", baseline="结构基线：…",
+    # 未封板场景标记（题面 v13 分支消费）；封板状态未知 → 最简不可考（fail-visible）
+    assert A.structure_facts_line({"leaderSealedToday": False}, None) == \
+        "结构事实：今日已封板=否（断板反包候选）"
+    assert A.structure_facts_line({}, {"state": "wzs"}) == \
+        "结构事实：周期状态=弱转强｜今日封板状态=不可考", "stateCn 缺失回退 CYCLE_STATE_CN"
+    # 周期缺席+已封板 → 整行缺席（§1.2-8；缺席留 build_one cycleState 结构化字段）
+    assert A.structure_facts_line({"leaderSealedToday": True}, None) is None
+    # 叙事接线：基线 < 事实行 < 空间锚（facts_line=None 不出行）
+    common = dict(date="2026-11-05", structure="结构行", baseline="结构基线：…",
                   evidence_block="【题材证据】", leader_name="X", leader_code="1")
     n = A.build_leader_narrative(**common, headroom="空间锚行",
                                  facts_line=A.structure_facts_line(
@@ -198,7 +198,7 @@ def test_structure_facts_line_v15_p1():
                                      {"state": "mainrise"}))
     assert n.index("结构基线") < n.index("结构事实：") < n.index("空间锚")
     n0 = A.build_leader_narrative(**common)
-    assert "结构事实（" not in n0, "facts_line=None 旧行为不变"
+    assert "结构事实" not in n0, "facts_line=None 不出行"
 
 
 def test_board_ladder_line_lead_diff_signed_p2_4():
@@ -313,7 +313,7 @@ def test_structure_line_marks_unknown_prev():
     assert "连板高度不可算" in line2 and "时间不可考" in line2
     # 2026-10-24c 口径修正：prev_board_n 语义=昨日封板且今日仍封；prev_total 未传时
     # 不得再把仍封数冒充「昨日封板 N 只」（旧文案吞掉断板数）
-    assert "昨日该板块封板总数不可考（今日仍封 3 只）" in line2
+    assert "昨日涨停总数不可考（今日仍封 3 只）" in line2
 
 
 def test_structure_line_prev_total_surfaces_duanban():
@@ -326,13 +326,13 @@ def test_structure_line_prev_total_surfaces_duanban():
     line = A.structure_line(board="机器人", board_n=5,
                             leader={"name": "大业", "code": "1", "streak": 3, "time": "09:25"},
                             followers_ge_ladder=1, prev_board_n=3, prev_peers=2, prev_total=6)
-    assert "昨日该板块封板 6 只，今日仍封 3 只（断板 3）" in line, "无 prev_still 兼容形状退回成员口径"
+    assert "昨日涨停 6 只，今日仍封 3 只（断板 3）" in line, "无 prev_still 兼容形状退回成员口径"
     # 同名口径：prev_still 在 → 断板 = prevTotal − prevStill（与成员口径的迁入失真无关）
     line_same = A.structure_line(board="AI应用", board_n=7,
                                  leader={"name": "X", "code": "2", "streak": 3, "time": "09:30"},
                                  followers_ge_ladder=2, prev_board_n=4, prev_peers=2,
                                  prev_total=3, prev_still=2)
-    assert "昨日该板块封板 3 只，今日仍封 2 只" in line_same, \
+    assert "昨日涨停 3 只，今日仍封 2 只" in line_same, \
         "同名口径：昨日他板块迁入的 2 只不计入仍封（2026-10-30d：断板=差值可推导不复述）"
     assert "断板 1" not in line_same
     # 迁移场景无 prev_still（兼容形状）：差值为负 → 断板不可算，不出负数
@@ -346,7 +346,7 @@ def test_structure_line_prev_total_surfaces_duanban():
                              leader={"name": "X", "code": "1", "streak": 2, "time": "09:30"},
                              followers_ge_ladder=0, prev_board_n=None, prev_peers=0,
                              prev_total=6)
-    assert "昨日该板块封板 6 只，今日仍封不可考（断板不可算）" in line2
+    assert "昨日涨停 6 只，今日仍封不可考（断板不可算）" in line2
     assert "None" not in line2
 
 
@@ -393,7 +393,15 @@ def test_structure_line_renders_board_count_history():
                              leader={"name": "X", "code": "1", "streak": 1, "time": "10:00:00"},
                              followers_ge_ladder=0, prev_board_n=None, prev_peers=None,
                              history=[])
-    assert "家数序列不可考" in empty
+    assert "家数序列不可考" not in empty, \
+        "2026-11-17：龙头路径不投喂序列缺席注（结构化 boardHistoryState 留痕）"
+    # 板块级路径保留（theme_continuation 题面明文消费「家数序列不可考」）
+    dual_empty = A.structure_line_dual(
+        board="机器人", board_n=3,
+        leader_rows=[{"name": "X", "code": "1", "streak": 1, "time": "10:00:00",
+                      "segment": "main", "leaderSealedToday": True}],
+        history=[])
+    assert "家数序列不可考" in dual_empty
 
 
 def _cycle_rows():
@@ -571,7 +579,9 @@ def test_driver_cross_line_variants():
     bare = A.driver_cross_line({"label": "policy", "labelSlot": "final",
                                 "questionSetVersion": "v3.1", "freshness": "continuing",
                                 "buySideLogic": "sector_follow"})
-    assert "驱动类别=政策" in bare and "催化深度=不可考" in bare and "收盘槽" in bare
+    assert "驱动类别=政策" in bare and "催化深度=不可考" in bare
+    assert "收盘槽" not in bare and bare.startswith("个股打标交叉："), \
+        "2026-11-17：收盘槽不标注（封板质量行时点已确立收盘语境）"
 
 
 def test_evidence_gate_forces_insufficient_and_keeps_model_answer():
@@ -729,7 +739,7 @@ def test_structure_line_unsealed_leader_explicit():
                             leader_sealed_today=False, gain10=77.7)
     assert "今日未封板（断板反包候选，10 日涨幅 +77.7%）" in line, "2026-10-30g+：选择口径注删"
     assert "跟风梯队不可算" in line and "跟风 None 家" not in line, "2026-10-30g+：括号删"
-    assert "昨日该板块封板 13 只，今日仍封 9 只" in line
+    assert "昨日涨停 13 只，今日仍封 9 只" in line
     # 未传 gain10 → 身位段如实省略，不伪造
     line2 = A.structure_line(board="机器人", board_n=17,
                              leader={"name": "大业股份", "code": "603278",
@@ -758,8 +768,8 @@ def test_structure_line_dual_renders_both_segment_leaders():
                                  prev_still=0, history=[("2026-10-21", 2)])
     assert "主板龙一 菲林格尔（603226）1 连板，首封 10:37:00，10 日涨幅 -17.4%" in line
     assert "双创龙一 斯迪克（300806）1 连板，首封 14:32:00，10 日涨幅 +4.1%" in line
-    assert "昨日该板块封板 0 只" in line and "10-21 2" not in line, \
-        "2026-10-30d：家数序列 <3 日与昨日承接行重叠，不出行"
+    assert "昨日涨停 0 只（无承接）" in line and "10-21 2" not in line, \
+        "2026-11-17：prev_total=0 仍封恒 0 可推导；2026-10-30d：序列 <3 日不出行"
     # 未封板轨：断板反包候选分情形文案
     rows2 = [{"name": "文投控股", "code": "600715", "streak": None, "time": None,
               "gain10": 30.0, "segment": "main", "leaderSealedToday": False}]
@@ -1307,11 +1317,12 @@ GENE_ITEM = {
 
 
 def test_zt_gene_line_six_fields_units_and_no_fake_zero():
-    """六元按序带单位；缺失走「不可考」不补 0；小数 1 位截断。"""
+    """五字段按序带单位（2026-11-17：首板炸板与首板封板互补留一）；缺失不补 0。"""
     line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM},
                            {"label": "双创龙一 301697", "item": None}])
     assert line.startswith("涨停基因")
-    assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、首板炸板0%、连板33.3%" in line
+    assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、连板33.3%" in line
+    assert "首板炸板" not in line, "互补字段不再投喂（落库六字段不动）"
     assert "301697" not in line, "缺该股语料整段缺席（AGENTS §1.2-8）"
     assert A.zt_gene_line([]) is None
 
@@ -1333,12 +1344,17 @@ def test_zt_gene_line_window_note_and_backfill_marker():
 
 
 def test_zt_gene_line_partial_gene_marks_missing_field():
-    """部分字段缺失（partial）：该字段单项「不可考」，其余照出，不整体丢弃。"""
+    """部分字段缺失（partial）：在场字段照出，不整体丢弃；首板炸板已退役不渲染。"""
     partial = dict(GENE_ITEM, gene={"zt_count": 4, "premium5_count": 1,
                                     "next_day_red_pct": 50, "first_seal_pct": 100,
                                     "first_broken_pct": None, "lianban_pct": 50})
     line = A.zt_gene_line([{"label": "龙一 301697", "item": partial}])
-    assert "首板炸板不可考" in line and "首板封板100%" in line
+    assert "首板封板100%" in line and "首板炸板" not in line
+    # 在场字段缺失 → 单项不可考（不补 0）
+    partial2 = dict(GENE_ITEM, gene={"zt_count": 4, "first_seal_pct": None,
+                                     "lianban_pct": 50})
+    line2 = A.zt_gene_line([{"label": "龙一 301697", "item": partial2}])
+    assert "首板封板不可考" in line2 and "涨停4次" in line2
 
 
 def test_narrative_gene_line_placement_before_reason_line():
@@ -1437,7 +1453,11 @@ def test_theme_heat_line_variants():
     # 截断披露：>6 个题材出「共 X 个」
     many = [{"id": f"8{i:04d}", "name": f"T{i}", "number": float(i)} for i in range(9)]
     line2 = A.theme_heat_line([{"label": "龙一 X", "themes": many, "poolMissing": None}])
-    assert "（前 6 按热度，共 9 个）" in line2 and "T8 8" in line2 and "T2 2" not in line2
+    assert "（共 9 个）" in line2 and "T8 8" in line2 and "T2 2" not in line2
+    assert "前 6 按热度" not in line2, "2026-11-17：选取口径注不进叙事（§1.2-8）"
+    # 单龙一 label 空 → 不出重复前缀（待判龙头行已锚定身份）
+    solo = A.theme_heat_line([{"label": "", "themes": themes, "poolMissing": None}])
+    assert solo.startswith("题材热度：光伏") and "龙一" not in solo
     # None/空/降级 → 整行缺席（AGENTS §1.2-8：缺数据不投喂占位）
     line3 = A.theme_heat_line([
         {"label": "主板龙一 Y", "themes": None, "poolMissing": "no_theme_corpus"},
@@ -1738,7 +1758,8 @@ def test_related_plate_percent_gate(monkeypatch):
 
 def test_narrative_20261111_line_placements():
     """新行装配位置：竞价/跌停紧炸板面；封板大单紧封板质量；爆发原因紧涨停原因；
-    板块归属紧题材热度；上榜预测在公告后、龙虎榜前；实时榜在龙虎榜后。"""
+    板块归属紧题材热度。2026-11-17：上榜预测/实时龙虎榜龙头题面零消费，
+    龙头叙事参数已删；板块级叙事保留（公告后/龙虎榜后装配不变）。"""
     base = dict(date="2026-10-19", market_line="涨停 46 家",
                 structure="结构行", baseline="基线行", evidence_block="【题材证据】")
     n = A.build_leader_narrative(
@@ -1749,12 +1770,10 @@ def test_narrative_20261111_line_placements():
         gene_line="基因行", reason_line="涨停原因行", bf_reason_line="爆发原因行",
         popularity_rank_line="热度排名行", risk_line="风险画像行",
         abnormal_price_line="异动提醒行", notice_count_line="公告计数行",
-        forecast_line="上榜预测行", lhb_facts_line="龙虎榜行",
-        realtime_lhb_line="实时榜行")
+        lhb_facts_line="龙虎榜行")
     order = ["炸板面行", "板内跌停行", "竞价行", "封板质量行", "封板大单行",
              "题材热度行", "板块归属行", "基因行", "涨停原因行", "爆发原因行",
-             "热度排名行", "风险画像行", "异动提醒行", "公告计数行",
-             "上榜预测行", "龙虎榜行", "实时榜行"]
+             "热度排名行", "风险画像行", "异动提醒行", "公告计数行", "龙虎榜行"]
     idx = [n.index(t) for t in order]
     assert idx == sorted(idx)
     # None 不出行
@@ -1800,7 +1819,7 @@ def test_base_rate_line_render_and_absence():
     stats = {"n": 112, "ratePct": 21.4, "start": "2026-10-23", "end": "2026-11-05",
              "sealed": {"n": 90, "ratePct": 25.6}, "broken": {"n": 22, "ratePct": 5.6}}
     ln = A.base_rate_line(stats)
-    assert ln == "续板基础率（live已结算112行，2026-10-23~2026-11-05）：总体21.4%；封板行25.6%／断板行5.6%"
+    assert ln == "续板基础率（112 样本，2026-10-23~2026-11-05）：总体21.4%；封板行25.6%／断板行5.6%"
     only_sealed = dict(stats, broken={"n": 0})
     assert "断板行" not in A.base_rate_line(only_sealed)
     assert A.base_rate_line(None) is None
@@ -1835,3 +1854,68 @@ def test_v17_criteria_consume_new_corpus_lines():
                       "梯队", "题材热度", "板块判定"):
         assert line_name in blob, f"v17 判据必须消费语料行：{line_name}"
 
+
+
+# ---------- 2026-11-17 语料精简（用户裁决，西陇科学 002584 案例审计） ----------
+
+XILONG_REASON = (
+    "化工；据2026年9月15日投资者关系活动记录表，公司暂未生产光刻胶。目前生产的产品包含"
+    "光刻胶配套的试剂如剥离液、显影液、蚀刻液、清洗液等。 化工：据2026年半年报，电子化学品"
+    "与通用试剂构成公司利润的主要来源；公司加大G4、G5级别高端产品战略布局，子公司佛山西陇"
+    "开展电子级高纯试剂生产线建设，推动湿电子化学品的产能扩张，为电子级异丙醇、丙酮、乙腈等"
+    "核心产品提供稳定的量产支撑，蚀刻液、显影液、剥离液等关键品类持续扩充优化升级")
+
+
+def test_limitup_reason_line_slim_keeps_hard_facts():
+    """涨停原因叙事压缩：套话小句删除，日期+来源+硬事实保留；plate 保真不动。"""
+    line = A.limitup_reason_line([{"label": "", "item": {"zt": XILONG_REASON}}])
+    assert line.startswith("涨停原因：化工；据2026年9月15日投资者关系活动记录表")
+    assert "暂未生产光刻胶" in line
+    assert "电子化学品与通用试剂构成公司利润的主要来源" in line
+    assert "佛山西陇开展电子级高纯试剂生产线建设" in line
+    for gone in ("战略布局", "产能扩张", "量产支撑", "持续扩充优化升级"):
+        assert gone not in line, f"套话小句不进叙事：{gone}"
+    # 自带日期/来源的小句永不删（硬事实保护，即使措辞似套话）
+    src = "公司2026年11月1日公告加大G4产品战略布局"
+    assert "战略布局" in A.limitup_reason_line([{"label": "", "item": {"zt": src}}])
+    # plate 热点摘引保真（2026-11-11 裁决不动）；双龙一前缀保留
+    ln2 = A.limitup_reason_line([{"label": "主板龙一 X",
+                                  "item": {"zt": "PCB设备", "plate": "异动解析页全文"}}])
+    assert ln2 == "涨停原因：主板龙一 X=PCB设备；热点摘引：异动解析页全文"
+    # 压缩后为空 → 整段缺席（§1.2-8）
+    assert A.limitup_reason_line([{"label": "", "item": {"zt": "公司加大战略布局"}}]) is None
+
+
+def test_leader_narrative_zero_consumption_lines_removed():
+    """龙头题面零消费行删除：盘面事实/盘面总结/上榜预测/实时龙虎榜不进龙头叙事；
+    market_line 改可选（None 头部只留日期）；删除的参数不再接受（旧代删除）。"""
+    import pytest
+    base = dict(date="2026-11-17", structure="板块行", baseline="结构基线：x",
+                evidence_block="【题材证据】", leader_name="西陇科学", leader_code="002584")
+    n = A.build_leader_narrative(**base)
+    assert n.startswith("2026-11-17 交易日\n"), "market_line 缺席头部只留日期"
+    for gone in ("盘面事实", "盘面总结", "上榜预测", "实时龙虎榜"):
+        assert gone not in n
+    n2 = A.build_leader_narrative(**base, market_line="涨停 37 家")
+    assert n2.startswith("2026-11-17 交易日 · 涨停 37 家"), "在场时旧头部形状"
+    with pytest.raises(TypeError):
+        A.build_leader_narrative(**base, market_summary="盘面总结：x")
+    with pytest.raises(TypeError):
+        A.build_leader_narrative(**base, forecast_line="上榜预测：x")
+    with pytest.raises(TypeError):
+        A.build_leader_narrative(**base, realtime_lhb_line="实时龙虎榜：x")
+
+
+def test_solo_leader_lines_drop_redundant_prefix():
+    """单龙一（label 空）：题材热度/基因/涨停原因/热度排名不出「主板龙一 X」重复前缀；
+    双龙一 label 在场时前缀保留（轨别身位可见）。"""
+    item = {"zt": "PCB设备+木地板", "rank": 30, "rank_total": 5575,
+            "rank_top": ["002242", "600715", "600410"]}
+    assert A.limitup_reason_line([{"label": "", "item": item}]) == "涨停原因：PCB设备+木地板"
+    assert A.popularity_rank_line([{"label": "", "item": item}]) == \
+        "热度排名：30/5575（Top3：002242、600715、600410）"
+    g = A.zt_gene_line([{"label": "", "item": GENE_ITEM}])
+    assert g.startswith("涨停基因：涨停5次") and "龙一" not in g
+    r2 = A.limitup_reason_line([{"label": "主板龙一 X", "item": item},
+                                {"label": "双创龙一 Y", "item": {"zt": "光刻胶"}}])
+    assert "主板龙一 X=" in r2 and "双创龙一 Y=光刻胶" in r2

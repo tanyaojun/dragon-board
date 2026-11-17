@@ -309,8 +309,9 @@ def test_heat_series_daily_aggregation_and_trend_line():
     assert "断流/见顶" not in text
     # 10-22 有 Kword=俄乌重建 的新闻 1 条
     assert "10-22 新闻1·事件0" in text
-    # 无痕迹的日如实写 0（不断流伪装成有数据）
-    assert "10-20 新闻0·事件0" in text
+    # 无痕迹的连续零日区间化（2026-11-17 语料精简：断流事实无损，逐字重复删除）
+    assert "10-13~10-21 新闻0·事件0（连续9日）" in text
+    assert "10-20 新闻0·事件0" not in text
     assert out["heatSeries"]["any"] is True
 
 
@@ -328,10 +329,11 @@ def test_heat_window_widened_to_ten_days():
     db = _db()
     out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
                                        leader_code="001360")
-    # 序列覆盖 10 个日槽（无痕迹日如实写 0）
+    # 序列覆盖 10 个日槽（2026-11-17：连续零日区间化，9 零日+1 有痕日=10 槽）
     seg = out["text"].split("题材热度序列（近 10 日）：", 1)[1].split("\n", 1)[0]
-    days = [d.split()[0] for d in seg.split("；")]
-    assert len(days) == 10 and days[0] == "10-13" and days[-1] == "10-22"
+    parts = seg.split("；")
+    assert parts[0] == "10-13~10-21 新闻0·事件0（连续9日）"
+    assert parts[-1].startswith("10-22 ") and len(parts) == 2
 
 
 def test_heat_series_absent_in_relay_compat_shape():
@@ -963,3 +965,50 @@ def test_include_flash_exact_0926_boundary_excluded():
                                        include_flash=True)
     assert "09:26 物理AI板块竞价异动" not in res["text"], "恰 09:26:00 不含"
     assert "物理AI盘前利好" in res["text"] and res["flashState"] == "ok"
+
+
+# ── 2026-11-17 语料精简（用户裁决，西陇科学案例）：枚举压缩/摘录截断治理/零日区间化 ──
+
+def test_compress_enum_long_run_only():
+    long = ("公司PCB用化学试剂包括各类规格的过硫酸钠、硫酸铜、硝酸银、氢氧化钠、盐酸、"
+            "硫酸、硝酸、环氧氯丙烷、氢氟酸、丙酮、氨水、甲醛等。")
+    out = D._compress_enum(long)
+    assert "过硫酸钠、硫酸铜、硝酸银等" in out
+    assert "氢氧化钠" not in out and "等等" not in out
+    # 短枚举（<8 项）原样不动
+    short = "剥离液、显影液、蚀刻液、清洗液等"
+    assert D._compress_enum(short) == short
+    # 尾随「等+类别词」不被吞并、不产生叠「等」
+    tail = "甲、乙、丙、丁、戊、己、庚、辛等关键品类持续优化"
+    out2 = D._compress_enum(tail)
+    assert "关键品类" in out2 and "等等" not in out2
+
+
+def test_clip_excerpt_sentence_boundary():
+    t = ("1、公司铜蚀刻液实现量产供应。 2、2026年9月12日网传研报，需求上涨。 "
+         "3、2026年6月23日网传纪要，氧化锆卡盘国产替代")
+    out = D._clip_excerpt(t, 60)
+    assert out.endswith("…") and "氧化锆" not in out, "半句碎片不投喂"
+    assert "需求上涨。" in out
+    assert D._clip_excerpt(t, 500) == t, "预算内原样"
+    # 无句界 → 硬截断保留（宁截勿空，fail-visible）
+    nb = D._clip_excerpt("无句界长文本" * 10, 20)
+    assert nb.endswith("…") and len(nb) == 21
+    # 回退后只剩编号空头 → 剔除
+    t2 = "首句完整。 2、 " + "x" * 100
+    assert "2、" not in D._clip_excerpt(t2, 12)
+
+
+def test_heat_line_zero_run_compression():
+    series = {"series": [
+        {"date": "2026-11-08", "newsN": 0, "eventN": 1, "maxHot": 75731},
+        *[{"date": f"2026-11-{d:02d}", "newsN": 0, "eventN": 0, "maxHot": None}
+          for d in range(9, 18)],
+    ]}
+    assert D._heat_line(series) == ("11-08 新闻0·事件1（最高热度75731）；"
+                                    "11-09~11-17 新闻0·事件0（连续9日）")
+    # 单日零值原样（不区间化）；非零日逐日照出
+    one = {"series": [{"date": "2026-11-08", "newsN": 1, "eventN": 0, "maxHot": None},
+                      {"date": "2026-11-09", "newsN": 0, "eventN": 0, "maxHot": None},
+                      {"date": "2026-11-10", "newsN": 2, "eventN": 0, "maxHot": None}]}
+    assert D._heat_line(one) == "11-08 新闻1·事件0；11-09 新闻0·事件0；11-10 新闻2·事件0"

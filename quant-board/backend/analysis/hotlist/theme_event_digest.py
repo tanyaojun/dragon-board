@@ -316,6 +316,47 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
+# ── 2026-11-17 语料精简（用户裁决，西陇科学 002584 案例审计）──
+# 纯叙事渲染层压缩：落库原文（jiuyan expound / 2203 zt）不动，单一事实源仍在库。
+
+_ENUM_ITEM = r"[^，。；：、！？\s等]{1,8}"
+_ENUM_RUN_RE = re.compile(_ENUM_ITEM + r"(?:、" + _ENUM_ITEM + r"){7,}")
+
+
+def _compress_enum(text: str) -> str:
+    """长枚举压缩：≥8 个短项（≤8 字）的「、」连续枚举只留前 3 项+「等」。
+
+    西陇案例：解析摘录罗列 13 个化学品名（~70 字符），驱动标签已承载类别
+    （PCB用化学试剂），逐项枚举判读价值低。阈值 ≥8 保守起步，短枚举不动。
+    """
+    def _sub(m: re.Match) -> str:
+        items = m.group(0).split("、")
+        return "、".join(items[:3]) + "等"
+    out = _ENUM_RUN_RE.sub(_sub, str(text or ""))
+    return out.replace("等等", "等")
+
+
+_SENT_END = "。！？；"
+
+
+def _clip_excerpt(text: str, limit: int) -> str:
+    """摘录截断治理：超预算时回退到最后一个完整句界，丢弃尾部半句碎片。
+
+    西陇案例：硬截断产出「3、2026年6月23日网传纪要，氧化锆卡…」零信息半句。
+    回退后若只剩编号空头（「3、」）一并剔除；尾附「…」显式披露仍有删节
+    （fail-visible）。预算内无任何句界时保留硬截断（宁截勿空）。
+    """
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    k = max(cut.rfind(ch) for ch in _SENT_END)
+    if k <= 0:
+        return cut + "…"
+    out = re.sub(r"\s*\d+、\s*$", "", cut[:k + 1]).rstrip()
+    return (out + "…") if out else cut + "…"
+
+
 def _days_between(a: str | None, b: str | None) -> int | None:
     from datetime import datetime
     try:
@@ -583,13 +624,37 @@ def theme_heat_series(db, board_name: str | None, *, date: str,
 
 
 def _heat_line(series: dict) -> str:
-    """热度序列渲染为一行（按日 新闻·事件·最高热度，供模型直读趋势）。"""
-    parts = []
-    for s in series["series"]:
-        seg = f"{s['date'][5:]} 新闻{s['newsN']}·事件{s['eventN']}"
-        if s.get("maxHot") is not None:
-            seg += f"（最高热度{s['maxHot']}）"
-        parts.append(seg)
+    """热度序列渲染为一行（按日 新闻·事件·最高热度，供模型直读趋势）。
+
+    2026-11-17 语料精简（用户裁决）：连续全零日（新闻0·事件0·无热度）合并为
+    区间段「MM-DD~MM-DD 新闻0·事件0（连续N日）」——断流事实无损，消除逐字
+    重复（西陇科学 11-17 案例：9 日零值逐字重复 ~140 字符）。单日零值原样。
+    """
+    rows = series["series"]
+    parts: list[str] = []
+    i = 0
+
+    def _is_zero(s: dict) -> bool:
+        return not s["newsN"] and not s["eventN"] and s.get("maxHot") is None
+
+    while i < len(rows):
+        s = rows[i]
+        if _is_zero(s):
+            j = i
+            while j + 1 < len(rows) and _is_zero(rows[j + 1]):
+                j += 1
+            if j > i:
+                parts.append(f"{s['date'][5:]}~{rows[j]['date'][5:]} "
+                             f"新闻0·事件0（连续{j - i + 1}日）")
+            else:
+                parts.append(f"{s['date'][5:]} 新闻0·事件0")
+            i = j + 1
+        else:
+            seg = f"{s['date'][5:]} 新闻{s['newsN']}·事件{s['eventN']}"
+            if s.get("maxHot") is not None:
+                seg += f"（最高热度{s['maxHot']}）"
+            parts.append(seg)
+            i += 1
     return "；".join(parts)
 
 
@@ -897,7 +962,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                           if leader_code and leader_expound_chars else content_chars)
             lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{l2_tag}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
-                         f"解析摘录：{_clip(body or exp, lead_chars)}")
+                         f"解析摘录：{_clip_excerpt(_compress_enum(body or exp), lead_chars)}")
         elif lead is not None:
             lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{l2_tag}）："
                          f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析")

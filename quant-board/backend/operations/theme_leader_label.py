@@ -530,11 +530,12 @@ def reason_entries_for_leaders(rows: list[dict],
     AGENTS §1.2-8）。单一事实源 = `fetch_reason_corpus`（kpl_daban_pool.reason_items）。
     """
     entries: list[dict] = []
+    solo = len(rows) == 1   # 2026-11-17 语料精简：单龙一不出重复前缀（同基因条目）
     for row in rows:
         code = str(row.get("code") or "")[-6:]
         seg = row.get("segment")
         seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
-        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+        entries.append({"label": "" if solo else f"{seg_cn} {row.get('name') or code}",
                         "item": reasons.get(code)})
     return entries
 def fetch_gene_corpus(db: Any, date: str) -> dict[str, dict]:
@@ -564,14 +565,17 @@ def gene_entries_for_leaders(rows: list[dict],
     """涨停基因行条目（2026-11-08a）：**仅待判龙一自身**（与涨停原因行同口径）。
 
     板块成员基因不列——基因是「这只股的历史打板确定性」，板块问题（深度/延续）由结构
-    行承载，不重复；无该股语料 → item=None（zt_gene_line 出「不可考」）。
+    行承载，不重复；无该股语料 → item=None（zt_gene_line 整段缺席，§1.2-8）。
+    2026-11-17 语料精简：单龙一（len(rows)==1）label 置空——待判龙头行已锚定
+    身份，叙事不出「主板龙一 X」重复前缀；双龙一（板块级）保留轨别前缀。
     """
     entries: list[dict] = []
+    solo = len(rows) == 1
     for row in rows:
         code = str(row.get("code") or "")
         seg = row.get("segment")
         seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
-        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+        entries.append({"label": "" if solo else f"{seg_cn} {row.get('name') or code}",
                         "item": genes.get(code)})
     return entries
 
@@ -620,12 +624,13 @@ def theme_heat_entries_for_leaders(rows: list[dict], corpus: dict[str, Any]) -> 
     items = corpus.get("items") or {}
     degraded = corpus.get("degraded")
     entries: list[dict] = []
+    solo = len(rows) == 1   # 2026-11-17 语料精简：单龙一不出重复前缀（同基因条目）
     for row in rows:
         code = str(row.get("code") or "")
         seg = row.get("segment")
         seg_cn = {"main": "主板龙一", "growth": "双创龙一"}.get(seg, "龙一") if seg else "龙一"
         hit = items.get(code)
-        entries.append({"label": f"{seg_cn} {row.get('name') or code}",
+        entries.append({"label": "" if solo else f"{seg_cn} {row.get('name') or code}",
                         "themes": (hit or {}).get("themes"),
                         "poolMissing": None if hit else degraded})
     return entries
@@ -1236,7 +1241,6 @@ def reconcile_superseded_leaders(db: Any, date: str, rows: list[dict] | None) ->
 
 def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               dataset_id: str = DEFAULT_DATASET_ID,
-              market_line: str | None = None,
               board_history: dict[str, list[tuple[str, int]]] | None = None,
               strength_match: dict | None = None,
               reason_entries: list[tuple[str, str | None]] | None = None,
@@ -1247,7 +1251,6 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               series_line: str | None = None,
               segment: str | None = None,
               live_line: str | None = None,
-              market_summary: str | None = None,
               lhb_facts: dict | None = None,
               rebound_line: str | None = None,
               cycle: dict | None = None,
@@ -1256,8 +1259,6 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               detail_lines: dict[str, str | None] | None = None,
               regulatory_line: str | None = None,
               regulatory_state: dict | None = None,
-              forecast_line: str | None = None,
-              realtime_lhb_line: str | None = None,
               sector_judgment: dict | None = None,
               base_rate_stats: dict | None = None) -> dict:
     """组装一条**个股级**投喂（叙事 + 附带元数据），零网络零模型（v17 四题）。
@@ -1265,16 +1266,16 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
     2026-11-11 语料缺口补全新增入参（均 None 不出行）：`bid_line`（竞价承接行）、
     `dt_line`（板内跌停行）、`detail_lines`（个股详情四通道行 dict：
     ztBigOrder/bfReason/abnormalPrice/relatedPlate，detail_lines_for_leader 产出）、
-    `forecast_line`（上榜预测行）、`realtime_lhb_line`（实时龙虎榜行）；热度排名/
-    风险画像两行由 reason_entries 直接派生（单一事实源），不另传入参。
+    热度排名/风险画像两行由 reason_entries 直接派生（单一事实源），不另传入参。
     v17 新增入参：`sector_judgment`（板块级 doc answers，板块判定行 join；同轮标注
     时由 run() 在标注前注入，构建时仅库读兜底）、`base_rate_stats`（续板基础率锚
     统计，live_base_rate 产出）；均 None 不出行（旧调用形状不变）。
+    **2026-11-17 语料精简（用户裁决）**：龙头题面零消费行删除——market_line/
+    market_summary/forecast_line/realtime_lhb_line 入参已删（盘面事实/盘面总结/
+    上榜预测/实时龙虎榜不再进龙头叙事；板块级 build_sector_one 不受影响，
+    fc_items/rt_items 落库不动）；家数序列缺席/周期缺席留结构化字段
+    boardHistoryState/cycleState（fail-visible，叙事不占字）。
     """
-    from backend.operations.jev_label_jiuyan import market_facts_line
-
-    if market_line is None:
-        market_line = market_facts_line(db, date, dataset_id)
     # boardCodes 缺失/为空时传 None（空集会把 L2 全过滤掉，属危险默认；显式回退全量口径+披露）
     sealed = frozenset(row.get("boardCodes") or ())
     block = digest.build_theme_evidence_block(db, board_name=row["board"], date=date,
@@ -1290,7 +1291,6 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
                       if lhb_facts is not None else None)
     narrative = build_leader_narrative(
         date=date,
-        market_line=market_line,
         forward_axis=forward_date_axis_line(date),
         structure=structure_line(
             board=row["board"], board_n=row["boardN"], leader=row,
@@ -1308,7 +1308,6 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         live_line=live_line,
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
-        market_summary=market_summary,
         driver_cross=driver_cross_line(driver_doc),
         gene_line=zt_gene_line(gene_entries or []),
         theme_heat_line=theme_heat_line(theme_heat_entries or []),
@@ -1323,15 +1322,13 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         zt_big_order_line=(detail_lines or {}).get("ztBigOrder"),
         bid_line=bid_line,
         dt_line=dt_line,
-        forecast_line=forecast_line,
         lhb_facts_line=lhb_facts_line,
-        realtime_lhb_line=realtime_lhb_line,
         rebound_line=rebound_line,
         evidence_block=block["text"],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
         segment=row.get("segment"),
-        # v15 P1：结构事实行（周期/封板/高度/梯队，程序直读；v17 D5 周期可作佐证）
+        # v15 P1（2026-11-17 收窄）：结构事实行只留周期状态+未封板场景标记
         facts_line=structure_facts_line(row, cycle),
         # v17：续板基础率锚行（先验底单一事实源）+ 板块判定行（A2 跨题修复）
         base_rate_line=base_rate_line(base_rate_stats),
@@ -1340,6 +1337,10 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
     return {"docKind": DOC_KIND_LEADER, "narrative": narrative, "evidence": block,
             "regulatoryState": regulatory_state,
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_facts_line is not None),
+            # 2026-11-17 语料精简：叙事不再投喂的缺席状态留结构化字段（fail-visible）
+            "boardHistoryState": ("missing" if board_history is not None
+                                  and not board_history.get(row["board"]) else None),
+            "cycleState": (cycle or {}).get("state") or None,
             # v17：板块判答注入状态（构建时仅库读兜底；同轮注入由 run() 标注前终裁）
             "sectorJudgmentState": ("injected" if "板块判定：" in narrative else None),
             "driverCross": {"found": bool(driver_doc),
@@ -1535,6 +1536,10 @@ def _label_one(db, col, date: str, built: dict,
         # 不匹配 null 字段，写 None 会成对账死角）
         if row.get("segment"):
             doc["segment"] = row["segment"]
+        # 2026-11-17 语料精简：叙事不再投喂的缺席状态结构化留痕（§1.2-8 落库层
+        # fail-visible）：家数序列缺席/周期缺席审计可观测，不占叙事字
+        doc["boardHistoryState"] = built.get("boardHistoryState")
+        doc["cycleState"] = built.get("cycleState")
     doc.update({
         "ammoVersion": AMMO_VERSION_THEME_LEADER,
         # A（2026-11-11 用户裁决）：龙虎榜缺席结构化留痕（叙事整行缺席时审计/补齐链
@@ -1884,7 +1889,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         dt_names, dt_ok = dt_names_for_board(row, lanes_corpus)
         reg_entries = regulatory_entries_for_codes(row_codes, row_roles, reg_corpus)
         built = build_one(
-            db, date, row, rows_baseline, dataset_id, market_line,
+            db, date, row, rows_baseline, dataset_id,
             board_history=board_history,
             strength_match=smatch,
             reason_entries=reason_entries_for_leaders([row], reasons),
@@ -1899,16 +1904,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             detail_lines=detail_lines_for_leader(row, detail_corpus, theme_heat),
             regulatory_line=regulatory_risk_line(reg_entries),
             regulatory_state=_regulatory_state(reg_corpus, reg_entries),
-            forecast_line=lhb_forecast_line(
-                _scope_entries(row_codes, row_roles, fc_corpus.get("items") or {}),
-                lane_ok=bool(fc_corpus.get("laneOk"))),
-            realtime_lhb_line=lhb_realtime_line(
-                _scope_entries(row_codes, row_roles, rt_corpus.get("items") or {}),
-                lane_ok=bool(rt_corpus.get("laneOk"))),
             live_line=kpl_live_line(le, board=rb, total=lm.get("total", 0),
                                     window=lm.get("window", ""),
                                     unavailable=lm.get("unavailable")),
-            market_summary=market_summary,
             lhb_facts=lhb_facts,
             rebound_line=rebound_line,
             cycle=cyc or None,

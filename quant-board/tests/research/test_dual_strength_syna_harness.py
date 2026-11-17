@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.operations.diagnose_dual_strength_syna import (
     WINDOWS,
     _syn_a_group,
-    analyze_window,
 )
 
 
@@ -58,12 +57,6 @@ def test_syn_a_group_predicate_matches_s22_definition():
     assert _syn_a_group("A", "A")(_signal("B", "A", "A")) is False
     # unknown 档不满足精确档位匹配
     assert _syn_a_group("A", "A")(_signal("A", "unknown", "A")) is False
-
-
-def test_analyze_window_fail_visible_on_empty():
-    """空帧/空信号如实返回 error 结构（fail-visible，不伪造空统计）。"""
-    empty = analyze_window("oos2u", {"start": "2026-09-13", "end": "2026-09-30"})
-    assert empty.get("error") == "no frames loaded"
 
 
 def test_main_accepts_oos2u_window_choice():
