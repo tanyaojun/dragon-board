@@ -169,7 +169,7 @@ def board_keywords(board_name: str | None) -> list[str]:
 
 
 def match_industry(nodes: list[dict], board_name: str | None) -> dict:
-    """板块名 → 产业树节点。返回 {matched, method, node, candidates}。
+    """板块名 → 产业树节点。返回 {matched, method, node, candidates, candidate_nodes}。
 
     优先级：**板块本名**归一后精确相等 → 本名双向包含 → 别名包含（别名不得参与精确匹配，
     否则「AI硬件」的别名「算力」会把「算力概念」误判成 exact）。
@@ -178,7 +178,8 @@ def match_industry(nodes: list[dict], board_name: str | None) -> dict:
     base = normalize_name(board_name)
     aliases = [normalize_name(a) for a in ALIASES.get(base, ()) if normalize_name(a)]
     if not base or base in NOT_A_THEME or not nodes:
-        return {"matched": False, "method": None, "node": None, "candidates": []}
+        return {"matched": False, "method": None, "node": None, "candidates": [],
+                "candidate_nodes": []}
     exact, contains, alias_hits = [], [], []
     for node in nodes:
         name = normalize_name(node.get("name"))
@@ -194,11 +195,16 @@ def match_industry(nodes: list[dict], board_name: str | None) -> dict:
                     (contains, "contains") if contains else
                     (alias_hits, "alias") if alias_hits else ([], None))
     if not pool:
-        return {"matched": False, "method": None, "node": None, "candidates": []}
+        return {"matched": False, "method": None, "node": None, "candidates": [],
+                "candidate_nodes": []}
     pool = sorted(pool, key=lambda n: (n.get("level") or 9, -(n.get("hot") or 0),
                                        len(n.get("name") or "")))
     return {"matched": True, "method": method, "node": pool[0],
-            "candidates": [n.get("name") for n in pool[:5]]}
+            "candidates": [n.get("name") for n in pool[:5]],
+            # 2026-11-18 B9 Fix-2：候选节点全量（前 5）供 S3 候选级迭代门与
+            # 首通道同档 tie-break tag-aware 选择（此前只试 pool[0]，同词其他
+            # 候选即使可过成分门也永不尝试——广百案结构性贫料根因之一）。
+            "candidate_nodes": pool[:5]}
 
 
 # 驱动标签第二匹配通道的候选词切分（S3，2026-10-24b）：韭研 expound 首行按分隔符
@@ -207,7 +213,7 @@ def match_industry(nodes: list[dict], board_name: str | None) -> dict:
 # 驱动（「存储芯片」「金矿」「华为昇腾」）可补对口产业树节点——真实扫描 10-22/23
 # 共 14 只 fire 9 只。边界如实披露：标签词与节点名无字面子串关系时不触发（如「证券」
 # ↔层级命名「金融-券商」），不编语义别名；对口内容由板内解析 expound 承载。
-_TAG_SPLIT_RE = re.compile(r"[＋+、，,/｜|｜\s（）()【】\[\]]+")
+_TAG_SPLIT_RE = re.compile(r"[＋+、，,/｜|｜\s（）()【】\[\]；;。：:]+")
 
 
 def _tag_terms(tag_line: str | None, limit: int = 3) -> list[str]:
@@ -220,6 +226,34 @@ def _tag_terms(tag_line: str | None, limit: int = 3) -> list[str]:
         if len(out) >= limit:
             break
     return out
+
+
+def _tag_aware_pick(match: dict, tag_line: str | None) -> tuple[dict | None, str | None]:
+    """首通道节点选择：仅当 (level, hot) 同档多候选 tie 时按龙头标签词破 tie。
+
+    2026-11-18 B9 Fix-4（用户裁决）：广百案「大消费」contains 命中全部「大消费-*」
+    子节点（level/hot 全同）→ 旧版取名字最短「大消费-酒」，纯排序伪影与个股业务无关。
+    同档 tie 时优先标签词子串命中的候选（确定性匹配，与 S3 同哲学，不编语义别名）；
+    level/hot 有差异时排序有意义不覆写（睿能宽父节点案，2026-10-30d「并列披露不替换
+    首通道」设计不变）。返回 (node, tagPreferredTerm)；无偏好 → (pool[0], None)。
+    """
+    cands = match.get("candidate_nodes") or []
+    top = match.get("node")
+    if len(cands) < 2 or not tag_line or top is None:
+        return top, None
+
+    def _key(n):
+        return (n.get("level") or 9, -(n.get("hot") or 0))
+
+    tied = [n for n in cands if _key(n) == _key(top)]
+    if len(tied) < 2:
+        return top, None
+    for t in _tag_terms(tag_line):
+        for n in tied:
+            nm = normalize_name(n.get("name"))
+            if nm and (t in nm or nm in t):
+                return n, t
+    return top, None
 
 
 # 残桩正文门槛（2026-11-14 用户报障：大东方大消费→商业航天错联复盘）：
@@ -747,15 +781,17 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     # 语料已采集时的「取数日/语料条数/采集日」管道计数行已随语料卫生红线撤出叙事
     # （AGENTS §1.2-8）：条数/新鲜度属开发诊断，新鲜度已由各条目的日期字段承载。
 
-    node = match.get("node")
+    node, tag_preferred_term = _tag_aware_pick(match, leader_tag_line)
     if not state.get("ok"):
         pass                                   # 未采集行已在前面给出，不再伪造 L3 明细
     elif not match.get("matched"):
         if board_name:                        # 空名（未归属股）不掏空占位（review 2026-11-13f）
             lines.append(f"板块级催化：产业树未映射（「{board_name}」）")
     elif not (node or {}).get("content") or _is_stub_content(node):
-        # 残桩正文（≤9 字自复述）按缺席处理（2026-11-14）：不伪装成催化原文
-        lines.append(f"板块级催化：产业树节点「{node.get('name')}」无催化正文")
+        # 残桩正文（≤9 字自复述）按缺席处理（2026-11-14）：不伪装成催化原文。
+        # 2026-11-18b（review P2 闭环）：「节点」在 hygiene FORBIDDEN 表内（2026-11-14
+        # 漏网），删词保义（缺席事实不变），并入未首烧的 2026-11-18b 代。
+        lines.append(f"板块级催化：产业树「{node.get('name')}」无催化正文")
     else:
         chg = node.get("contentChangedDate") or "未知"
         gap = _days_between(chg, date)
@@ -781,8 +817,14 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     # 首通道未映射时同样适用（此时任何命中都是增量）。
     # 2026-11-14 成分验证门（用户报障：大东方 600327 零售标签蹭「商业航天」被注入
     # 卫星叙事）：词面命中 ≠ 业务关联，注入前必须验证龙头 ∈ 匹配节点（含一级祖先）
-    # 成分快照——不在/无法核验/残桩正文一律不注入，跳过原因留 s3State 供审计不进叙事；
-    # 继续扫后续标签词（各词独立门，不连坐）。
+    # 成分快照。
+    # 2026-11-18 B9 Fix-2/3（用户裁决「采纳全部建议」）：①候选级迭代门——同词全部
+    # 候选独立过门（不连坐），首个过门即注入（旧版只试 pool[0]，广百案 L1 无快照
+    # 即换词，可经祖先验明的 L2 候选永不尝试）；②门语义拆分——not_member（验明
+    # 不在，蹭标签）维持阻断（2026-11-14 裁决不动）；unverifiable（快照缺席）改
+    # 披露式注入（§4.0 暴露不阻断）：叙事行带「成分未核验」数据事实标注（与
+    # 「未证实」来源可靠性标注同类），s3State=injected_unverifiable 留痕，模型自行降权。
+    # 残桩正文门不变；跳过原因留 s3State 供审计不进叙事。
     s3_state: str | None = None
     s3_term: str | None = None
     s3_node_name: str | None = None
@@ -790,29 +832,38 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         first_name = normalize_name((node or {}).get("name"))
         for term in _tag_terms(leader_tag_line):
             m2 = match_industry(nodes, term)
-            n2 = m2.get("node") or {}
-            if not m2.get("matched") or normalize_name(n2.get("name")) == first_name:
+            if not m2.get("matched"):
                 continue
-            s3_term, s3_node_name = term, n2.get("name")
-            if _is_stub_content(n2):
-                s3_state = s3_state or "skipped_stub_content"
-                continue
-            mem = _leader_node_membership(db, n2, leader_code)
-            if mem != "member":
-                s3_state = s3_state or (
-                    "skipped_not_member" if mem == "not_member"
-                    else "skipped_unverifiable")
-                continue
-            chg2 = n2.get("contentChangedDate") or "未知"
-            gap2 = _days_between(chg2, date)
-            gap2_txt = ("当日" if gap2 == 0 else f"{gap2} 天前"
-                        if isinstance(gap2, int) and gap2 > 0 else "未知")
-            lines.append(
-                f"产业树补充映射（龙头标签词「{term}」关联「{n2.get('name')}」，"
-                f"热度 {n2.get('hot')}，"
-                f"正文更新 {chg2}，{gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
-            s3_state = "injected"
-            break
+            for n2 in m2.get("candidate_nodes") or [m2.get("node") or {}]:
+                if normalize_name(n2.get("name")) == first_name:
+                    continue
+                # s3Term/s3Node = state 归因候选（首个跳过原因或注入候选），非最后
+                # 尝试候选（review minor-1：候选迭代下赋值与 state 记录同步，防审计错配）。
+                if _is_stub_content(n2):
+                    if s3_state is None:
+                        s3_state = "skipped_stub_content"
+                        s3_term, s3_node_name = term, n2.get("name")
+                    continue
+                mem = _leader_node_membership(db, n2, leader_code)
+                if mem == "not_member":
+                    if s3_state is None:
+                        s3_state = "skipped_not_member"
+                        s3_term, s3_node_name = term, n2.get("name")
+                    continue
+                s3_term, s3_node_name = term, n2.get("name")
+                chg2 = n2.get("contentChangedDate") or "未知"
+                gap2 = _days_between(chg2, date)
+                gap2_txt = ("当日" if gap2 == 0 else f"{gap2} 天前"
+                            if isinstance(gap2, int) and gap2 > 0 else "未知")
+                unverified = "" if mem == "member" else "成分未核验，"
+                lines.append(
+                    f"产业树补充映射（龙头标签词「{term}」关联「{n2.get('name')}」，"
+                    f"{unverified}热度 {n2.get('hot')}，"
+                    f"正文更新 {chg2}，{gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
+                s3_state = "injected" if mem == "member" else "injected_unverifiable"
+                break
+            if s3_state in ("injected", "injected_unverifiable"):
+                break
 
     # 当日题材事件（开盘啦 Topic：仅标题+热度+日期；2026-10-28 用户裁决，正文不出、弱匹配降级）
     heat = (theme_heat_series(db, board_name, date=date, days=HEAT_WINDOW_DAYS)
@@ -1030,4 +1081,5 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             "s3State": s3_state,
             "s3Term": s3_term,
             "s3Node": s3_node_name,
+            "tagPreferredTerm": tag_preferred_term,
             "unmappedCandidates": match.get("candidates") or []}

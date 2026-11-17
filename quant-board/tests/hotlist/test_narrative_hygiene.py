@@ -366,6 +366,44 @@ def test_hygiene_theme_evidence_block_with_content():
     _assert_clean(out["text"], "evidence_block(有催化正文)")
 
 
+def test_hygiene_s3_supplement_member_and_unverifiable():
+    """2026-11-18 B9（review major-1 闭环，§1.2-8 程序性门禁）：S3 补充映射行族
+    member / unverifiable 两变体全块过黑名单——「成分未核验」是数据事实标注
+    （与「未证实」来源可靠性标注同类），非开发注；残桩缺席行「节点」违禁词已删。"""
+    industry = [
+        {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
+         "content": "1、2026年9月23日晚，我国成功发射卫星互联网低轨 26 组卫星。",
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22",
+         "path": ["商业航天"]},
+    ]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "大消费", "count": 1, "stocks": [
+            {"code": "sh600327", "name": "大东方",
+             "expound": "零售+商业航天\n1、公司商业零售门店情况。"},
+        ]},
+    ]}]
+    # member 变体：快照在场且龙头 ∈ 成分
+    db = _FakeDb()
+    db.cols["jiuyan_ai_industry"] = _FakeCol(industry)
+    db.cols["jiuyan_industry_stocks"] = _FakeCol([
+        {"_id": "B1", "kind": "jiuyan_industry_stocks", "name": "商业航天",
+         "stocks": [{"code": "600327", "name": "大东方"}]}])
+    db.cols["jiuyan_action"] = _FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
+                                       leader_code="600327")
+    assert out["s3State"] == "injected"
+    _assert_clean(out["text"], "evidence_block(S3 member 注入)")
+    # unverifiable 变体：快照缺席 → 披露式注入（成分未核验标注）
+    db2 = _FakeDb()
+    db2.cols["jiuyan_ai_industry"] = _FakeCol(industry)
+    db2.cols["jiuyan_action"] = _FakeCol(action)
+    out2 = D.build_theme_evidence_block(db2, board_name="大消费", date="2026-10-22",
+                                        leader_code="600327")
+    assert out2["s3State"] == "injected_unverifiable"
+    assert "成分未核验" in out2["text"]
+    _assert_clean(out2["text"], "evidence_block(S3 unverifiable 披露注入)")
+
+
 def test_hygiene_20261111_new_lines():
     """2026-11-11 语料缺口补全新行（①→④）：黑名单零命中；缺数据整行缺席。"""
     rank_item = {"zt": "冰雪经济+中俄贸易受益", "plate": "冰雪产业", "rank": 15,

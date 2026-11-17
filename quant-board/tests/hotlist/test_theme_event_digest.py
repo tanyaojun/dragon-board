@@ -498,9 +498,11 @@ def test_driver_tag_gate_blocks_non_member_tag():
     assert out["s3Term"] == "商业航天" and out["s3Node"] == "商业航天"
 
 
-def test_driver_tag_gate_unverifiable_without_snapshot():
-    """成分快照缺席（读不到/无该节点档）=无法核验 → 不注入（fail-safe：宁可少补
-    不误补），s3State 如实标 unverifiable。"""
+def test_driver_tag_gate_unverifiable_injects_with_disclosure():
+    """2026-11-18 B9 Fix-3（用户裁决「采纳全部建议」）：快照缺席=无法核验 ≠
+    not_member——披露式注入（§4.0 暴露不阻断），叙事行带「成分未核验」数据事实
+    标注（与「未证实」来源可靠性标注同类），s3State=injected_unverifiable 留痕；
+    验明不在（not_member 蹭标签）仍阻断（上测，2026-11-14 裁决不动）。"""
     industry = [
         {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
          "content": "1、2026年9月23日晚，我国成功发射卫星互联网低轨 26 组卫星。",
@@ -518,8 +520,135 @@ def test_driver_tag_gate_unverifiable_without_snapshot():
     db.cols["jiuyan_action"] = FakeCol(action)
     out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
                                        leader_code="600327")
-    assert "产业树补充映射" not in out["text"]
-    assert out["s3State"] == "skipped_unverifiable"
+    assert "产业树补充映射" in out["text"]
+    assert "成分未核验" in out["text"], "披露标注是数据事实，模型自行降权"
+    assert "卫星互联网" in out["text"], "真正文注入（贫料→有料）"
+    assert out["s3State"] == "injected_unverifiable"
+    assert out["s3Term"] == "商业航天" and out["s3Node"] == "商业航天"
+
+
+def test_driver_tag_candidate_iteration_tries_next_on_not_member():
+    """2026-11-18 B9 Fix-2（用户裁决）：同词候选独立过门不连坐——pool[0]
+    not_member 后继续试同词下一候选（可经不同一级祖先验明）；旧版只试 pool[0]
+    即换词，可验明候选结构性饿死（广百案根因之一）。"""
+    industry = [
+        {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
+         "content": "1、2026年9月23日晚，卫星互联网发射。",
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22",
+         "path": ["商业航天"]},
+        {"code": "B2", "name": "航天-卫星", "level": 2, "hot": 5.0,
+         "content": "1、2026年10月21日，卫星互联网组网加速。",
+         "contentChangedDate": "2026-10-21", "lastFetchDate": "2026-10-22",
+         "path": ["航天", "航天-卫星"]},
+    ]
+    industry_stocks = [
+        {"_id": "B1", "kind": "jiuyan_industry_stocks", "name": "商业航天",
+         "stocks": [{"code": "001270", "name": "铖昌科技"}]},   # 龙头不在 → not_member
+        {"_id": "HK", "kind": "jiuyan_industry_stocks", "name": "航天",
+         "stocks": [{"code": "600327", "name": "大东方"}]},     # 经祖先验明 member
+    ]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "大消费", "count": 1, "stocks": [
+            {"code": "sh600327", "name": "大东方",
+             "expound": "航天+零售\n1、公司门店情况。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=industry_stocks)
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
+                                       leader_code="600327")
+    assert out["s3State"] == "injected", "同词第二候选过门即注入"
+    assert out["s3Node"] == "航天-卫星" and out["s3Term"] == "航天"
+    assert "组网加速" in out["text"] and "成分未核验" not in out["text"]
+
+
+def test_driver_tag_audit_fields_attribute_to_state_candidate():
+    """review minor-1（2026-11-18）：s3Term/s3Node = state 归因候选（首个跳过原因），
+    非最后尝试候选——候选 A 残桩→候选 B not_member，终态 skipped_stub_content 必须配 A。"""
+    industry = [
+        {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
+         "content": "航天",   # 残桩（≤9 字）
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22",
+         "path": ["商业航天"]},
+        {"code": "B2", "name": "航天-卫星", "level": 2, "hot": 5.0,
+         "content": "1、2026年10月21日，卫星互联网组网加速。",
+         "contentChangedDate": "2026-10-21", "lastFetchDate": "2026-10-22",
+         "path": ["航天", "航天-卫星"]},
+    ]
+    industry_stocks = [{"_id": "HK", "kind": "jiuyan_industry_stocks", "name": "航天",
+                        "stocks": [{"code": "001270", "name": "铖昌科技"}]}]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "大消费", "count": 1, "stocks": [
+            {"code": "sh600327", "name": "大东方",
+             "expound": "航天+零售\n1、公司门店情况。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=industry_stocks)
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
+                                       leader_code="600327")
+    assert out["s3State"] == "skipped_stub_content"
+    assert out["s3Node"] == "商业航天" and out["s3Term"] == "航天", \
+        "审计指向首个跳过原因候选（A 残桩），非最后尝试（B not_member）"
+
+
+def test_guangbai_retail_tree_mismatch_end_to_end():
+    """2026-11-18 B9 广百案端到端回归（库内事实复刻）：「大消费」contains 命中
+    全部大消费-* 子节点（level/hot 全同）旧版取最短名「酒」；Fix-1 切词补 ；后
+    「零售」独立成词，Fix-4 同档 tie-break 选「大消费-零售百货」（诚实残桩缺席行），
+    Fix-2/3 使 L1「零售百货」真正文（无快照）披露式注入。"""
+    industry = [
+        {"code": "C1", "name": "大消费-酒", "level": 2, "hot": 0.0,
+         "content": "酒", "contentChangedDate": "2026-09-26",
+         "lastFetchDate": "2026-11-17", "path": ["大消费", "大消费-酒"]},
+        {"code": "C2", "name": "大消费-零售百货", "level": 2, "hot": 0.0,
+         "content": "零售百货", "contentChangedDate": "2026-09-26",
+         "lastFetchDate": "2026-11-17", "path": ["大消费", "大消费-零售百货"]},
+        {"code": "R1", "name": "零售百货", "level": 1, "hot": -2.28,
+         "content": "2026年10月20日，国家发展改革委新闻发布会表示促进百货零售转型。",
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-11-17",
+         "path": ["零售百货"]},
+    ]
+    industry_stocks = [{"_id": "DC", "kind": "jiuyan_industry_stocks",
+                        "name": "大消费", "batchDate": "2026-10-25",
+                        "stocks": [{"code": "002187", "name": "广百股份"}]}]
+    action = [{"_id": "2026-11-17:final", "fields": [
+        {"name": "大消费", "count": 1, "stocks": [
+            {"code": "sz002187", "name": "广百股份",
+             "expound": "零售；据2026年半年报，公司从事百货零售\n1、主业百货零售。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[],
+             industry_stocks=industry_stocks)
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-11-17",
+                                       leader_code="002187")
+    text = out["text"]
+    assert "产业树「大消费-零售百货」无催化正文" in text, \
+        "Fix-4：同档 tie-break 选业务相关兄弟（诚实残桩缺席行；「节点」违禁词已删，review P2）"
+    assert "大消费-酒" not in text, "最短名排序伪影消除"
+    assert out["tagPreferredTerm"] == "零售"
+    assert "产业树补充映射（龙头标签词「零售」关联「零售百货」，成分未核验，" in text
+    assert "国家发展改革委" in text, "Fix-1+2+3：唯一真正文节点披露式注入"
+    assert out["s3State"] == "injected_unverifiable"
+    assert out["s3Term"] == "零售" and out["s3Node"] == "零售百货"
+
+
+def test_tag_aware_pick_only_breaks_level_hot_ties():
+    """Fix-4 边界：level/hot 有差异时排序有意义不覆写（睿能宽父节点案，
+    2026-10-30d 首通道不替换设计）；仅同档 tie 时标签词破 tie。"""
+    parent = {"name": "半导体产业链", "level": 1, "hot": 12.0}
+    child = {"name": "半导体产业链-存储芯片", "level": 2, "hot": 18.0}
+    m = {"node": parent, "candidate_nodes": [parent, child]}
+    assert D._tag_aware_pick(m, "存储芯片+机器人") == (parent, None)
+    a = {"name": "大消费-酒", "level": 2, "hot": 0.0}
+    b = {"name": "大消费-零售百货", "level": 2, "hot": 0.0}
+    m2 = {"node": a, "candidate_nodes": [a, b]}
+    assert D._tag_aware_pick(m2, "零售；据半年报") == (b, "零售")
+    assert D._tag_aware_pick(m2, "") == (a, None)
+    assert D._tag_aware_pick({"node": a, "candidate_nodes": [a]}, "零售") == (a, None)
 
 
 def test_stub_content_treated_as_no_catalyst():
@@ -546,7 +675,8 @@ def test_stub_content_treated_as_no_catalyst():
     out = D.build_theme_evidence_block(db, board_name="大消费", date="2026-10-22",
                                        leader_code="600327")
     text = out["text"]
-    assert "板块级催化：产业树节点「大消费-酒」无催化正文" in text
+    assert "板块级催化：产业树「大消费-酒」无催化正文" in text
+    assert "节点" not in text, "2026-11-18b review P2：「节点」在 hygiene FORBIDDEN 表，删词保义"
     assert "板块级催化原文" not in text
     assert out["hasContent"] is False
     # S3 同门：标签词「白酒」命中残桩节点 → 不注入
@@ -560,6 +690,9 @@ def test_tag_terms_split_is_deterministic():
         ["人形机器人", "金属腱绳", "商业航天"]
     assert D._tag_terms("应用+科技") == [], "泛词黑名单内的词不作候选"
     assert D._tag_terms("") == [] and D._tag_terms(None) == []
+    assert D._tag_terms("零售；据2026年半年报，公司从事百货零售") == \
+        ["零售", "据2026年半年报", "公司从事百货零售"], \
+        "2026-11-18 B9 Fix-1：；;。：: 入分隔符集（KPL expound 通用格式，广百案「零售」此前被；粘成不可匹配整块）"
 
 
 def test_generic_anchor_econ_p1_1():

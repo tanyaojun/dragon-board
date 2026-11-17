@@ -138,6 +138,14 @@ def cmd_list_datasets(_: argparse.Namespace) -> None:
         print_json(DatasetService(session).list_datasets())
 
 
+def cmd_jev_low_confidence(args: argparse.Namespace) -> None:
+    """判答质量观测（2026-11-18 C1 裁决）：低置信判答清单，零 jev 调用，按代际分段。"""
+    from backend.operations.jev_answer_quality import low_confidence_report
+    db = _runtime_mongodb_database()
+    print_json(low_confidence_report(
+        db, date_start=args.start, date_end=args.end, threshold=args.threshold))
+
+
 def cmd_verify_themes(args: argparse.Namespace) -> None:
     payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
     print_json(ThemeMigrationService(None).verify_mapping(payload))
@@ -1443,6 +1451,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_cmd = sub.add_parser("list-datasets", help="List datasets")
     list_cmd.set_defaults(func=cmd_list_datasets)
+
+    from backend.operations.jev_answer_quality import LOW_CONFIDENCE_THRESHOLD
+    jev_lc_cmd = sub.add_parser(
+        "jev-low-confidence",
+        help="判答质量观测：低置信判答清单（零 jev 调用，按题集代际分段，C1 替代审计）")
+    jev_lc_cmd.add_argument("--start", default=None, help="起始日 YYYY-MM-DD（含）")
+    jev_lc_cmd.add_argument("--end", default=None, help="结束日 YYYY-MM-DD（含）")
+    jev_lc_cmd.add_argument("--threshold", type=float, default=LOW_CONFIDENCE_THRESHOLD,
+                            help="max_prob 观察阈值（默认取模块常量，仅人工抽检分流非判据）")
+    jev_lc_cmd.set_defaults(func=cmd_jev_low_confidence)
 
     verify_themes_cmd = sub.add_parser("verify-themes", help="Verify historical DragonBoard theme mapping JSON payload (mongodb 链)")
     verify_themes_cmd.add_argument("--path", required=True)

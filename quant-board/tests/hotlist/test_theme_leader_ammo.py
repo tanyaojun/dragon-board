@@ -91,7 +91,7 @@ def test_question_set_frozen_hash_and_versions():
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v18"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18a"   # 语料精简续批（西陇/广百审计 B 类）；题面 v18 同批换代（A1-A5）；前一版 2026-11-17b = 桶键中文化
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18b"   # B9 原料层修复（S3 门/切词/首通道 tag-aware）；题面 v18 hash 不变；前版 2026-11-18a = 语料精简续批（B 类）
     assert A.QUESTION_SET_HASH_THEME_LEADER == "8f7f97a4680a"   # v18（2026-11-18 用户裁决修复 A+B + review 清洁度修）；前代 eb9cfae4139e = v17 术语对齐代（跨代不可比，预登记 theme-leader-v18-questionset-corpus-fix-20261118）
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",

@@ -145,7 +145,7 @@ def test_auction_leader_vA5_dedicated_stamps():
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
     assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA5"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-18a"   # 删盘面事实行+热度排名接线+共享渲染精简+注入 bug 修复；前版 2026-11-15e = 第三源三档+公共门禁
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-18b"   # 共享 B9 原料层修复随题材同批；前版 2026-11-18a = 删盘面事实行+热度排名接线+注入 bug 修复
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == "fb671c8f0223"   # vA5（含 B4 接线 + review 清洁度修）；前代 cd5639a7407f = vA4（跨代不可比）
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）
