@@ -106,7 +106,7 @@
 - **未定档日回退现算**（classify_series 定格优先、现算兜底，单一事实源仍是
   analysis/hotlist/weak_to_strong.py，零第二份阈值）；continuation 链由定格 hit 传导。
 - **语料行分歧注记**：重跑评分 ≠ 定档 idx 时，语料行显式写
-  「重跑重评 X，节点以收盘定档 Y 为准」（fail-visible，不静默）。
+  「重跑重评 X，以收盘定档 Y 为准」（fail-visible，不静默；v10 措辞去「节点」黑名单词）。
 - **历史回填**：`backend.cli wzs-settle-backfill --start --end [--idx-override 日期=指数]`，
   幂等；2026-10-22 执行 2026-05-06~10-21 → 111 日全部定档，其中 2026-10-20 引用本文档
   §1 存档定档值 50.1（收盘首次判定，重跑重评 47.8/46.4 不改写）。dry-run 命中清单与

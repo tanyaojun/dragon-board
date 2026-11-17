@@ -431,8 +431,9 @@ def test_zhaban_face_rushing_and_rotten_segments():
         "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
     })
     line = zhaban_face_line(db, _D0)
-    assert "冲刺未封 6 家（南模生物(15.7%)" not in line  # 夹具名是「冲688265」非真实名
-    assert "冲刺未封 6 家（冲688265(+15.7%)、冲000973(+7.4%)、冲600199(+6.9%)）" in line
+    # v10 D3：冲刺代表股删（判据消费家数不消费股名，明细在 THS 帧结构化）
+    assert "冲刺未封 6 家" in line
+    assert "冲688265" not in line and "南模生物" not in line
     assert "涨停池烂板（开板≥2次回封）15 家（占 42%）" in line
 
 
@@ -528,16 +529,20 @@ def test_ladder_structure_first_board_pct_no_prev_no_fake():
 
 
 def test_theme_ladder_lines_dragon_order():
-    """题材梯队：高度优先、封板时间次之；区间文案「N天M板」+ 真连板（2026-10-16 口径）。"""
+    """题材梯队：高度优先、封板时间次之；区间文案「N天M板」+ 真连板（2026-10-16 口径）。
+    v10 B3：relay 侧只留龙一；龙二/三与新鲜/延续/驱动主类打标撤出（题材链自有供给）。"""
     db = _db()
     db.cols["hotlist_jev_driver_labels"] = FakeCol([
         {"tradingDate": _D0, "status": "ok", "code": "600001", "label": "product_event",
          "freshness": "continuing"}])
     lines = theme_ladder_lines(db, _D0)
+    text = "\n".join(lines)
     # 妖股 16天8板：龙序仍按区间 M 居首，但文案补跨度与真连板（昨日不在池 → 连板1板）
     assert any("龙一 E(16天8板" in x for x in lines)
     assert any("连板1板" in x for x in lines)
-    assert any("龙二 A(4天4板" in x for x in lines)
+    assert "龙二" not in text and "龙三" not in text
+    assert "新鲜" not in text and "驱动主类" not in text and "无标签" not in text
+    assert "龙一=板块节点空间龙一档" not in text   # v10 A2：口径图例删
     # D0 五只全部有板数（600005 16天8板 / 600001 4天4板），无首板股——不断言首板，
     # 但也不能留 `or True` 这种永真式占位（2026-10-16 review：那是噪声不是检查）
     assert not any("首板" in x for x in lines)
@@ -556,7 +561,6 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
                 "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
                 "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
-                "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
                 "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
             }}}}, 123)
 
@@ -579,10 +583,11 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v9"
-    # v8 市场周期融合 3 题答案抽取 + 缺语料标记（本夹具无 market_cycle 档→True）
-    assert doc["turnQuality"] == "pending" and doc["cycleIntensity"] == "moderate"
+    assert doc["questionSetVersion"] == "v10"
+    # v8 市场周期融合题答案抽取 + 缺语料标记（本夹具无 market_cycle 档→True）；v10 删 cycleIntensity
+    assert doc["turnQuality"] == "pending"
     assert doc["riskAhead"] == "none" and doc["cycleCorpusMissing"] is True
+    assert "cycleIntensity" not in doc
     # v6：板块/龙头结构随文档落库（前端同源读取，无需二次计算）
     assert isinstance(doc.get("relayStructure"), dict)
     assert doc["relayStructure"]["mainline"] is not None
@@ -612,7 +617,6 @@ def _dispatch_phase(phase):
                 "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 5.0, "legend": list(range(11))},
                 "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
-                "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
                 "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
             }}}}, 1)
     return fake_dispatch
@@ -671,8 +675,8 @@ def test_run_skips_missing_final():
 
 
 def test_questions_schema():
-    """题目集：v9 8 题；choice 题全部带 insufficient_evidence 兜底（防超证据判读）。"""
-    assert len(QUESTIONS_RELAY) == 8
+    """题目集：v10 7 题（删 cycle_intensity）；choice 题全部带 insufficient_evidence 兜底（防超证据判读）。"""
+    assert len(QUESTIONS_RELAY) == 7
     for qid, q in QUESTIONS_RELAY.items():
         if q["type"] == "choice":
             assert "insufficient_evidence" in q["criteria"], qid
@@ -1248,9 +1252,10 @@ def test_relay_structure_mainline_by_three_day_survivors():
     counts = {s["name"]: s["d0"]["count"] for s in struct["sectors"]}
     assert counts["乙板块"] > counts["甲板块"]
     assert struct["sectors"][0]["name"] == "甲板块"
-    main_line = next(x for x in relay.sector_relay_lines(struct)
-                     if x.startswith("主线板块："))
-    assert main_line.startswith("主线板块：甲板块") and "总龙头在本板块：是" in main_line
+    # v10 C2：主线结论行撤出叙事（被主线行+升位关系全覆盖），struct 事实源不变
+    lines = relay.sector_relay_lines(struct)
+    assert not any(x.startswith("主线板块：") for x in lines)
+    assert any(x.startswith("· 甲板块（主线）") for x in lines)
 
 
 def test_relay_structure_mainline_degrades_when_no_survivor():
@@ -1269,7 +1274,8 @@ def test_relay_structure_mainline_degrades_when_no_survivor():
     struct = relay.relay_structure(db, _D0)
     assert struct["mainline"]["name"] == "乙板块"
     assert struct["mainline"]["basis"] == "d0_count"
-    assert any(x.startswith("主线板块：乙板块") for x in relay.sector_relay_lines(struct)),         "2026-10-30g+：依据注删，basis 字段仍为 d0_count"
+    # v10 C2：主线结论行撤出，basis 字段仍为 d0_count（struct 事实源不变）
+    assert not any(x.startswith("主线板块：") for x in relay.sector_relay_lines(struct))
 
 
 def test_relay_structure_missing_history_is_fail_visible():
@@ -1293,8 +1299,8 @@ def test_relay_structure_missing_history_is_fail_visible():
     assert "0只" not in row and "0 只" not in row
     # 依据文案不得声称「均为零」（那是把缺料读成事实）
     assert "chain_na" == struct["mainline"]["basis"]
-    main_line = next(x for x in lines if x.startswith("主线板块："))
-    assert main_line.startswith("主线板块：乙板块") and "三日链不可算" not in main_line, "2026-10-30g+：依据注删"
+    # v10 C2：主线结论行撤出；不可算披露走 struct.degraded + 升位关系行
+    assert not any(x.startswith("主线板块：") for x in lines)
     assert struct["mainline"]["survivors"] is None
     assert anchor_gaps_derived("\n".join(lines)) == ["板块接力链"]
 
@@ -1317,7 +1323,8 @@ def test_relay_structure_mainline_degrades_when_chain_ok_and_truly_zero():
     assert struct["mainline"]["basis"] == "d0_count"
     row = next(x for x in relay.sector_relay_lines(struct) if x.startswith("· 甲板块"))
     assert "三日存活 0 只" in row and "今日晋级 0 只" in row
-    assert any(x.startswith("主线板块：甲板块") for x in relay.sector_relay_lines(struct)),         "2026-10-30g+：依据注删，basis 字段仍为 d0_count"
+    # v10 C2：主线结论行撤出，basis 字段仍为 d0_count
+    assert not any(x.startswith("主线板块：") for x in relay.sector_relay_lines(struct))
 
 
 def test_relay_structure_leader_same_stock():
@@ -1647,7 +1654,6 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
                 "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
                 "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
                 "turn_quality": {"type": "choice", "choice": "pending", "probabilities": {}},
-                "cycle_intensity": {"type": "choice", "choice": "moderate", "probabilities": {}},
                 "risk_ahead": {"type": "choice", "choice": "none", "probabilities": {}},
             }}}}, 100)
 
@@ -1659,10 +1665,13 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     assert struct["mainline"]["name"] == "甲板块"
     narrative = doc["narrative"]
     assert "板块接力链（三日" in narrative and "龙头结构：" in narrative, "2026-10-30g+：定义注删"
-    assert f"主线板块：{struct['mainline']['name']}" in narrative
     assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
-    assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
-    assert doc["questionSetVersion"] == "v9"
+    # v10 C1/C2/B1：档案头行并入总龙头行；主线结论行/同桶基线行撤出（struct 保留）
+    assert "龙头档案：" not in narrative
+    assert "主线板块：" not in narrative
+    assert "同桶隔日连板基线" not in narrative
+    assert struct["mainline"].get("sustain") is not None   # 桶键结构化事实源仍在
+    assert doc["questionSetVersion"] == "v10"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1814,19 +1823,19 @@ def test_ladder_structure_prev_layers():
 
 def test_relay_trajectory_title_and_swing_aligned():
     """D6：段名对齐判据引用名【近10日连板轨迹】——近10日=今日+近9日（与高位轨迹段
-    「近10个交易日」同规）；摆动锚窗口同步 10 日。"""
+    「近10个交易日」同规）；v10 D1：摆动锚撤出（峰/谷可从轨迹表读出，判据零引用）。"""
     dates = [f"2026-09-{d:02d}" for d in range(11, 21)] + ["2026-09-30"]
     finals = [_final(d, _STOCKS[_D0]) for d in dates]
     db = FakeDb({"snapshot_frames": _frames(dates), "jiuyan_action": FakeCol(finals)})
     line = relay.relay_trajectory_line(db, dates[-1])
     assert line.startswith("近10日连板轨迹（含今日")
     assert "近11日连板轨迹" not in line
-    assert "近10个交易日涨停峰值" in line
+    assert "摆动锚" not in line and "涨停峰值" not in line
 
 
 def test_theme_evidence_lines_top3_boards():
-    """D5：题材证据块（韭研产业树+投资日历确定性拼装，top3 板块）注入题材段；
-    未映射板块如实标注，不做模糊猜测。"""
+    """v10 B2：题材证据块改仅事件/日历命中（孤儿催化原文/未映射/无匹配占位撤出）；
+    命中行渲染当日事件标题+热度，匹配单源仍走 build_theme_evidence_block。"""
     boards = {"机器人": [{"code": "600001", "name": "A", "num": "4天4板", "time": "09:25"}],
               "低空经济": [{"code": "600002", "name": "B", "num": "3天3板", "time": "09:44"}],
               "公告": [{"code": "600003", "name": "C"}]}
@@ -1851,43 +1860,59 @@ def test_theme_evidence_lines_top3_boards():
     })
     lines = relay.theme_evidence_lines(db, _D0)
     text = "\n".join(lines)
-    assert lines[0] == "题材证据（top3 板块）：", "取数日/语料计数管道注撤出叙事（AGENTS §1.2-8）"
-    assert "板块级催化原文（「机器人」" in text, "2026-10-30f：来源名删（与 theme-leader 链同源）"
-    assert "当日题材事件：" in text and "英伟达GTC大会" in text, "2026-10-30g：括号注删"
-    # 公告=粗分桶（NOT_A_THEME）→ 未映射如实标注
-    assert "未映射" in text and "不代表无催化" not in text
+    assert lines[0] == "题材事件（top3 板块）："
+    assert "当日 2026-09-30 英伟达GTC大会" in text and "热度 46417" in text
+    # v10：催化原文/未映射/无匹配占位不再进 relay 语料（判据零消费的孤儿证据）
+    assert "板块级催化原文" not in text and "未映射" not in text
+    assert "无匹配" not in text and "未来 3 日既定事件" not in text
+
+
+def test_theme_evidence_lines_no_hits_whole_block_absent():
+    """v10 B2（AGENTS §1.2-8）：top3 全无事件/日历命中 → 整块缺席，不留「无匹配」占位。"""
+    boards = {"机器人": [{"code": "600001", "name": "A", "num": "4天4板", "time": "09:25"}]}
+    db = FakeDb({
+        "jiuyan_action": FakeCol([_final_multi(_D0, boards)]),
+        "kpl_topic_events": FakeCol([]),
+        "kpl_theme_news": FakeCol([]),
+        "kpl_theme_calendar": FakeCol([]),
+        "jiuyan_ai_industry": FakeCol([
+            {"_id": "i1", "code": "n1", "name": "机器人", "level": 2,
+             "content": "产业树正文在场但无事件命中", "hot": 19.11,
+             "contentChangedDate": "2026-09-30", "lastFetchDate": "2026-09-30"},
+        ]),
+    })
+    assert relay.theme_evidence_lines(db, _D0) == []
 
 
 def test_theme_evidence_lines_corpus_missing_fail_visible():
-    """D5 fail-visible：题材语料未采集（2026-10-20 起才有）→ 显式标注，并计入
+    """v10 fail-visible：题材语料未采集（2026-10-20 起才有）→ 保留例外事实行，并计入
     anchorGapsDerived（子项缺位，不抬主锚徽标）。"""
     db = FakeDb({"jiuyan_action": FakeCol(
         [_final_multi(_D0, {"机器人": [{"code": "600001", "name": "A"}]})])})
     lines = relay.theme_evidence_lines(db, _D0)
     assert len(lines) == 1
-    assert "语料未采集" in lines[0] and "无催化" not in lines[0]
-    assert anchor_gaps_derived("\n".join(lines)) == ["题材证据"]
+    assert lines[0] == "题材事件：语料未采集"
+    assert anchor_gaps_derived("\n".join(lines)) == ["题材事件"]
 
 
 def test_sector_lines_sustain_baseline():
-    """D5：板块接力链段尾增同桶隔日连板基线行（结构基线单一事实源
-    theme_leader_baseline；主线甲板块龙一甲A=4板/2家/早封 → 组合桶 62.5%）。"""
+    """v10 B1：同桶基线行撤出 relay 叙事（v9 删 theme_pulse 后的孤儿证据，8 题判据
+    零引用；题材龙头链自有供给）；桶键结构化事实源 mainline.sustain 保留供前端/审计。"""
     struct = relay.relay_structure(_sector_db(), _D0)
     lines = relay.sector_relay_lines(struct)
-    line = next(l for l in lines if "同桶隔日连板基线" in l)
-    assert "甲A" in line and "62.5%（8 样本）" in line
-    assert "总体 34.3%（341 样本" in line
-    assert "2026-08-01~10-19" in line
+    assert not any("同桶隔日连板基线" in l for l in lines)
+    assert not any("窗口" in l for l in lines)   # A3 统计窗口注随段删
+    sus = struct["mainline"]["sustain"]
+    assert sus["name"] == "甲A" and sus["streak"] == 4 and sus["boardN"] == 2
 
 
 def test_sector_lines_sustain_baseline_streak_unknown():
-    """D5 fail-visible：主线龙一真连板不可算 → 桶不可定位，只给总体基线，不猜桶。"""
+    """v10：真连板不可算日同样不出基线行；sustain 桶键字段仍随 struct 落库（fail-visible）。"""
     struct = relay.relay_structure(_sector_db(), _D0)
     struct["mainline"]["sustain"]["streak"] = None
     lines = relay.sector_relay_lines(struct)
-    line = next(l for l in lines if "同桶隔日连板基线" in l)
-    assert "桶不可定位" in line and "总体 34.3%" in line, "2026-10-30g+：括号删"
-    assert "62.5%" not in line
+    assert not any("同桶隔日连板基线" in l for l in lines)
+    assert struct["mainline"]["sustain"]["streak"] is None
 
 
 def test_sector_lines_sustain_baseline_caliber_sealed_and_streak():
@@ -1917,11 +1942,9 @@ def test_sector_lines_sustain_baseline_caliber_sealed_and_streak():
     sus = struct["mainline"]["sustain"]
     # 桶键=封板口径：妖X 炸板不入家数（boardN=1）；龙一=真连板序（龙Y streak 3）
     assert sus["boardN"] == 1 and sus["streak"] == 3 and sus["name"] == "龙Y"
+    # v10 B1：基线行撤出叙事，桶键口径回归仍由 struct 承载（题材链同桶供给不受影响）
     lines = relay.sector_relay_lines(struct)
-    line = next(l for l in lines if "同桶隔日连板基线" in l)
-    assert "龙Y" in line and "妖X" not in line
-    # (3, 1-2, early) 无组合桶 → 按高度档回退 46.2%；旧口径 (1, 2家) 会给 19.2%
-    assert "46.2%（39 样本）" in line and "19.2%" not in line
+    assert not any("同桶隔日连板基线" in l for l in lines)
 
 
 def test_money_hist_series_skips_day_with_missing_final():
@@ -1983,8 +2006,109 @@ def test_questions_v7_criteria_revisions():
     assert "≤-2%" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "近20日分位" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "分位刻度" in QUESTIONS_RELAY["relay_index"]["instructions"]
-    # 版本与题数：v9 删 theme_pulse/leader_strength 10→8（2026-11-12 用户裁决）
+    # 版本与题数：v10 语料精简 + 删 cycle_intensity（2026-11-17 用户裁决），题集 8→7
     from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
-    assert QUESTION_SET_VERSION_RELAY == "v9"
-    assert len(QUESTIONS_RELAY) == 8
+    assert QUESTION_SET_VERSION_RELAY == "v10"
+    assert len(QUESTIONS_RELAY) == 7
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v10（2026-11-17）语料精简：A 卫生 / B 孤儿证据 / C 去重 / D 低价值 / E 判据消歧
+# 预注册：docs/hotlist-jev/relay-v10-corpus-slim-preregistration-20261117.md
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_v10_full_narrative_hygiene_and_slim_lock(monkeypatch):
+    """v10 验收门 1/2：完整叙事过 §1.2-8 黑名单（补「节点」漏网教训——题材梯队表
+    图例曾含黑名单词却无测试覆盖）；删项缺席、保留事实在场。"""
+    from tests.hotlist.test_narrative_hygiene import FORBIDDEN
+    monkeypatch.setattr(relay, "_dispatch_jev", _dispatch_phase("relay_heat"))
+    db = _sector_db()
+    run_relay_index_day(db, [_D0])
+    _, doc = db.cols[relay.COLLECTION].updates[0]
+    narrative = doc["narrative"]
+    hits = [w for w in FORBIDDEN if w in narrative]
+    assert not hits, f"v10 叙事含开发注释 {hits}"
+    # A/B/C/D 删项缺席
+    for gone in ("待落库", "候选池含停牌复牌未分辨", "龙一=板块节点空间龙一档",
+                 "同桶隔日连板基线", "主线板块：", "龙头档案：", "摆动锚",
+                 "历史基线", "一日游为主", "驱动主类", "（交叉 ",
+                 "板块级催化", "无匹配", "龙二", "龙三"):
+        assert gone not in narrative, gone
+    # 保留事实：结构预检/反包率/归因分布/龙一/总龙头/昨日相位轴
+    assert "反包修复：" in narrative and "晋级与断板：" in narrative
+    assert "题材梯队表：" in narrative and "龙一" in narrative
+    assert "总龙头" in narrative and "板块接力链（三日" in narrative
+    assert "连板轨迹（含今日" in narrative
+
+
+def test_v10_criteria_collapse_points_to_three_day_chain():
+    """E：collapse「高位批量断板」显式点名【三日晋级链】高位股轨迹（真连板≥4 段
+    与区间高位轨迹段错位修复）；relay_index instructions 增板序图例（A5 配套）。"""
+    c = QUESTIONS_RELAY["relay_phase"]["criteria"]["collapse"]
+    assert "【三日晋级链】高位股轨迹断板≥2只" in c
+    assert "（轨迹断板≥2只）" not in c
+    assert "●=涨停，末位今日" in QUESTIONS_RELAY["relay_index"]["instructions"]
+
+
+def test_v10_market_facts_ths_cross_default_unchanged(monkeypatch):
+    """C4：market_facts_line 缺省输出字节级不变（共用坐标系红线）；relay 传
+    ths_cross=False 只去「（交叉 …）」分布，其余字段一致。"""
+    from backend.operations import jev_label_jiuyan as jl
+    cur = {"ztCount": 37, "zhabanRate": 35.1, "zhabanCount": 20, "rushingCount": 12,
+           "drawdownCount": 8, "ladder": {"one": 33, "two": 5, "three": 1, "four": 0, "high": 0},
+           "ladderSource": "jiuyan", "ladderPoolTotal": 39,
+           "thsLadder": {"one": 31, "two": 5, "three": 1, "four": 0, "high": 0},
+           "maxBoard": 3, "maxBoardRange": 8,
+           "maxBoardStock": {"boards": 8, "days": 14, "name": "阳光照明"}}
+    monkeypatch.setattr(jl, "market_metrics", lambda *a, **k: dict(cur))
+    monkeypatch.setattr(jl, "trading_dates_before", lambda *a, **k: [])
+    monkeypatch.setattr(jl, "limit_down_count", lambda *a, **k: (None, "missing"))
+    monkeypatch.setattr(jl, "_advdec_segment", lambda *a, **k: "")
+    db = FakeDb({})
+    default = jl.market_facts_line(db, _D0)
+    slim = jl.market_facts_line(db, _D0, ths_cross=False)
+    assert "（交叉 31/5/1/0/0）" in default
+    assert "（交叉" not in slim
+    assert default.replace("（交叉 31/5/1/0/0）", "") == slim
+    assert "连板梯队 39只封板 一板33/二板5/三板+1" in slim   # 梯队本体保留
+
+
+def test_v10_sequence_legend_param():
+    """A5：板序图例参数化——缺省带图例（炸板链零变化），relay legend=False 去除。"""
+    from backend.analysis.hotlist import jev_driver_ammo as ammo
+    bars = [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 11.0}]
+    with_legend = ammo.sequence_line_from_bars(_D0, "600001", "A", 10, bars)
+    without = ammo.sequence_line_from_bars(_D0, "600001", "A", 10, bars, legend=False)
+    assert "（●=涨停，末位今日）" in with_legend
+    assert "（●=涨停，末位今日）" not in without
+    assert with_legend.replace("（●=涨停，末位今日）", "") == without
+
+
+def test_v10_leader_label_merged_into_structure_line():
+    """C1：标签并入总龙头行（struct 单源），档案头行删；位置/板序/板型三行保留。"""
+    db = _sector_db()
+    db.cols["hotlist_jev_driver_labels"] = FakeCol([
+        {"_id": f"{_D0}:600101", "tradingDate": _D0, "status": "ok", "code": "600101",
+         "label": "capital_flow", "freshness": "continuing"}])
+    struct = relay.relay_structure(db, _D0)
+    text = "\n".join(relay.leader_structure_lines(struct))
+    assert "·标签 capital_flow/continuing" in text
+    prof = relay.leader_profile_lines(db, _D0, total_leader=struct["totalLeader"])
+    assert not any(x.startswith("龙头档案：") for x in prof)
+    assert len(prof) == 3   # 个股位置/板序/板型（TDX mock 下为不可算行，仍在场）
+
+def test_v10_ladder_anchor_fallback_notes(monkeypatch):
+    """v10 A2/nit5：龙一档回退只留缺位事实（口径图例删）；表头/逐板块两路回退注记锁定。"""
+    from backend.operations import sector_nodes as SN
+    db = _db()
+    # 档整体缺失 → 表头缺位事实，无口径图例
+    monkeypatch.setattr(SN, "ledger_leaders", lambda *a, **k: None)
+    text = "\n".join(theme_ladder_lines(db, _D0))
+    assert "·龙一档缺失" in text
+    assert "龙一=板块节点空间龙一档" not in text and "龙序按区间高度" not in text
+    # 档在场但缺该板块 → 逐板块缺位事实（不吃掉表头，不出图例）
+    monkeypatch.setattr(SN, "ledger_leaders", lambda *a, **k: {"别的板块": {}})
+    text = "\n".join(theme_ladder_lines(db, _D0))
+    assert "·龙一档缺该板块" in text
+    assert "龙序回退区间高度口径" not in text and "·龙一档缺失" not in text

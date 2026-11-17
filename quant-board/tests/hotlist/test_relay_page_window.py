@@ -149,14 +149,14 @@ def test_detail_filter_bar_has_no_date_controls(js: str):
 
 # ── 需求 2：表格列 ─────────────────────────────────────────────────────────
 def test_table_columns_drop_tokens_time_add_leader(js: str):
-    """表头：去 tokens/判定时间；v9 删龙头强度列；2026-11 合并融合三题 3 列 + 监控表迁入 5 列（共 16 列）。"""
+    """表头：去 tokens/判定时间；v9 删龙头强度列；v10 删周期强度列（融合题 2 列 + 监控表迁入 5 列，共 15 列）。"""
     rt = _fn(js, "renderRelayTab")
     head = rt[rt.index('$(\'relayTable\').innerHTML'):]
     assert "tokens" not in head, "表头不应再含 tokens 列"
     assert "判定时间" not in head, "表头不应再含判定时间列"
     assert "龙头强度" not in head, "v9 删 leader_strength，表头不应再含龙头强度列"
     assert "节点" in head and "wzsB" in rt, "表头应含弱转强节点列（2026-10-21 立项）"
-    assert 'colspan="16"' in rt, "展开详情行 colspan 应为 16（2026-11 合并融合三题 3 列 + 监控表迁入 5 列）"
+    assert 'colspan="15"' in rt, "展开详情行 colspan 应为 15（v10 删周期强度列）"
     assert 'rWzsSel' in js, "节点筛选下拉必须接线"
     assert "'weak', '弱']" in js and "'strong', '强']" in js and "'wzs', '弱转强']" in js,         "节点筛选枚举必须三态（弱/弱转强/强，2026-10-22 用户裁决）"
     assert "w.state === 'wzs'" in rt and "w.state === 'strong'" in rt,         "节点徽标须按 state 分支（wzs/strong）"

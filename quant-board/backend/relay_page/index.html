@@ -362,7 +362,7 @@
   .tl-wrap::-webkit-scrollbar-track{background:transparent}
   .tl-wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
   .tl-wrap::-webkit-scrollbar-thumb:hover{background:#94a3b8}
-  /* 情绪周期日级表（2026-11 合并周期五列后 16 列宽表）：横向滚动，滚动条与 tl-wrap 同款 */
+  /* 情绪周期日级表（2026-11 合并周期五列；v10 删周期强度列后 15 列宽表）：横向滚动，滚动条与 tl-wrap 同款 */
   .relay-wrap{overflow-x:auto}
   .relay-wrap::-webkit-scrollbar{height:8px}
   .relay-wrap::-webkit-scrollbar-track{background:transparent}
@@ -1163,10 +1163,9 @@ const MONEY_COLOR = {strong:'#16a34a', neutral:'#94a3b8', losing:'#dc2626',
 const MONEY_ORDER = ['strong','neutral','losing','insufficient_evidence'];
 const BAND_ORDER = ['0-25','25-40','40-60','≥60'];
 const BAND_COLOR = {'0-25':'#38bdf8','25-40':'#94a3b8','40-60':'#f59e0b','≥60':'#16a34a'};
-// ── v8 市场周期融合 3 题（2026-11-12）：choice→中文 + 色；仅 v8 档有值（代际区分，旧档不出）──
+// ── v8 市场周期融合题（2026-11-12；v10 删 cycle_intensity）：choice→中文 + 色；仅 v8 档有值（代际区分，旧档不出）──
 const MC_TURN_CN = {confirmed:'真转折', pending:'待确认', false:'假信号',
                     not_in_window:'非窗口', insufficient_evidence:'证据不足'};
-const MC_INTENSITY_CN = {strong:'强', moderate:'中', weak:'弱', insufficient_evidence:'证据不足'};
 const MC_RISK_CN = {high_collapse:'高位崩塌', space_compress:'空间压缩', none:'无显著',
                     insufficient_evidence:'证据不足'};
 const MC_TURN_COLOR = {confirmed:'#16a34a', pending:'#f59e0b', false:'#dc2626',
@@ -1888,9 +1887,9 @@ function renderRelayTab(){
         ? '周期列加载中，覆盖度未知'
         : '该日无 market-cycle 存档（未覆盖或不在读口窗内）';
   const cycMiss = `<span style="color:var(--muted2)" title="${esc(cycMissTip)}">—</span>`;
-  // v8 市场周期融合三题列（转折质量/周期强度/前瞻风险）：旧代档无值显 —（代际区分非缺判）
+  // v8 市场周期融合题列（转折质量/前瞻风险；v10 删周期强度）：旧代档无值显 —（代际区分非缺判）
   const mcCell = (v, cn, colors, qid, conf) => {
-    if (v == null) return '<span style="color:var(--muted2)" title="该存档无市场周期融合三题判定（v8 前旧代）">—</span>';
+    if (v == null) return '<span style="color:var(--muted2)" title="该存档无市场周期融合题判定（v8 前旧代）">—</span>';
     const col = colors && colors[v] ? ` style="color:${colors[v]};font-weight:600"` : '';
     return `<span${critConfTip(qid, v, cn[v] || v, null, conf)}${col}>${esc(cn[v] || v)}</span>`;
   };
@@ -1955,14 +1954,13 @@ function renderRelayTab(){
     <td><span${critConfTip('ladder_health', r.ladderHealth, '梯队', LADDER_DESC[r.ladderHealth], (a.ladder_health||{}).confidence)}>${ladderB(r.ladderHealth)}</span></td>
     <td><span${critConfTip('money_effect', r.moneyEffect, '钱效', MONEY_DESC[r.moneyEffect], (a.money_effect||{}).confidence)}>${moneyB(r.moneyEffect)}</span></td>
     <td>${mcCell(r.turnQuality, MC_TURN_CN, MC_TURN_COLOR, 'turn_quality', (a.turn_quality||{}).confidence)}</td>
-    <td>${mcCell(r.cycleIntensity, MC_INTENSITY_CN, null, 'cycle_intensity', (a.cycle_intensity||{}).confidence)}</td>
     <td>${mcCell(r.riskAhead, MC_RISK_CN, MC_RISK_COLOR, 'risk_ahead', (a.risk_ahead||{}).confidence)}</td>
     <td class="num">${ceil.maxBoard != null ? ceil.maxBoard : (cy ? '—' : cycMiss)}</td>
     <td class="num">${ceil.threePlusN != null ? ceil.threePlusN : (cy ? '—' : cycMiss)}</td>
     <td>${cy ? cycleAnchorCell(cy.anchor && cy.anchor.main) : cycMiss}</td>
     <td>${cy ? cycleAnchorCell(cy.anchor && cy.anchor.growth) : cycMiss}</td>
     <td>${ev}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="16">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
+    + (open ? `<tr class="lg-detail"><td colspan="15">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
   }).join('');
   STATE.relayEntries = shown.map(r => relayEntryOf(r));
   const bar = $('relayFilterBar');
@@ -1983,8 +1981,8 @@ function renderRelayTab(){
     // rSet/rClear 已把页码重置回 1，若不同步，pager 会停在旧页码/旧禁用态（评审 F-minor-1）。
     const pgEl = $('relayPager'); if (pgEl) pgEl.innerHTML = relayPager(pg.page, pg.total);
   }
-  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th><th>转折质量</th><th>周期强度</th><th>前瞻风险</th><th>天花板</th><th>≥3板</th><th>主板龙一</th><th>双创龙一</th><th>事件</th></tr>`
-    + (body || '<tr><td colspan="16" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th><th>转折质量</th><th>前瞻风险</th><th>天花板</th><th>≥3板</th><th>主板龙一</th><th>双创龙一</th><th>事件</th></tr>`
+    + (body || '<tr><td colspan="15" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   // 周期五列覆盖度/降级披露（fail-visible：读失败原因进页内小注 + 底部状态栏，不阻断其余列）
   const ch = $('relayCycleHint');
   if (ch){
@@ -2067,7 +2065,6 @@ function renderRelayKpi(shown){
     + card('接力钱效', `${moneyB(d.moneyEffect)}${cf(aOf('money_effect').confidence)}`, tierDesc('money_effect', d.moneyEffect, MONEY_DESC[d.moneyEffect]), aOf('money_effect').confidence)
     + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`
     + (d.turnQuality != null ? card('转折质量', `<span style="color:${MC_TURN_COLOR[d.turnQuality]||'#94a3b8'}">${MC_TURN_CN[d.turnQuality]||d.turnQuality}</span>${cf(aOf('turn_quality').confidence)}`, tierDesc('turn_quality', d.turnQuality, MC_TURN_CN[d.turnQuality]), aOf('turn_quality').confidence) : '')
-    + (d.cycleIntensity != null ? card('周期强度', `${MC_INTENSITY_CN[d.cycleIntensity]||d.cycleIntensity}${cf(aOf('cycle_intensity').confidence)}`, tierDesc('cycle_intensity', d.cycleIntensity, MC_INTENSITY_CN[d.cycleIntensity]), aOf('cycle_intensity').confidence) : '')
     + (d.riskAhead != null ? card('前瞻风险', `<span style="color:${MC_RISK_COLOR[d.riskAhead]||'#94a3b8'}">${MC_RISK_CN[d.riskAhead]||d.riskAhead}</span>${cf(aOf('risk_ahead').confidence)}`, tierDesc('risk_ahead', d.riskAhead, MC_RISK_CN[d.riskAhead]), aOf('risk_ahead').confidence) : '');
 }
 

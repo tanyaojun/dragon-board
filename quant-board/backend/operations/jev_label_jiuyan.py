@@ -129,8 +129,8 @@ def dieban_count(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> int | N
     return n if seen else None
 
 
-# 盘面事实行缓存（IO 侧，键=(dataset, date)；批次D I14 恢复）
-_FACTS_CACHE: dict[tuple[str, str], str] = {}
+# 盘面事实行缓存（IO 侧，键=(dataset, date, final fetchedAt 戳, ths_cross)；批次D I14 恢复，v10 扩第 4 元）
+_FACTS_CACHE: dict[tuple[str, str, str, bool], str] = {}
 _ADVDEC_CACHE: dict[tuple[str, str], tuple] = {}
 
 
@@ -916,19 +916,24 @@ def _advdec_segment(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
     return f' · 池内涨跌比 {ratio}（涨{up}/跌{down}）'
 
 
-def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                      ths_cross: bool = True) -> str:
     """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。按 (dataset, 日, 源版本) 缓存。
 
     缓存键含 final fetchedAt 版本戳（2026-10-23 事故）：final 被重采覆写后旧行
     「最高 8 板」会永选命中，长驻进程不重启则不自愈。戳读取失败按 None 入键
     （退化为旧行为，不阻断主链）。
+
+    ths_cross（v10，2026-11-17）：False 时不渲染「（交叉 …）」THS×韭研校验分布
+    （relay 7 题判据零消费，双源 QA 字段仍留 market_metrics 结构化）；缺省 True =
+    其他链（cycle/theme_leader/auction）输出字节级不变（共用坐标系红线）。
     """
     try:
         stamp_doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fetchedAt": 1})
         stamp = repr((stamp_doc or {}).get("fetchedAt"))
     except Exception:
         stamp = "?"
-    cache_key = (dataset_id, date, stamp)
+    cache_key = (dataset_id, date, stamp, ths_cross)
     if cache_key in _FACTS_CACHE:
         return _FACTS_CACHE[cache_key]
     cur = market_metrics(db, date, dataset_id)
@@ -988,7 +993,7 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         hu_note = f'，{hu}只高度不可算未入桶' if isinstance(hu, int) and hu else ''
         ladder_seg = f'连板梯队 {cur.get("ladderPoolTotal")}只封板 {ladder_txt}'
         ths = cur.get("thsLadder")
-        if ths:
+        if ths and ths_cross:
             ladder_seg += (f'（交叉 {ths.get("one")}/{ths.get("two")}/{ths.get("three")}'
                            f'/{ths.get("four")}/{ths.get("high")}）')
     elif src == "jiuyan_touch":
@@ -1851,14 +1856,18 @@ def stock_position_line(date: str, code: str) -> str:
         return "个股位置：不可算"
 
 
-def limitup_sequence_line(date: str, code: str, name: str | None, n: int = 10) -> str:
+def limitup_sequence_line(date: str, code: str, name: str | None, n: int = 10,
+                          legend: bool = True) -> str:
     """弹药 7 壳：TDX 取数 → ammo.sequence_line_from_bars（纯计算，批次D I14）。
     P1-1：逐链接用除权参考价（交易所公式精确昨收，板序假阴根治），
-    无事件/取数失败回退原口径（原已知边缘语义）。"""
+    无事件/取数失败回退原口径（原已知边缘语义）。
+    legend（v10）：False 时不出「（●=涨停，末位今日）」图例（relay 侧图例一次性
+    进 instructions）；缺省 True = 炸板链等其他消费方零变化。"""
     try:
         bars = _daily_bars(code)
         adj = _adj_prev_series(date, code, bars) if bars else None
-        return ammo.sequence_line_from_bars(date, code, name, n, bars, adj or None)
+        return ammo.sequence_line_from_bars(date, code, name, n, bars, adj or None,
+                                            legend=legend)
     except Exception as e:
         return "板序：不可算"
 

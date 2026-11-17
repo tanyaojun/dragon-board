@@ -3,11 +3,11 @@
 
 背景：原「连板情绪」（detail）改名「情绪周期」，原独立「情绪周期」（cycle）子页签删除，
 其监控表「天花板/≥3板/主板龙一/双创龙一/事件」五列迁入 detail 日级表；同日表新增
-v8 市场周期融合三题列（转折质量/周期强度/前瞻风险）。
+v8 市场周期融合题列（转折质量/前瞻风险；v10 删周期强度）。
 
 钉住六件事（静态抽取函数体断言 + node 沙箱行为探针，零网络零 jev 调用，AGENTS §1.2-7）：
 1. 合并注册：RELAY_VIEWS detail=情绪周期、cycle 子页签/rv-cycle 容器删除、cycleFetch 仍接线；
-2. 日级表 16 列：原 8 列 + 融合三题 3 列 + 监控表迁入 5 列，展开行 colspan=16；
+2. 日级表 15 列：原 8 列 + 融合题 2 列（v10 删周期强度）+ 监控表迁入 5 列，展开行 colspan=15；
 3. 周期五列按 tradingDate 合并 market-cycle series；龙一命运徽章只看自身
    leaderSealedToday（封/断），缺档显—（fail-visible 不伪造）；读失败原因页内披露；
 4. 置信度 tooltip 化：detail 表与页头 KPI 不再出可见 P 芯片，悬停字段值读取；
@@ -79,30 +79,34 @@ def test_cycle_merged_into_detail_view():
     assert "function renderCycle(" not in HTML, "renderCycle 应随页面删除"
     assert "cycleFetch(date);" in HTML, "中央数据处理器仍接线 cycleFetch（周期五列数据源）"
     assert 'id="rv-detail"' in HTML and 'id="relayTable"' in HTML
-    assert 'class="relay-wrap"' in HTML, "16 列宽表须有横向滚动容器"
+    assert 'class="relay-wrap"' in HTML, "15 列宽表须有横向滚动容器"
     assert ".relay-wrap::-webkit-scrollbar" in HTML, "滚动条样式在场"
     assert 'id="relayCycleHint"' in HTML, "周期列覆盖度/降级披露挂载点在场"
 
 
-# ── 2. 日级表 16 列 ──────────────────────────────────────────────────────────
-def test_detail_table_sixteen_columns():
+# ── 2. 日级表 15 列（v10 删周期强度）──────────────────────────────────────
+def test_detail_table_fifteen_columns():
     rt = _fn(HTML, "renderRelayTab")
     head = rt[rt.index("$('relayTable').innerHTML"):]
-    # 评审 P2-7：精确钉住表头列名序列与数量（防第 17 列忘改 colspan / OR 支路弱断言）
+    # 评审 P2-7：精确钉住表头列名序列与数量（防忘改 colspan / OR 支路弱断言）
     head_line = head[:head.index("\n")]
     labels = [a or b for a, b in re.findall(r"th\('([^']+)'|<th>([^<]+)</th>", head_line)]
     assert labels == ["日期", "指数", "分区", "相位", "边际", "节点", "梯队", "钱效",
-                      "转折质量", "周期强度", "前瞻风险",
+                      "转折质量", "前瞻风险",
                       "天花板", "≥3板", "主板龙一", "双创龙一", "事件"], \
-        f"表头 16 列序列不符：{labels}"
-    assert 'colspan="16"' in rt, "展开详情行与空态 colspan 应为 16"
+        f"表头 15 列序列不符：{labels}"
+    assert 'colspan="15"' in rt, "展开详情行与空态 colspan 应为 15"
+    assert 'colspan="16"' not in rt, "v10 删周期强度列后旧 16 列 colspan 不应残留"
     assert 'colspan="8"' not in rt, "旧 8 列 colspan 不应残留"
-    # 融合三题列：值源 relay 存档顶层字段 + answers 置信度，词表/配色单源
-    for k in ("r.turnQuality", "r.cycleIntensity", "r.riskAhead",
-              "MC_TURN_CN", "MC_INTENSITY_CN", "MC_RISK_CN",
-              "turn_quality", "cycle_intensity", "risk_ahead"):
-        assert k in rt, f"融合三题列缺 {k}"
-    assert "v8 前旧代" in rt, "旧代档无三题值须显式披露（代际区分非缺判）"
+    # 融合题列：值源 relay 存档顶层字段 + answers 置信度，词表/配色单源
+    for k in ("r.turnQuality", "r.riskAhead",
+              "MC_TURN_CN", "MC_RISK_CN",
+              "turn_quality", "risk_ahead"):
+        assert k in rt, f"融合题列缺 {k}"
+    # v10：周期强度题已删，列/词表/KPI 卡零残留（注释里的代际说明除外）
+    assert "cycleIntensity" not in rt and "MC_INTENSITY_CN" not in HTML
+    assert "<th>周期强度</th>" not in rt and "card('周期强度'" not in HTML
+    assert "v8 前旧代" in rt, "旧代档无融合题值须显式披露（代际区分非缺判）"
 
 
 # ── 3. 周期五列合并 + fail-visible ───────────────────────────────────────────

@@ -159,6 +159,9 @@ def build_rewrap_pool(db: Any, date: str, slot: str = "final",
         "resealCodes": reseal_codes, "resealN": len(reseal_codes) if prev_failed_found else None,
         "resealRate": round(reseal_rate, 4) if reseal_rate is not None else None,
         "missing": missing, "stocks": stocks,
+        # v10（2026-11-17）：候选池口径注从叙事移结构化（AGENTS §1.2-8）——停牌复牌
+        # 与断板同形未分辨，随池快照落库供审计/读口，不再每日进 jev 语料。
+        "poolCaveat": "候选池含停牌复牌未分辨",
     }
 
 

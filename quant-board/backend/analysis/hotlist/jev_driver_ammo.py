@@ -328,7 +328,8 @@ def position_line_from_bars(date: str, code: str, bars: list[dict],
 
 def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
                             bars: list[dict],
-                            adj_prev: dict[str, float] | None = None) -> str:
+                            adj_prev: dict[str, float] | None = None,
+                            legend: bool = True) -> str:
     """弹药 7：近 n 日涨停序列（收盘口径，板籍阈值判定）——几天几板/断板反包（隔日弱转强）机械锚。
     fail-visible：日线缺当日棒/窗口不足如实标注。P1-1：adj_prev 提供时逐链用除权参考价
     （交易所公式精确昨收，原「除权日 prev_close 失真」已知边缘根治），None=原口径。
@@ -372,7 +373,8 @@ def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
     extra = f" · 连板延伸至窗口外 {overflow} 板" if overflow else ""
     rewrap = seq[-1] == 1 and (len(seq) < 2 or seq[-2] == 0) and any(seq[:-1])
     tag = " · 今日=断板反包（隔日弱转强）" if rewrap else ""
-    return (f"板序：近 {len(seq)} 日 {marks}（●=涨停，末位今日） · 当前连板 {streak}"
+    legend_txt = "（●=涨停，末位今日）" if legend else ""
+    return (f"板序：近 {len(seq)} 日 {marks}{legend_txt} · 当前连板 {streak}"
             f" · 窗口内 {sum(seq)} 板{tag}{adj_note}{extra}")
 
 

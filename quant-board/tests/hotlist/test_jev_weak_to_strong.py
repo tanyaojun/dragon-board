@@ -174,10 +174,12 @@ def test_weak_to_strong_line_hit_and_miss(monkeypatch):
     hit_line = R.weak_to_strong_line(db, "2026-03-04")
     assert "弱转强参照" in hit_line and "符合历史弱转强形态" in hit_line
     assert "跌停 20→5" in hit_line and "涨停 30→55" in hit_line
-    assert "T+1 延续率 1/1" in hit_line and "今日反包率 10.0%" in hit_line
+    # v10 D2：静态历史基线/反包率对比撤出叙事（反包率+分位在反包修复行）
+    assert "T+1 延续率" not in hit_line and "今日反包率" not in hit_line
+    assert "历史基线" not in hit_line and "一日游" not in hit_line
     miss_line = R.weak_to_strong_line(db, "2026-03-06")
     assert "昨日 relayIndex 60.0（中强区）" in miss_line and "不贴形态标" in miss_line
-    assert "T+1 延续率 1/1" in miss_line               # 基线锚始终在场
+    assert "T+1 延续率" not in miss_line
 
 
 def test_weak_to_strong_line_midday_no_fake_confirm(monkeypatch):
@@ -287,8 +289,10 @@ def test_apply_settlement_carry_on_rerun():
 
 
 def test_weak_to_strong_line_divergence_note():
-    """语料行定格 vs 重评分歧注记：重跑改评分后，语料行按定档节点表述并显式注记重评值。"""
+    """语料行定格 vs 重评分歧注记：重跑改评分后，语料行按定档节点表述并显式注记重评值。
+    v10 P2：措辞去「节点」（FORBIDDEN 黑名单词），重跑分支同过叙事卫生红线。"""
     from backend.operations.jev_relay_index import weak_to_strong_line
+    from tests.hotlist.test_narrative_hygiene import FORBIDDEN
     db = _mk_db()
     for r in db["hotlist_jev_relay_index"].rows:
         if r.get("_id") == "2026-03-04:RELAY":
@@ -296,7 +300,8 @@ def test_weak_to_strong_line_divergence_note():
     W.write_settlement(db, "2026-03-04", idx_override=55.0)
     line = weak_to_strong_line(db, "2026-03-04")
     assert "符合历史弱转强形态" in line                # 按定档节点（55 命中）表述
-    assert "重跑重评 44.0" in line and "收盘定档 55.0" in line
+    assert "重跑重评 44.0，以收盘定档 55.0 为准" in line
+    assert not [w for w in FORBIDDEN if w in line], "重跑分支叙事含开发注释"
 
 
 # ── 定档代际绑定（2026-10-22 §6.4 预注册：题集升代→旧定格失效→--reset 重定档） ────
@@ -339,14 +344,14 @@ def test_reset_backfill_restamps_under_new_generation(monkeypatch):
 # ── 独立审查处置（2026-10-22 reviewer：MF-1/2/3、SF-3/4） ────────────────────
 def test_first_run_line_without_today_doc():
     """MF-1 回归：首判时当日 doc 未落库，语料行不得误报「昨日 relayIndex 缺失」，
-    也不得把形态写成未命中——只给昨日分区 + 结构预检 + 待落库注记。"""
+    也不得把形态写成未命中——只给昨日分区 + 结构预检（v10 A1：「待落库」流程注删）。"""
     from backend.operations.jev_relay_index import weak_to_strong_line
     db = _mk_db()
     db["hotlist_jev_relay_index"].rows = [
         r for r in db["hotlist_jev_relay_index"].rows if r.get("_id") != "2026-03-04:RELAY"]
     line = weak_to_strong_line(db, "2026-03-04")
     assert "昨日 relayIndex 30.0（弱势区）" in line
-    assert "今日 relayIndex 待落库（形态随收盘评分定档）" in line
+    assert "待落库" not in line
     assert "结构预检：跌停 20→5↓" in line
     assert "缺失（形态不可判）" not in line and "未命中" not in line
 

@@ -144,6 +144,8 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                                 "rate": rw.get("resealRate")}
                                if rw.get("prevFailedFound") else None),
                     "missing": rw.get("missing"), "stocks": rw.get("stocks"),
+                    # v10 A4：候选池口径注从叙事移结构化后，读口同步透出（披露可达，§4.0）
+                    "poolCaveat": rw.get("poolCaveat"),
                 }
             except Exception as exc:  # noqa: BLE001 — 不阻断主读口，但不得裸吞（审查 SF5）
                 import sys as _sys

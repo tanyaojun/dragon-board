@@ -401,7 +401,12 @@ def test_rewrap_face_line_states():
     assert "反包修复：昨日断板候选 3 只 · 今日反包 2 只（反包率 66.7%" in line
     assert "近20日分位不可算" in line            # 快照缺 + 分位样本<5 → 不可算，不补数
     assert "昨日炸板回封 1/1（100.0%）" in line
-    assert "代表：五连板股（9天8板·断1日）" in line and "停牌复牌未分辨" in line
+    # v10 D3/A4：代表股与停牌复牌口径注撤出叙事；口径注移结构化 poolCaveat
+    assert "代表：" not in line and "停牌复牌未分辨" not in line
+    from backend.analysis.hotlist.rewrap_pool import build_rewrap_pool
+    pool = build_rewrap_pool(db, D0, "final")
+    assert pool["poolCaveat"] == "候选池含停牌复牌未分辨"
+    assert len(pool["stocks"]) == 2   # 明细仍在结构化字段（审计/读口消费）
     # 轴不足
     db2 = FakeDb({"jiuyan_action": FakeCol([
         _final(D1, [_st("600003", "甲", "2天2板")]),
@@ -469,6 +474,8 @@ def test_limitup_route_rewrap_payload(monkeypatch):
     rw = result["rewrap"]
     assert rw["slot"] == "midday" and rw["caliber"] == "touched"
     assert rw["count"] == 2 and rw["candidate"] == 3
+    # v10 A4/P1：口径注结构化后读口同步透出（披露可达）
+    assert rw["poolCaveat"] == "候选池含停牌复牌未分辨"
     assert {s["code"] for s in rw["stocks"]} == {"600003", "600004"}
     by_code = {s["code"]: s for s in result["stocks"]}
     assert by_code["sz600003"].get("rewrap") is True
