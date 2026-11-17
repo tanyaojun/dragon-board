@@ -1364,7 +1364,10 @@ class DabanPoolArchiver:
             try:
                 db = self._database_factory()
                 if not gene_date:
-                    gene_date = await asyncio.to_thread(latest_archived_pool_day, db)
+                    # now=_ctx_now：时钟注入一致性（缺省真实钟会使回填窗随日期漂移，
+                    # 与 stale_cutoff 同轮口径；11-17 测试日期腐烂实证）
+                    gene_date = await asyncio.to_thread(latest_archived_pool_day, db,
+                                                        now=_ctx_now)
                     gene_date_source = "local_archive" if gene_date else "none"
                 if not gene_date:
                     results["gene"] = {"ok": False, "reason": "no_pool_date"}
@@ -1386,7 +1389,8 @@ class DabanPoolArchiver:
                 notice_date, notice_date_source = pool_date, "snapshot"
                 db = self._database_factory()
                 if not notice_date:
-                    notice_date = await asyncio.to_thread(latest_archived_pool_day, db)
+                    notice_date = await asyncio.to_thread(latest_archived_pool_day, db,
+                                                          now=_ctx_now)
                     notice_date_source = "local_archive" if notice_date else "none"
                 if not notice_date:
                     results["notice"] = {"ok": False, "reason": "no_pool_date"}

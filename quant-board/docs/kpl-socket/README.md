@@ -221,6 +221,47 @@ QuantBoard 主后端 :8000
   块尾在会话 ~55-65s，与 60-67s 会话寿命贴线竞争（13:10 是 79.8s 会话才落地）；
   提前后块尾 ~25-30s，flush 批回落在会话中段。
 
+### 3.5 App 端会话生命周期模型（2026-11-17 破译源码定案，用户质询驱动）
+
+用户质询：「若服务端设 TTL，App 岂不要每 50s 重登？假设有矛盾——要看破译源码」。
+对 `.tmp_review/c2_src|main_src`（jadx 反编译）逐类对照，结论：
+
+- **短会话是服务端连接轮换设计，App 自身就活在频繁重连里**，矛盾消解：
+  - `SocketReaderThread`：读超时 **20s**（`b.c().d(20L, TimeUnit.SECONDS)`），
+    `SocketTimeoutException` → `LoopThread.run` catch → msg 103 → 断线重连。
+    **App 自己就是「20s 无任何帧即自断重连」**，靠服务端持续推数据活着。
+  - `ReconnectManager`：退避表 `{0,1,2,4,8,15,30}s`——为频繁重连而设计；
+    ErrResp（服务器主动断开）→ a=20、IOException → a=11、超时 → a=12，三路皆重连。
+  - auth 用缓存 token 秒级重做（whiteBoxEncrypt+AuthReq），重连后订阅重建，
+    数据流 1-2s 恢复，用户无感。**「App 不重连」是错觉，无缝重连才是真相。**
+- **客户端无心跳**：User/Hq/ServiceHqDaban/ServiceAppGlobal 全部 proto 无心跳消息；
+  `SocketWriterThread` 纯队列 drain 无定时器。唯一「心跳」= 服务端→客户端 kind 1
+  （pkg 0x10，`"receive a err heart len"`），单向、无需应答。我们帧日志从未收到
+  0x10（S 帧日志在帧对齐层、解析前，不会漏记）。
+- **★ 我们缺失的续命机制：订阅包缓存 + ResubNt（cmd 220）重发**（`qn0.j`）：
+  App 维护 `this.e`=已成功订阅包列表（「订阅成功, cmd:X, 当前订阅个数:N」，
+  ack 后入列、会话断开清空）；服务端发 220（`Base.ResubNt{topics}`）=订阅注册表
+  失效通知：topics 空→全量重发、非空→按 topic 匹配重发。**已落地**（本日）：
+  `_resub_cache`（四个 drain 发送成功后缓存 {cmd,req,ext} 原料，去重+500 上限）+
+  `_handle_resub_nt`（220 → 全量重入 setup 队头，8 帧/tick 拟人节流复用；topic
+  粒度不可靠——0x40 ext 是二进制路由头非 App 字符串 topic——故两种情况都全量，
+  topics 进事件供诊断）+ `parse_resub_topics` + stats `resub_events/resub_requeued`。
+  注：捕获窗内未观察到 220 帧（服务端何时发未定），此为 App 同款正确性投资。
+- **另发现 App 批量订阅协议 cmd 211 SubReqs**（`{seqId,cmd,version,codec,subId,data}`，
+  ack 带 subId；配套 UnsubReq/UnsubIdReq）——服务端管理的订阅注册表。我们直发
+  0x40 帧可用（有响应+推送）但无注册表语义；211 化是后续可选重构（需协议 RE）。
+- **已对齐项（逐项比对确认）**：TLS+SNI(socket.kaipan.com) ✓、connType=99 ✓
+  （App `SocketRepository.f6127a=99`）、flags=(d<<3)|enc ✓、auth d=2（flags 0x11）✓。
+- **差异项（已知未动）**：我们每 8 tick 重发 610 AuthReq 保活——App 无此行为
+  （历史调优产物，暂保留观察）；我们 15s 读超时 continue（App 20s 自断重连）。
+- **运维含义**：不再追求单会话长寿；正确姿势=每个短会话的爆发前段就含关键订阅
+  （已落地：09:00 门禁 + pid=8 priority 前插 + 序列窗 (9,15)-(9,27)，见
+  hotlist-jev 预登记 §7.12）。§3.4 各轮「螺旋控流」补丁方向正确（逼近 App 行为
+  模型），本节补齐了缺失的注册表层。
+- 附带修复：archiver `latest_archived_pool_day` 调用补 `now=_ctx_now`（gene/notice
+  两通道）——时钟注入一致性，缺省真实钟使回填窗随日期漂移（11-17 测试日期腐烂
+  实证：11-06 档超 10 天窗被判 no_pool_date）；该测试补 `clock=_TEST_CLOCK`。
+
 ## 四、数据语义与已知限制
 
 - **价格是 ×10000 整数缩放**：113000=11.30 元、8900980=890.098（板块点位）。展示层需自行除以 10000 或标注口径。

@@ -853,7 +853,9 @@ def test_archiver_gene_backfills_when_collector_down(monkeypatch):
     db = _FakeDb()
     archive_snapshot(db, _snap(100.0, ["000001", "000002"], date="2026-11-06"))
     archiver = DabanPoolArchiver(settings=_S(), database_factory=lambda: db,
-                                 interval_seconds=60, gene_fetcher=_fake_gene, gene_limit=2)
+                                 interval_seconds=60, gene_fetcher=_fake_gene, gene_limit=2,
+                                 clock=_TEST_CLOCK)   # 固定钟（同套件其它用例）：
+    # 缺 clock 时用真实钟 → stale_cutoff=now-3d 随日期腐烂（11-17 实证 11-06 档被判 stale）
     asyncio.run(archiver._archive_once())
     res = archiver.status()["lastResult"]
     assert res["pool"]["ok"] is False and "collector_degraded" in res["pool"]["reason"]

@@ -1156,6 +1156,45 @@ class TestTradingHoursGate:
         assert svc._in_trading_session(utc_moment)          # 上海 11:00 开市中
         assert not svc._in_trading_session(utc_moment + 8 * 3600 + 60)   # 上海 19:01 已收市
 
+    def test_resub_nt_requeues_cached_subs(self, svc):
+        """cmd 220 ResubNt（App qn0.j 同款，2026-11-17 破译源码落地）：
+        已发订阅缓存重入 setup 队列头；无缓存 fail-visible 事件。"""
+        import backend.services.kpl_socket_protocol as proto
+        svc._pending_setup_frames = []
+        svc._resub_cache = []
+        # 无缓存 → ok=False 留痕
+        q = svc.subscribe()
+        svc._handle_resub_nt(b"", dec_payload=b"")
+        ev = [e for e in _drain_q(q) if e["type"] == "resub_nt"]
+        assert ev and ev[-1]["ok"] is False and ev[-1]["reason"] == "no_cached_subs"
+        # 有缓存 → 全量重入队头
+        item = {"cmd": 2103, "req": bytes.fromhex("aa"),   # CMD_DABAN_STOCK_LIST
+                "ext": bytes.fromhex("02082a"), "priority": True}
+        svc._resub_cache = [dict(item)]
+        svc._handle_resub_nt(b"", dec_payload=b"")
+        assert svc._pending_setup_frames and svc._pending_setup_frames[0]["cmd"] == item["cmd"]
+        assert svc._stats.get("resub_requeued") == 1
+        # topics 非空 → 仍全量（topic 粒度不可靠）+ topics 透出
+        pb_topics = bytes.fromhex("0a026162")   # pb: field1 LEN 2 "ab"
+        svc._pending_setup_frames = []
+        q2 = svc.subscribe()
+        svc._handle_resub_nt(pb_topics, dec_payload=pb_topics)
+        assert len(svc._pending_setup_frames) == 1
+        ev2 = [e for e in _drain_q(q2) if e["type"] == "resub_nt"]
+        assert ev2[-1]["ok"] is True and ev2[-1]["topics"] == ["ab"]
+
+    def test_resub_cache_dedupe_and_cap(self, svc):
+        """缓存去重（cmd/ext/req 三元组）+ 500 上限防 runaway。"""
+        svc._resub_cache = []
+        item = {"cmd": 2103, "req": bytes([1]), "ext": bytes([2])}
+        for _ in range(3):
+            svc._cache_resub_item(item)
+        assert len(svc._resub_cache) == 1
+        svc._resub_cache = [{"cmd": i, "req": b"", "ext": b""} for i in range(500)]
+        svc._cache_resub_item({"cmd": 999, "req": b"", "ext": b""})
+        assert len(svc._resub_cache) == 500
+        assert svc._resub_cache[-1]["cmd"] == 999
+
     def test_session_boundaries(self, svc):
         f = svc._in_trading_session
         assert not f(self._ts(hour=8, min=59))       # 开市前

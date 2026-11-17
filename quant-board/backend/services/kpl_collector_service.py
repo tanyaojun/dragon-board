@@ -347,6 +347,9 @@ class KplCollectorService:
         # 2026-11-10 重排：daban 家族（21xx/2103/2112/3004/3101）不再在 setup 内联发送，
         # 改为入队由读循环限流续发（_drain_setup_subs）——见 _session 6c 注释
         self._pending_setup_frames: List[Dict[str, Any]] = []
+        # 已发订阅缓存（App qn0.this.e 同款语义：会话内已成功发出的订阅包原料，
+        # 供 cmd 220 ResubNt 重发；会话重建时随 setup 队列重建自然失效，不需清理）
+        self._resub_cache: List[Dict[str, Any]] = []
         self._zt_reason_lock = threading.Lock()
         # 2013 个股题材库热度推送（2026-11-08 题材龙头语料第 2 项）：与 2203 完全同款
         # 模式——订阅面=涨停池（2103 pid=1）成员自动跟随、无退订、每会话重建订阅
@@ -757,6 +760,7 @@ class KplCollectorService:
                 if sent:
                     self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
                 sock.sendall(frame)
+                self._cache_resub_item(item)   # 220 ResubNt 重发缓存（App this.e 同款）
             except OSError as exc:
                 self._sock_dead = True
                 dropped = len(batch) - sent + len(self._pending_setup_frames)
@@ -801,6 +805,8 @@ class KplCollectorService:
                 if sent:
                     self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
                 sock.sendall(frame)
+                self._cache_resub_item({"cmd": proto.CMD_HQ_REASONS,
+                                        "req": req, "ext": ext})
             except OSError as exc:
                 self._sock_dead = True
                 dropped = len(batch) - sent + len(rest)
@@ -886,6 +892,8 @@ class KplCollectorService:
                 if sent:
                     self._human_pause(0.3, 0.15)
                 sock.sendall(frame)
+                self._cache_resub_item({"cmd": proto.CMD_STOCK_RELATED_THEME,
+                                        "req": req, "ext": ext})
             except OSError as exc:
                 self._sock_dead = True
                 dropped = len(batch) - sent + len(rest)
@@ -941,6 +949,9 @@ class KplCollectorService:
                 self._dbg("C", frame)
                 try:
                     sock.sendall(frame)
+                    self._cache_resub_item(
+                        {"cmd": cmd, "req": req,
+                         "ext": bytes([0x02]) + struct.pack(">H", cmd)})
                 except OSError as exc:
                     self._sock_dead = True
                     rest = batch[sent:]
@@ -1747,9 +1758,47 @@ class KplCollectorService:
                             value=int(value), d=d, encrypted=bool(enc),
                             token_len=len(token)))
 
+    def _cache_resub_item(self, item: Dict[str, Any]) -> None:
+        """已发订阅原料缓存（去重、上限 500 防 runaway；220 重发用）。"""
+        key = (item.get("cmd"), bytes(item.get("ext") or b""),
+               bytes(item.get("req") or b""))
+        for it in self._resub_cache:
+            k2 = (it.get("cmd"), bytes(it.get("ext") or b""), bytes(it.get("req") or b""))
+            if k2 == key:
+                return
+        if len(self._resub_cache) >= 500:
+            self._resub_cache.pop(0)
+        self._resub_cache.append(dict(item))
+
+    def _handle_resub_nt(self, payload: bytes, *, dec_payload: bytes) -> None:
+        """cmd 220 ResubNt：服务端订阅注册表失效通知（App qn0.j 同款语义）。
+
+        破译源码（2026-11-17，.tmp_review c2_src/main_src）：App 维护 this.e=
+        已成功订阅包列表，收到 220 时 topics 空 → 全量重发、非空 → 按 topic 匹配
+        重发；会话断开 e 清空。我们的 topic 粒度不可靠（0x40 ext 是二进制路由头
+        非 App 的字符串 topic），故两种情况都全量重入 setup 队列（8 帧/tick 拟人
+        节流复用），topics 进事件供诊断。重发帧重建 seq（App x() 每次 write 生成
+        新帧同款）。"""
+        topics = proto.parse_resub_topics(dec_payload or payload)
+        if not self._resub_cache:
+            self._stats["resub_events"] = self._stats.get("resub_events", 0) + 1
+            self._emit(KplEvent(type="resub_nt", ts=time.time(), ok=False,
+                                reason="no_cached_subs", topics=topics))
+            return
+        requeued = list(self._resub_cache)
+        # pid=8 priority 前插保持（同 setup 构造语义）；重发帧由 drain 重建 seq
+        self._pending_setup_frames[0:0] = requeued
+        self._stats["resub_events"] = self._stats.get("resub_events", 0) + 1
+        self._stats["resub_requeued"] = self._stats.get("resub_requeued", 0) + len(requeued)
+        self._emit(KplEvent(type="resub_nt", ts=time.time(), ok=True,
+                            requeued=len(requeued), topics=topics))
+
     def _dispatch(self, fr: Dict[str, Any], *, sender: Any = None, next_seq: Any = None) -> None:
         cmd = fr["cmd"]
         payload = fr.get("payload", b"")
+        if cmd == proto.CMD_RESUB_NT:
+            self._handle_resub_nt(payload, dec_payload=self._dec_if_flags(payload, fr))
+            return
         if cmd == proto.CMD_ERROR:
             err = proto.parse_err_resp(payload)
             self._err(f"server error: {err}")

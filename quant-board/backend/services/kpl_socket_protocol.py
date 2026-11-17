@@ -74,6 +74,7 @@ CMD_CHALLENGE = 260
 CMD_ANTI_CHEAT = 261
 CMD_ANTI_CHEAT_ANS = 262
 CMD_ERROR = 201  # Base.ErrResp（服务器拒绝/错误）
+CMD_RESUB_NT = 220  # Base.ResubNt（服务端订阅注册表失效→客户端重发订阅；App qn0.j）
 
 PKG_SERVER = 0x20
 PKG_AUTH = 0x30  # e(3)<<4
@@ -432,6 +433,47 @@ def parse_plate_snapshot(data: bytes) -> Dict[str, Dict[str, str]]:
         pid = s(1)
         if pid:
             out[pid] = {"name": s(2), "parent": s(6), "flag": s(4), "py": s(3)}
+    return out
+
+
+def parse_resub_topics(payload: bytes) -> List[str]:
+    """Base.ResubNt{topics: repeated string} 解析（field 1, wire type 2）。
+
+    宽容解析：任何 field>1 或非 LEN 编码的跳过；载荷空/解析异常返回 []（= 全量
+    重发语义，与 App topics 空分支一致）。"""
+    out: List[str] = []
+    try:
+        i, n = 0, len(payload)
+        while i < n:
+            tag = payload[i]; i += 1
+            field, wire = tag >> 3, tag & 7
+            if wire == 0:
+                v = 0; shift = 0
+                while i < n:
+                    b = payload[i]; i += 1
+                    v |= (b & 0x7F) << shift
+                    if not b & 0x80:
+                        break
+                    shift += 7
+            elif wire == 2:
+                ln = 0; shift = 0
+                while i < n:
+                    b = payload[i]; i += 1
+                    ln |= (b & 0x7F) << shift
+                    if not b & 0x80:
+                        break
+                    shift += 7
+                blob = payload[i:i + ln]; i += ln
+                if field == 1:
+                    out.append(blob.decode("utf-8", errors="replace"))
+            elif wire == 5:
+                i += 4
+            elif wire == 1:
+                i += 8
+            else:
+                break   # 3/7 保留：停止（fail-visible 上游留痕）
+    except Exception:   # noqa: BLE001 — 宽容：坏载荷 → []（全量重发）
+        return out
     return out
 
 
