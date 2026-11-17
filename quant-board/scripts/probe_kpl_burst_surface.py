@@ -59,13 +59,17 @@ class ProbeSurfaceCollector(KplCollectorService):
     生产爆发面本身的风控指纹。per-stock 池用 _pool_stock_ids 覆写受控注入（S2/S3），
     不依赖 2103 pid=1 实时响应（隔离变量）。"""
 
-    def __init__(self, codec, variant: str, pool=None, reconnect=False, **kw):
+    def __init__(self, codec, variant: str, pool=None, reconnect=False, staged=False, **kw):
         if variant not in VARIANT_SURFACE:
             raise ValueError(f"unknown variant {variant!r}（仅 S0/S1/S2/S3）")
         surface = VARIANT_SURFACE[variant]
         if variant in _PER_STOCK_VARIANTS and not pool:
             raise ValueError(f"{variant} 需 --pool 受控池（per-stock 订阅面）")
         self._reconnect = bool(reconnect)
+        # 分波订阅模式（KPL_SUB_STAGED 同款）：验证「爆发体积阈值是短窗速率还是会话
+        # 累计」——staged 下全面订阅面分窗释放（wave1/2/3+failsafe），若仍 rst 则
+        # 阈值是累计型，分波只是延迟不是解决。
+        kw["sub_staged"] = bool(staged)
         # 控制变量固定（消除 610/211 因素，唯一变量=订阅面族）
         kw.setdefault("ka_mode", "off")
         kw.setdefault("sub_batch_mode", "direct")
@@ -131,12 +135,12 @@ def _frame_family(cmd) -> str:
 
 
 def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool,
-                reconnect=False, stock_ids=None, priority_ids=None) -> dict:
+                reconnect=False, stock_ids=None, priority_ids=None, staged=False) -> dict:
     TMP.mkdir(exist_ok=True)
     dump = TMP / f"kplburst_{tag}_frames_s{idx}_{variant}.hex"
     os.environ["KPL_DEBUG"] = str(dump)
     svc = ProbeSurfaceCollector(
-        codec, variant, pool=pool, reconnect=reconnect,
+        codec, variant, pool=pool, reconnect=reconnect, staged=staged,
         device_id=os.environ.get("KPL_DEVICE_ID")
         or os.environ.get("QUANT_BOARD_KPL_APP_DEVICEID", ""),
         user_id=os.environ.get("KPL_USER_ID", "0"),
@@ -146,7 +150,7 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool,
         # 复现生产全量行情宇宙（3001/3006）：priority_ids 设优先块（分块轮询）
         svc.set_subscriptions(list(stock_ids), list(priority_ids or []))
     print(f"[s{idx}] variant={variant} pool={len(pool or [])} quotes={len(stock_ids or ['801044'])} "
-          f"observe={observe_s}s reconnect={reconnect} dump={dump.name}", flush=True)
+          f"observe={observe_s}s reconnect={reconnect} staged={staged} dump={dump.name}", flush=True)
     t0 = time.time()
     svc.start()
     if reconnect:
@@ -194,6 +198,9 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool,
                         for t in ("stock_quotes", "daban", "zd_stat", "market_overview",
                                   "plate_strength", "zt_reasons", "theme_heat")},
         "unsub_sent_n": svc._stats.get("unsub_sent_n", 0),
+        "staged_released_n": svc._stats.get("staged_released_n", 0),
+        "staged_dropped_n": svc._stats.get("staged_dropped_n", 0),
+        "staged": staged,
         "registry": svc._sub_registry.stats(),
         "server_errors": [e.get("server") for e in events if e["type"] == "error"],
         "ka_mode": svc._ka_mode, "sub_batch_mode": svc._sub_batch_mode,
@@ -239,6 +246,9 @@ def main() -> int:
     ap.add_argument("--reconnect", action="store_true",
                     help="生产同款连续重连（螺旋退避）模式：验证 rst_10054 是否重连累积驱动"
                          "（非盘中驱动）；observe-s 为总运行时长，死因取累计计数")
+    ap.add_argument("--staged", action="store_true",
+                    help="分波订阅模式（同生产 KPL_SUB_STAGED）：验证爆发体积阈值是"
+                         "短窗速率还是会话累计——若 staged 下仍 rst 则阈值累计型")
     ap.add_argument("--stock-ids-file", default="",
                     help="JSON {stock_ids,priority_ids}：复现生产全量 3001/3006 行情宇宙"
                          "（默认仅 1 板块，与生产差异是隔离 confound）；"
@@ -274,7 +284,7 @@ def main() -> int:
                 print(f"[cooldown] {args.cooldown_s}s ...", flush=True)
                 time.sleep(args.cooldown_s)
             summaries.append(run_session(idx, variant, codec, args.observe_s, args.tag, pool,
-                                         reconnect=args.reconnect,
+                                         reconnect=args.reconnect, staged=args.staged,
                                          stock_ids=stock_ids, priority_ids=priority_ids))
     out = TMP / f"kplburst_{args.tag}_run.json"
     out.write_text(json.dumps(summaries, ensure_ascii=False, indent=1), encoding="utf-8")
