@@ -619,26 +619,98 @@ def archive_theme_corpus(db: Any, snapshot: dict[str, Any], *,
             "merged_n": merged_n, "skipped_stale": skipped_stale}
 
 
+def _theme_items_from_mapping(db: Any, date: str) -> dict[str, Any]:
+    """theme_stock_mappings 集合 → theme_items 同合同构建（2026-11-17 P2 用户裁决）。
+
+    集合 = {themeId, stockCode, stockTags, stockReason, stockHot, updatedAt}，每日
+    00:30 由 longhuvip 题材 API 刷新（cli refresh-theme-mappings；独立源，不依赖
+    2013 推送链）。反转为 {stock_id → {stock_id, name, themes:[{id,name,number}],
+    ts, first_ts}}；题材名经 themes 集合 id→name（缺 → ""，不猜）；股票名取同日档
+    rt/fc/zb/dt items（缺 → ""）。
+    口径注：映射为日级快照（00:30 刷新），2013 推送为盘中实时——热度的盘中演进
+    不在此源覆盖（README §3.6 P2）。集合空/读失败 → ok=False（fail-visible）。"""
+    try:
+        mapping = list(db["theme_stock_mappings"].find({}))
+        themes_rows = list(db["themes"].find({}))
+    except Exception as exc:
+        return {"ok": False, "reason": f"mapping_read_error:{type(exc).__name__}"}
+    if not mapping:
+        return {"ok": False, "reason": "no_theme_mapping"}
+    theme_names = {str((t or {}).get("id") or ""): str((t or {}).get("name") or "")
+                   for t in themes_rows}
+    pool_doc = db[_COLLECTION].find_one({"_id": date}) or {}
+    pool_names: dict[str, str] = {}
+    for lane in ("rt_items", "fc_items", "zb_items", "dt_items"):
+        for it in pool_doc.get(lane) or []:
+            sid = str((it or {}).get("stock_id") or "")
+            if sid and sid not in pool_names:
+                pool_names[sid] = str((it or {}).get("name") or "")
+    members: dict[str, dict[str, Any]] = {}
+
+    def _hot(v: Any) -> int:
+        try:
+            return int(str(v).strip())
+        except (ValueError, TypeError):
+            return 0
+
+    for m in mapping:
+        code = str((m or {}).get("stockCode") or "").strip()
+        if not code:
+            continue
+        tid = str((m or {}).get("themeId") or "").strip()
+        item = members.get(code)
+        if item is None:
+            item = {"stock_id": code, "name": pool_names.get(code, ""),
+                    "themes": [], "ts": 0.0, "first_ts": None}
+            members[code] = item
+        if tid:
+            item["themes"].append({"id": tid, "name": theme_names.get(tid, ""),
+                                   "number": _hot(m.get("stockHot"))})
+        raw_ts = str((m or {}).get("updatedAt") or "")
+        ts = 0.0
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+            try:
+                ts = datetime.strptime(raw_ts, fmt).replace(tzinfo=TZ_SHANGHAI).timestamp()
+                break
+            except ValueError:
+                continue
+        if ts:
+            item["ts"] = max(float(item.get("ts") or 0), ts)
+            item["first_ts"] = min(float(item["first_ts"] or ts), ts)
+    if not members:
+        return {"ok": False, "reason": "no_stock_mapping"}
+    items = sorted(members.values(), key=lambda x: x["stock_id"])
+    return {"ok": True, "items": items, "ts": max((it.get("ts") or 0) for it in items)}
+
+
 def load_theme_corpus(db: Any, date: str) -> dict[str, Any]:
     """2013 题材库热度语料读口（jev 投喂原料）：{ok, date, items, count, ts, archived_at}。
 
     fail-visible：「日档不存在」（no_archive）与「日档在但语料未落库」（no_theme_corpus，
     该日 collector 未开 2013 订阅或盘中未运行）严格分开，不伪装空语料。
+    2026-11-17 P2 裁决（用户）：池级 2013 订阅收敛后，题材语料改由
+    theme_stock_mappings 映射集供（corpus_source=theme_stock_mappings，日级快照）。
     """
     row = db[_COLLECTION].find_one({"_id": date})
+    if row and (row.get("theme_items") or []):
+        return {"ok": True, "source": "local_archive", "lane": _THEME_LANE,
+                "date": row.get("theme_date") or date, "items": row["theme_items"],
+                "count": len(row["theme_items"]), "ts": row.get("theme_ts"),
+                "archived_at": row.get("theme_archived_at"),
+                "corpus_source": row.get("theme_source") or "socket_2013"}
+    fb = _theme_items_from_mapping(db, date)
+    if fb.get("ok"):
+        return {"ok": True, "source": "theme_stock_mappings", "lane": _THEME_LANE,
+                "date": date, "items": fb["items"], "count": len(fb["items"]),
+                "ts": fb.get("ts"), "corpus_source": "theme_stock_mappings",
+                "note": "2013 池级订阅已收敛（P2）：题材语料改由 theme_stock_mappings 供（日级快照 00:30 刷新）"}
     if not row:
         return {"ok": False, "degraded": True, "reason": "no_archive",
-                "date": date, "lane": _THEME_LANE}
-    items = row.get("theme_items") or []
-    if not items:
-        return {"ok": False, "degraded": True, "reason": "no_theme_corpus",
-                "date": date, "lane": _THEME_LANE, "item_n": 0,
-                "note": "日档存在但 2013 题材库语料未落库（需当日盘中运行 collector 且 KPL_THEME_SUBS≠0）"}
-    return {"ok": True, "source": "local_archive", "lane": _THEME_LANE,
-            "date": row.get("theme_date") or date, "items": items,
-            "count": len(items), "ts": row.get("theme_ts"),
-            "archived_at": row.get("theme_archived_at"),
-            "corpus_source": row.get("theme_source") or "socket_2013"}
+                "date": date, "lane": _THEME_LANE, "mapping_reason": fb.get("reason")}
+    return {"ok": False, "degraded": True, "reason": "no_theme_corpus",
+            "date": date, "lane": _THEME_LANE, "item_n": 0,
+            "mapping_reason": fb.get("reason"),
+            "note": "日档存在但 2013 题材库语料未落库且映射兑底不可用（KPL_THEME_SUBS=0 时预期走映射）"}
 
 
 # ── 2112 上榜预测 / 3004-3101 实时龙虎榜语料通道（2026-11-11 ③）────────────

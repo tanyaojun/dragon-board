@@ -341,15 +341,22 @@ QuantBoard 主后端 :8000
 staged1/staged2 的「阈值窗」拟合是过拟合（150-170 帧/窗恰好拟合却机制错误——
 真实判据是活跃订阅数预算，具体数值待服务端源码/实弹定界）。
 
-**修正方向（架构级，待用户裁决数据语义）**：
-- P1：2103 收敛为 App 同款——每池 1 帧（index=0 count=30），49→4 帧；
-  深池走分页重订阅（幂等替换）而非订阅更多页。
-- P2：per-stock 2203/2013 池级订阅移除或按需单股；zt_reason 链改读 2103
-  推送自带 reason/hot_val（无缺口）；**题材链缺口**：2013 题材关系 2103
-  不自带，热榜 jev 题材链消费 get_theme_heat——需裁决（top-N 常驻 / 接受
-  缺口 / 仅详情按需）。
-- P3：3001 行情宇宙轮转（~13 帧/窗背景量）保留评估。
-- 目标：活跃订阅 ≤30 帧/会话（App 画像），fail-visible 面积进 status。
+**修正方向（架构级）**：
+- P2 ✅（2026-11-17 用户裁决落地）：池级 2203/2013 订阅摘除（.env.local
+  KPL_ZT_REASON_SUBS=0 / KPL_THEME_SUBS=0，回滚=删行重启）。题材链改源：
+  `theme_stock_mappings` 集合（13896 条 {themeId, stockCode, stockHot,
+  updatedAt}，每日 00:30 longhuvip API 刷新，独立源不依赖推送链）——
+  archiver `load_theme_corpus` 兜底（2013 日档在场仍优先，corpus_source
+  可审计；映射为日级快照，盘中热度演进不覆盖，README 口径注）。zt_reason
+  语料：2203 详情字段（全文解析/梯队/风险画像）2103 无法等价替代 → 该
+  伴生语料按缺席纪律降级（消费方 fetch_reason_corpus 已结构化降级）。
+  测试 test_theme_corpus_mapping_fallback + 615 passed + 实弹验证
+  （无日档日期 ok=True count=4356 全市场覆盖，题材名经 themes 元数据）。
+- P1 ⏳：2103 收敛为 App 同款（每池 1 帧 index=0 count=30，49→4 帧）——
+  **池深度语义裁决待定**：现档 rt_items 273 行 vs App 同款 30 行/池。
+- P3 ⏳：3001 行情宇宙轮转（~13 帧/窗背景量）保留评估。
+- 目标：活跃订阅 ≤30 帧/会话（App 画像）；P2 落地后现面 ~71 帧
+  （7 globals+49 页+行情轮转），待 P1。
 
 ## 四、数据语义与已知限制
 

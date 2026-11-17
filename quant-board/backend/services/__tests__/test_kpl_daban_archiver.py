@@ -45,6 +45,15 @@ class _FakeCollection:
         assert upsert or row is not None, "非 upsert 更新不应凭空造档"
         row.update(update["$set"])
 
+    def find(self, q: dict | None = None) -> list[dict]:
+        """全表扫描（映射兑底用；仅支持空条件与等值条件）。"""
+        out = []
+        for row in self.rows.values():
+            ok = all(row.get(k) == v for k, v in (q or {}).items())
+            if ok:
+                out.append(dict(row))
+        return out
+
     def find_one(self, q: dict, sort: list | None = None) -> dict | None:
         """仿 Mongo 语义：精确 _id 走 key 查找，其余条件走扫描；**返回副本**不暴露内行。
 
@@ -82,10 +91,15 @@ class _FakeCollection:
 class _FakeDb:
     def __init__(self) -> None:
         self._coll = _FakeCollection()
+        self._extra: dict[str, _FakeCollection] = {}
 
     def __getitem__(self, name: str):
-        assert name == "kpl_daban_pool"
-        return self._coll
+        if name == "kpl_daban_pool":
+            return self._coll
+        # P2 题材映射兑底读 theme_stock_mappings/themes（假库按名建集合）
+        if name not in self._extra:
+            self._extra[name] = _FakeCollection()
+        return self._extra[name]
 
 
 def _snap(ts: float, stock_ids: list[str], pages_missing: list[int] | None = None,
@@ -899,6 +913,57 @@ def test_theme_corpus_merged_into_same_day_doc():
     assert "items.0.stock_id" not in row2   # 池 items 不被语料回写冲掉
     loaded = load_theme_corpus(db, "2026-11-06")
     assert loaded["ok"] is True and loaded["count"] == 2
+
+
+ts0 = datetime(2026, 11, 6, 14, 40, tzinfo=TZ_SHANGHAI).timestamp()
+
+
+def test_theme_corpus_mapping_fallback():
+    """P2（2026-11-17 用户裁决）：2013 池级订阅收敛后，题材语料由
+    theme_stock_mappings 映射集兜底（日级快照，独立于推送链，fail-visible）。"""
+    from backend.services.kpl_daban_archiver import (
+        archive_snapshot,
+        archive_theme_corpus,
+        load_theme_corpus,
+    )
+    db = _FakeDb()
+    # 空映射集 + 无日档 → no_archive（附 mapping 原因，fail-visible 不伪装语料）
+    r = load_theme_corpus(db, "2026-11-06")
+    assert r["ok"] is False and r["reason"] == "no_archive"
+    assert r["mapping_reason"] == "no_theme_mapping"
+    # 建日档后（archive_snapshot 写 2026-11-06 档）→ no_theme_corpus（附 mapping 原因）
+    archive_snapshot(db, _snap(100.0, ["000001"], date="2026-11-06"))
+    r = load_theme_corpus(db, "2026-11-06")
+    assert r["ok"] is False and r["reason"] == "no_theme_corpus"
+    assert r["mapping_reason"] == "no_theme_mapping"
+    # 有映射：反转聚合 + themes 元数据补名 + 股票名取池日档
+    db["themes"].rows["t1"] = {"id": "111", "name": "固态电池"}
+    db["themes"].rows["t2"] = {"id": "222", "name": "算力"}
+    for i, (tid, code, hot, upd) in enumerate([
+            ("111", "301697", "2158", "2026-11-17 00:30:00.419000"),
+            ("222", "301697", "900", "2026-11-17 00:31:45.459000"),
+            ("111", "000010", "300", "2026-11-17 00:30:00.419000")]):
+        db["theme_stock_mappings"].rows[f"m{i}"] = {
+            "themeId": tid, "stockCode": code, "stockTags": "[]",
+            "stockReason": "", "stockHot": hot, "updatedAt": upd}
+    db._coll.rows["2026-11-06"] = {"_id": "2026-11-06", "rt_items": [
+        {"stock_id": "301697", "name": "硅宝科技"}]}
+    r = load_theme_corpus(db, "2026-11-06")
+    assert r["ok"] is True and r["corpus_source"] == "theme_stock_mappings"
+    assert r["count"] == 2
+    items = {it["stock_id"]: it for it in r["items"]}
+    assert items["301697"]["name"] == "硅宝科技"          # 股票名取池日档
+    assert items["000010"]["name"] == ""                  # 池外股名缺位不猜
+    ths = items["301697"]["themes"]
+    assert {(t["id"], t["name"], t["number"]) for t in ths} == {
+        ("111", "固态电池", 2158), ("222", "算力", 900)}
+    assert items["301697"]["ts"] > items["000010"]["ts"]  # 取最大 updatedAt
+    # 2013 推送档在场时仍优先（corpus_source=socket_2013，推送新鲜度更优）
+    archive_theme_corpus(db, _theme_snap("2026-11-06",
+                                         {"301697": _theme_item("301697", ts0)}),
+                         now=datetime(2026, 11, 6, 14, 45, tzinfo=TZ_SHANGHAI))
+    r = load_theme_corpus(db, "2026-11-06")
+    assert r["corpus_source"] == "socket_2013"
 
 
 def test_theme_corpus_stale_and_empty_snapshots():
