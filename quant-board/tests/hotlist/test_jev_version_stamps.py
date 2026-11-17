@@ -144,7 +144,7 @@ def test_auction_leader_vA4_dedicated_stamps():
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
     assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA4"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-15d"   # 纯语料供给换代：竞价过程事实行（socket 序列观测值）+ MorningBiddingList 真源头日档；前一版 2026-11-15c = vA4：移除韭研龙序源
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-15e"   # 第三源三档+公共板块竞价涨幅均值>0门禁（生产默认严格）；前一版 2026-11-15d = 竞价过程事实行+MBL 日档
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）
     assert al.AUCTION_LEADER_QUESTIONS == (

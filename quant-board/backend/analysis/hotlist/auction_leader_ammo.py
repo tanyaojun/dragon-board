@@ -29,7 +29,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA4"   # 换代登记：2026-11-15 用户裁决移除韭研龙序第二源（实测封板概率极低）；身位题清理「韭研龙序」判据（红线6）；前一版 vA3 = auction-leader-vA3-preregistration-20261114
-AMMO_VERSION_AUCTION_LEADER = "2026-11-15d"   # 纯语料供给换代：竞价过程事实行（socket 序列观测值）+ MorningBiddingList 真源头日档（kaipanla.com 域 MITM 定案合同）；前一版 2026-11-15c = vA4：移除韭研龙序源（删龙序叙事行/锚第二桶/身位题龙序判据）；2026-11-15b = 第三源竞价强度两新行；2026-11-15a = 监管风险行；2026-11-14h = D：S3 成分验证门+产业树残桩正文剔除；2026-11-14g = C：同花顺隔夜快讯兑底；2026-11-14f = B：韭研早报晨间窗；2026-11-14e = A：KPL 09:05 二次刷新槽
+AMMO_VERSION_AUCTION_LEADER = "2026-11-15e"   # 第三源三档+公共「板块竞价涨幅均值>0」门禁（生产默认严格暂不切中等）；前一版 2026-11-15d = 竞价过程事实行+MBL 真源头日档；2026-11-15c = vA4 移除韭研龙序源；2026-11-15b = 第三源竞价强度两新行；2026-11-15a = 监管风险行
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")

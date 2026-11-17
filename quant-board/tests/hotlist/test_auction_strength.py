@@ -390,3 +390,43 @@ def test_roster_negative_max_total_clamped():
     assert out == []
     assert state["cap"] == 0 and state["truncatedN"] == 3
     assert state["selectedN"] == 0 and state["reason"] == "no_qualified"
+
+
+# ── 三档 + 公共均值门（2026-11-15 用户裁决：板块竞价涨幅均值>0，生产默认严格）──
+
+def test_roster_mean_gate_excludes_negative_board():
+    """公共门禁：中热板但 jj_percent 均值≤0 → 整板剔除（即使个股严格合格）+ 留痕。"""
+    db = FakeDb()
+    _seed_tree(db, "机器人", ["600100"])
+    _seed_tree(db, "净负板", ["600500", "600501", "600502"])
+    rows = {"600100": _row(jj_percent=7.0, jj_amount=2.5e8),
+            "600500": _row(jj_percent=7.0, jj_amount=1e8),    # mid50_95 撤减 合格
+            "600501": _row(jj_percent=-9.0, jj_amount=1e8),
+            "600502": _row(jj_percent=-8.0, jj_amount=1e8)}
+    out, state = AS.trial_strength_roster(db, DATE, rows)
+    assert [r["code"] for r in out] == ["600100"]
+    assert state["meanFilteredBoards"] == ["净负板"]
+    assert state["meanGate"] == "board_jj_percent_mean>0" and state["tier"] == "strict"
+
+
+def test_roster_tiers_medium_loose_with_gate():
+    """中等放宽姿态、宽松放宽个股档；三档共用均值门；载荷 jjtier/posture 如实。"""
+    db = FakeDb()
+    _seed_tree(db, "机器人", ["600100", "600104", "600106"])
+    rows = {"600100": _row(jj_percent=7.0, jj_amount=9e7),
+            "600104": _row(jj_percent=7.5, jj_amount=9e7, first=5e6, last=9e6),
+            "600106": _row(jj_percent=9.9, jj_amount=9e7)}
+    s, _ = AS.trial_strength_roster(db, DATE, rows, tier="strict")
+    m, _ = AS.trial_strength_roster(db, DATE, rows, tier="medium")
+    l, _ = AS.trial_strength_roster(db, DATE, rows, tier="loose")
+    assert [r["code"] for r in s] == ["600100"]
+    assert [r["code"] for r in m] == ["600104", "600100"]
+    assert [r["code"] for r in l] == ["600106", "600104", "600100"]
+    assert m[0]["trialStrength"]["posture"] == "maintain"
+    assert l[0]["trialStrength"]["jjtier"] == "top95"
+
+
+def test_roster_unknown_tier_raises():
+    db = FakeDb()
+    with pytest.raises(ValueError):
+        AS.trial_strength_roster(db, DATE, {}, tier="bogus")

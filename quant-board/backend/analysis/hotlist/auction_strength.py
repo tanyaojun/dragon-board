@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """竞价试盘强度第三源（预登记 auction-leader-trial-strength-source-preregistration-20261115）。
 
-选龙合同（严格档，2026-11-15 用户裁决）：
+选龙合同（2026-11-15 用户裁决；三档 + 公共前置门禁，生产默认严格）：
   root 粗桶板块竞价强度 board_amt = 每日每板 Σjj_amount（全板试盘股，缺值按 0）
-  合格 = board_tier(board_amt) == 中热 2-5亿 ∧ tier_jj == mid50_95 ∧ posture == decrease
-  每 root 板按 jj_ratio 降序取前 max_per_board=3（并集补充进双源 live 锚，非替换）。
+  公共门禁 = 板块竞价涨幅均值（板内成员 jj_percent 均值）> 0（三档共用，情绪门）
+  严格 = 中热 2-5亿 ∧ mid50_95 ∧ 撤减；中等 = 中热 ∧ mid50_95（姿态不限）；
+  宽松 = 中热（个股档/姿态不限）。每 root 板按 jj_ratio 降序取前 max_per_board=3。
+  生产默认 tier=strict（暂不切中等）；run() 与读口共用单一实现。
 
 单一事实源（AGENTS §1.2-1）：
 - 档位/姿态/limit-preseal 口径复用 scripts/auction_trial_base_rate_eval.py（bre，
@@ -42,6 +44,11 @@ _spec.loader.exec_module(bre)
 BOARD_TIERS = [("冷 <5000万", 5e7), ("温 5000万-2亿", 2e8), ("中热 2-5亿", 5e8),
                ("热 5-10亿", 1e9), ("过热 ≥10亿", float("inf"))]
 TIER_MID_HOT = "中热 2-5亿"
+# 三档（2026-11-15 用户裁决：公共均值门 + 生产默认严格暂不切中等）
+TRIAL_TIER_STRICT = "strict"
+TRIAL_TIER_MEDIUM = "medium"
+TRIAL_TIER_LOOSE = "loose"
+TRIAL_TIERS = (TRIAL_TIER_STRICT, TRIAL_TIER_MEDIUM, TRIAL_TIER_LOOSE)
 
 
 def fnum(x: Any) -> float | None:
@@ -130,8 +137,11 @@ def assign_root_boards(rows: list[dict], db: Any) -> dict:
 
 def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
                           max_per_board: int = 3,
-                          max_total: int | None = None) -> tuple[list[dict], dict]:
-    """第三源选龙（严格档 + 每板前三）：run() 与读口共用单一实现（禁第二套）。
+                          max_total: int | None = None,
+                          tier: str = TRIAL_TIER_STRICT) -> tuple[list[dict], dict]:
+    """第三源选龙（三档 + 公共均值门 + 每板前三）：run() 与读口共用单一实现（禁第二套）。
+
+    公共前置门禁：板块竞价涨幅均值（jj_percent 均值）>0，三档共用；全缺→不满足。
 
     trial_rows = dict[code→试盘行具名字段]（run() 窗内采集 / auction_trial_raw 日档）。
     返回 (rows, state)：rows = [{code, name, board, trialStrength:{boardAmt, btier,
@@ -142,6 +152,10 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
     """
     state: dict = {"state": "ok", "date": date, "mappedN": 0, "unmappedN": 0,
                    "hotBoards": [], "selectedN": 0}
+    if tier not in TRIAL_TIERS:
+        raise ValueError(f"trial_strength_roster: 未知 tier {tier!r}")
+    state["tier"] = tier
+    state["meanGate"] = "board_jj_percent_mean>0"
     if max_total is not None:
         max_total = max(0, max_total)   # 负值钳 0（评审：截断记账不得虚增/负切片）
     if not trial_rows:
@@ -167,17 +181,32 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
     state["unmappedN"] = len(rows) - len(mapped)
     amts = board_amt(rows)
     board_n = Counter(r["board"] for r in mapped)
+    # 板块竞价涨幅均值（jj_percent，缺值跳过；全缺→None→门禁不满足，fail-visible）
+    mean_vals: dict[str, list[float]] = {}
+    for r in mapped:
+        v = fnum(r.get("jj_percent"))
+        if v is not None:
+            mean_vals.setdefault(r["board"], []).append(v)
+    board_mean = {b: sum(v) / len(v) for b, v in mean_vals.items()}
     state["hotBoards"] = [{"board": b, "amt": amts[b], "n": board_n[b]}
                           for b in sorted(amts) if board_tier(amts[b]) == TIER_MID_HOT]
-    # 严格筛：中热板 × mid50_95 × 撤减（缺 jj_percent/first/last 自然排除，不伪装 0）
+    state["meanFilteredBoards"] = [b for b in sorted(amts)
+                                   if board_tier(amts[b]) == TIER_MID_HOT
+                                   and (board_mean.get(b) is None or board_mean[b] <= 0)]
+    # 三档筛（公共均值门在前）：缺 jj_percent/first/last 自然排除，不伪装 0
     groups: dict[str, list[tuple[float, dict]]] = {}
     for r in mapped:
         b = r["board"]
         if board_tier(amts.get(b)) != TIER_MID_HOT:
             continue
-        if bre.tier_jj(r) != "mid50_95":
+        m = board_mean.get(b)
+        if m is None or m <= 0:   # 公共前置门禁：板块竞价涨幅均值>0
             continue
-        if bre.posture(r) != "decrease":
+        jt = bre.tier_jj(r)
+        po = bre.posture(r)
+        if tier == TRIAL_TIER_STRICT and not (jt == "mid50_95" and po == "decrease"):
+            continue
+        if tier == TRIAL_TIER_MEDIUM and jt != "mid50_95":
             continue
         ratio = jj_ratio(fnum(r.get("jj_percent")), r.get("pre_percent"),
                          r.get("limit"), r["preseal"])
@@ -189,7 +218,7 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
             out.append({"code": r["code"], "name": names.get(r["code"]), "board": b,
                         "trialStrength": {"boardAmt": amts[b], "btier": TIER_MID_HOT,
                                           "jjRatio": round(ratio, 2),
-                                          "jjtier": "mid50_95", "posture": "decrease",
+                                          "jjtier": bre.tier_jj(r), "posture": bre.posture(r),
                                           "rank": rank, "boardTrialN": board_n[b]}})
     if max_total is not None and len(out) > max_total:
         out.sort(key=lambda r: (-r["trialStrength"]["jjRatio"], r["board"], r["code"]))
