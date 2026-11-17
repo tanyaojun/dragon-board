@@ -134,6 +134,16 @@ per-stock 池注入：S2/S3 用 ~30 只活跃涨停池成员（探针工具受�
 
 ## 6. 裁决回填（开火后填）
 
+### 6.0 工具 shakedown（2026-11-17 15:28 收盘前，S0×1，已清理临时产物）
+
+- 工具 `scripts/probe_kpl_burst_surface.py` 实弹验证通过（单会话禁重连 + 死因分类入 summary）。
+- **S0 globals-only：session_s=90.4（右删失）death=eof_clean err_code=None**；
+  帧族 globals=7 / 3001_3006=39（轮询）/ auth 链 5；无 2103 页、无 per-stock。
+- **初步信号**：最小面 90s+ 干净关连（无 10054）vs 生产全面 ~37-60s rst_10054
+  （live death_cause_counts rst_10054×4）→ 指纹在新增族（2103 页/per-stock），
+  不在 globals/3001-3006 基底。**诚实披露**：收盘前 15:29 服务器攻击性可能偏低，
+  且 S0 仅 1 会话（非 ≥3 中位）；定案仍需 11-18 盘中完整矩阵 S1/S2/S3 隔离。
+
 - [ ] S0-S3 各 ≥3 会话 session_s/death_cause 中位 + 按族帧计数
 - [ ] 主导族定案（裁决矩阵 §2.3）
 - [ ] 杠杆 A/B 推荐 + 生产变更预登记（另行文档）
@@ -142,7 +152,10 @@ per-stock 池注入：S2/S3 用 ~30 只活跃涨停池成员（探针工具受�
 
 ## 7. 验证清单
 
-- [x] 死因分类观测落地（零行为变更）：TestDeathCause 4 + KPL 209 / services+api 582 passed
-- [ ] 探针工具 mock 测试（批准后实施）
-- [ ] 实弹开火（用户批准 + 11-18 窗）
+- [x] 死因分类观测落地（零行为变更）：TestDeathCause 4 + KPL 267 / services+api 582 passed
+- [x] 探针工具实施 + mock 测试：`scripts/probe_kpl_burst_surface.py` +
+      `test_kpl_burst_surface_probe.py` 12 passed（变体面构成/控制变量/受控池/
+      单会话死因/帧族）
+- [x] S0 shakedown（11-17 收盘前×1）：90.4s eof_clean，工具实弹验证通过（§6.0）
+- [ ] 完整矩阵实弹开火（用户已批准「开火」；11-18 竞价窗 09:15，今日 15:28 窗尽）
 - [ ] 结论回填 + 文档同步
