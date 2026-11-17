@@ -610,71 +610,33 @@ def test_trial_state_contract_pending_and_renderer_wiring(env, monkeypatch):
 
 
 def test_run_wires_trial_in_window(env, monkeypatch):
-    """窗内：fetch 返回入选股试盘行 → 叙事出试盘行 + trialState=ok+采集观测留痕。"""
+    """raw 日档试盘行 → 叙事出试盘行 + trialState=ok/archive（Wzs 出链后读路径）。"""
     db, calls = env
     monkeypatch.setattr(L, "_in_auction_window", lambda: True)
-    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: {
-        "state": "ok", "saved_at": "2026-11-16T09:25:30+08:00", "fetched": False,
-        "n_rows": 95, "actual_date": date, "message": "已读取本地缓存数据",
-        "attempts": [{"refresh": False, "state": "ok"}],
+    db["auction_trial_raw"].docs[DATE] = {
+        "_id": DATE, "tradingDate": DATE, "savedAt": "2026-11-16T09:25:30+08:00",
+        "nRows": 95,
         "rows": {"603135": {"start_time": "09:15:00", "end_time": "09:20:11",
                              "first_amount": 2_116_000.0, "max_amount": 2_116_000.0,
-                             "jj_percent": -2.36, "jj_amount": 3_310_000.0}}})
+                             "jj_percent": -2.36, "jj_amount": 3_310_000.0}}}
     res = L.run(DATE, confirm_budget=True)
     assert res["ok"]
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
     assert "竞价试盘（09:15:00–09:20:11）：首开 211.6万" in doc["narrative"]
     assert "试盘涨幅 -2.36%（09:20:11 时点）" in doc["narrative"]
     ts = doc["corpusState"]["trialState"]
-    assert ts["state"] == "ok" and ts["saved_at"] == "2026-11-16T09:25:30+08:00"
-    assert ts["n_rows"] == 95 and ts["attempts"] == [{"refresh": False, "state": "ok"}]
+    assert ts["state"] == "ok" and ts["source"] == "archive"
+    assert ts["saved_at"] == "2026-11-16T09:25:30+08:00" and ts["n_rows"] == 95
 
 
 def test_run_out_of_window_trial_skipped(env, monkeypatch):
     """窗外：零外呼（fetch 不被调）、试盘行缺席、trialState=skipped_out_of_window。"""
     db, calls = env
     monkeypatch.setattr(L, "_in_auction_window", lambda: False)
-    fired = []
-    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: fired.append(date) or {})
-    L.run(DATE, confirm_budget=True)
-    assert fired == []
+    L.run(DATE, confirm_budget=True)   # Wzs 已出链：无任何外呼路径可触发
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
     assert "竞价试盘" not in doc["narrative"]
     assert doc["corpusState"]["trialState"] == {"state": "skipped_out_of_window"}
-
-
-def test_trial_raw_persisted_in_window(env, monkeypatch):
-    """全量 raw 日档落库（2026-11-14 用户裁决）：窗内 ok 态 → auction_trial_raw 写入
-    全量 rows；trialState.persistState 留痕；fetch 失败不写不覆盖。"""
-    db, _ = env
-    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
-    ok_result = {"state": "ok", "actual_date": DATE, "saved_at": "2026-11-13T09:26:01",
-                 "fetched": False, "n_rows": 2,
-                 "rows": {"603135": {"max_amount": 21_160_000.0, "jj_percent": -2.36},
-                          "605255": {"max_amount": 9_610_000.0, "jj_percent": 4.78}},
-                 "attempts": [{"refresh": False, "state": "ok", "fetched": False}]}
-    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: ok_result)
-    L.run(DATE, confirm_budget=True)
-    raw = db["auction_trial_raw"].docs[DATE]
-    assert raw["tradingDate"] == DATE and raw["nRows"] == 2
-    assert raw["rows"]["605255"]["jj_percent"] == 4.78
-    cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]["trialState"]
-    assert cs["persistState"]["persisted"] is True and cs["state"] == "ok"
-
-
-def test_trial_raw_fetch_failed_not_persisted(env, monkeypatch):
-    """fetch_failed 无载荷不落（label trialState 留痕，raw 档不覆盖/不建）。"""
-    db, _ = env
-    monkeypatch.setattr(L, "_in_auction_window", lambda: True)
-    monkeypatch.setattr(L, "fetch_auction_trial",
-                        lambda date: {"state": "http_error:URLError", "rows": {},
-                                      "n_rows": 0, "attempts": []})
-    L.run(DATE, confirm_budget=True)
-    assert db["auction_trial_raw"].docs.get(DATE) is None
-    cs = db[L.COLLECTION].docs[f"{DATE}:603135"]["corpusState"]["trialState"]
-    assert cs["state"].startswith("fetch_failed") is False
-    assert cs["state"] == "http_error:URLError"
-    assert "persistState" not in cs
 
 
 def test_corpus_state_morning_flash_fields_persisted(env, monkeypatch):
@@ -755,10 +717,11 @@ def _trial_strength_setup(monkeypatch, db, rows, boards):
     # qt.gtimg.cn（红线 9 频控预算）；离线确定性返回，补源缺席不阻断选龙
     monkeypatch.setattr(L, "get_auction_snapshot_tencent",
                         lambda codes: {"ok": False, "items": {}, "missing": list(codes)})
-    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: {
-        "state": "ok", "saved_at": f"{date}T09:25:30+08:00", "fetched": False,
-        "n_rows": len(rows), "actual_date": date, "message": "",
-        "attempts": [{"refresh": False, "state": "ok"}], "rows": rows})
+    # WzsLinker 已退役出链（2026-11-17 用户裁决）：试盘行走 raw 日档读路径
+    # （auction_trial_raw = 历史 raw 档；主链 = socket 官方序列）
+    db["auction_trial_raw"].docs[DATE] = {
+        "_id": DATE, "tradingDate": DATE,
+        "savedAt": f"{DATE}T09:25:30+08:00", "nRows": len(rows), "rows": rows}
     yield
     jiuyan_board.reset_jiuyan_board_cache()
     jiuyan_industry_root.reset_jiuyan_industry_root_cache()
@@ -892,13 +855,11 @@ def test_trial_strength_dry_run_reads_archive(env, monkeypatch):
         "_id": DATE, "tradingDate": DATE, "nRows": 4, "savedAt": f"{DATE}T09:26:01",
         "rows": {"600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
                  "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}}
-    fired = []
-    monkeypatch.setattr(L, "fetch_auction_trial", lambda date: fired.append(date) or {})
+    # Wzs 已出链：dry-run 天然零外呼
     try:
         res = L.run(DATE, dry_run=True)
         assert res["ok"] and res["dryRun"]
-        assert fired == []                              # dry-run 零外呼
-        assert calls == [] and db[L.COLLECTION].docs == {}
+        assert calls == []                              # dry-run 零外呼零写 and db[L.COLLECTION].docs == {}
         assert res["selection"]["trialN"] == 3
         assert res["trialStrengthState"]["state"] == "ok"
         assert res["leaders"] == 4                      # 1 推送 + 3 trial

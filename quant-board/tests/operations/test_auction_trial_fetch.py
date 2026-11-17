@@ -48,62 +48,6 @@ def test_parse_api_error_structured():
     assert "变体" in res["message"]
 
 
-def test_fetch_fresh_cache_single_attempt(monkeypatch):
-    """缓存新鲜（龄 ≤120s）→ 仅 1 发裸读、无 refresh（预算最省路径）。"""
-    saved = "2026-11-13T23:41:01+08:00"
-    ts = datetime.strptime(saved[:19], "%Y-%m-%dT%H:%M:%S").timestamp()
-    urls: list[str] = []
-
-    def fake_get(url: str) -> dict:
-        urls.append(url)
-        return _load()
-
-    monkeypatch.setattr(T, "_http_get_json", fake_get)
-    res = T.fetch_auction_trial(DATE, now=ts + 10)
-    assert res["state"] == "ok" and res["rows"]["605255"]["jj_percent"] == 4.78
-    assert len(res["attempts"]) == 1 and res["attempts"][0]["refresh"] is False
-    assert "refresh=1" not in urls[0]
-
-
-def test_fetch_stale_cache_refresh_once(monkeypatch):
-    """缓存陈旧 → 至多补 1 发 refresh=1（≤2 发封顶，无重试循环）。"""
-    saved = "2026-11-13T23:41:01+08:00"
-    ts = datetime.strptime(saved[:19], "%Y-%m-%dT%H:%M:%S").timestamp()
-    urls: list[str] = []
-
-    def fake_get(url: str) -> dict:
-        urls.append(url)
-        return _load()
-
-    monkeypatch.setattr(T, "_http_get_json", fake_get)
-    res = T.fetch_auction_trial(DATE, now=ts + 300)
-    assert len(res["attempts"]) == 2
-    assert res["attempts"][1]["refresh"] is True
-    assert urls[0].endswith(f"date={DATE}") and urls[1].endswith(f"date={DATE}&refresh=1")
-
-
-def test_fetch_fallback_no_refresh(monkeypatch):
-    """回退/错误态 → 立即收手（不在无数据方向上追加请求，红线 9）。"""
-    payload = _load()
-    payload["actual_date"] = "2026-11-12"
-
-    def fake_get(url: str) -> dict:
-        return payload
-
-    monkeypatch.setattr(T, "_http_get_json", fake_get)
-    res = T.fetch_auction_trial(DATE)
-    assert res["state"] == "fallback" and len(res["attempts"]) == 1
-
-
-def test_fetch_http_error_structured_no_retry(monkeypatch):
-    def fake_get(url: str) -> dict:
-        raise OSError("conn refused")
-
-    monkeypatch.setattr(T, "_http_get_json", fake_get)
-    res = T.fetch_auction_trial(DATE)
-    assert res["state"] == "http_error:OSError" and res["rows"] == {}
-
-
 class _FakeCol:
     def __init__(self):
         self.docs = {}
@@ -268,9 +212,3 @@ def test_persist_trial_raw_carries_obs_fingerprint():
     assert doc["obs"]["headSortKeys"][0] == "stock_id"
 
 
-def test_saved_at_age_offset_aware():
-    """review finding-3：+08:00 偏移与 naive（按 CST 合同）龄一致；不可判 → None。"""
-    now = T.datetime(2026, 11, 13, 9, 26, 2, tzinfo=T.timezone(T.timedelta(hours=8))).timestamp()
-    assert T._saved_at_age("2026-11-13T09:26:00", now=now) == 2.0
-    assert T._saved_at_age("2026-11-13T09:26:00+08:00", now=now) == 2.0
-    assert T._saved_at_age("garbage", now=now) is None

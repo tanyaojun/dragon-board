@@ -75,7 +75,7 @@ from backend.operations.auction_bidding_direct import (
     collect_auction_bidding_direct)
 from backend.operations.auction_trial_derive import derive_trial_rows_from_series
 from backend.operations.auction_trial_fetch import (
-    COLLECTION_TRIAL_RAW, fetch_auction_trial, persist_trial_raw)
+    COLLECTION_TRIAL_RAW)
 from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
                                                       trading_dates)
 from backend.operations.jev_label_jiuyan import jiuyan_streak_map
@@ -709,11 +709,10 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 bid_supplement = f"fetch_failed:{exc}"
     if bid_items:
         lanes["bid"] = bid_items   # 写回（lanes 假件可能无 bid 键：保证注入传播）
-    # 试盘源采集（2026-11-14c 定案接线，勘察 §6 合同；WzsLinker api-auction.php）
-    # 【降级为迁移期回退源（2026-11-16 item11）】：自建派生（上方序列派生）优先，
-    # 仅派生缺席时窗内回退 WzsLinker（非官方代理端点，双源对拍后删除）：
-    # 仅 09:25–09:30 窗（试盘行已定格，与 bid 补源同窗）、裸读≤1 + 陈旧补拉≤1（红线 9
-    # 台账 §6.4）；dry-run 零外呼；actual_date 守卫在解析层（回退数据不得冒充当日）
+    # 试盘源（2026-11-17 正名，用户裁决）：**主链 = KPL socket 官方推送序列**
+    # （pid=8 竞价池实时页，下方 trial_rows_from_series 即官方序列的试盘行加工层，
+    # 主链一环）。WzsLinker（第三方非官方代理，11-16 实证故障）**已退役出链**：
+    # 判据链零依赖，历史 raw 日档（auction_trial_raw）保留作对拍参考。
     # 竞价列表真源头直采（2026-11-16 MITM 定案合同：kaipanla.com MorningBiddingList
     # Type=4 PidType=0；与试盘 fetch 同窗一次，冻结态全量快照落 kpl_morning_bidding_raw）
     mbl_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
@@ -734,19 +733,6 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if derived_rows:
         trial_rows = derived_rows
         trial_state = derived_state
-    if not trial_rows and not dry_run and _in_auction_window():
-        try:
-            tr = fetch_auction_trial(date)
-            trial_rows = tr.get("rows") or {}
-            trial_state = {k: tr[k] for k in ("state", "saved_at", "fetched", "n_rows",
-                                              "actual_date", "message") if tr.get(k) is not None}
-            trial_state["attempts"] = tr.get("attempts") or []
-            # 全量 raw 日档落库（2026-11-14 用户裁决，§4.0 原始记录自持）：仅 ok 态写，
-            # 空档也是事实；persistState 进 trialState（fail-visible）
-            if tr.get("state") == "ok":
-                trial_state["persistState"] = persist_trial_raw(db, date, tr)
-        except Exception as exc:   # noqa: BLE001 试盘失败不阻断投喂（整行缺席留痕）
-            trial_state = {"state": f"fetch_failed:{exc}"}
     # 第三源日档回读（2026-11-15 预登记）：live 窗采集缺席（dry-run/窗外/历史日）时
     # 读 auction_trial_raw 日档（纯库读零外呼零写），强度选龙与试盘语料可回放；
     # 日档亦缺 → 第三源整源缺席（fail-visible，双源不受影响，不兑底选龙）

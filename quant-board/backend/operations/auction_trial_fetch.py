@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""竞价试盘源采集器（WzsLinker api-auction.php，合同定案 2026-11-14，勘察 §6）。
+"""WzsLinker 试盘 raw 日档工具（历史档案读写；2026-11-17 已退役出链）。
 
-合同（冻结）：GET {TRIAL_HOST}?page=limit_up_bidding&date=YYYY-MM-DD[&refresh=1]
-- 响应信封：success/actual_date/is_fallback/fetched/saved_at/message/dates；
-- 数据：data.data.stock_list.head_info（sort_key 列语义）+ list（数组位 cell={text,rank}）；
-- **rank = 数值原值**：金额=元、比例=小数（×100 才是百分数）、时间=原串（勘察 §6.1）；
-- 历史 date：代理档案不可变、refresh 被忽略（11-14 实测）；当日 refresh=1 强制上游拉取
-  （refresh_requested 回显；非交易日自动短路 fetched:false——代理自节流）。
+**2026-11-17 用户裁决**：判据链主链 = KPL socket 官方推送序列（pid=8 竞价池实时页），
+WzsLinker（第三方非官方代理，11-16 实证故障）**退役出链**——live 采集函数
+fetch_auction_trial 已删，判据链零依赖（auction_leader_label.run 主链守卫测试锁定）。
 
-频控预算（红线 9，勘察 §6.4 台账）：盘中 ≤2 发/日 = 先裸读（缓存命中零上游），
-saved_at 陈旧（>TRIAL_STALE_SECONDS）才补 1 发 refresh=1；单次会话无重试循环，
-失败结构化返回不抛。守卫：actual_date ≠ 请求日 → rows 清空（回退数据不得冒充当日，
-跨日冒充 = 叙事假事实，天普 11-12 池漏档同级教训）。
+本模块保留：auction_trial_raw 日档（COLLECTION_TRIAL_RAW，11-16/11-17 对拍参考档）
+的读写工具（persist_trial_raw/normalize_trial_time/parse_trial_payload），
+供 scripts/backfill_auction_trial_raw.py（历史档案回填）与
+scripts/auction_trial_raw_normalize_times.py（时间列规范化）使用。
+历史合同存档（Wzs api-auction.php，勘察 §6）：GET {TRIAL_HOST}?page=limit_up_bidding
+&date=YYYY-MM-DD；rank=数值原值（金额=元、比例=小数）；actual_date ≠ 请求日 → rows
+清空（跨日冒充 = 叙事假事实）。
 """
 from __future__ import annotations
 
@@ -20,10 +20,8 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-TRIAL_HOST = "http://wzslinker.top/companys/api-auction.php"
+TRIAL_HOST = "http://wzslinker.top/companys/api-auction.php"   # 已退役（历史合同存档）
 REQUEST_TIMEOUT_SECONDS = 10
-TRIAL_STALE_SECONDS = 120          # 裸读缓存龄上限（页面轮询节奏 60s 的 2 倍容差）
-MAX_ATTEMPTS = 2                   # 红线 9：裸读 + 至多 1 发 refresh，无重试循环
 COLLECTION_TRIAL_RAW = "auction_trial_raw"   # 全量日档（_id=日期，2026-11-14 用户裁决）
 
 _PCT_KEYS = ("jj_percent", "percent", "pre_percent", "jj_turnover")
@@ -131,19 +129,6 @@ def parse_trial_payload(data: dict, date: str) -> dict:
                 "rows": {}, "n_rows": 0}
 
 
-def _saved_at_age(saved_at: object, now: float | None = None) -> float | None:
-    """信封 saved_at 龄：兼容 +08:00/Z 偏移；naive 按 CST 合同（review finding-3，
-    不依赖宿主机时区）。不可判 → None（宁缺毋猜，不补拉不冒充新鲜）。"""
-    s = str(saved_at or "")
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))   # 信封合同 = CST
-    return (now if now is not None else time.time()) - dt.timestamp()
-
-
 def persist_trial_raw(db, date: str, result: dict) -> dict:
     """试盘 raw 全量日档落库（2026-11-14 用户裁决：单集合 auction_trial_raw，_id=日期）。
 
@@ -169,30 +154,3 @@ def persist_trial_raw(db, date: str, result: dict) -> dict:
     except Exception as exc:   # noqa: BLE001 — 红线 9：结构化留痕不抛，不阻断投喂
         return {"persisted": False,
                 "reason": f"persist_error:{type(exc).__name__}: {str(exc)[:80]}"}
-
-
-def fetch_auction_trial(date: str, *, now: float | None = None) -> dict:
-    """当日试盘载荷采集（单会话 ≤2 发：裸读 → 陈旧才补 1 发 refresh；失败结构化返回）。"""
-    attempts: list[dict] = []
-    result: dict | None = None
-    refresh = False
-    for _ in range(MAX_ATTEMPTS):
-        url = f"{TRIAL_HOST}?page=limit_up_bidding&date={date}"
-        if refresh:
-            url += "&refresh=1"
-        try:
-            data = _http_get_json(url)
-        except Exception as exc:  # noqa: BLE001 — 红线 9：结构化记录，不重试
-            return {"state": f"http_error:{type(exc).__name__}", "rows": {}, "n_rows": 0,
-                    "attempts": attempts, "message": str(exc)[:120]}
-        result = parse_trial_payload(data, date)
-        attempts.append({"refresh": refresh, "state": result["state"],
-                         "fetched": result.get("fetched"),
-                         "saved_at": result.get("saved_at")})
-        if result["state"] != "ok":
-            break
-        age = _saved_at_age(result.get("saved_at"), now=now)
-        if age is None or age <= TRIAL_STALE_SECONDS or refresh:
-            break          # 新鲜 / 龄不可判（宁缺毋猜）/ 已补拉过 → 收手
-        refresh = True     # 陈旧 → 至多补 1 发强制刷新
-    return {**(result or {}), "attempts": attempts}

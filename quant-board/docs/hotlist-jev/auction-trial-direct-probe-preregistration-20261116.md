@@ -365,11 +365,10 @@
     （early/lateTicksFiltered 计数）。
     验收（11-18 窗内）：首 tick ≤09:15:30、first比 涨停开盘股 ≤1.3、posture
     翻转率对比今日 3/4 显著下降。
-  - **裁决项（留用户）**：方案 C（推荐）=分工制——roster 判据链回 WzsLinker 主源
-    （KPL 官方口径），派生序列链专职前端「竞价过程」观测（已上线）；源序改回
-    Wzs→日档→派生（派生仅 Wzs 缺席日降级观测，明示口径）。方案 A=接受派生口径
-    （first=09:15:57 基线重定义，涨停开盘撤减误判 3/4，不建议）。方案 B=字段级
-    混合拼接（时点对齐复杂，不建议）。
+  - **裁决项（留用户）**：~~方案 C（回 Wzs 主源）~~ **撤回（2026-11-17 用户裁决
+    「主链=socket 官方推送」）**——C 与退役目标自相矛盾（Wzs 11-16 实证故障，
+    回退=重新引入依赖）。定案：**WzsLinker 退役出链，判据链 = socket 官方序列
+    单主链**（方案 A 方向）。Wzs 挂了怎么办 → 零影响：链内无此源（实现见下）。
 
   **明日双源对拍裁决维度（升级）**：①逐股 last/posture 翻转率（真实 tick 首
   帧非代理）②boardAmt/中热档漂移（宇宙 114 vs 84）③板块归属漂移分布 ④入选
@@ -381,6 +380,26 @@
   board_amt 板块热度口径随之放宽，roster 过滤（中热×mid50_95×撤减）不变；
   5s tick 采样粒度粗于 WzsLinker 自采序列，首帧/峰值统计存在粒度差（观测值口径，
   非判据字段，不影响选龙比值分母）。
+
+### 7.13 WzsLinker 出链 + 主链正名（2026-11-17 晚，用户裁决）
+
+**正名**：主链 = **KPL socket 官方推送序列**（pid=8 竞价池实时页，官方第一手）。
+此前把官方序列叫「派生」、把第三方代理留作「回退」是主次颠倒——WzsLinker 的
+试盘六字段本身就是它自己的自采计算值（§7.7 定案），才是二手加工。
+
+**出链实现**（测试守卫锁定）：
+- auction_leader_label.run：删除 Wzs fetch 回退块；源序 = 官方序列试盘行（主链）
+  → auction_trial_raw 日档回读（自家历史档）→ 缺席 fail-visible（trialState 留痕）。
+  `fetch_auction_trial`/`persist_trial_raw` 不再被链引用；endpoint 不在判据链。
+- auction_trial_fetch.py：live 采集函数删除；模块降级为 raw 日档工具层
+  （persist/normalize/parse，供 backfill/normalize 脚本），历史档保留作对拍参考。
+- 守卫测试：test_label_wiring_series_primary（序列先行于日档 + endpoint 不在源）
+  + test_wzslinker_retired_out_of_chain（leader_label 源零 Wzs 引用）。
+- Wzs 挂了怎么办 → **零影响**：链内无此源。派生真缺席（socket 序列缺失）→
+  日档 → 日档亦缺 → 结构化降级（不伪装选龙）。
+
+**预算**：判据链每日外呼 = 0（纯库读）+ MBL 直采 1 发（kaipanla 官方合同）+
+腾讯补源（窗内缺 bid 才发）——Wzs 的 ≤2 发/日预算随退役清零。
 
 ### 7.10 复盘代办收口（2026-11-16 同日）
 

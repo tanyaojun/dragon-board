@@ -117,14 +117,15 @@ def test_derive_nan_not_zero():
     assert rows["605255"]["jj_percent"] == 4.78
 
 
-def test_label_wiring_derived_before_fetch():
-    """打标链接线守卫：派生在 WzsLinker fetch 之前；fetch 以「派生缺席」为门控。"""
+def test_label_wiring_series_primary():
+    """主链接线守卫（2026-11-17 正名）：主链=官方 socket 序列试盘行（先行），
+    raw 日档回读为次；WzsLinker 退役出链（判据链零第三方代理依赖）。"""
     from backend.operations import auction_leader_label as L
     src = open(L.__file__, encoding="utf-8").read()
-    i_derive = src.find("derived_rows, derived_state = derive_trial_rows_from_series")
-    i_fetch = src.find("tr = fetch_auction_trial(date)")
-    assert 0 < i_derive < i_fetch, "派生必须在 WzsLinker fetch 之前"
-    assert "if not trial_rows and not dry_run and _in_auction_window():" in src,         "WzsLinker fetch 必须以「派生缺席」为前置门控（迁移期回退语义）"
+    i_series = src.find("derived_rows, derived_state = derive_trial_rows_from_series")
+    i_archive = src.find('db[COLLECTION_TRIAL_RAW].find_one')
+    assert 0 < i_series < i_archive, "官方序列主链必须先于 raw 日档回读"
+    assert "fetch_auction_trial" not in src and "TRIAL_HOST" not in src,         "WzsLinker 已退役出链（endpoint/采集函数不在判据链；注释提及不受限）"
     assert "kpl_bidding_series_derived" in open(
         "backend/operations/auction_trial_derive.py", encoding="utf-8").read()
 
