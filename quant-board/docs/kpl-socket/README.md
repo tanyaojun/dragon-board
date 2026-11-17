@@ -269,9 +269,10 @@ QuantBoard 主后端 :8000
   逐字节匹配实弹验证；**批内盘中推送交付已验证**（pushbatch vs pushdirect
   11/18/16 vs 12/19/17 同量级）；**402 已裁决**：kind5 ack=28B 不透明状态块，
   subIds 按 seq 从原请求取（App qn0.d/q 同款），退订后推送即停差分实弹成立，
-  KPL_UNSUB_ENABLED 仍默认关——per-stock 共享 subId 误退阻塞（生产 collision_n=133）已实现
-  **唯一 subId hint** 修复（KPL_SUB_UNIQUE_ID 门控默认关，base 0x4000 会话内递增，M3 冲突护栏
-  fail-safe），待 uid/uidcmd 探针裁决服务端是否回声唯一 hint 后启用（方案 §12）；**P4 已裁决：610 重发第 5 次→1106 确定性
+  KPL_UNSUB_ENABLED 生产已启用——per-stock 共享 subId 误退阻塞（生产 collision_n=133）经
+  **唯一 subId hint** 修复（KPL_SUB_UNIQUE_ID，base 0x4000 会话内递增，M3 冲突护栏 fail-safe），
+  r5 探针裁决通过（服务端回声唯一 hint 16384+、402 退单股 removed=1、推送 hit/miss=54/0），
+  生产已置 KPL_SUB_UNIQUE_ID=1 + KPL_UNSUB_ENABLED=1（方案 §12）；**P4 已裁决：610 重发第 5 次→1106 确定性
   杀连（3/3 中位 67s），off 3/3 零错误 >120s → 默认已切 KPL_KA_MODE=off**；
   裁决与证据链见方案 §1.3/§7.1/§11）。
 - **已对齐项（逐项比对确认）**：TLS+SNI(socket.kaipan.com) ✓、connType=99 ✓

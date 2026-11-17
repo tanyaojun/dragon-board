@@ -394,7 +394,7 @@ zd_stat/market_overview/plate_strength 致「推送恒 0」假象——已修脚
 - **ka_mode 默认 610→off**（collector + serve `KPL_KA_MODE`）：P4 3/3 确定性裁决。
 - 探针摘要 push_events/timeline 补 zd_stat/market_overview/plate_strength 事件名。
 
-## 12. 402 启用阻塞（2026-11-17 生产实证，用户「请启用」裁决前必解）
+## 12. 402 per-stock 精准退订（2026-11-17 阻塞 → 唯一 subId hint 裁决通过并启用）
 
 **KPL_UNSUB_ENABLED 暂不能安全启用**——per-stock 退订存在确定性误退缺陷：
 
@@ -425,22 +425,43 @@ zd_stat/market_overview/plate_strength 致「推送恒 0」假象——已修脚
 - mock 测试 TestSubUniqueId（5 用例）：默认 off=cmd / 唯一 hint 每股独立且 ≥base /
   全局族保持 cmd / 唯一 hint 下 collision=0 且退单股不误退他股 / 分配器 base+回绕。
 
-**关键未知（探针裁决）**：U6 只证服务端回声 `hint=cmd`；**自定义唯一 hint 是否被
-回声/受理未知**。探针变体 `uid`（sub_unique_id=1）/ `uidcmd`（对照 hint=cmd）：
-direct 订 2114 保活 + 3 股 per-stock 2203（000001/000002/600000，生产 _stock_sub_ext
-路径），25s 后按 key 只退 000002（生产 _drain_unsub）。裁决点：
-1. `entries.sub_id`：uid 变体是否回声 0x4000+ 唯一值（vs uidcmd 全 2203）；
-   `registry.sub_id_collision_n` uid 应=0。
-2. 推送交付：uid 变体 zt_reasons 推送是否仍按 topic 正常到达（stock_push_timeline）。
-3. 402 差分：退 000002 后其推送停 / 000001+600000 继续 + kind5 ack removed=1。
-若服务端忽略 hint（sub_id 仍=cmd）→ 唯一 hint 方案不成立，转方向 2（UnsubReq{topics}）。
+**探针裁决（2026-11-17 14:44 r5，用户批准「开火」——命门通过）**：U6 只证服务端回声
+`hint=cmd`；自定义唯一 hint 是否被回声/受理经 uid/uidcmd 对照裁决。探针变体 `uid`
+（sub_unique_id=1）/ `uidcmd`（对照 hint=cmd）：direct 订 2114 保活 + 3 股 per-stock
+2203（000001/000002/600000，生产 _stock_sub_ext 路径），25s 后按 key 只退 000002
+（生产 _drain_unsub）。裁决点与结果：
+1. **服务端回声唯一 hint——成立**：uid sub_ack attr2=16384/16385/16386（0x4000+
+   逐股独立，seq 9/10/11），`collision_n=0`；uidcmd 全 2203、`collision_n=2`。
+2. **推送交付不受影响——成立**：uid `push_topic_hit_n=54 / miss=0`，topic 逐股正确
+   `hqStock|26:20040/2203-1/<stock>`（hint 仅改 attr2，topic attr3 不变）。
+3. **402 精准退单股——成立**：+26.3s `probe_unsub_fired[16385]`→`sub_unsub_ack
+   removed=1`，000002 state=unsubscribed，000001(16384)/600000(16386) 仍 acked。
+   两会话 90.3/90.2s 零服务器错误。
 
-**开火预登记（待用户批准）**：变体 uid,uidcmd（2 会话），观察窗 90s/会话，冷却 ≥180s；
+**诚实披露（差分局限）**：3 条 zt_reasons 推送均为 t0 初始快照（测试股非活跃涨停池
+成员，90s 窗内无持续推送），per-stock「退订后持续推送即停」差分未直接观测；机制由
+① P3' 全局 2114 推送即停实弹（§11.1）+ ② 本次唯一 subId 精准 targeting（removed=1）
++ ③ topic 路由独立于 subId 三者证成。生产有活跃涨停池成员，启用后观测确认。
+
+**开火预登记（已执行 r5）**：变体 uid,uidcmd（2 会话），观察窗 90s/会话，冷却 180s；
 新增帧/会话 = 1（2114）+ 3（per-stock 2203）+ 1（402，仅 uid）= ≤5 ≤12；402 首射 1 帧
-（当日累计 ≤2）；211 帧 0。开火前 :8002 stop，完毕 start。验证通过后启用
-`KPL_SUB_UNIQUE_ID=1` + `KPL_UNSUB_ENABLED=1`（需重启进程）。
+（当日累计 2 ≤2）；211 帧 0。开火前 :8002 stop，完毕重启加载新代码 + 启用 flag。
 
-在此之前两 flag 维持默认关；402/唯一 hint 代码作为 flag 门控能力提交（休眠，不影响生产）。
+**裁决通过 → 启用**：`KPL_SUB_UNIQUE_ID=1` + `KPL_UNSUB_ENABLED=1`（重启进程生效）。
+唯一 hint 使 per-stock collision→0，M3 护栏不再跳过 → 402 随涨停池成员退出精准退单股；
+全局族 subId=cmd 唯一不受影响。回退：置两 flag=0 重启（恢复 cmd hint + 退订关）。
+
+**生产启用观测（2026-11-17 14:5x）**：:8002 重启加载新代码 + .env.local 置两 flag=1，
+status `sub_unique_id=True / unsub_enabled=True`。per-stock 推送正常流转（zt_reasons=24 /
+theme_heat=19，`push_topic_hit_n=62 / miss=0`）→ 唯一 hint 不破坏 topic 路由（与 r5 一致）。
+会话 ~60.8s 被 10054 重置（爆发指纹既有议题 §7.1.1，独立于本任务）；退订随涨停池成员
+退出触发（短会话 + 池稳定时 unsub_sent_n 暂 0，机制已由 r5 removed=1 证成）。
+
+**collision_n 口径 nuance**：生产聚合 `sub_id_collision_n` 含**全局 2103 页**（setup lane
+多页共享 subId=2103，非 per-stock）——这些页不参与 `_sync_unsub_surface` 退订 diff（仅
+zt/theme/detail per-stock lane），共享无功能影响。per-stock 三 lane 唯一 hint 后自身
+collision=0（r5 证）；聚合计数非 0 不代表 per-stock 退订受阻。M3 护栏仅对 unsub 候选
+（per-stock）生效，全局页永不入候选。
 
 **验证（全 mock）**：TestSubUniqueId 5 用例 + 全套件 KPL 九文件 **418 passed** /
 `backend/services/__tests__ + tests/api` **578 passed** / `tests/hotlist` **1582 passed,

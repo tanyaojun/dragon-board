@@ -237,7 +237,7 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   必须 GCM（明文→2008 杀连），仅 hqDaban 全局族可批（2103/2203/2013 批内拒
   2000/cmd 110），收益 ~7 帧/会话不抵风控面 → 保持 direct 不启用；批内盘中推送
   交付==direct 实弹验证；402 语义钉死（ack=28B 状态块，subIds 按 seq 取原请求，
-  退订推送即停差分成立，KPL_UNSUB_ENABLED 仍默认关——per-stock 共享 subId 误退阻塞已实现唯一 subId hint 修复（KPL_SUB_UNIQUE_ID 门控，待 uid/uidcmd 探针裁决，方案 §12）；**P4：610 重发第 5 次
+  退订推送即停差分成立，KPL_UNSUB_ENABLED 生产已启用——per-stock 共享 subId 误退阻塞经唯一 subId hint 修复（KPL_SUB_UNIQUE_ID），r5 探针裁决通过（服务端回声唯一 hint、402 退单股 removed=1，方案 §12）；**P4：610 重发第 5 次
   →1106 确定性杀连（受控实验 3/3 中位 67s），off 3/3 零错误 >120s →
   默认已切 KPL_KA_MODE=off**。方案唯一来源
   [kpl-socket/sub-registry-refactor-plan.md](kpl-socket/sub-registry-refactor-plan.md)
