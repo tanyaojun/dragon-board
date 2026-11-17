@@ -90,9 +90,9 @@ def test_question_set_frozen_hash_and_versions():
     「首板被板」→「首板炸板」错字修复；b（开火前修订，用户裁决海洋新闻真实命中）：
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v17"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-17b"   # 语料去开发语义（用户裁决）：桶键中文化+措辞修复；题面续板①同桶→同结构桶一词对齐；前一版 2026-11-17a = 语料精简三档
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "eb9cfae4139e"   # 2026-11-17b 术语对齐代（同桶→同结构桶）；前代 8c6c94429abd = v17 精简批（跨代不可比，预登记 theme-leader-bucket-cn-20261117）
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v18"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18a"   # 语料精简续批（西陇/广百审计 B 类）；题面 v18 同批换代（A1-A5）；前一版 2026-11-17b = 桶键中文化
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "8f7f97a4680a"   # v18（2026-11-18 用户裁决修复 A+B + review 清洁度修）；前代 eb9cfae4139e = v17 术语对齐代（跨代不可比，预登记 theme-leader-v18-questionset-corpus-fix-20261118）
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
                                    "leader_nextday_continue", "leader_headroom",
@@ -112,7 +112,10 @@ def test_question_set_frozen_hash_and_versions():
     assert "封单占比低、峰值大幅回落、主力净额大幅流出=封板质量弱" in cont, "封板质量方向读法"
     assert "竞价放量高开=承接强" in cont, "竞价方向读法"
     assert "不得以该行为由调档" in cont and "自行补 0" in cont, "不可考/待校验禁调档不补 0"
-    assert "周期状态可作调档佐证之一" in cont and "不得单独定档" in cont, "D5 周期解禁为佐证"
+    assert "周期状态（转弱=降档佐证、主升=升档佐证）与「涨停基因」行" in cont \
+        and "不得单独定档" in cont, "D5 周期佐证 + v18 A5 基因行接为佐证（消费缺口修复）"
+    assert "即≥45%" not in cont, "v18 A3 写死推导废除（先验底随窗滚动，高两档≠恒≥45%）"
+    assert "10 日涨幅取出的龙一" not in cont, "v18 A4 分轨元规则压缩（选龙机制非判档规则）"
     assert "引用新闻须按业务/产业链关联核实" in cont, "新闻真实命中裁决（b）：业务关联核实"
     assert "标题未点名公司" in cont and "不等于无关" in cont, "标题/关联股不点名≠无关"
     hard_crit = A.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]["criteria"]
@@ -135,6 +138,8 @@ def test_question_set_frozen_hash_and_versions():
     assert "综合前三题" not in ins, "悬空引用废除"
     assert "起判档由空间锚最细出率桶读数直接映射" in ins
     assert "再走≥1板率不足三成 → peak 起判" in ins
+    assert "启动期/发酵期时改 space_1 起判" in ins and "③优先于起判映射" in ins, \
+        "v18 A1 启动期低锚冲突修复（西陇案：锚 20%→peak 起判 vs ③启动期禁 peak，模型实判 peak 违规）"
     assert "三成及以上 → space_1 起判" in ins
     assert "≥2板率两成及以上且板块判定为发酵期/强延续 → space_2plus 起判" in ins
     assert "1-3 板 → peak 起判" not in ins and "仅一到三成" not in ins, \
@@ -151,7 +156,13 @@ def test_question_set_frozen_hash_and_versions():
     # ── v17 两新题（预登记 v17 §2.3）：深度/广度个股侧显式中间判断 ──
     hard = A.QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]
     assert set(hard["criteria"]) == {"hard_fact", "sector_story", "soft_meme", "insufficient"}
-    assert "最硬的可证实事实" in hard["instructions"]
+    assert "驱动该股涨停的最硬可证实事实" in hard["instructions"], "v18 A2 驱动归因"
+    assert "因果关联" in hard["instructions"] and "受益方" not in hard["instructions"], \
+        "v18 A2 valence 中性（review minor-2：①判是否驱动事实，与竞价⑤负面驱动不降档正交）"
+    assert "澄清/否认类公告" in hard["instructions"] \
+        and "静态主业描述不计公司级硬催化" in hard["instructions"], \
+        "西陇案：IR 记录「暂未生产光刻胶」是澄清类硬事实，非驱动催化"
+    assert "静态主业描述不计" in hard["criteria"]["hard_fact"], "判据同步收窄"
     assert "不降低硬事实档位" in hard["instructions"], "软成分披露不降档（光洋羊字辈案）"
     assert "未证实" in hard["instructions"] and "按软证据计" in hard["instructions"]
     assert "只作交叉参考" in hard["instructions"], "打标交叉不替代证据判读"
@@ -265,7 +276,7 @@ def test_bucket_cn_and_combo_cn_no_dev_keys_in_narrative():
     assert A.bucket_cn("streak", "4+") == "4板+" and A.bucket_cn("board", ">=8") == "≥8家"
     assert A.bucket_cn("time", "early<=10:00") == "≤10:00"
     assert A.bucket_cn("time", "mid<=13:00") == "10:00后~13:00"
-    assert A.bucket_cn("prev", "prev0") == "0家" and A.bucket_cn("ladder", "3") == "3家"
+    assert A.bucket_cn("prev", "prev0") == "0家" and A.bucket_cn("ladder", "3") == "3家+"
     assert A.bucket_cn("streak", "unknown") == "不可考"
     assert A.bucket_cn("streak", "weird") == "weird", "未知键透传 fail-visible"
     row = {"streak": 1, "boardN": 10, "time": "09:35:00"}
@@ -346,7 +357,8 @@ def test_structure_line_marks_unknown_prev():
                             leader={"name": "大业股份", "code": "603278", "streak": 3,
                                     "time": "09:25:00"},
                             followers_ge_ladder=1, prev_board_n=None, prev_peers=None)
-    assert "板块「机器人」今日封板 5 家" in line and "3 连板" in line and "首封 09:25:00" in line
+    assert "板块「机器人」今日封板 5 家" in line and "3 连板" in line and "首封 09:25" in line
+    assert "09:25:00" not in line, "2026-11-18a B6：首封秒级精度零消费，截到分钟"
     assert "昨日同板块不可考" in line
     assert "家数序列" not in line, "history 未传（None）不出序列段——向后兼容旧调用"
 
@@ -795,7 +807,8 @@ def test_structure_line_unsealed_leader_explicit():
                               leader={"name": "正裕工业", "code": "603089", "streak": 3,
                                       "time": "09:25:00"},
                               followers_ge_ladder=1, prev_board_n=3, prev_peers=2)
-    assert "龙头 正裕工业（603089）3 连板，首封 09:25:00" in sealed
+    assert "龙头 正裕工业（603089）3 连板，首封 09:25" in sealed
+    assert "09:25:00" not in sealed
 
 
 def test_structure_line_dual_renders_both_segment_leaders():
@@ -809,8 +822,9 @@ def test_structure_line_dual_renders_both_segment_leaders():
     line = A.structure_line_dual(board="AI硬件", board_n=7, leader_rows=rows,
                                  prev_peers=0, prev_board_n=0, prev_total=0,
                                  prev_still=0, history=[("2026-10-21", 2)])
-    assert "主板龙一 菲林格尔（603226）1 连板，首封 10:37:00，10 日涨幅 -17.4%" in line
-    assert "双创龙一 斯迪克（300806）1 连板，首封 14:32:00，10 日涨幅 +4.1%" in line
+    assert "主板龙一 菲林格尔（603226）1 连板，首封 10:37，10 日涨幅 -17.4%" in line
+    assert "双创龙一 斯迪克（300806）1 连板，首封 14:32，10 日涨幅 +4.1%" in line
+    assert "10:37:00" not in line and "14:32:00" not in line, "2026-11-18a B6：首封截分钟"
     assert "昨日涨停 0 只（无承接）" in line and "10-21 2" not in line, \
         "2026-11-17：prev_total=0 仍封恒 0 可推导；2026-10-30d：序列 <3 日不出行"
     # 未封板轨：断板反包候选分情形文案
@@ -852,7 +866,8 @@ def test_popularity_rank_line_and_risk_profile_line():
     rank_line = A.popularity_rank_line(entries)
     assert rank_line.startswith("热度排名：")
     assert "主板龙一 龙江交通 15/5575" in rank_line
-    assert "（Top3：美邦服饰、晋亿实业）" in rank_line
+    assert "（Top3：" not in rank_line, "2026-11-18a B2：Top3 名单零判据消费且裸码不可读，撤出"
+    assert "美邦服饰" not in rank_line
     assert "（梯队：2板）" in rank_line
     assert "斯迪克" not in rank_line, "排名缺位 → 整段缺席"
     # rank=0/rank_total=0 → 缺席（不在榜）
@@ -1124,8 +1139,9 @@ def test_lhb_line_verified_absence_requires_both_endpoints_ok():
                 "stocks": []}
     line2 = A.lhb_line(degraded, codes=["603278"], roles={"603278": "待判龙一"})
     assert line2 is not None and "全市场无上榜" not in line2, "分组榜单在手不得丢弃"
-    assert "待判龙一 大业股份（603278）：偏离 10.02，上榜额 2.40亿，" \
-        "上榜原因 日涨幅偏离值达7%的证券" in line2, "分组榜单兑底 join 出已有事实"
+    assert "待判龙一 大业股份（603278）：偏离 10.02，上榜额 2.40亿" in line2, \
+        "分组榜单兜底 join 出已有事实"
+    assert "上榜原因" not in line2, "2026-11-18a B1：上榜触发条件零判据消费，撤出（落库不动）"
     # 相关个股不在分组榜 → 披露总数（stocks/groups 并集）且 0 只
     line3 = A.lhb_line(degraded, codes=["300001"])
     assert line3 == "龙虎榜：当日全市场上榜 1 只，本叙事相关个股 0 只上榜"
@@ -1225,18 +1241,19 @@ def test_lhb_line_seat_fallback_order_and_cap():
 def test_lhb_line_matches_leader_first_and_roles():
     line = A.lhb_line(LHB_FACTS, codes=["603278", "sh600715", "002639"],
                       roles={"603278": "待判龙一"})
-    assert "待判龙一 大业股份（603278）：主力净额 0.52亿（买 0.90亿 / 卖 -0.38亿），" \
-        "上榜原因 连续三个交易日内收盘价格涨幅偏离值累计20%" in line
-    assert "相关个股 文投控股（600715）：主力净额 1.50亿（买 2.30亿 / 卖 -0.80亿），" \
-        "上榜原因 日涨幅偏离值达7%的证券" in line
+    assert "待判龙一 大业股份（603278）：主力净额 0.52亿" in line
+    assert "相关个股 文投控股（600715）：主力净额 1.50亿" in line
+    # 2026-11-18a B1：买卖拆分/上榜原因撤出（题面只消费席位/机构分歧与净额）
+    assert "（买 " not in line and "上榜原因" not in line
     # 龙一优先（传入顺序），交易所前缀取后 6 位
     assert line.index("603278") < line.index("600715") < line.index("002639")
 
 
-def test_lhb_line_missing_numbers_and_reason_are_dash_not_zero():
+def test_lhb_line_missing_numbers_are_dash_not_zero():
     line = A.lhb_line(LHB_FACTS, codes=["002639"], roles={"002639": "板内成员"})
-    assert "板内成员 雪人股份（002639）：主力净额 --，上榜原因 --" in line, \
-        "非数值资金/缺原因出 --，不伪装 0"
+    assert "板内成员 雪人股份（002639）：主力净额 --" in line, \
+        "非数值资金出 --，不伪装 0"
+    assert "上榜原因" not in line, "2026-11-18a B1：上榜原因撤出"
 
 
 def test_lhb_line_zero_relevant_is_fact_not_direction():
@@ -1518,7 +1535,7 @@ def test_notice_count_line_variants():
             "upstream_date": "20261108", "window_note": wn}
     line = A.notice_count_line([{"label": "主板龙一 X", "item": item, "poolMissing": None}])
     # 真 0 是真实计数照常带出；缺位逐项「不可考」不补 0；window_note 随行头带出
-    assert "主板龙一 X：公告 2/研报 0/新闻不可考/数据日期 20261108" in line
+    assert "主板龙一 X：公告 2/研报 0/新闻不可考/数据日期 2026-11-08" in line
     assert wn not in line and "统计窗口" not in line, "口径注不进叙事，只留结构化字段"
     # 取不到/无信息量（全 0 或仅新闻计数）→ 整行缺席（AGENTS §1.2-8）
     line2 = A.notice_count_line([
@@ -1956,9 +1973,66 @@ def test_solo_leader_lines_drop_redundant_prefix():
             "rank_top": ["002242", "600715", "600410"]}
     assert A.limitup_reason_line([{"label": "", "item": item}]) == "涨停原因：PCB设备+木地板"
     assert A.popularity_rank_line([{"label": "", "item": item}]) == \
-        "热度排名：30/5575（Top3：002242、600715、600410）"
+        "热度排名：30/5575"
     g = A.zt_gene_line([{"label": "", "item": GENE_ITEM}])
     assert g.startswith("涨停基因：涨停5次") and "龙一" not in g
     r2 = A.limitup_reason_line([{"label": "主板龙一 X", "item": item},
                                 {"label": "双创龙一 Y", "item": {"zt": "光刻胶"}}])
     assert "主板龙一 X=" in r2 and "双创龙一 Y=光刻胶" in r2
+
+
+# ── 2026-11-18a 语料精简续批（用户裁决，西陇/广百案例审计 B 类）──
+
+
+def test_slim_reason_text_dedup_plate_head():
+    """B5：多段同名板块头去重（西陇「化工；…化工：…」案）；首段头保留（板块归属
+    事实）、异名头不动、单段不动；硬事实日期/来源不受影响。"""
+    zt = ("化工；据2026年9月15日投资者关系活动记录表，公司暂未生产光刻胶。\r\n\r\n"
+          "化工：据2026年半年报，电子化学品构成利润主要来源")
+    out = A._slim_reason_text(zt)
+    assert out.count("化工") == 1
+    assert "2026年9月15日" in out and "2026年半年报" in out
+    # 单段不动（广百「零售；据…」案）
+    assert A._slim_reason_text("零售；据2026年半年报，公司从事百货零售") == \
+        "零售；据2026年半年报，公司从事百货零售"
+    # 异名头保留（不猜）
+    assert "电子：据B。" in A._slim_reason_text("化工；据A。\r\n\r\n电子：据B。")
+
+
+def test_seal_time_txt_truncates_seconds():
+    """B6：首封 HH:MM:SS 截到分钟（桶口径只用 ≤10:00，秒级零消费）；非规范串原样。"""
+    assert A._seal_time_txt("09:35:33") == "09:35"
+    assert A._seal_time_txt("09:35") == "09:35"
+    assert A._seal_time_txt(None) == "时间不可考"
+    assert A._seal_time_txt("时间不可考") == "时间不可考"
+    line = A.structure_line(board="X", board_n=3,
+                            leader={"name": "N", "code": "002584", "streak": 1,
+                                    "time": "09:35:33"},
+                            followers_ge_ladder=2, prev_board_n=0, prev_peers=0)
+    assert "首封 09:35" in line and "09:35:33" not in line
+    brief = A._leader_brief({"name": "N", "code": "002584", "streak": 1,
+                             "time": "09:35:33", "leaderSealedToday": True}, "main")
+    assert "首封 09:35" in brief and "09:35:33" not in brief
+
+
+def test_lhb_line_name_strip_and_compact_format():
+    """B1：name strip（江化微双空格案）+ 买卖拆分/上榜原因撤出；席位/机构段保留。"""
+    facts = {"ok": True, "groups": [], "stocks": [
+        {"code": "603078", "name": "江化微  ", "main_net_yuan": 9.3e7,
+         "main_buy_yuan": 1.65e8, "main_sell_yuan": -7.2e7, "reason": "偏离7%"}],
+        "stock_board": {"603078": {"name": "江化微", "buy_in": 9.8e7}},
+        "agency": {"603078": {"name": "江化微", "buy_in": -5e6, "join_num": 2}}}
+    line = A.lhb_line(facts, codes=["603078"])
+    assert "江化微（603078）：主力净额 0.93亿" in line
+    assert "（买 " not in line and "上榜原因" not in line
+    assert "席位买入 0.98亿" in line and "机构净买 -0.05亿（2 家）" in line
+
+
+def test_baseline_ladder_cap_bucket_renders_plus():
+    """B3：跟风桶 cap3 语义=≥3家 译「3家+」（西陇跟风 9 家 vs 桶[3家]歧义）；
+    原始键 ladder_bucket 不动（分组/查键单一事实源）。"""
+    row = {"streak": 1, "boardN": 10, "time": "09:35:00", "ladderFollowers": 9}
+    rows = [{**row, "continued": True}] * 10
+    line = A.baseline_line(rows, row, min_combo_n=5)
+    assert "按跟风梯队[3家+]" in line and "按跟风梯队[3家]" not in line
+    assert A.ladder_bucket(9) == "3"

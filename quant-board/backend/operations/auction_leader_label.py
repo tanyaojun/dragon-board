@@ -66,6 +66,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     limitup_reason_line,
     lhb_line,
     notice_count_line,
+    popularity_rank_line,
     regulatory_risk_line,
     sector_judgment_line,
     theme_heat_line,
@@ -316,7 +317,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
               *, t1_row: dict | None, pool_prev: dict, lanes: dict, mbl_state: dict | None = None,
               gene_corpus: dict, notice_corpus: dict, heat_corpus: dict,
               reason_corpus: dict, lhb_facts: dict | None,
-              market_line: str, base_rate_stats: dict | None,
+              base_rate_stats: dict | None,
               sector_judgment: dict | None, board_codes: list[str],
               basis_map: dict | None = None, basis_state: str = "missing",
               bid_supplement: str | None = None,
@@ -375,8 +376,10 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         l2_fallback_date=prev_date, leader_expound_chars=1200, include_morning=True,
         include_flash=True)
     series_state: dict = {}
+    # 2026-11-18a：涨停原因/热度排名共用条目（同源 reason_corpus，零新采集）
+    reason_entries = reason_entries_for_leaders(rows, reason_corpus)
     narrative = build_auction_leader_narrative(
-        date=date, prev_date=prev_date, market_line=market_line,
+        date=date, prev_date=prev_date,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
         push_board=row.get("pushBoard"),
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
@@ -391,7 +394,8 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         sector_judgment=sector_judgment_line(sector_judgment),
         theme_heat_line=theme_heat_line(theme_heat_entries_for_leaders(rows, heat_corpus)),
         gene_line=zt_gene_line(gene_entries_for_leaders(rows, gene_corpus)),
-        reason_line=limitup_reason_line(reason_entries_for_leaders(rows, reason_corpus)),
+        reason_line=limitup_reason_line(reason_entries),
+        popularity_rank_line=popularity_rank_line(reason_entries),
         notice_count_line=notice_count_line(notice_entries_for_leaders(rows, notice_corpus)),
         regulatory_line=reg_line,
         lhb_facts_line=lhb_txt,
@@ -580,6 +584,10 @@ def _label_one(db, col, date: str, built: dict, *,
     for k, v in old.items():
         if k.startswith("outcome"):
             doc[k] = v
+    # 2026-11-18 bug 修复（广百案审计）：判答回写 built——run() 板块标注循环
+    # 以 b.get("answers") 收集板块判答供龙头注入；此前不回写 → 恒 {} → 首跑
+    # 龙头叙事板块判定行全链悬空（sectorJudgmentState 恒 sector_missing）。
+    built["answers"] = answers
     col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     from backend.analysis.hotlist.jev_driver_ammo import _usage_tokens
     return bool(parsed["ok"]), _usage_tokens(parsed.get("usage"))
@@ -875,7 +883,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           lanes=lanes, gene_corpus=gene_corpus,
                           notice_corpus=notice_corpus, heat_corpus=heat_corpus,
                           reason_corpus=reason_corpus, lhb_facts=lhb_facts,
-                          market_line=market_line, base_rate_stats=base_rate_stats,
+                          base_rate_stats=base_rate_stats,
                           basis_map=basis_map, basis_state=basis_state,
                           bid_supplement=bid_supplement,
                           sector_judgment=None if is_trial else sector_answers.get(board),

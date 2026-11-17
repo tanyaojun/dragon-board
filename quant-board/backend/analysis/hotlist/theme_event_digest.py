@@ -974,11 +974,11 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             lead_chars = (leader_expound_chars
                           if leader_code and leader_expound_chars else content_chars)
             lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{l2_tag}）："
-                         f"{lead_label} {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
+                         f"{lead_label} {lead.get('name')}（{str(lead.get('code') or '')[-6:]}）驱动标签「{tag_line}」｜"
                          f"解析摘录：{_clip_excerpt(_compress_enum(body or exp), lead_chars)}")
         elif lead is not None:
             lines.append(f"板内解析（「{board_name}」{board_stocks_n} 只{l2_tag}）："
-                         f"{lead_label} {lead.get('name')}（{lead.get('code')}）无异动解析")
+                         f"{lead_label} {lead.get('name')}（{str(lead.get('code') or '')[-6:]}）无异动解析")
         peer_tags = []
         for p in [s for s in stocks if s is not lead][:5]:
             pe = str(p.get("expound") or "")

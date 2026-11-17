@@ -72,7 +72,7 @@ def test_pre_percent_not_in_narrative():
 def test_leader_narrative_order_trial_before_bid_match():
     """时间序：09:15 推送 → 竞价试盘 → 09:25 匹配 → 结构行（试盘行紧邻竞价组）。"""
     text = AL.build_auction_leader_narrative(
-        date="2026-11-16", prev_date="2026-11-13", market_line="上证 +0.5%",
+        date="2026-11-16", prev_date="2026-11-13",
         leader_name="中重科技", leader_code="603135", board="机器人",
         push_line="竞价看龙头推送（09:15 试盘价）：09:15 中重科技 +3.00%",
         bid_line="竞价（09:25 匹配价）：中重科技 竞价涨幅 +4.78%",
@@ -86,7 +86,7 @@ def test_leader_narrative_order_trial_before_bid_match():
 
 def test_no_trial_line_when_absent():
     text = AL.build_auction_leader_narrative(
-        date="2026-11-16", prev_date="2026-11-13", market_line="上证 +0.5%",
+        date="2026-11-16", prev_date="2026-11-13",
         leader_name="中重科技", leader_code="603135", board="机器人",
         push_line=None, bid_line=None, structure=None,
         trial_line=AL.auction_trial_line(None), evidence_block="题材证据块：测试")

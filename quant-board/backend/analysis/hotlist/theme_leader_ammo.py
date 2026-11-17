@@ -110,7 +110,7 @@ from backend.services.kpl_socket_protocol import RPLATE_INC_IS_PERCENT, bdo_item
 # outcomeSealedNextDay/outcomeDay2/supersededBy 零新结算；④人气题一字不改；⑤板块级
 # 两题一字不改。配套 AMMO 2026-11-12a：板块判定行（板块 doc 判答注入个股叙事，纯 join）
 # + 续板基础率锚行（seal_stats 滚动直算）+ GENE_CN「首板被板」错字修复。
-QUESTION_SET_VERSION_THEME_LEADER = "v17"
+QUESTION_SET_VERSION_THEME_LEADER = "v18"   # 2026-11-18 用户裁决「修复 A+B 两大类」：A1 空间①启动期/发酵期改 space_1 起判（③优先）；A2 硬度①驱动归因（valence 中性：是否驱动事实；澄清/否认/静态主业描述不计硬催化）；A3 续板①删写死「即≥45%」；A4 分轨元规则三处压缩；A5 基因行接为续板佐证。前版 v17 = eb9cfae4139e（跨代不可比）
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -247,7 +247,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v17"
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-17b"   # 语料去开发语义（用户裁决，西陇科学案例续审）：桶键中文化（同桶→同结构[1连板·板块≥8家·首封≤10:00]，单维桶值带单位；原始键分组/落库不动）/梯队持平措辞/基因溢价措辞/催化新鲜度逗号分隔/摘录截断双省略号治理；题面续板①同步改一词（同桶→同结构桶），hash 随题面重算（预登记 theme-leader-bucket-cn-20261117，跨代不可比）；前一版 2026-11-17a = 语料精简三档（题面 hash 不动）；再前 2026-11-15a = 监管风险行
+AMMO_VERSION_THEME_LEADER = "2026-11-18a"   # 语料精简续批（用户裁决，西陇/广百案例审计 B 类）：龙虎榜删买卖拆分/上榜原因+name strip；热度排名删 Top3 裸码；跟风桶 cap3 译「3家+」；首封截分钟；涨停原因同名板块头去重；公告日期 ISO；板内解析代码去交易所前缀。题面 v18 同批换代；前一版 2026-11-17b = 桶键中文化；再前 2026-11-17a = 语料精简三档
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -319,6 +319,15 @@ def prev_peer_bucket(prev_peers: Any) -> str:
 def _time_key(t: Any) -> str:
     s = str(t or "")[:5]
     return s if len(s) == 5 and s[2] == ":" else "99:99"
+
+
+def _seal_time_txt(t: Any) -> str:
+    """首封时点叙事文本（2026-11-18a）：HH:MM:SS 截到分钟——桶口径只用 ≤10:00，
+    秒级精度零判据消费且与封板质量行「首板 HH:MM」重复；非规范串原样（fail-visible）。"""
+    s = str(t or "").strip()
+    if not s:
+        return "时间不可考"
+    return s[:5] if re.fullmatch(r"\d{2}:\d{2}:\d{2}", s) else s
 
 
 def rank_board_stocks(stocks: list[dict]) -> list[dict]:
@@ -418,7 +427,9 @@ _BOARD_CN = {">=8": "≥8家", "5-7": "5-7家", "3-4": "3-4家", "1-2": "1-2家"
              "unknown": "不可考"}
 _TIME_CN = {"early<=10:00": "≤10:00", "mid<=13:00": "10:00后~13:00",
             "late>13:00": ">13:00", "unknown": "不可考"}
-_LADDER_CN = {"0": "0家", "1": "1家", "2": "2家", "3": "3家", "unknown": "不可考"}
+# 2026-11-18a：ladder_bucket cap3 语义=「≥3家」，旧译「3家」与结构行跟风 N 家矛盾
+# （西陇案：跟风 9 家 vs 桶[3家]）；补「+」与 prev3+「3家+」同口径（纯渲染，原始键不动）。
+_LADDER_CN = {"0": "0家", "1": "1家", "2": "2家", "3": "3家+", "unknown": "不可考"}
 _PREV_CN = {"prev0": "0家", "prev1-2": "1-2家", "prev3+": "3家+",
             "prev_unknown": "不可考"}
 _BUCKET_CN = {"streak": _STREAK_CN, "board": _BOARD_CN, "time": _TIME_CN,
@@ -562,7 +573,7 @@ QUESTIONS_THEME_LEADER = {
                         "落在哪一档。只判概率档位，不预测价格、不给买卖建议。硬规则："
                         "①锚对齐：概率中枢=叙事「结构基线」行最细出率同结构桶（方括号条件最全"
                         "且样本≥8；无则用「按连板高度」桶）；先验底=「续板基础率」锚行"
-                        "（程序直算、随窗滚动）。档位高于先验底两档（即≥45%）或偏离中枢"
+                        "（程序直算、随窗滚动）。档位高于先验底两档或偏离中枢"
                         "一档以上（上调或下调），理由必须点名基线/锚行具体数字，并给出锚未"
                         "覆盖的当日新证据（新催化、竞价承接突变、封板质量异常等），不得凭"
                         "整体行情乐观或悲观移动档位；"
@@ -571,8 +582,9 @@ QUESTIONS_THEME_LEADER = {
                         "封板强度的唯一可量化判据源——封单占比低、峰值大幅回落、主力净额"
                         "大幅流出=封板质量弱；竞价放量高开=承接强。偏离中枢而引用时必须点名"
                         "具体数字；行缺席、不可考或标单位待校验时不得以该行为由调档，也不得"
-                        "自行补 0。「结构事实」行的周期状态可作调档佐证之一（转弱=降档佐证、"
-                        "主升=升档佐证），不得单独定档，仍须点名基线/锚行数字。有明确日期与"
+                        "自行补 0。「结构事实」行的周期状态（转弱=降档佐证、主升=升档"
+                        "佐证）与「涨停基因」行（次日红盘率/连板率，历史打板画像）可作"
+                        "调档佐证，不得单独定档，仍须点名基线/锚行数字。有明确日期与"
                         "新鲜度的题材证据（产业树/题材事件·新闻/前瞻日历/板内解析/个股打标"
                         "交叉）权重高于结构特征；引用新闻须按业务/产业链关联核实（公司主营/基因/板块标签"
                         "与新闻主题的实质联系，如机器人零部件/减速器业务↔水下机器人/海洋装备"
@@ -585,8 +597,8 @@ QUESTIONS_THEME_LEADER = {
                         "（板内炸板面/昨日仍封数）、板块判定行与题材证据判断；结构基线行"
                         "（含任一出率桶）、承接行、梯队行、题材证据任一在场必须按①给档，"
                         "锚缺失仅要求降低置信（confidence ≤0.6），不得以「无同构历史锚」"
-                        "判 insufficient；叙事标注分轨（主板/双创）时，待判龙头为其轨内按 "
-                        "10 日涨幅取出的龙一，身位表述以轨内为准，另一轨龙一仅作板块结构事实。",
+                        "判 insufficient；叙事标注分轨（主板/双创）时，待判龙头为其轨内"
+                        "龙一，身位以轨内为准，另一轨龙一仅作板块结构事实。",
         "criteria": {
             "high_ge65": "高概率≥65%：结构强（高度领先，或竞价放量高开+昨日承接强）且催化"
                          "硬而新鲜（涨停原因/打标交叉=新催化≤2 日，或当日新增题材事件/新闻，"
@@ -615,7 +627,8 @@ QUESTIONS_THEME_LEADER = {
                         "注意：这是空间判断，不是次日概率判断——强延续题材的龙一通常仍有空间，"
                         "退潮题材的高标即使次日勉强封板也缺乏空间。硬规则："
                         "①起判档由空间锚最细出率桶读数直接映射（不按连板高度硬编码）：再走"
-                        "≥1板率不足三成 → peak 起判；三成及以上 → space_1 起判；其中≥2板率"
+                        "≥1板率不足三成 → peak 起判（板块判定深度=启动期/发酵期时改 "
+                        "space_1 起判，③优先于起判映射）；三成及以上 → space_1 起判；其中≥2板率"
                         "两成及以上且板块判定为发酵期/强延续 → space_2plus 起判。连板高度"
                         "不可算时（含待判龙头今日未封板的断板反包候选）同样按最细出率桶起判"
                         "（无按高度细分则用总体行）；锚行整体缺席（叙事无空间锚行）才允许按"
@@ -626,8 +639,8 @@ QUESTIONS_THEME_LEADER = {
                         "③跨题一致性：板块判定深度=启动期/发酵期时本题默认不得选 peak；"
                         "延续性=临近结束，或催化硬度=soft_meme 且身位=relay_seat 时默认"
                         "不得选 space_2plus；偏离须点名锚行数字并给锚外新证据；"
-                        "④叙事标注分轨（主板/双创）时，待判龙头为其轨内龙一，空间判断以轨内"
-                        "身位为准（双创 20cm 生态与主板 10cm 不同，另一轨龙一仅作板块结构"
+                        "④叙事标注分轨（主板/双创）时，空间判断以轨内身位为准（双创 20cm 与主板"
+                        "10cm 生态不同，另一轨龙一仅作板块结构"
                         "事实）；⑤三层证据（产业树/题材事件·新闻/板内解析）同时缺失判 "
                         "insufficient；叙事含空间锚行（有率值）时不得选本档（v13）。",
         "criteria": {
@@ -649,8 +662,12 @@ QUESTIONS_THEME_LEADER = {
         "instructions": "仅依据所给证据（涨停原因行/爆发原因行/板内解析/题材证据块/打标交叉行/"
                         "公告计数行），判断驱动该龙头涨停的**催化硬度**——催化有多可证实。"
                         "只判催化性质，不预测价格、不给买卖建议。硬规则："
-                        "①按「最硬的可证实事实」判档，理由必须点名硬事实的日期与来源"
-                        "（公告/投资者关系记录/研报/订单交付/并购并表/新业务放量）；"
+                        "①按「驱动该股涨停的最硬可证实事实」判档：硬事实须为涨停驱动"
+                        "事实，与涨停有因果关联（公司自身业务/订单/产品/并购/股权等）；澄清/否认类公告"
+                        "（如「暂未生产X」）与定期报告静态主业描述不计公司级硬催化，驱动为"
+                        "板块级政策/产业新闻且公司业务关联经核实时按 sector_story 判；理由"
+                        "必须点名硬事实的日期与来源（公告/投资者关系记录/研报/订单交付/并购"
+                        "并表/新业务放量）；"
                         "②软成分（名称谐音梗、未证实网传纪要/研报、蹭概念）并存时理由必须"
                         "披露，但不降低硬事实档位；「未证实」是程序对来源可靠性的标注，"
                         "此类内容按软证据计；③打标交叉行的驱动类别/催化深度/新鲜度是另一条"
@@ -659,7 +676,8 @@ QUESTIONS_THEME_LEADER = {
                         "证据部分缺位按在场证据判档并降低置信。",
         "criteria": {
             "hard_fact": "公司级硬催化：公告/投资者关系记录/机构研报/订单交付/并购并表/"
-                         "新业务放量等可证实事实，可点名日期与来源",
+                         "新业务放量等可证实事实，可点名日期与来源，且为涨停驱动事实"
+                         "（与涨停有因果关联；澄清/否认类、静态主业描述不计）",
             "sector_story": "板块级叙事：政策/行业新闻/板块事件驱动，公司受益但无自身"
                             "公司级硬事实；新闻与公司的业务/产业链关联经核实即计"
                             "（标题未点名公司、关联股不含本公司不影响）",
@@ -705,8 +723,7 @@ QUESTIONS_THEME_LEADER = {
                         "并给锚外新证据；④关键证据缺失判 insufficient：仅当窗内逐日"
                         "表现缺失**且**板块结构不可考两者同时成立；证据部分缺位（如无"
                         "跟随数/无周期背景）不是 insufficient 理由，按在场证据判档并"
-                        "降低置信；⑤若叙事标注分轨（主板/双创），待判龙头为其轨内龙一，"
-                        "判档以轨内身位为准。",
+                        "降低置信；⑤叙事标注分轨（主板/双创）时判档以轨内身位为准。",
         "criteria": {
             "dragon_confirm": "新龙确立：人气聚合——板内跟随在场（当日板内上板≥2 家，"
                               "含龙头自身）或窗内表现稳住高位（反包前未深度溃散），"
@@ -973,7 +990,7 @@ def _leader_brief(leader: dict, seg: str | None = None) -> str:
                 f"（断板反包候选{gain_txt}）")
     streak = leader.get("streak")
     streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
-    time_txt = str(leader.get("time") or "时间不可考")
+    time_txt = _seal_time_txt(leader.get("time"))
     return f"{seg_cn} {leader.get('name')}（{leader.get('code')}）{streak_txt}，首封 {time_txt}{gain_txt}"
 
 
@@ -1213,7 +1230,7 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     else:
         streak = leader.get("streak")
         streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
-        time_txt = str(leader.get("time") or "时间不可考")
+        time_txt = _seal_time_txt(leader.get("time"))
         leader_txt = (f"龙头 {leader.get('name')}（{leader.get('code')}）"
                       f"{streak_txt}，首封 {time_txt}")
     prev_txt, hist_txt = _prev_history_txt(prev_peers, prev_board_n, prev_total,
@@ -1443,13 +1460,38 @@ _REASON_SOURCE_RE = re.compile(
     r"\d{4}年|公告|研报|纪要|互动|记录表|中标|订单|合同|半年报|年报|季报|盘后|讯")
 
 
+_PLATE_HEAD_RE = re.compile(r"^([^\s；：:，。]{1,12})[；：:]")
+
+
+def _dedup_plate_head(txt: str) -> str:
+    """多段原因同名板块头去重（2026-11-18a 用户裁决，西陇「化工；…化工：…」案）。
+
+    上游 zt 每段自带板块头（「化工；据…」/「化工：据…」）；首段头保留（板块归属
+    事实），后续段**同名**头剔除、异名头不动（不猜）；单段不动。落库 reason_items
+    原文不动（单一事实源在库），仅叙事渲染层压缩。
+    """
+    paras = re.split(r"\r?\n+", txt)
+    if len(paras) < 2:
+        return txt
+    first = _PLATE_HEAD_RE.match(paras[0].strip())
+    if not first:
+        return txt
+    head = first.group(1)
+    out = [paras[0].strip()]
+    for p in paras[1:]:
+        p = p.strip()
+        m = _PLATE_HEAD_RE.match(p)
+        out.append(p[m.end():] if m and m.group(1) == head else p)
+    return " ".join(x for x in out if x)
+
+
 def _slim_reason_text(zt: str) -> str:
-    """涨停原因叙事压缩：长枚举压缩（_compress_enum）+ 套话小句删除。
+    """涨停原因叙事压缩：长枚举压缩（_compress_enum）+ 同名板块头去重 + 套话小句删除。
 
     小句按 ，。； 切分；命中套话模式且不含来源/日期关键词的小句整句丢弃；
     尾部残留分隔符清理。压缩后为空 → 调用方整段缺席（§1.2-8）。
     """
-    txt = _compress_enum(zt)
+    txt = _dedup_plate_head(_compress_enum(zt))
     parts = re.split(r"([，。；])", txt)
     out: list[str] = []
     for i in range(0, len(parts), 2):
@@ -1501,7 +1543,8 @@ def popularity_rank_line(entries: list[dict]) -> str | None:
     `entries` 与涨停原因行同形状（单一事实源 = fetch_reason_corpus）；
     - rank>0 且 rank_total>0 才出（2203 rank 族口径=全市场涨停原因榜排名）；
       与上榜预测行 hot_val（人气值）是不同口径，行文命名严格区分；
-    - rank_top（Top 榜名单）非空 → 取前 3 名并列；zt_group（涨停梯队串）非空并入；
+    - rank_top（Top 榜名单）**不进叙事**（2026-11-18a 用户裁决：题面只消费本股
+      排名是否 Top3，名单零判据消费且裸代码不可读）；zt_group（涨停梯队串）非空并入；
     - 排名缺位 → 该股整段缺席；全部缺席 → None（整行不出）。
     """
     if not entries:
@@ -1515,9 +1558,6 @@ def popularity_rank_line(entries: list[dict]) -> str | None:
             continue    # 排名不可考/不在榜 → 该股整段缺席
         label = str(entry.get("label") or "").strip()
         seg = f"{label} {rank}/{total}".strip()
-        top = [str(x).strip() for x in (item.get("rank_top") or []) if str(x).strip()]
-        if top:
-            seg += f"（Top3：{'、'.join(top[:3])}）"
         group = str(item.get("zt_group") or "").strip()
         if group:
             seg += f"（梯队：{group}）"
@@ -1758,6 +1798,9 @@ def notice_count_line(entries: list[dict]) -> str | None:
                         if isinstance(v, (int, float)) and not isinstance(v, bool)
                         else f"{label_cn[key]}不可考")
         date_txt = str(item.get("upstream_date") or "").strip()
+        # 2026-11-18a：上游 YYYYMMDD 归一 ISO（纯渲染；落库 upstream_date 不动）
+        if re.fullmatch(r"\d{8}", date_txt):
+            date_txt = f"{date_txt[:4]}-{date_txt[4:6]}-{date_txt[6:]}"
         if date_txt:
             segs.append(f"数据日期 {date_txt}")
         parts.append(f"{label}：{'/'.join(segs)}")
@@ -2094,9 +2137,12 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
       （验证后的缺席，一行事实）；注意：个股行端点失败但分组榜单在手**不是**无上榜，
       不得出本行（2026-11-11 前 ok=True+stocks 空会误称无上榜，把已取得的龙虎榜数据丢弃）；
     - 榜单已生成但相关个股 0 只上榜（含席位/机构榜也无命中）→ 显式披露 0 只（事实陈述）；
-    - 有相关上榜 → 按传入 codes 顺序（龙一优先）列主力净额/买/卖（元→亿）与上榜原因。
+    - 有相关上榜 → 按传入 codes 顺序（龙一优先）列主力净额（元→亿）+席位买入/机构净买。
+    买卖拆分与上榜原因**不进叙事**（2026-11-18a 用户裁决：龙头/竞价四题只消费席位/机构
+    分歧与净额量级，买卖拆分/上榜触发条件零判据消费；name 统一 strip 防上游空格残留；
+    落库 facts 全字段不动，单一事实源在库）。
     个股行缺位时分组榜单兜底（2026-11-11）：相关代码不在 stocks 时从 groups join
-    （偏离/上榜额/分组原因，纯事实；主力资金字段个股行端点缺位，段内不伪装不出）。
+    （偏离/上榜额，纯事实；主力资金字段个股行端点缺位，段内不伪装不出）。
     席位/机构扩维（2026-10-30c）：相关个股若在 GetStockList 营业部个股榜/GetAgencyListV2
     机构榜（同 facts 归一层，逐端点 fail-visible），追加「席位买入 X亿」「机构净买 X亿
     （N 家）」；不在榜/端点失败时该段缺席不伪装。机构净买可负（负=净卖出，如实呈现）。
@@ -2149,7 +2195,7 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
             if g is None:
                 # 席位/机构兜底段（C）：只列已取得的席位事实；主力资金/偏离/上榜额/
                 # 上榜原因属主榜端点字段，缺位不伪装不出（§4.0）
-                name = str(((sb_e or ag_e) or {}).get("name") or "") or k
+                name = str(((sb_e or ag_e) or {}).get("name") or "").strip() or k
                 segs: list[str] = []
                 if sb_e is not None:
                     segs.append(f"席位买入 {_fmt_yi(sb_e.get('buy_in'))}")
@@ -2159,21 +2205,14 @@ def lhb_line(facts: dict | None, *, codes: Any, roles: dict[str, str] | None = N
                                 + (f"（{jn} 家）" if jn else ""))
                 return f"{role} {name}（{k}）：" + "；".join(segs)
             # 分组榜单兜底段：只有已取得的事实，主力资金段不出（§4.0 不伪装）
-            name = str(g.get("name") or "") or k
+            name = str(g.get("name") or "").strip() or k
             dev = g.get("deviation")
             seg = (f"{role} {name}（{k}）："
                    f"偏离 {dev if dev not in (None, '') else '--'}，"
                    f"上榜额 {_fmt_yi(g.get('amount_yuan'))}")
-            reason = str(g.get("group_reason") or "").strip()
-            if reason:
-                seg += f"，上榜原因 {reason}"
         else:
-            name = str(s.get("name") or "") or k
-            buy, sell = s.get("main_buy_yuan"), s.get("main_sell_yuan")
+            name = str(s.get("name") or "").strip() or k
             seg = f"{role} {name}（{k}）：主力净额 {_fmt_yi(s.get('main_net_yuan'))}"
-            if buy is not None or sell is not None:
-                seg += f"（买 {_fmt_yi(buy)} / 卖 {_fmt_yi(sell)}）"
-            seg += f"，上榜原因 {str(s.get('reason') or '').strip() or '--'}"
         # 席位/机构扩维（2026-10-30c）：不在榜/端点失败时缺席，不伪装零（§4.0）
         if sb_e is not None:
             seg += f"；席位买入 {_fmt_yi(sb_e.get('buy_in'))}"

@@ -209,9 +209,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
-    assert doc["questionSetVersion"] == "v17"
-    assert doc["questionSetHash"] == "eb9cfae4139e"   # 2026-11-17b 术语对齐代（同桶→同结构桶）；前代 8c6c94429abd 留档预登记（跨代不可比）
-    assert doc["ammoVersion"] == "2026-11-17b"   # 语料去开发语义（用户裁决）；前一版 2026-11-17a = 语料精简三档
+    assert doc["questionSetVersion"] == "v18"
+    assert doc["questionSetHash"] == "8f7f97a4680a"   # v18（2026-11-18 用户裁决修复 A+B + review 清洁度修）；前代 eb9cfae4139e/8c6c94429abd 留档预登记（跨代不可比）
+    assert doc["ammoVersion"] == "2026-11-18a"   # 语料精简续批（B 类）；前一版 2026-11-17b = 桶键中文化
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -259,7 +259,7 @@ def test_rerun_preserves_backfilled_outcome(env):
     doc = col.docs["2026-10-19:603278"]
     assert doc["outcomeSealedNextDay"] is True, "复跑不得抹掉已回填结局"
     assert doc["outcomeDay2"]["closePct"] == 1.3, "outcome* 全键保留（含后日溢价）"
-    assert doc["questionSetVersion"] == "v17", "outcome 之外字段照常重建"
+    assert doc["questionSetVersion"] == "v18", "outcome 之外字段照常重建"
 
 
 def test_missing_ths_pool_is_fail_visible(env, monkeypatch, capsys):

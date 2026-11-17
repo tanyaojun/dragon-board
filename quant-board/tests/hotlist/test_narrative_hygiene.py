@@ -465,7 +465,7 @@ def test_hygiene_auction_leader_vA1_lines():
         "auction_base_rate_line")
     _assert_absent(AL.auction_base_rate_line(None), "auction_base_rate_line(无已结算)")
     narr = AL.build_auction_leader_narrative(
-        date="2026-11-13", prev_date="2026-11-12", market_line="盘面事实：测试",
+        date="2026-11-13", prev_date="2026-11-12",
         leader_name="中重科技", leader_code="603135", board="机器人",
         push_line=AL.auction_push_line(push, codes=["603135"]),
         bid_line=AL.auction_bid_line(bid),
@@ -487,7 +487,7 @@ def test_hygiene_board_belong_push_concept_suffix():
     """2026-11-13 裁决：板块归属=韭研板块名 + 推送概念事实并列（非开发注释）。"""
     from backend.analysis.hotlist import auction_leader_ammo as AL
     narr = AL.build_auction_leader_narrative(
-        date="2026-11-13", prev_date="2026-11-12", market_line="盘面事实：测试",
+        date="2026-11-13", prev_date="2026-11-12",
         leader_name="日出东方", leader_code="603366", board="寒潮",
         push_line=None, bid_line=None, structure=None, ladder_line=None,
         base_rate=None, sector_judgment=None, theme_heat_line=None,
@@ -500,9 +500,9 @@ def test_hygiene_auction_no_unverifiable_noise():
     """2026-11-13 用户裁决：竞价链叙事与题面禁「不可考」——缺位字段/整行缺席，不留噪声。"""
     from backend.analysis.hotlist import auction_leader_ammo as AL
     import json as _json
-    # 叙事全参缺位（market_line/structure/bid_line/board 全 None）→ 无一行占位噪声
+    # 叙事全参缺位（structure/bid_line/board 全 None）→ 无一行占位噪声
     narr = AL.build_auction_leader_narrative(
-        date="2026-11-13", prev_date=None, market_line=None,
+        date="2026-11-13", prev_date=None,
         leader_name="中重科技", leader_code="603135", board=None,
         push_line=None, bid_line=None, structure=None, ladder_line=None,
         base_rate=None, sector_judgment=None, theme_heat_line=None,
@@ -529,7 +529,7 @@ def test_hygiene_auction_no_unverifiable_noise():
     # 与 v17 base_rate_line 同款先例，不入禁词；若未来加严需用户显式裁决。
     auction_forbidden = ("不可算", "补源", "腾讯", "tencent_auction", "榜外补")
     narr2 = AL.build_auction_leader_narrative(
-        date="2026-11-13", prev_date="2026-11-12", market_line=None,
+        date="2026-11-13", prev_date="2026-11-12",
         leader_name="中重科技", leader_code="603135", board="机器人",
         push_board="机器人",
         push_line="竞价看龙头推送：09:15 中重科技 +3.00%",

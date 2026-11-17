@@ -173,7 +173,7 @@ def test_fire_writes_docs_and_idempotent(env):
     sector = col.docs[f"{DATE}:board:机器人"]
     assert leader["docKind"] == "leader" and leader["status"] == "ok"
     assert leader["auctionSealToday"] == "mid_45_65"
-    assert leader["questionSetVersion"] == "vA4"
+    assert leader["questionSetVersion"] == "vA5"
     assert leader["outcomeSealedToday"] is None
     assert "竞价看龙头推送（09:15 试盘价）：" in leader["narrative"]
     assert sector["docKind"] == "sector"
@@ -553,7 +553,7 @@ def test_build_one_pool_miss_cross_seals_structure(monkeypatch):
         None, DATE, "2026-11-12", row, t1_row=None,
         pool_prev={"items": {}, "degraded": None}, lanes={}, gene_corpus={},
         notice_corpus={}, heat_corpus={}, reason_corpus={}, lhb_facts=None,
-        market_line="盘面事实：测试", base_rate_stats=None, sector_judgment=None,
+        base_rate_stats=None, sector_judgment=None,
         board_codes=[row], prev_cross=cross, streak_map={"603135": 3})
     assert "昨日（2026-11-12）结构：连板 3 板，昨日封板（首封 09:47）" in built["narrative"]
     assert built["corpusState"]["prevPoolCross"] == "jiuyan_ths"
@@ -575,6 +575,45 @@ def test_frozen_rerun_reuses_morning_narrative(env):
     assert doc["narrative"] == original
     assert len(calls) == n + 2          # 冻结只冻语料，判答仍重烧（板块自愈+个股）
     assert doc["sectorJudgmentState"] == "injected"
+
+
+def test_fresh_run_injects_sector_judgment(env):
+    """2026-11-18 bug 修复（广百案审计）：首跑板块判答必须注入龙头叙事。
+    此前 _label_one 不回写 built["answers"] → run() 收集恒 {} → 板块判定行
+    全链悬空（sectorJudgmentState 恒 sector_missing）；重跑场景被 DB 预载+
+    冻结叙事掩盖（旧测试只锁重跑），本测试锁首跑路径。"""
+    db, calls = env
+    L.run(DATE, confirm_budget=True)
+    col = db[L.COLLECTION]
+    doc = col.docs[f"{DATE}:603135"]
+    sec = col.docs[f"{DATE}:board:机器人"]
+    assert sec["status"] == "ok" and sec["answers"]
+    assert doc["sectorJudgmentState"] == "injected"
+    assert "板块判定：" in doc["narrative"]
+    assert "炒作深度=" in doc["narrative"]
+
+
+def test_build_one_drops_market_facts_and_wires_rank(monkeypatch):
+    """2026-11-18a B1/B2：龙头叙事不出昨日盘面事实行（四题零消费+封板①禁
+    整体行情调档）；热度排名行接线（身位题证据清单/Top3 例外此前悬空），
+    与涨停原因同源 reason_corpus，零新采集；Top3 裸码名单不进叙事。"""
+    monkeypatch.setattr(L.digest, "build_theme_evidence_block",
+                        lambda *a, **k: {"text": "题材证据块：测试", "state": {}})
+    row = {"code": "002187", "name": "广百股份", "board": "大消费", "pct": 9.91}
+    reason_corpus = {"002187": {"zt": "零售；据2026年半年报，公司从事百货零售",
+                                 "rank": 30, "rank_total": 5575,
+                                 "rank_top": ["002242", "600715"]}}
+    built = L.build_one(
+        None, DATE, "2026-11-12", row, t1_row=None,
+        pool_prev={"items": {}}, lanes={}, gene_corpus={},
+        notice_corpus={}, heat_corpus={}, reason_corpus=reason_corpus,
+        lhb_facts=None, base_rate_stats=None, sector_judgment=None,
+        board_codes=[row])
+    n = built["narrative"]
+    assert "盘面事实" not in n, "B1：昨日盘面事实行退役（题材链 2026-11-17a 同款判例）"
+    assert "热度排名：30/5575" in n, "B2：身位题证据清单点名行必须可达"
+    assert "（Top3：" not in n
+    assert n.index("涨停原因：") < n.index("热度排名：")
 
 
 def test_trial_state_contract_pending_and_renderer_wiring(env, monkeypatch):
@@ -600,7 +639,7 @@ def test_trial_state_contract_pending_and_renderer_wiring(env, monkeypatch):
         None, DATE, "2026-11-13", row, t1_row=None,
         pool_prev={"items": {}, "degraded": None}, lanes={}, gene_corpus={},
         notice_corpus={}, heat_corpus={}, reason_corpus={}, lhb_facts=None,
-        market_line="盘面事实：测试", base_rate_stats=None, sector_judgment=None,
+        base_rate_stats=None, sector_judgment=None,
         board_codes=[row], trial=trial)
     assert built["corpusState"]["trialState"]["state"] == "ok"
     assert built["corpusState"]["trialState"]["prevPercentCross"] == "agree_3src"
@@ -681,7 +720,7 @@ def test_build_one_wires_regulatory_line():
     built = L.build_one(db, DATE, "2026-11-12", row, t1_row=None,
                         pool_prev={"items": {}}, lanes={}, gene_corpus={},
                         notice_corpus={}, heat_corpus={}, reason_corpus={},
-                        lhb_facts=None, market_line="涨停 46 家",
+                        lhb_facts=None,
                         base_rate_stats=None, sector_judgment=None,
                         board_codes=[row], reg_corpus=reg)
     n = built["narrative"]
@@ -692,7 +731,7 @@ def test_build_one_wires_regulatory_line():
     built0 = L.build_one(db, DATE, "2026-11-12", row, t1_row=None,
                          pool_prev={"items": {}}, lanes={}, gene_corpus={},
                          notice_corpus={}, heat_corpus={}, reason_corpus={},
-                         lhb_facts=None, market_line="涨停 46 家",
+                         lhb_facts=None,
                          base_rate_stats=None, sector_judgment=None,
                          board_codes=[row],
                          reg_corpus={"byCode": {}, "laneOk": False,

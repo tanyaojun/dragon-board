@@ -138,14 +138,15 @@ def test_relay_v9_phase_state_machine_criteria():
     assert "leader_strength" not in relay.QUESTIONS_RELAY
 
 
-def test_auction_leader_vA4_dedicated_stamps():
-    """竞价龙头晨间链独立版本戳（vA4，2026-11-15 用户裁决退役 jiuyan 龙序第二源）：
+def test_auction_leader_vA5_dedicated_stamps():
+    """竞价龙头晨间链独立版本戳（vA5，2026-11-18 用户裁决修复 A+B 两大类）：
     独立题集代际 + 独立 AMMO 戳；落档用独立戳（跨代不可比违规防范）。"""
     import inspect
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
-    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA4"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-15e"   # 第三源三档+公共板块竞价涨幅均值>0门禁（生产默认严格）；前一版 2026-11-15d = 竞价过程事实行+MBL 日档
+    assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA5"
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-18a"   # 删盘面事实行+热度排名接线+共享渲染精简+注入 bug 修复；前版 2026-11-15e = 第三源三档+公共门禁
+    assert al.QUESTION_SET_HASH_AUCTION_LEADER == "fb671c8f0223"   # vA5（含 B4 接线 + review 清洁度修）；前代 cd5639a7407f = vA4（跨代不可比）
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）
     assert al.AUCTION_LEADER_QUESTIONS == (
@@ -157,10 +158,33 @@ def test_auction_leader_vA4_dedicated_stamps():
     seat_txt = seat["instructions"] + "".join(seat["criteria"].values())
     assert "入选股" in seat_txt and "推送股" not in seat_txt
     assert "韭研龙序" not in seat["instructions"]   # vA4 清理：判据不引用已退役龙序证据（红线6）
+    # ── vA5（2026-11-18 用户裁决修复 A+B）：广百案审计错配修复锁定 ──
+    seal = al.QUESTIONS_AUCTION_LEADER["auction_leader_seal_today"]
+    assert "硬一字" in seal["criteria"]["high_ge65"], "A1 一字板 high 档变体（净额≡0 结构性不可达修复）"
+    assert "涨停委买额" in seal["instructions"] and "竞昨比" in seal["instructions"], "A1 六件套字段进判据源"
+    assert "涨停基因行" in seal["instructions"], "B3 基因行接为消费（背景佐证）"
+    pat = al.QUESTIONS_AUCTION_LEADER["trial_settlement_pattern"]
+    assert "观测代理" in pat["instructions"] and "竞价过程事实行" in pat["instructions"], \
+        "A2 序列观测源主锚缺席分支（末帧代理+置信上限）"
+    assert "共证本档" in pat["criteria"]["hard_oneword"], "A2 一字竞价行共证（09:25:00 不可证修复）"
+    assert "一字无对手盘" in seat["instructions"], "A3 身位题一字零值读法传导"
+    assert "龙虎榜行" in seat["instructions"] and "不证明当日承接" in seat["instructions"], \
+        "B4 龙虎榜行接为 T−1 背景佐证（不作当日承接确证，与题材身位题跨链对齐）"
+    ah = al.QUESTIONS_AUCTION_LEADER["leader_catalyst_hardness"]
+    assert "爆发原因行" not in ah["instructions"] and "打标交叉行" not in ah["instructions"].split("③")[0], \
+        "B5 证据清单收窄（竞价叙事无此两行，防悬空引用）"
+    assert "因果关联" in ah["instructions"] and "受益方" not in ah["instructions"], \
+        "继承题材 v18 A2 驱动归因（valence 中性，与⑤负面驱动正交）"
+    assert "market_line" not in inspect.signature(al.build_auction_leader_narrative).parameters, \
+        "B1 盘面事实行参数退役（四题零消费+封板①禁整体行情调档）"
+    assert "popularity_rank_line" in inspect.signature(al.build_auction_leader_narrative).parameters, \
+        "B2 热度排名行接线（身位题悬空引用修复）"
+    assert "built[\"answers\"] = answers" in inspect.getsource(ops._label_one), \
+        "注入 bug 修复：判答回写 built（首跑板块判定行全链悬空案）"
     # A2 删题锁定：空间/人气题不在晨间题集
     assert "leader_headroom" not in al.QUESTIONS_AUCTION_LEADER
     assert "leader_rebound_popularity" not in al.QUESTIONS_AUCTION_LEADER
-    # 板块两题原文复用 v17（单一事实源）；硬度题 vA3 起拍卖链本地覆写（方向解耦
+    # 板块两题原文复用题材链（单一事实源，现 v18）；硬度题 vA3 起竞价链本地覆写（方向解耦
     # ⑤规则），criteria 原文仍同源，instructions 为拍卖链扩展版
     from backend.analysis.hotlist import theme_leader_ammo as tl
     assert al.QUESTIONS_AUCTION_LEADER["theme_speculation_depth"] is tl.QUESTIONS_THEME_LEADER["theme_speculation_depth"]

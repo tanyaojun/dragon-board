@@ -28,8 +28,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     _questions_hash,
 )
 
-QUESTION_SET_VERSION_AUCTION_LEADER = "vA4"   # 换代登记：2026-11-15 用户裁决移除韭研龙序第二源（实测封板概率极低）；身位题清理「韭研龙序」判据（红线6）；前一版 vA3 = auction-leader-vA3-preregistration-20261114
-AMMO_VERSION_AUCTION_LEADER = "2026-11-15e"   # 第三源三档+公共「板块竞价涨幅均值>0」门禁（生产默认严格暂不切中等）；前一版 2026-11-15d = 竞价过程事实行+MBL 真源头日档；2026-11-15c = vA4 移除韭研龙序源；2026-11-15b = 第三源竞价强度两新行；2026-11-15a = 监管风险行
+QUESTION_SET_VERSION_AUCTION_LEADER = "vA5"   # 2026-11-18 用户裁决「修复 A+B 两大类」：A1 封板 high 一字板变体+②点名竞昨比/涨停委买额；A2 形态①序列观测代理分支+hard_oneword 竞价行共证+证据清单点名过程事实行；A3 身位②一字零值读法；A4 封板②背离句去重（归形态③）；B3 基因接背景佐证；B5 硬度证据清单收窄。硬度①继承题材 v18 驱动归因（valence 中性），⑤方向解耦沿 vA3 裁决保留（两维正交）。前版 vA4 = cd5639a7407f（跨代不可比）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-18a"   # 龙头叙事删盘面事实行（四题零消费+封板①禁整体行情调档）；热度排名行接线（身位题悬空引用修复）；共享渲染精简随题材 2026-11-18a 同批生效；板块判答注入 bug 修复（_label_one 回写 answers）。前版 2026-11-15e = 第三源三档+公共「板块竞价涨幅均值>0」门禁；再前 2026-11-15d = 竞价过程事实行+MBL 真源头日档
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -47,12 +47,13 @@ QUESTIONS_AUCTION_LEADER = {
                         "新证据（竞价承接突变、催化硬度、身位竞争等），不得凭整体行情"
                         "乐观或悲观移动档位；锚行缺席时按在场证据判档且 confidence ≤0.6，"
                         "不得以「无历史锚」判 insufficient；②量化证据：「竞价」行（高开"
-                        "幅度/竞价额/竞价换手/竞价净额/同板对比）与「竞价试盘」行（开始/"
+                        "幅度/竞价额/竞价换手/竞价净额/竞昨比/涨停委买额/同板对比；竞昨比="
+                        "竞价额/昨日成交额，涨停委买额=一字封队强度）与「竞价试盘」行（开始/"
                         "结束试盘时点、试盘涨幅、首开额/最终额）是当日承接的两条可量化"
-                        "判据源，双时点合读——试盘涨幅是结束试盘时点快照、竞价行是 09:25 "
-                        "匹配冻结值，两者背离本身是形态信息。一字板分支：09:25 匹配价≈"
-                        "涨停限制且竞价成交/换手为零时按硬一字读法，竞价零值是「无对手盘」"
-                        "而非抛压，不得作负证据；可撤窗（09:20 前）结束试盘不得单独作负"
+                        "判据源，双时点合读（时点语义与背离读法详见形态题③）。一字板分支："
+                        "09:25 匹配价≈涨停限制且竞价成交/换手为零时按硬一字读法，竞价零值"
+                        "是「无对手盘」而非抛压，不得作负证据，涨停委买额作封队强度证据；"
+                        "可撤窗（09:20 前）结束试盘不得单独作负"
                         "证据（撤单后由真实委托承接封板是常见活板形态），须与试盘涨幅"
                         "符号/强度、最终额相对首开额的增减合读；试盘涨幅为负（end 时点"
                         "跌破昨收）可作显著负证据；试盘行缺席时回退按竞价行判据，不得"
@@ -64,11 +65,13 @@ QUESTIONS_AUCTION_LEADER = {
                         "「身位」两题同调用判答可作交叉引用；④缺失门：三层证据（产业树/"
                         "题材事件·新闻/板内解析）同时缺失判 insufficient（程序强制覆盖，"
                         "原答另存备查），不得用结构特征硬填空档；⑤昨日结构事实（连板高度/"
-                        "首封时点/昨日封板与否）只作背景佐证，不得单独定档。",
+                        "首封时点/昨日封板与否）与涨停基因行（历史打板画像）只作背景佐证，"
+                        "不得单独定档。",
         "criteria": {
-            "high_ge65": "高概率≥65%：竞价放量高开且净额为正（承接强），催化硬而新鲜"
-                         "（硬事实/当日新增题材事件·新闻/未来 1-2 日既定事件），身位稳固"
-                         "或同板竞价对比领先",
+            "high_ge65": "高概率≥65%：竞价放量高开且净额为正（承接强），或硬一字"
+                         "（09:25 匹配≈限价且成交/换手为零、涨停委买额成封队）且试盘/末帧"
+                         "顶近限价；催化硬而新鲜（硬事实/当日新增题材事件·新闻/未来 1-2 日"
+                         "既定事件），身位稳固或同板竞价对比领先",
             "mid_45_65": "中等 45%-65%：承接与催化一强一弱，或与锚中枢同档；典型：催化"
                          "新鲜但竞价缩量/净额为负，或竞价强但催化陈旧",
             "low_25_45": "偏低 25%-45%：竞价缩量低开或净额大幅为负（承接弱），或催化"
@@ -84,22 +87,35 @@ QUESTIONS_AUCTION_LEADER = {
     # 方向影响由封板题/形态题合读，本题只判「有多可证实」不判方向（vA2 天普澄清案）
     "leader_catalyst_hardness": {
         **QUESTIONS_THEME_LEADER["leader_catalyst_hardness"],
+        # vA5（2026-11-18 B5）：竞价叙事无爆发原因行/打标交叉行（题材链专属装配位），
+        # 证据清单同步收窄防悬空引用；③交叉参考规则保留（条件式，行缺席不触发）。
+        # ①继承题材 v18 驱动归因（valence 中性：是否驱动事实）；⑤方向解耦沿 vA3 裁决保留（两维正交：①判
+        # 「是不是驱动事实」，⑤判「驱动事实不因利空降档」；澄清/否认类归①处理）。
         "instructions": QUESTIONS_THEME_LEADER["leader_catalyst_hardness"]["instructions"]
-                        + "⑤方向解耦：负面硬事实（澄清公告、风险提示、股东减持等公司级"
-                        "可证实事实）同样按硬事实计档——硬度只判「可证实性」，不判利好"
+                        .replace("（涨停原因行/爆发原因行/板内解析/题材证据块/打标交叉行/"
+                                 "公告计数行）",
+                                 "（涨停原因行/板内解析/题材证据块/公告计数行）")
+                        + "⑤方向解耦：负面硬事实（风险提示、股东减持等公司级可证实事实）"
+                        "若为驱动事实同样按硬事实计档——硬度只判「可证实性」，不判利好"
                         "利空方向；其对封板/形态的影响由封板题与形态题合读，本题不得因"
-                        "方向利空而降档至软催化。",
+                        "方向利空而降档至软催化（澄清/否认类按①驱动归因处理）。",
     },
+    # vA5 B4（2026-11-18）：龙虎榜行接为 T−1 背景佐证（与题材身位题跨链对齐；
+    # 盘前链 T−1 榜单不作当日承接确证，区别于题材盘后链身位题①点名消费）。
     "auction_seat_durability": {
         "type": "choice",
         "instructions": "仅依据所给证据（昨日梯队/结构行、同板入选股间"
-                        "竞价高开与竞价额对比、热度排名行、题材热度行、板块判定行），"
+                        "竞价高开与竞价额对比、热度排名行、龙虎榜行（T−1 主力净额/"
+                        "席位买入/机构净买，背景佐证）、题材热度行、板块判定行），"
                         "判断该竞价龙头在板块内的**身位稳固度**——是稳固核心、被挑战，"
                         "还是可替代的接力位。只判身位性质，不预测价格、不给买卖建议。"
                         "硬规则：①判档必须点名昨日梯队领先差/同板竞价对比/"
-                        "热度排名中至少一项具体事实；②同板竞价对比高开幅度与竞价额均"
-                        "落后于同板其他入选股且无独立催化时默认 relay_seat，除非昨日"
-                        "高度显著领先（领先差≥1 板）或热度排名 Top3；③板块判定=退潮期/"
+                        "热度排名中至少一项具体事实；②同板对比中竞价额为零且高开≈限价"
+                        "的入选股按一字无对手盘读，不作额落后（与封板题一字板分支同口径）；"
+                        "龙虎榜行（T−1 榜单）只作背景佐证，不证明当日承接，不作定档确证；"
+                        "高开幅度与竞价额均落后于同板其他入选股且无独立催化时默认 "
+                        "relay_seat，除非昨日高度显著领先（领先差≥1 板）或热度排名 Top3；"
+                        "③板块判定=退潮期/"
                         "临近结束时默认不得判 core_seat；④板块结构缺席且三层证据（产业树/"
                         "题材事件·新闻/板内解析）同时缺席才判 insufficient；证据部分缺位"
                         "按在场证据判档并降低置信。",
@@ -120,12 +136,15 @@ QUESTIONS_AUCTION_LEADER = {
         "type": "choice",
         "instructions": "仅依据所给证据（竞价试盘行：开始/结束试盘时点、试盘涨幅、首开额/"
                         "首加额/最大额/最终额、竞价成交/换手；竞价行：09:25 匹配价、竞价"
-                        "成交额/换手；结构行：连板/昨日封板），判断该股当日集合竞价试盘的"
+                        "成交额/换手；竞价过程事实行：首帧/峰值/末帧时点与涨幅；结构行："
+                        "连板/昨日封板），判断该股当日集合竞价试盘的"
                         "**结算形态**属哪一档。形态档全部为 09:25 前可观测事实，不涉及对"
                         "日内走势或收盘的预测，不给买卖建议。硬规则：①主锚=结束试盘时点"
                         "三档（09:25:00 全匹配 / 09:20–09:25 不可撤窗 / 09:20 前可撤窗）"
                         "×试盘涨幅相对当日涨跌幅限制的强度（顶死≥95% / 一半以上 / 一半"
-                        "以下 / 为负）；②资金姿态合读：最终额相对首开额的增减（含首加额）"
+                        "以下 / 为负）；试盘行在场但结束试盘时点/试盘涨幅缺席（序列观测源）"
+                        "时，以竞价过程事实行末帧时点/涨幅作结束试盘观测代理，confidence "
+                        "≤0.6，理由须点名末帧时点；②资金姿态合读：最终额相对首开额的增减（含首加额）"
                         "只作档内合读证据——撤单后资金撤减不等于弱（试盘单退出后由真实"
                         "委托承接是常见活板形态），维持挂着不等于强，不得单凭增减定档；"
                         "③试盘涨幅是「结束试盘时点」快照、竞价行是 09:25 匹配冻结值，"
@@ -133,7 +152,9 @@ QUESTIONS_AUCTION_LEADER = {
                         "insufficient，不得以竞价行硬填形态档。",
         "criteria": {
             "hard_oneword": "硬一字形态：结束试盘=09:25:00（竞价全程匹配）且试盘涨幅"
-                            "顶近当日涨停限制，竞价行匹配价亦≈限价",
+                            "顶近当日涨停限制，竞价行匹配价亦≈限价；试盘锚字段缺席时，"
+                            "竞价行 09:25 匹配≈限价且成交/换手为零（无对手盘）+末帧涨幅"
+                            "顶近限价可共证本档",
             "no_cancel_settle": "不可撤窗定型：结束试盘落在 09:20–09:25（不可撤单窗内"
                                 "最后定型），试盘涨幅未顶死或试盘有反复",
             "cancel_weak": "可撤窗撤单+试盘负涨幅：结束试盘在 09:20 前，且试盘涨幅为负"
@@ -494,7 +515,7 @@ def auction_base_rate_line(stats: dict | None) -> str | None:
             f"窗 {stats.get('start') or '?'}~{stats.get('end') or '?'}）")
 
 
-def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: str,
+def build_auction_leader_narrative(*, date: str, prev_date: str,
                                    leader_name: str, leader_code: str, board: str | None,
                                    push_line: str | None, bid_line: str | None,
                                    structure: str | None,
@@ -508,6 +529,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
                                    theme_heat_line: str | None = None,
                                    gene_line: str | None = None,
                                    reason_line: str | None = None,
+                                   popularity_rank_line: str | None = None,
                                    notice_count_line: str | None = None,
                                    regulatory_line: str | None = None,
                                    lhb_facts_line: str | None = None,
@@ -517,11 +539,14 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
 
     push_board：KPL 推送的题材炒作概念（2026-11-13 裁决：板块归属取韭研板块名，
     推送概念仅作事实并列披露，供 jev 交叉理解推送语境）。
+    2026-11-18a（用户裁决，广百案例审计 B 类）：`market_line` 参数删除——昨日盘面
+    事实行四题零消费且封板题①明令「不得凭整体行情乐观或悲观移动档位」（题材链
+    2026-11-17a 同款判例）；板块级叙事 build_auction_sector_narrative 不受影响。
+    `popularity_rank_line` 接线（身位题证据清单/Top3 例外此前悬空）：与涨停原因行
+    同源 reason_corpus，零新采集；None 不出行。
     """
     belong = f"板块归属：{board}" if board else None
     lines = [f"{date} 交易日 · 竞价龙头盘前投喂"]
-    if market_line:
-        lines.append(f"昨日（{prev_date}）{market_line}")
     lines.append(f"待判龙头：{leader_name}（{leader_code}）")
     if belong:
         if push_board and push_board != board:
@@ -530,7 +555,7 @@ def build_auction_leader_narrative(*, date: str, prev_date: str, market_line: st
     for ln in (push_line, trial_line, bidding_series_line, board_strength, trial_selection,
                bid_line, structure, ladder_line, base_rate,
                sector_judgment, theme_heat_line, gene_line, reason_line,
-               notice_count_line, regulatory_line, lhb_facts_line):
+               popularity_rank_line, notice_count_line, regulatory_line, lhb_facts_line):
         if ln:
             lines.append(ln)
     lines.append(evidence_block)
