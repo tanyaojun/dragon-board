@@ -210,8 +210,8 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["docKind"] == "leader" and "segment" not in doc  # 夹具行无 segment → 不写键（P2-5）
     assert doc["questionSetVersion"] == "v17"
-    assert doc["questionSetHash"] == "8c6c94429abd"   # v17 题集×语料匹配+两新题+开火前修订 b（v1-v16 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-11-17a"   # 语料精简（用户裁决，西陇科学案例）；前一版 2026-11-15a = 监管风险行
+    assert doc["questionSetHash"] == "eb9cfae4139e"   # 2026-11-17b 术语对齐代（同桶→同结构桶）；前代 8c6c94429abd 留档预登记（跨代不可比）
+    assert doc["ammoVersion"] == "2026-11-17b"   # 语料去开发语义（用户裁决）；前一版 2026-11-17a = 语料精简三档
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -348,8 +348,8 @@ def test_anchor_deviation_audit_unit():
     """P1-1 改道（2026-11-07）：jev 平台 answer schema 服务端锁死（5 探针实证），
     模型自证 reason 不可行 → 程序侧读叙事基线行计算偏离。规则①同口径：
     最细同桶样本<8 回退按连板高度桶；偏离≥1 档打 deviation_from_anchor。"""
-    base = ("结构基线：同桶[streak2|n3-4|early] 历史次日连板率 61.1%（36 样本）；"
-            "按连板高度[2] 42.8%（180 样本）；总体 33.9%（740 样本）")
+    base = ("结构基线：同结构[2连板·板块3-4家·首封≤10:00] 历史次日连板率 61.1%（36 样本）；"
+            "按连板高度[2板] 42.8%（180 样本）；总体 33.9%（740 样本）")
     # 同档（61.1% ∈ mid 桶区间）：不标
     assert L._anchor_deviation_audit(base, "mid_45_65") == (None, None)
     # 偏离一档：打标 + note 带中枢读数
@@ -365,6 +365,47 @@ def test_anchor_deviation_audit_unit():
     assert L._anchor_deviation_audit("无基线行叙事", "low_25_45") == (None, None)
     assert L._anchor_deviation_audit(base, "insufficient") == (None, None)
     assert L._anchor_deviation_audit(base, None) == (None, None)
+
+
+def test_anchor_parsers_roundtrip_with_renderer():
+    """2026-11-17b（review m2）：渲染器→解析器往返互锁——baseline_line 产出直接
+    嗟两解析器，未来任一侧格式漂移此处先红（手写夹具两侧独立断言不闭环）。"""
+    from backend.analysis.hotlist import theme_leader_ammo as A
+    from backend.operations.theme_leader_seal_stats import _anchor_observation_fields
+    rows = [{"streak": 2, "boardN": 5, "time": "09:20:00", "continued": True}] * 10 \
+        + [{"streak": 2, "boardN": 5, "time": "09:25:00", "continued": False}] * 10
+    row = {"streak": 2, "boardN": 5, "time": "09:22:00"}
+    narrative = A.baseline_line(rows, row, min_combo_n=5)
+    flag, note = L._anchor_deviation_audit(narrative, "high_ge65")
+    assert flag == "deviation_from_anchor" and "50.0%" in note
+    out = _anchor_observation_fields(narrative, "high_ge65")
+    assert out["anchorRate"] == 50.0 and out["anchorN"] == 20
+    assert out["anchorBucket"] == "mid_45_65" and out["anchorDeviation"] == 1
+
+
+def test_anchor_observation_fields_legacy_prefix_compat():
+    """review m1：历史落库叙事（同桶前缀+原始键）回放仍须解析（只读工具向后兼容，
+    旧代档 anchorRate 不得静默归 None）。"""
+    from backend.operations.theme_leader_seal_stats import _anchor_observation_fields
+    legacy = ("结构基线：同桶[streak2|n3-4|early<=10:00] 历史次日连板率 61.1%（36 样本）；"
+              "按连板高度[2] 42.8%（180 样本）")
+    out = _anchor_observation_fields(legacy, "low_25_45")
+    assert out["anchorRate"] == 61.1 and out["anchorN"] == 36
+    assert out["heightRate"] == 42.8 and out["anchorDeviation"] == 1
+
+
+def test_anchor_observation_fields_parse_cn_bucket():
+    """2026-11-17b：seal_stats 叙事解析器与偏离审计同步改「同结构」前缀（括号内容
+    中文化后通配不受影响）；样本<8 回退高度桶口径不变。"""
+    from backend.operations.theme_leader_seal_stats import _anchor_observation_fields
+    n = ("结构基线：同结构[2连板·板块3-4家·首封≤10:00] 历史次日连板率 61.1%（36 样本）；"
+         "按连板高度[2板] 42.8%（180 样本）；总体 33.9%（740 样本）")
+    out = _anchor_observation_fields(n, "low_25_45")
+    assert out["anchorRate"] == 61.1 and out["anchorN"] == 36
+    assert out["heightRate"] == 42.8 and out["anchorDeviation"] == 1
+    low_n = n.replace("61.1%（36 样本）", "61.1%（5 样本）")
+    out2 = _anchor_observation_fields(low_n, "mid_45_65")
+    assert out2["anchorBucket"] == "low_25_45", "小样本回退高度桶"
 
 
 def test_reason_passthrough_and_human_mark_preserved(env, monkeypatch):
@@ -517,7 +558,7 @@ def test_build_one_wires_history_and_headroom_anchor():
     assert "交易日轴：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \
         "（节假日顺延未经验证）" in n and "日历源" not in n
     assert "昨日涨停 6 只，今日仍封 3 只" in n, "2026-10-30d：断板=差值可推导不复述；2026-11-17 措辞精简"
-    assert "板块梯队形态：首板 3 家 / 2板 1 家 / 3板+ 1 家；龙头 3 板，次高 2 板（领先 +1）" in n
+    assert "板块梯队形态：首板 3 家 / 2板 1 家 / 3板+ 1 家；龙头 3 板，次高 2 板（领先 +1 板）" in n
     assert "板内炸板面：今日触板未封 2 家（昨日 1 家）" in n
     i_struct, i_lad = n.index("板块「机器人」今日封板"), n.index("板块梯队形态")
     i_zhaban, i_base = n.index("板内炸板面"), n.index("结构基线")

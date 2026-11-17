@@ -114,7 +114,9 @@ def _anchor_deviation_audit(narrative: str | None, choice: str | None) -> tuple[
     """
     if not narrative or not choice or choice == "insufficient" or choice not in _ANCHOR_ORDER:
         return None, None
-    m = re.search(r"结构基线：同桶\[[^\]]+\] 历史次日连板率 ([\d.]+)%（(\d+) 样本）", narrative)
+    # 2026-11-17b：叙事桶键中文化后前缀改「同结构」（括号内容通配不受影响）；
+    # src 审计标签保持内部术语「同桶」（结构化字段，不进叙事）。
+    m = re.search(r"结构基线：同结构\[[^\]]+\] 历史次日连板率 ([\d.]+)%（(\d+) 样本）", narrative)
     src = "同桶"
     if not m or int(m.group(2)) < 8:
         m2 = re.search(r"按连板高度\[[^\]]+\] ([\d.]+)%（(\d+) 样本）", narrative)

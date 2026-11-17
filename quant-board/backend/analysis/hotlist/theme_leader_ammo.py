@@ -247,7 +247,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v17"
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-17a"   # 语料精简（用户裁决，西陇科学 002584 案例审计）：①无损压缩（热度序列连续零日区间化/解析摘录句界截断+长枚举压缩/基因互补字段留一）；②龙头题集零消费行删除（盘面事实/盘面总结/上榜预测/实时龙虎榜，结构事实行只留周期状态+未封板场景标记；板块级叙事不动）；③措辞修复（live已结算→样本/收盘槽省略/前6按热度删/单龙一前缀省略/昨日承接措辞/涨停原因套话小句删除）；题面 hash 不动；前一版 2026-11-15a = 监管风险行（预登记 theme-leader-regulatory-risk-20261115）；再前 2026-11-14a = S3 成分验证门+产业树残桩正文剔除
+AMMO_VERSION_THEME_LEADER = "2026-11-17b"   # 语料去开发语义（用户裁决，西陇科学案例续审）：桶键中文化（同桶→同结构[1连板·板块≥8家·首封≤10:00]，单维桶值带单位；原始键分组/落库不动）/梯队持平措辞/基因溢价措辞/催化新鲜度逗号分隔/摘录截断双省略号治理；题面续板①同步改一词（同桶→同结构桶），hash 随题面重算（预登记 theme-leader-bucket-cn-20261117，跨代不可比）；前一版 2026-11-17a = 语料精简三档（题面 hash 不动）；再前 2026-11-15a = 监管风险行
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -408,6 +408,40 @@ def combo_key(row: dict) -> str:
             f"|{seal_time_bucket(row.get('time'))}")
 
 
+# 2026-11-17b 语料去开发语义（用户裁决，西陇科学案例续审）：桶键是程序内部
+# 分组键（streak1|n>=8|early<=10:00 / prev0 等），直投叙事属开发语义。叙事统一
+# 走下方中文映射（结构基线/空间锚共用，禁第二套）；原始键不动（分组/落库/
+# 审计单一事实源），仅渲染层翻译。题面续板①「同桶」同步改「同结构桶」
+# （预登记 theme-leader-bucket-cn-20261117，hash 随题面重算）。
+_STREAK_CN = {"1": "1板", "2": "2板", "3": "3板", "4+": "4板+", "unknown": "不可考"}
+_BOARD_CN = {">=8": "≥8家", "5-7": "5-7家", "3-4": "3-4家", "1-2": "1-2家",
+             "unknown": "不可考"}
+_TIME_CN = {"early<=10:00": "≤10:00", "mid<=13:00": "10:00后~13:00",
+            "late>13:00": ">13:00", "unknown": "不可考"}
+_LADDER_CN = {"0": "0家", "1": "1家", "2": "2家", "3": "3家", "unknown": "不可考"}
+_PREV_CN = {"prev0": "0家", "prev1-2": "1-2家", "prev3+": "3家+",
+            "prev_unknown": "不可考"}
+_BUCKET_CN = {"streak": _STREAK_CN, "board": _BOARD_CN, "time": _TIME_CN,
+              "ladder": _LADDER_CN, "prev": _PREV_CN}
+
+
+def bucket_cn(kind: str, key: str) -> str:
+    """单维桶键 → 叙事中文（未知键原样透传，fail-visible 不伪装）。"""
+    return _BUCKET_CN[kind].get(key, key)
+
+
+def combo_cn(row: dict) -> str:
+    """组合桶中文条件（仅叙事；分组/查键仍用 combo_key 原始键）。"""
+    sk = streak_bucket(row.get("streak"))
+    ck = board_count_bucket(row.get("boardN"))
+    tk = seal_time_bucket(row.get("time"))
+    streak_txt = {"1": "1连板", "2": "2连板", "3": "3连板",
+                  "4+": "4连板+"}.get(sk, "连板不可考")
+    board_txt = ("板块" + _BOARD_CN[ck]) if ck != "unknown" else "板块家数不可考"
+    time_txt = ("首封" + _TIME_CN[tk]) if tk != "unknown" else "首封不可考"
+    return f"{streak_txt}·{board_txt}·{time_txt}"
+
+
 def _rate(rows: list[dict]) -> tuple[int, int, float | None]:
     n = len(rows)
     cont = sum(1 for r in rows if r.get("continued"))
@@ -526,7 +560,7 @@ QUESTIONS_THEME_LEADER = {
         # 7 条元规则压成 4 条。四档阈值（25/45/65）与 Brier 验收链不变。
         "instructions": "仅依据所给证据，判断该板块龙头在**次一交易日**继续封板（涨停）的概率"
                         "落在哪一档。只判概率档位，不预测价格、不给买卖建议。硬规则："
-                        "①锚对齐：概率中枢=叙事「结构基线」行最细出率同桶（方括号条件最全"
+                        "①锚对齐：概率中枢=叙事「结构基线」行最细出率同结构桶（方括号条件最全"
                         "且样本≥8；无则用「按连板高度」桶）；先验底=「续板基础率」锚行"
                         "（程序直算、随窗滚动）。档位高于先验底两档（即≥45%）或偏离中枢"
                         "一档以上（上调或下调），理由必须点名基线/锚行具体数字，并给出锚未"
@@ -778,29 +812,29 @@ def baseline_line(rows: list[dict], row: dict, min_combo_n: int = 5) -> str:
     combo = combo_rates(rows, min_combo_n).get(combo_key(row))
     parts: list[str] = []
     if combo:
-        parts.append(f"同桶[{combo_key(row)}] 历史次日连板率 {combo['rate']:.1%}（{combo['n']} 样本）")
+        parts.append(f"同结构[{combo_cn(row)}] 历史次日连板率 {combo['rate']:.1%}（{combo['n']} 样本）")
     else:
-        parts.append(f"同桶[{combo_key(row)}] 样本不足（<{min_combo_n}），不出率")
+        parts.append(f"同结构[{combo_cn(row)}] 样本不足（<{min_combo_n}），不出率")
     sk = streak_bucket(row.get("streak"))
     sb = group_rates(rows, lambda r: streak_bucket(r.get("streak"))).get(sk)
     if sb:
-        parts.append(f"按连板高度[{sk}] {sb['rate']:.1%}（{sb['n']} 样本）")
+        parts.append(f"按连板高度[{bucket_cn('streak', sk)}] {sb['rate']:.1%}（{sb['n']} 样本）")
     ck = board_count_bucket(row.get("boardN"))
     cb = group_rates(rows, lambda r: board_count_bucket(r.get("boardN"))).get(ck)
     if cb:
-        parts.append(f"按板块家数[{ck}] {cb['rate']:.1%}（{cb['n']} 样本）")
+        parts.append(f"按板块家数[{bucket_cn('board', ck)}] {cb['rate']:.1%}（{cb['n']} 样本）")
     tk = seal_time_bucket(row.get("time"))
     tb = group_rates(rows, lambda r: seal_time_bucket(r.get("time"))).get(tk)
     if tb and tk != "unknown":
-        parts.append(f"按封板时间[{tk}] {tb['rate']:.1%}（{tb['n']} 样本）")
+        parts.append(f"按封板时间[{bucket_cn('time', tk)}] {tb['rate']:.1%}（{tb['n']} 样本）")
     fk = ladder_bucket(row.get("ladderFollowers"))
     fb = group_rates(rows, lambda r: ladder_bucket(r.get("ladderFollowers"))).get(fk)
     if fb and fk != "unknown":
-        parts.append(f"按跟风梯队[{fk}] {fb['rate']:.1%}（{fb['n']} 样本）")
+        parts.append(f"按跟风梯队[{bucket_cn('ladder', fk)}] {fb['rate']:.1%}（{fb['n']} 样本）")
     pk = prev_peer_bucket(row.get("prevPeers"))
     pb = group_rates(rows, lambda r: prev_peer_bucket(r.get("prevPeers"))).get(pk)
     if pb and pk != "prev_unknown":
-        parts.append(f"按昨日承接[{pk}] {pb['rate']:.1%}（{pb['n']} 样本）")
+        parts.append(f"按昨日承接[{bucket_cn('prev', pk)}] {pb['rate']:.1%}（{pb['n']} 样本）")
     cont, n, rate = _rate(rows)
     if n:
         parts.append(f"总体 {rate:.1%}（{n} 样本）")
@@ -879,13 +913,13 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
     ck = combo_key(row)
     combo_pairs = [p for p in kept if combo_key(p[0]) == ck]
     if len(combo_pairs) >= min_combo_n:
-        parts.append(f"同桶[{ck}] {_stat(combo_pairs)}")
+        parts.append(f"同结构[{combo_cn(row)}] {_stat(combo_pairs)}")
     else:
-        parts.append(f"同桶[{ck}] 样本不足（<{min_combo_n}），不出锚")
+        parts.append(f"同结构[{combo_cn(row)}] 样本不足（<{min_combo_n}），不出锚")
     sk = streak_bucket(row.get("streak"))
     streak_pairs = [p for p in kept if streak_bucket(p[0].get("streak")) == sk]
     if len(streak_pairs) >= min_combo_n:
-        parts.append(f"按连板高度[{sk}] {_stat(streak_pairs)}")
+        parts.append(f"按连板高度[{bucket_cn('streak', sk)}] {_stat(streak_pairs)}")
     # 右删失样本数只进结构化审计，不进叙事（AGENTS §1.2-8）
     # 2026-10-30d 语料精简：再走≥1板率定义在题面 ③ 已给，叙事侧不重复
     return ("空间锚："
@@ -1211,9 +1245,11 @@ def board_ladder_line(row: dict) -> str | None:
     second = row.get("secondStreak")
     if isinstance(leader_streak, int) and isinstance(second, int):
         # P2-4（review 2026-11-05）：负差原拼接成「领先 +-1」，改带符号数；0 差写持平
+        # 2026-11-17b 去开发语义：0 差「领先 持平」语义杂揉 → 「与次高持平」；
+        # 非零差补「板」单位（题面身位题「领先差≥1 板」同口径）。
         diff = leader_streak - second
-        lead_txt = "持平" if diff == 0 else f"{diff:+d}"
-        seg += f"；龙头 {leader_streak} 板，次高 {second} 板（领先 {lead_txt}）"
+        lead_txt = "与次高持平" if diff == 0 else f"领先 {diff:+d} 板"
+        seg += f"；龙头 {leader_streak} 板，次高 {second} 板（{lead_txt}）"
     elif isinstance(leader_streak, int):
         seg += f"；龙头 {leader_streak} 板，次高 不可算"
     else:
@@ -1610,7 +1646,7 @@ def _gene_num(v: Any) -> str:
 # (字段, 标签, 单位)：单位随值写出，避免「涨停5」这类缺单位读法（数值仍原样不改写）
 GENE_CN = (
     ("zt_count", "涨停", "次"),
-    ("premium5_count", "溢价5%", "次"),
+    ("premium5_count", "溢价5%以上", "次"),   # 2026-11-17b：原「溢价5%2次」数字粘连歧义
     ("next_day_red_pct", "次日红盘", "%"),
     ("first_seal_pct", "首板封板", "%"),
     # 2026-11-17 语料精简：first_broken_pct 与 first_seal_pct 互补（和恒 100%），

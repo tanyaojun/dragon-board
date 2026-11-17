@@ -320,7 +320,12 @@ def _clip(text: str, limit: int) -> str:
 # 纯叙事渲染层压缩：落库原文（jiuyan expound / 2203 zt）不动，单一事实源仍在库。
 
 _ENUM_ITEM = r"[^，。；：、！？\s等]{1,8}"
-_ENUM_RUN_RE = re.compile(_ENUM_ITEM + r"(?:、" + _ENUM_ITEM + r"){7,}")
+# 2026-11-17b：编号前缀不得入枚举项——短引导句场景（如「1、试剂包括过硫酸钠、…」，
+# 「试剂包括过硫酸钠」恰 8 字可成项）编号「1」会独立成首项占用前 3 保留槽，
+# 致实际保留化学名不足 3 个；起始位禁「数字、」编号头（项内数字不受影响）。
+# 已知边界（review n3 备查）：纯数字枚举全起始位被禁不再压缩（语料罕见）；
+# 编号头在 ≥7 前项之后的枚举中段仍会入项（lookahead 只守起始位）。
+_ENUM_RUN_RE = re.compile(r"(?!\d+、)" + _ENUM_ITEM + r"(?:、" + _ENUM_ITEM + r"){7,}")
 
 
 def _compress_enum(text: str) -> str:
@@ -353,7 +358,15 @@ def _clip_excerpt(text: str, limit: int) -> str:
     k = max(cut.rfind(ch) for ch in _SENT_END)
     if k <= 0:
         return cut + "…"
-    out = re.sub(r"\s*\d+、\s*$", "", cut[:k + 1]).rstrip()
+    out = cut[:k + 1].rstrip()
+    # 2026-11-17b：句界截断尾「。…」双省略号杂揉（枚举压缩后「等。…」）——
+    # 句号让位省略号，删节披露不变。先删尾「。」再剔编号空头（review n2：
+    # 反序时「N、。」尾的编号空头会 bypass 剔除 regex），剔后可能再露句号再删一次。
+    if out.endswith("。"):
+        out = out[:-1]
+    out = re.sub(r"\s*\d+、\s*$", "", out).rstrip()
+    if out.endswith("。"):
+        out = out[:-1]
     return (out + "…") if out else cut + "…"
 
 
@@ -760,7 +773,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
         # 只留 match 结构化字段
         lines.append(
             f"板块级催化原文（「{node.get('name')}」，"
-            f"热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
+            f"热度 {node.get('hot')}，正文更新 {chg}，{gap_txt}）："
             f"{_clip(node.get('content'), content_chars)}")
 
     # S3 驱动标签补充映射（2026-10-24b）：龙头驱动标签词命中产业树**不同**节点时
@@ -797,7 +810,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             lines.append(
                 f"产业树补充映射（龙头标签词「{term}」关联「{n2.get('name')}」，"
                 f"热度 {n2.get('hot')}，"
-                f"正文更新 {chg2}={gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
+                f"正文更新 {chg2}，{gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
             s3_state = "injected"
             break
 

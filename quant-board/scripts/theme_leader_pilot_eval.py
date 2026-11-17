@@ -279,7 +279,8 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
         "roster": roster,
         # 形状契约：早返回（无次日/全体未封）也补齐全部键，摘要打印不得因缺键崩
         # （2026-10-20 实测：`--date 2026-10-20` 当日跑 → KeyError: mixedVersions）
-        "versions": {}, "mixedVersions": False, "scored": 0, "perBucket": [],
+        "versions": {}, "versionHashes": {}, "mixedVersions": False, "scored": 0,
+        "perBucket": [],
         "origins": {}, "mixedOrigins": False,
         "degradedCount": 0, "degradedShare": None,
         "supersededCount": superseded_n,
@@ -315,11 +316,25 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
     for s in samples_eval:
         versions.setdefault(s.get("questionSetVersion") or "unknown", []).append(s)
     out["versions"] = {ver: len(rows_v) for ver, rows_v in versions.items()}
-    out["mixedVersions"] = len(versions) > 1
+    # 2026-11-17b（review M1）：同 version 内 hash 换代亦跨代不可比——v17 live 标答期
+    # 术语对齐代（8c6c94429abd→eb9cfae4139e，预登记 theme-leader-bucket-cn-20261117 §6）。
+    # 某 version 含多 hash 时按 "version@hash" 拆分出分组指标；单 hash 版本保持原键
+    # （既有输出形状零变化）。
+    out["versionHashes"] = {
+        ver: sorted({s.get("questionSetHash") or "unknown" for s in rows_v})
+        for ver, rows_v in versions.items()}
+    gen: dict[str, list[dict]] = {}
+    for ver, rows_v in versions.items():
+        if len(out["versionHashes"][ver]) > 1:
+            for s in rows_v:
+                gen.setdefault(f"{ver}@{s.get('questionSetHash') or 'unknown'}", []).append(s)
+        else:
+            gen[ver] = rows_v
+    out["mixedVersions"] = len(gen) > 1
     if out["mixedVersions"]:
-        out["versionMetrics"] = {ver: _metrics(rows_v) for ver, rows_v in versions.items()}
-        out["note"] = ("本日存在多代际标签 → 只出各代际分组指标，**不给跨代合计**"
-                       "（预登记：跨代不可比）")
+        out["versionMetrics"] = {g: _metrics(rows_g) for g, rows_g in gen.items()}
+        out["note"] = ("本日存在多代际标签（含同版本多 hash 代）→ 只出各代际分组指标，"
+                       "**不给跨代合计**（预登记：跨代不可比）")
         out["scored"] = sum(m["scored"] for m in out["versionMetrics"].values())
     else:
         out.update(_metrics(samples_eval))
@@ -328,8 +343,18 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
                        "回填样本见 originMetrics（可能含语料泄漏，不得进验收）")
 
     out["tradingDaysCovered"] = 1
-    # v17 新题分组（旧代样本无新题字段 → 空分组，形状契约恒在）
-    out["v17Groups"] = _v17_groups(samples_eval, rows)
+    # v17 新题分组（旧代样本无新题字段 → 空分组，形状契约恒在）；
+    # 2026-11-17b（review M1）：v17 内多 hash 代 → 按 hash 拆子报告，不出跨代并集。
+    v17_hashes = {(s.get("questionSetHash") or "unknown") for s in samples_eval
+                  if s.get("questionSetVersion") == "v17"
+                  and (s.get("sampleOrigin") or "live") == "live"}
+    if len(v17_hashes) > 1:
+        out["v17Groups"] = {h: _v17_groups(samples_eval, rows, h)
+                            for h in sorted(v17_hashes)}
+        out["v17GroupsMixedHash"] = True
+    else:
+        out["v17Groups"] = _v17_groups(samples_eval, rows,
+                                       next(iter(v17_hashes), None))
     out["acceptance"] = {
         "minTradingDays": ACCEPTANCE_MIN_TRADING_DAYS,
         "minTradingDaysMet": False,
@@ -424,6 +449,8 @@ def _sample_row(doc: dict, outcome: bool | None, lookup) -> dict:
         "modelProb": point, "insufficientMass": insuff,
         "baselineKey": doc.get("baselineKey"),
         "questionSetVersion": doc.get("questionSetVersion"),
+        # 2026-11-17b（review M1）：hash 代际维度随样本透传（同 version 多 hash 不混评）
+        "questionSetHash": doc.get("questionSetHash"),
         # 样本代际：live=当日挂链前瞻；backfill=事后补跑（可能看到当时不存在的语料 → 单独统计）
         "sampleOrigin": doc.get("sampleOrigin") or "live",
         "gate": (doc.get("gate") or {}).get("reason"),
@@ -460,7 +487,8 @@ def _combo_key_of(doc: dict) -> str:
     return combo_key(struct) if isinstance(struct, dict) else ""
 
 
-def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
+def _v17_groups(samples: list[dict], all_rows: list[dict],
+                questionSetHash: str | None = None) -> dict:
     """v17 新题分组评估（预登记 v17 §5-3，零新结算代码）。
 
     催化硬度×T+1 续板/T+2 溢价；身位稳固度×T+1 续板/次日板块家数/身位替代；
@@ -482,7 +510,9 @@ def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
     """
     samples = [s for s in samples
                if s.get("questionSetVersion") == "v17"
-               and (s.get("sampleOrigin") or "live") == "live"]
+               and (s.get("sampleOrigin") or "live") == "live"
+               and (questionSetHash is None
+                    or (s.get("questionSetHash") or "unknown") == questionSetHash)]
     def _rate(rows: list[dict]) -> float | None:
         return (sum(1 for r in rows if r["outcome"]) / len(rows)) if rows else None
 
@@ -525,7 +555,9 @@ def _v17_groups(samples: list[dict], all_rows: list[dict]) -> dict:
     for r in all_rows:
         d = r["doc"]
         if d.get("questionSetVersion") != "v17" or \
-                (d.get("sampleOrigin") or "live") != "live":
+                (d.get("sampleOrigin") or "live") != "live" or \
+                (questionSetHash is not None
+                 and (d.get("questionSetHash") or "unknown") != questionSetHash):
             continue
         if d.get("leaderSuperseded") and r["outcome"] is not None:
             k = d.get("leaderSeatDurability")

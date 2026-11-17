@@ -190,7 +190,10 @@ def _anchor_observation_fields(narrative: str | None, choice: str | None) -> dic
                  "anchorBucket": None, "anchorDeviation": None}
     if not narrative:
         return out
-    m = re.search(r"结构基线：同桶\[[^\]]+\] 历史次日连板率 ([\d.]+)%（(\d+) 样本）", narrative)
+    # 2026-11-17b：叙事前缀改「同结构」（与 _anchor_deviation_audit 同步）；
+    # 本工具按日期窗回放**历史落库叙事**，双前缀兼容旧代档（review m1：
+    # 只认新前缀会使旧代档 anchorRate/anchorN 静默归 None，报告缩水无披露）。
+    m = re.search(r"结构基线：(?:同桶|同结构)\[[^\]]+\] 历史次日连板率 ([\d.]+)%（(\d+) 样本）", narrative)
     if m:
         out["anchorRate"], out["anchorN"] = float(m.group(1)), int(m.group(2))
     mh = re.search(r"按连板高度\[[^\]]+\] ([\d.]+)%（(\d+) 样本）", narrative)

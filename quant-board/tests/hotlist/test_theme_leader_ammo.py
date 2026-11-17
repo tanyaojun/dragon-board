@@ -91,8 +91,8 @@ def test_question_set_frozen_hash_and_versions():
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v17"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-17a"   # 语料精简（用户裁决，西陇科学案例审计）：无损压缩+龙头题集零消费行删除+措辞修复；题面 hash 不动；前一版 2026-11-15a = 监管风险行
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "8c6c94429abd"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-17b"   # 语料去开发语义（用户裁决）：桶键中文化+措辞修复；题面续板①同桶→同结构桶一词对齐；前一版 2026-11-17a = 语料精简三档
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "eb9cfae4139e"   # 2026-11-17b 术语对齐代（同桶→同结构桶）；前代 8c6c94429abd = v17 精简批（跨代不可比，预登记 theme-leader-bucket-cn-20261117）
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
                                    "leader_nextday_continue", "leader_headroom",
@@ -106,8 +106,9 @@ def test_question_set_frozen_hash_and_versions():
     cont = A.QUESTIONS_THEME_LEADER["leader_nextday_continue"]["instructions"]
     assert "先验底=「续板基础率」锚行" in cont, "先验底改读锚行（程序直算随窗滚动）"
     assert "21.4%" not in cont and "n=112" not in cont, "写死率值废除（窗口漂移教训）"
-    assert "概率中枢=叙事「结构基线」行最细出率同桶" in cont, "中枢语义不回潮"
-    assert "上调或下调" in cont and "按连板高度」桶" in cont, "双向偏离义务+同桶未出率回退"
+    assert "概率中枢=叙事「结构基线」行最细出率同结构桶" in cont, "中枢语义不回潮"
+    assert "同桶" not in cont, "2026-11-17b 开发语义撤出：题面与叙事同用「同结构桶」"
+    assert "上调或下调" in cont and "按连板高度」桶" in cont, "双向偏离义务+同结构桶未出率回退"
     assert "封单占比低、峰值大幅回落、主力净额大幅流出=封板质量弱" in cont, "封板质量方向读法"
     assert "竞价放量高开=承接强" in cont, "竞价方向读法"
     assert "不得以该行为由调档" in cont and "自行补 0" in cont, "不可考/待校验禁调档不补 0"
@@ -204,9 +205,9 @@ def test_structure_facts_line_v15_p1():
 def test_board_ladder_line_lead_diff_signed_p2_4():
     """P2-4：梯队形态行领先差带符号（负差原拼成「+-1」，11-06 永臻股份实证）；零差写持平。"""
     base = {"ladderShape": {"first": 1, "two": 0, "threePlus": 1, "unknown": 0}}
-    assert "领先 +1" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 2})
-    assert "领先 -1）" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 4})
-    assert "领先 持平）" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 3})
+    assert "领先 +1 板" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 2})
+    assert "领先 -1 板）" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 4})
+    assert "与次高持平）" in A.board_ladder_line({**base, "streak": 3, "secondStreak": 3})
 
 
 def test_bucket_functions_stable_keys():
@@ -258,17 +259,59 @@ def test_rates_and_min_sample_gate():
     assert set(s) >= {"byStreak", "byBoardCount", "bySealTime", "byFollowers", "byPrevPeers", "combo"}
 
 
+def test_bucket_cn_and_combo_cn_no_dev_keys_in_narrative():
+    """2026-11-17b 去开发语义（用户裁决）：桶键中文化单一源；原始键只进分组/落库，
+    叙事不得出现 streak1|/early<=10:00/prev0 类程序键；未知键原样透传不伪装。"""
+    assert A.bucket_cn("streak", "4+") == "4板+" and A.bucket_cn("board", ">=8") == "≥8家"
+    assert A.bucket_cn("time", "early<=10:00") == "≤10:00"
+    assert A.bucket_cn("time", "mid<=13:00") == "10:00后~13:00"
+    assert A.bucket_cn("prev", "prev0") == "0家" and A.bucket_cn("ladder", "3") == "3家"
+    assert A.bucket_cn("streak", "unknown") == "不可考"
+    assert A.bucket_cn("streak", "weird") == "weird", "未知键透传 fail-visible"
+    row = {"streak": 1, "boardN": 10, "time": "09:35:00"}
+    assert A.combo_cn(row) == "1连板·板块≥8家·首封≤10:00"
+    assert A.combo_cn({"streak": None, "boardN": None, "time": None}) == \
+        "连板不可考·板块家数不可考·首封不可考"
+    rows = [{**row, "ladderFollowers": 9, "prevPeers": 0, "continued": True}] * 10
+    line = A.baseline_line(rows, {**row, "ladderFollowers": 9, "prevPeers": 0},
+                           min_combo_n=5)
+    assert "同结构[1连板·板块≥8家·首封≤10:00]" in line
+    for dev_key in ("streak1", "n>=8", "early<=10:00", "prev0", "同桶"):
+        assert dev_key not in line, f"开发语义不得进叙事：{dev_key}"
+    # 分组/查键单一事实源不动：combo_key 仍原始键
+    assert A.combo_key(row) == "streak1|n>=8|early<=10:00"
+
+
+def test_baseline_line_bucket_value_rendering_full_domain():
+    """2026-11-17b（review m2）：全桶值域渲染钉住——mid/late 时间桶、梯队 0 家、
+    昨日承接 3家+、板块家数各档、组合桶 unknown 三分支进叙事括号。"""
+    def _line(row, n=6):
+        rows = [{**row, "continued": True}] * n
+        return A.baseline_line(rows, row, min_combo_n=5)
+    assert "按封板时间[10:00后~13:00]" in _line({"streak": 1, "boardN": 9, "time": "11:00:00"})
+    assert "按封板时间[>13:00]" in _line({"streak": 1, "boardN": 9, "time": "14:00:00"})
+    assert "按跟风梯队[0家]" in _line({"streak": 1, "boardN": 9, "time": "09:30:00",
+                                          "ladderFollowers": 0})
+    assert "按昨日承接[3家+]" in _line({"streak": 1, "boardN": 9, "time": "09:30:00",
+                                          "prevPeers": 5})
+    for n_board, cn in ((5, "5-7家"), (3, "3-4家"), (1, "1-2家")):
+        assert f"按板块家数[{cn}]" in _line({"streak": 1, "boardN": n_board, "time": "09:30:00"})
+    unk = _line({"streak": None, "boardN": None, "time": None})
+    assert "同结构[连板不可考·板块家数不可考·首封不可考]" in unk
+    assert "按连板高度[不可考]" in unk and "按板块家数[不可考]" in unk
+
+
 def test_baseline_line_discloses_small_samples_and_falls_back():
     rows = _rows()
     strong = {"streak": 4, "boardN": 9, "time": "09:20:00"}
     line = A.baseline_line(rows, strong, min_combo_n=2)
-    assert "同桶[streak4+|n>=8|early<=10:00] 历史次日连板率 100.0%（2 样本）" in line
-    assert "按连板高度[4+]" in line and "按板块家数[>=8]" in line and "总体" in line
+    assert "同结构[4连板+·板块≥8家·首封≤10:00] 历史次日连板率 100.0%（2 样本）" in line
+    assert "按连板高度[4板+]" in line and "按板块家数[≥8家]" in line and "总体" in line
 
     weak = {"streak": 1, "boardN": 2, "time": "09:50:00"}
     line2 = A.baseline_line(rows, weak, min_combo_n=5)
     assert "样本不足（<5），不出率" in line2, "小样本必须明说，不给假高率"
-    assert "按连板高度[1]" in line2, "组合桶不足时回退到单维桶（标注样本量）"
+    assert "按连板高度[1板]" in line2, "组合桶不足时回退到单维桶（标注样本量）"
 
 
 def test_baseline_line_surfaces_seal_time_followers_prev_peers_tiers():
@@ -290,9 +333,9 @@ def test_baseline_line_surfaces_seal_time_followers_prev_peers_tiers():
     row = {"streak": 2, "boardN": 5, "time": "09:25:00", "ladderFollowers": 2,
            "prevPeers": 1}
     line = A.baseline_line(rows, row, min_combo_n=8)
-    assert "按封板时间[early<=10:00] 66.7%（3 样本）" in line
-    assert "按跟风梯队[2] 66.7%（3 样本）" in line
-    assert "按昨日承接[prev1-2] 100.0%（2 样本）" in line
+    assert "按封板时间[≤10:00] 66.7%（3 样本）" in line
+    assert "按跟风梯队[2家] 66.7%（3 样本）" in line
+    assert "按昨日承接[1-2家] 100.0%（2 样本）" in line
     # 旧形状（无 ladderFollowers/prevPeers 字段）→ 两维不出行，不报错不伪造
     legacy = A.baseline_line(_rows(), {"streak": 4, "boardN": 9, "time": "09:20:00"})
     assert "按跟风梯队" not in legacy and "按昨日承接" not in legacy
@@ -356,7 +399,7 @@ def test_board_ladder_line_shape_and_second_streak():
            "ladderShape": {"first": 4, "two": 1, "threePlus": 2, "unknown": 1}}
     line = A.board_ladder_line(row)
     assert line == ("板块梯队形态：首板 4 家 / 2板 1 家 / 3板+ 2 家；另有 1 只连板高度不可算；"
-                    "龙头 5 板，次高 3 板（领先 +2）"), "2026-10-30g+：括号删"
+                    "龙头 5 板，次高 3 板（领先 +2 板）"), "2026-10-30g+：括号删；2026-11-17b 补板单位"
     # 孤军：板内无其它可算真连板 → 次高如实不可考
     solo = A.board_ladder_line({"streak": 3, "secondStreak": None,
                                 "ladderShape": {"first": 2, "two": 0, "threePlus": 1,
@@ -454,14 +497,14 @@ def test_headroom_anchor_line_fallbacks_and_disclosure():
         "2026-10-30d：再走≥1板率定义在题面已给，叙事侧不重复"
     assert "总体 再走≥1板率 33.3%" in line and "剔右删失" not in line, "删失注撤出叙事"
     # 同桶（streak4+|n>=8|early）内 A10-15 与 E10-14 两样本（剩余均 0）→ 组合桶成立出锚
-    assert ("同桶[streak4+|n>=8|early<=10:00] 再走≥1板率 0.0% · ≥2板率 0.0% · "
+    assert ("同结构[4连板+·板块≥8家·首封≤10:00] 再走≥1板率 0.0% · ≥2板率 0.0% · "
             "中位再走 0.0 板（均值 0.0，2 样本）") in line
     # 每档基率齐备：连板高度档同样带再走≥1板率（模型可直接对档位）
-    assert "按连板高度[4+] 再走≥1板率 0.0%" in line
+    assert "按连板高度[4板+] 再走≥1板率 0.0%" in line
     # 小样本桶明说不出锚
     tight = A.headroom_anchor_line(_cycle_rows(), {"streak": 2, "boardN": 3, "time": "13:30:00"},
                                    min_combo_n=8)
-    assert "样本不足（<8），不出锚" in tight and "按连板高度[2] 再走≥1板率" not in tight
+    assert "样本不足（<8），不出锚" in tight and "按连板高度[2板] 再走≥1板率" not in tight
     # 无历史样本 / 全删失 → None（叙事不出行，不编造基准）
     assert A.headroom_anchor_line([], row) is None
     all_censored = [{"code": "G", "date": "2026-10-13", "streak": 2, "continued": True,
@@ -514,7 +557,7 @@ def test_narrative_order_with_2026_10_24c_lines():
 def test_narrative_places_headroom_anchor_between_baseline_and_evidence():
     """Q1（2026-10-24b）：空间锚行排在基线后、证据块前（固定行序，便于逐字复现）。"""
     ev = "【题材证据】\n取数日 2026-10-23"
-    anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同桶[x] 0.0 板"
+    anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同结构[x] 0.0 板"
     text = A.build_leader_narrative(
         date="2026-10-23", market_line="涨停 81 家", structure="板块「X」今日封板 3 家",
         baseline="结构基线：总体 33.9%", evidence_block=ev,
@@ -527,7 +570,7 @@ def test_narrative_places_headroom_anchor_between_baseline_and_evidence():
 def test_narrative_places_driver_cross_between_headroom_and_evidence():
     """打标交叉行（2026-10-27b）：排在空间锚后、证据块前；缺席走 fail-visible 行非 None。"""
     ev = "【题材证据】\n取数日 2026-10-27"
-    anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同桶[x] 再走≥1板率 54.5%"
+    anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同结构[x] 再走≥1板率 54.5%"
     cross = A.driver_cross_line({"labelSlot": "midday", "questionSetVersion": "v4.0",
                                  "label": "capital_flow", "catalystDepth": "core_main_business",
                                  "freshness": "fresh_catalyst", "buySideLogic": "high_board_relay"})
@@ -1321,7 +1364,7 @@ def test_zt_gene_line_six_fields_units_and_no_fake_zero():
     line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM},
                            {"label": "双创龙一 301697", "item": None}])
     assert line.startswith("涨停基因")
-    assert "主板龙一 000525=涨停5次、溢价5%3次、次日红盘100%、首板封板66.7%、连板33.3%" in line
+    assert "主板龙一 000525=涨停5次、溢价5%以上3次、次日红盘100%、首板封板66.7%、连板33.3%" in line
     assert "首板炸板" not in line, "互补字段不再投喂（落库六字段不动）"
     assert "301697" not in line, "缺该股语料整段缺席（AGENTS §1.2-8）"
     assert A.zt_gene_line([]) is None
@@ -1331,7 +1374,7 @@ def test_zt_gene_line_window_note_and_backfill_marker():
     """统计窗口上游未标注必须带出（禁写成近 N 日）；回填条目标注抓取日。"""
     line = A.zt_gene_line([{"label": "主板龙一 000525", "item": GENE_ITEM}])
     assert "统计窗口" not in line and "未标注" not in line, "口径注不进叙事（AGENTS §1.2-8）"
-    assert "近" not in line.replace("溢价5%", "")
+    assert "近" not in line.replace("溢价5%以上", "")
     backfill = dict(GENE_ITEM, same_day=False, fetched_date="2026-11-08")
     line2 = A.zt_gene_line([{"label": "主板龙一 000525", "item": backfill}])
     assert "数据时点 2026-11-08，晚于交易日" in line2
@@ -1830,7 +1873,7 @@ def test_narrative_v17_line_placements():
     """v17 两新行装配位置：基线 < 基础率锚 < 结构事实 < 板块判定 < 空间锚；
     None 不出行（旧调用形状不变）；板块级叙事不注入（不循环）。"""
     base = dict(date="2026-11-11", market_line="涨停 46 家",
-                structure="结构行", baseline="结构基线：同桶[x] 历史次日连板率 50.0%（104 样本）",
+                structure="结构行", baseline="结构基线：同结构[x] 历史次日连板率 50.0%（104 样本）",
                 evidence_block="【题材证据】", leader_name="光洋股份", leader_code="002708")
     n = A.build_leader_narrative(
         **base, headroom="空间锚：按连板高度[3] 再走≥1板率 47.5%",

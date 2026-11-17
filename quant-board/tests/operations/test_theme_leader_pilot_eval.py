@@ -85,10 +85,11 @@ class FakeDb:
 
 
 def _label(code, name, choice="mid_45_65", probs=None, bucket="{}", stage="ongoing",
-           version="v1", gate=None):
+           version="v1", gate=None, hash=None):
     return {
         "_id": f"2026-10-19:{code}", "tradingDate": "2026-10-19", "code": code, "name": name,
-        "board": "机器人", "questionSetVersion": version, "gate": gate or {"applied": False},
+        "board": "机器人", "questionSetVersion": version, "questionSetHash": hash,
+        "gate": gate or {"applied": False},
         "baselineMeta": {"start": "2026-07-16", "end": "2026-10-16"},
         "baselineBucket": bucket,
         "answers": {"leader_nextday_continue": {
@@ -188,6 +189,49 @@ def test_mixed_versions_are_not_aggregated(patched):
     assert set(out["versionMetrics"]) == {"v1", "v2"}
     assert "meanModelProb" not in out, "混代际时不得给跨代合计口径"
     assert "跨代不可比" in out["note"]
+
+
+def test_same_version_multi_hash_generations_not_aggregated(patched):
+    """2026-11-17b（review M1）：v17 live 标答期内 hash 换代（术语对齐代）——
+    同 version 多 hash 亦跨代不可比：按 version@hash 拆分指标，不给跨代合计；
+    versionHashes 审计维度随报告透出。"""
+    a = _label("603278", "大业股份", version="v17", hash="8c6c94429abd")
+    b = _label("600686", "金龙汽车", version="v17", hash="eb9cfae4139e")
+    db = patched([a, b], {"603278", "600686"})
+    out = E.evaluate(db, "2026-10-19")
+    assert out["versions"] == {"v17": 2}
+    assert out["versionHashes"] == {"v17": ["8c6c94429abd", "eb9cfae4139e"]}
+    assert out["mixedVersions"] is True
+    assert set(out["versionMetrics"]) == {"v17@8c6c94429abd", "v17@eb9cfae4139e"}
+    assert "meanModelProb" not in out, "同版本多 hash 不得给跨代合计"
+    assert "跨代不可比" in out["note"]
+    assert out["samples"][0]["questionSetHash"] in ("8c6c94429abd", "eb9cfae4139e")
+    # 单 hash 代形状零变化：原键不带 @hash
+    db2 = patched([_label("603278", "大业股份", version="v17", hash="eb9cfae4139e")],
+                  {"603278"})
+    out2 = E.evaluate(db2, "2026-10-19")
+    assert out2["mixedVersions"] is False and "meanModelProb" in out2
+
+
+def test_v17_groups_split_by_hash_when_mixed(patched):
+    """review M1：v17Groups 方向代理同口径——多 hash 日按 hash 拆子报告，
+    不出跨代并集；单 hash 日形状不变且过滤他代样本。"""
+    a = _label("603278", "大业股份", version="v17", hash="aaa")
+    a.update({"leaderCatalystHardness": "hard_fact", "leaderHeadroom": "space_1"})
+    b = _label("603028", "赛福天", version="v17", hash="bbb")
+    b.update({"leaderCatalystHardness": "soft_meme", "leaderHeadroom": "peak"})
+    db = patched([a, b], {"603278", "603028"})
+    out = E.evaluate(db, "2026-10-19")
+    assert out["v17GroupsMixedHash"] is True
+    assert set(out["v17Groups"]) == {"aaa", "bbb"}
+    assert out["v17Groups"]["aaa"]["byCatalystHardness"]["hard_fact"]["n"] == 1
+    assert "soft_meme" not in out["v17Groups"]["aaa"]["byCatalystHardness"]
+    assert out["v17Groups"]["bbb"]["byHeadroom"]["peak"]["n"] == 1
+    # 单 hash：标准形状 + hash 过滤生效
+    db2 = patched([a], {"603278"})
+    out2 = E.evaluate(db2, "2026-10-19")
+    assert "v17GroupsMixedHash" not in out2
+    assert out2["v17Groups"]["byCatalystHardness"]["hard_fact"]["n"] == 1
 
 
 def test_gated_label_is_counted_as_insufficient_and_reported(patched):

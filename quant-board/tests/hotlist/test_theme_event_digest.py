@@ -989,7 +989,19 @@ def test_clip_excerpt_sentence_boundary():
          "3、2026年6月23日网传纪要，氧化锆卡盘国产替代")
     out = D._clip_excerpt(t, 60)
     assert out.endswith("…") and "氧化锆" not in out, "半句碎片不投喂"
-    assert "需求上涨。" in out
+    assert "需求上涨" in out and "。…" not in out, "2026-11-17b：句号让位省略号，双省略号杂揉治理"
+    # 枚举压缩+句界截断叠加：「等。…」→「等…」（西陇科学 PCB 试剂清单案例，长引导句）
+    enum_t = ("1、公司PCB用化学试剂包括各类规格的过硫酸钠、硫酸铜、硝酸银、氢氧化钠、"
+              "盐酸、硫酸、硝酸、环氧氯丙烷、氢氟酸、丙酮、氨水、甲醛等。 2、后续另述")
+    first_sent = D._compress_enum(enum_t)
+    first_sent = first_sent[:first_sent.index("。") + 1]
+    enum_out = D._clip_excerpt(D._compress_enum(enum_t), len(first_sent) + 3)
+    assert enum_out.endswith("等…") and "。…" not in enum_out
+    # 短引导句编号头不得被吞成枚举首项（2026-11-17b  lookahead 修复）
+    short_lead = "1、试剂包括过硫酸钠、硫酸铜、硝酸银、氢氧化钠、盐酸、硫酸、硝酸、环氧氯丙烷、氢氟酸、丙酮、氨水、甲醛等"
+    assert D._compress_enum(short_lead).startswith("1、试剂包括过硫酸钠、硫酸铜、硝酸银等")
+    # review n2：「N、。」尾编号空头先删句号再剔编号（反序会 bypass）
+    assert D._clip_excerpt("甲。3、。" + "x" * 100, 7) == "甲…"
     assert D._clip_excerpt(t, 500) == t, "预算内原样"
     # 无句界 → 硬截断保留（宁截勿空，fail-visible）
     nb = D._clip_excerpt("无句界长文本" * 10, 20)
