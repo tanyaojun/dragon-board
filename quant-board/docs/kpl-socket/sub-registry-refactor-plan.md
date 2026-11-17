@@ -582,8 +582,9 @@ errresp 归类 +3s / 健康干净 EOF 快 retry 0s / 健康网络瞬态 0s / 连
 同步（3.0）。collector 我的用例 35 passed；全套件 `services+api` **607 passed**（含用户
 并行 staged-subs 特性测试）。
 
-**提交冲突登记（2026-11-17）**：用户并发开发 `sub_staged` 分波订阅特性，与本 §15 同改
-`kpl_collector_service.py` + `test_kpl_collector_service.py`（init/status 块细粒度交织）；
-用户 `TestStagedSubs` 有 `daban` 未局部导入的测试隔离缺陷（隔离跑 NameError，全套件
-命名空间污染下绿）。**本轮未提交**（避免整文件混入用户未完成特性）；提交方式待用户裁决
-（用户先提交 staged-subs / 授权 git add -p 隔离 §15 hunks）。serve 无新 env。
+**提交冲突登记（2026-11-17，已解决）**：用户并发开发 `sub_staged` 分波订阅特性，与本 §15
+同改 `kpl_collector_service.py` + `test_kpl_collector_service.py`（init/status 块细粒度交织），
+本轮为避免整文件混入用户未完成特性而暂停提交。**协作者已统一提交收口**：2079171e（探针
+增强）→ c3354c2b（分波+§15 代码）→ 3623a409（隔离定案文档）→ d5d25d99（§15 文档，含
+PC↔App 审计）。工作区干净，§15 代码 + TestAppRetryBackoff 均入 HEAD。serve 无新 env。
+爆发指纹根因经协作者 iso1 定案为总体积阈值（burst-fingerprint 文档 §6.2），审计文档 §8 已收口。
