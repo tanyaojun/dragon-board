@@ -1134,6 +1134,81 @@ class TestThemeHeat2013:
         assert sock.sent[1][0] == proto.PKG_ROUTE
 
 
+class TestDeathCause:
+    """死因分类观测（2026-11-17 纯观测，零行为变更）：爆发指纹 RST(10054) vs
+    ErrResp 杀连(1106/1002/2008) vs 干净 EOF；隔离探针与螺旋判据重标定底座。"""
+
+    def test_classify_exception_causes(self, svc):
+        import socket
+        import ssl
+        f = svc._classify_death_cause
+        assert f(ConnectionResetError(10054, "reset")) == "rst_10054"
+        assert f(ConnectionResetError()) == "rst_10054"   # isinstance 兑底（无 winerror）
+        e10053 = OSError(10053, "abort"); e10053.winerror = 10053
+        assert f(e10053) == "abort_10053"
+        assert f(SignSvcError("boom")) == "signsvc"
+        assert f(AntiCheatError("261")) == "anti_cheat"
+        assert f(socket.timeout()) == "timeout"
+        assert f(ssl.SSLError("handshake")) == "network:SSLError"
+        assert f(ValueError("x")) == "network:ValueError"
+
+    def test_classify_clean_return_causes(self, svc):
+        f = svc._classify_death_cause
+        # ErrResp code 优先（TTL/610 杀连 1106/1002、明文 211 lethal 2008）
+        svc._session_streaming = True
+        for code in (1106, 1002, 2008):
+            svc._session_err_code = code
+            assert f(None) == f"errresp_{code}"
+        # code 优先于 sock_dead/streaming
+        svc._session_err_code = 1002
+        svc._sock_dead = True
+        assert f(None) == "errresp_1002"
+        # 无 code：drain send 失败门禁 → send_dead
+        svc._session_err_code = None
+        svc._sock_dead = True
+        assert f(None) == "send_dead"
+        # 无 code 无 sock_dead：setup 早退 vs 干净 EOF
+        svc._sock_dead = False
+        svc._session_streaming = False
+        assert f(None) == "setup_fail"
+        svc._session_streaming = True
+        assert f(None) == "eof_clean"
+
+    def test_status_exposes_death_cause_fields(self, svc):
+        st = svc.status()
+        assert "last_death_cause" in st
+        assert "death_cause_counts" in st and isinstance(st["death_cause_counts"], dict)
+        assert "last_session_err_code" in st
+
+    def test_run_loop_records_death_without_changing_backoff(self, svc, monkeypatch):
+        """_run_loop 记录死因+发 session_death 事件，但退避/螺旋逻辑零变更：
+        10054 短命会话仍走 <60s 指数退避（streak=1 → backoff=4.0）。"""
+        monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
+
+        def _rst_session():
+            raise ConnectionResetError(10054, "burst fingerprint RST")
+
+        monkeypatch.setattr(svc, "_session", _rst_session)
+        waits = []
+
+        def _wait(s):
+            waits.append(s)
+            svc._stop.set()
+            return True
+
+        monkeypatch.setattr(svc, "_stop", type(svc._stop)())
+        monkeypatch.setattr(svc._stop, "wait", _wait)
+        svc._run_loop()
+        assert svc._last_death_cause == "rst_10054"
+        assert svc._death_cause_counts.get("rst_10054") == 1
+        assert svc.status()["last_death_cause"] == "rst_10054"
+        deaths = [e for e in svc._history if e.get("type") == "session_death"]
+        assert deaths and deaths[-1]["cause"] == "rst_10054"
+        # 零行为变更实证：退避仍由原 <60s 螺旋逻辑决定（session_s≈0 → streak=1 → 4.0）
+        assert svc._short_session_streak == 1
+        assert waits == [4.0]
+
+
 class TestTradingHoursGate:
     """2026-11-11 交易时段门控：非交易时段不建连（防风控打标累积），时段内自动恢复。"""
 

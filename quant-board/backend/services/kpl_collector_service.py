@@ -335,6 +335,13 @@ class KplCollectorService:
         self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
         self._DETAIL_BLOCK_MAX_STOCKS = self._stock_detail_max_stocks
         self._short_session_streak = 0   # 重连螺旋防线：连续短命会话连击数（<60s 计连击）
+        # 死因分类观测（2026-11-17 纯观测，零行为变更）：区分爆发指纹 RST(10054) /
+        # ErrResp 杀连(1106/1002/2008) / 干净 EOF / 网络/auth/反作弊失败，供隔离探针
+        # 与螺旋判据重标定实证底座；不参与退避计算（README §3.4 爆发指纹议题）。
+        self._last_death_cause = ""
+        self._death_cause_counts: Dict[str, int] = {}
+        self._session_err_code: Optional[int] = None   # 本会话最近 ErrResp code（每会话复位）
+        self._session_streaming = False                # 本会话是否进入收流（setup 早退判别）
         self._enforce_trading_hours = bool(enforce_trading_hours)
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
@@ -1238,6 +1245,11 @@ class KplCollectorService:
             # 重连螺旋防线观测（2026-11-10）：连续短命会话退避秒数 + 当前连击数
             "reconnect_backoff_s": self._stats.get("reconnect_backoff_s"),
             "short_session_streak": self._short_session_streak,
+            # 死因分类观测（2026-11-17 纯观测，零行为变更）：爆发指纹 RST(10054) vs
+            # ErrResp 杀连(1106/1002/2008) vs 干净 EOF；隔离探针与螺旋判据重标定底座
+            "last_death_cause": self._last_death_cause,
+            "death_cause_counts": dict(self._death_cause_counts),
+            "last_session_err_code": self._session_err_code,
             # 交易时段门控观测（2026-11-11）：当前是否在交易窗口 + 是否启用门控
             "trading_session": (self._in_trading_session()
                                 if self._enforce_trading_hours else True),
@@ -1295,6 +1307,40 @@ class KplCollectorService:
                 except queue.Full:
                     pass
                 self._subs.remove(q)
+
+    def _classify_death_cause(self, exc: Optional[BaseException]) -> str:
+        """会话死因分类（2026-11-17 纯观测，零行为变更）。
+
+        区分爆发指纹 RST(10054) / ErrResp 杀连(1106/1002/2008) / 干净 EOF /
+        网络/auth/反作弊失败，供隔离探针（README §3.4 爆发指纹议题）与螺旋判据
+        重标定提供实证底座。**不参与退避计算**——重连时机/阈值仍由 _run_loop 原逻辑决定。
+
+        判据优先级：异常类型/winerror → 本会话 ErrResp code → drain send 失败门禁 →
+        setup 早退 → 干净 EOF。10054=服务器 RST（爆发指纹主导，§7.1.1）；1106/1002=
+        TTL/610 杀连；2008=明文 211  lethal；eof_clean=无错误码服务器关连（干净轮换）。
+        """
+        if exc is not None:
+            winerr = getattr(exc, "winerror", None)
+            if isinstance(exc, ConnectionResetError) or winerr == 10054:
+                return "rst_10054"
+            if winerr == 10053:
+                return "abort_10053"
+            if isinstance(exc, SignSvcError):
+                return "signsvc"
+            if isinstance(exc, AntiCheatError):
+                return "anti_cheat"
+            if isinstance(exc, socket.timeout):
+                return "timeout"
+            return f"network:{type(exc).__name__}"
+        # 无异常 = _session 正常 return（服务器关连 / setup 早退 / ErrResp 后关连）
+        code = self._session_err_code
+        if code is not None:
+            return f"errresp_{code}"
+        if self._sock_dead:
+            return "send_dead"
+        if not self._session_streaming:
+            return "setup_fail"
+        return "eof_clean"
 
     def _err(self, msg: str, **extra: Any) -> None:
         self._last_error = msg
@@ -1394,25 +1440,40 @@ class KplCollectorService:
             self._stats["sessions"] += 1
             t_session = time.time()
             backoff = 2.0
+            death_exc: Optional[BaseException] = None   # 死因观测：捕获会话异常（不改退避）
             try:
                 self._session()
             except (ssl.SSLError, OSError, socket.timeout) as exc:
+                death_exc = exc
                 self._err(f"session#{self._session_no} network: {type(exc).__name__}: {exc}")
             except SignSvcError as exc:
+                death_exc = exc
                 self._err(f"session#{self._session_no} signsvc: {exc}")
                 # signsvc 故障重试间隔拉长
                 backoff = 5.0
             except AntiCheatError as exc:
+                death_exc = exc
                 # 261 无法作答 → 不发假答案，直接断连重建（App 同款行为）；
                 # 退避拉长到 5s：若 261 周期性下发，2s 快速重连会刷屏（评审 R1-P2）
                 self._err(f"session#{self._session_no} anti_cheat: {exc}")
                 backoff = 5.0
             except Exception as exc:  # 未知异常也必须 fail-visible
+                death_exc = exc
                 self._err(f"session#{self._session_no} unexpected: {type(exc).__name__}: {exc}")
             finally:
                 # 会话时长观测（2026-11-09 抖动根因验证）：在重连退避之前记录，否则
                 # backoff 会被算进会话时长污染 §3.4 时长档对照（评审 MINOR）
                 self._stats["last_session_s"] = round(time.time() - t_session, 1)
+                # 死因分类观测（2026-11-17 纯观测，零行为变更）：独立于下方退避计算，
+                # 只记录+发事件，不改变重连时机/螺旋阈值（爆发指纹议题实证底座）。
+                cause = self._classify_death_cause(death_exc)
+                self._last_death_cause = cause
+                self._death_cause_counts[cause] = self._death_cause_counts.get(cause, 0) + 1
+                self._emit(KplEvent(type="session_death", ts=time.time(),
+                                    session=self._session_no, cause=cause,
+                                    session_s=self._stats["last_session_s"],
+                                    err_code=self._session_err_code,
+                                    sock_dead=self._sock_dead))
             # 重连螺旋防线（2026-11-10 根因复盘）：连续短命会话说明设备已被风控打标
             # 或本端异常，固定 2s 高频重连只会把风险分越拉越高（实弹验证：冷却 3min
             # 后单会话寿命 6s→67.6s）。阈值 60s（健康 TTL 档 75-160s，<60 均视为
@@ -1457,6 +1518,8 @@ class KplCollectorService:
         sock = self._tls_connect()
         self._rx = bytearray()   # 新会话新流：残帧缓冲必须清零
         self._sock_dead = False  # 新会话新 socket：drain 失败门禁复位
+        self._session_err_code = None   # 死因观测：本会话 ErrResp code 复位
+        self._session_streaming = False  # 死因观测：收流标志复位
         self._pending_setup_frames = []   # 新会话重建订阅面：上会话残留待发帧作废
         self._sub_registry.clear_session()   # App qn0.f：断线清空注册表（c/d/e）
         self._batch_broken = False   # 熔断会话级复位（新会话重新尝试 211，若 flag 开）
@@ -1764,6 +1827,7 @@ class KplCollectorService:
             # （3001/3006）全部完成」；daban 家族已重排为读循环续发，不占此口径
             # （实弹口径见 _drain_setup_subs 注释）
             self._stats["last_setup_s"] = round(time.time() - t_setup, 1)
+            self._session_streaming = True   # 死因观测：进入收流（区分 setup 早退）
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
             # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
@@ -2121,6 +2185,7 @@ class KplCollectorService:
             return
         if cmd == proto.CMD_ERROR:
             err = proto.parse_err_resp(payload)
+            self._session_err_code = err.get("code")   # 死因观测（纯记录，不改路由）
             self._err(f"server error: {err}")
             self._emit(KplEvent(type="error", ts=time.time(), server=err))
             # 211 熔断：未决批期间收 ErrResp → 本会话回退单帧（保守归因，
@@ -2134,6 +2199,7 @@ class KplCollectorService:
             # fail-visible 解析上报，不静默当 raw；无 seq 无法归因到项，只计数。
             dec = self._dec_if_flags(payload, fr)
             err = proto.parse_err_resp(dec)
+            self._session_err_code = err.get("code")   # 死因观测（纯记录）
             self._stats["err_nt_n"] = self._stats.get("err_nt_n", 0) + 1
             self._err(f"server error nt(110): {err}")
             self._emit(KplEvent(type="error", ts=time.time(), server=err, channel=110))
