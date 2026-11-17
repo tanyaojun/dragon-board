@@ -169,6 +169,17 @@ def status() -> JSONResponse:
     return JSONResponse(content={"ok": True, "codec": _CODEC_MODE, **svc.status()})
 
 
+@app.get("/api/kpl/subscription-ids")
+def subscription_ids() -> JSONResponse:
+    """只读暴露 3001/3006 行情订阅宇宙（零行为变更观测，2026-11-17）：
+    供爆发指纹探针复现生产全量行情面（探针默认仅 1 板块，与生产 331 ids 差异
+    是隔离实验的关键 confound）。返回 stock_ids + priority_ids（优先块）。"""
+    svc = _get_service()
+    return JSONResponse(content={"ok": True,
+                                 "stock_ids": list(svc._stock_ids),
+                                 "priority_ids": list(svc._sub_prio_all)})
+
+
 @app.post("/api/kpl/start")
 async def start() -> JSONResponse:
     svc = _get_service()

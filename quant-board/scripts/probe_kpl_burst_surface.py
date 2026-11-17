@@ -59,12 +59,13 @@ class ProbeSurfaceCollector(KplCollectorService):
     生产爆发面本身的风控指纹。per-stock 池用 _pool_stock_ids 覆写受控注入（S2/S3），
     不依赖 2103 pid=1 实时响应（隔离变量）。"""
 
-    def __init__(self, codec, variant: str, pool=None, **kw):
+    def __init__(self, codec, variant: str, pool=None, reconnect=False, **kw):
         if variant not in VARIANT_SURFACE:
             raise ValueError(f"unknown variant {variant!r}（仅 S0/S1/S2/S3）")
         surface = VARIANT_SURFACE[variant]
         if variant in _PER_STOCK_VARIANTS and not pool:
             raise ValueError(f"{variant} 需 --pool 受控池（per-stock 订阅面）")
+        self._reconnect = bool(reconnect)
         # 控制变量固定（消除 610/211 因素，唯一变量=订阅面族）
         kw.setdefault("ka_mode", "off")
         kw.setdefault("sub_batch_mode", "direct")
@@ -89,6 +90,10 @@ class ProbeSurfaceCollector(KplCollectorService):
         return super()._pool_stock_ids()
 
     def _run_loop(self):
+        if self._reconnect:
+            # 重连模式：生产同款 _run_loop（螺旋退避连续重连）——验证 rst_10054
+            # 是否重连累积驱动（非盘中驱动）。死因分类已由生产 _run_loop 落地。
+            return super()._run_loop()
         # 单会话禁重连（预登记 §3 预算纪律）+ 死因分类（同生产 _classify_death_cause）
         self._session_no += 1
         self._stats["sessions"] += 1
@@ -125,25 +130,33 @@ def _frame_family(cmd) -> str:
     return f"other_{cmd}"
 
 
-def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool) -> dict:
+def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool,
+                reconnect=False, stock_ids=None, priority_ids=None) -> dict:
     TMP.mkdir(exist_ok=True)
     dump = TMP / f"kplburst_{tag}_frames_s{idx}_{variant}.hex"
     os.environ["KPL_DEBUG"] = str(dump)
     svc = ProbeSurfaceCollector(
-        codec, variant, pool=pool,
+        codec, variant, pool=pool, reconnect=reconnect,
         device_id=os.environ.get("KPL_DEVICE_ID")
         or os.environ.get("QUANT_BOARD_KPL_APP_DEVICEID", ""),
         user_id=os.environ.get("KPL_USER_ID", "0"),
         token=os.environ.get("KPL_TOKEN", ""),
-        stock_ids=["801044"])
-    print(f"[s{idx}] variant={variant} pool={len(pool or [])} observe={observe_s}s "
-          f"dump={dump.name}", flush=True)
+        stock_ids=stock_ids or ["801044"])
+    if stock_ids:
+        # 复现生产全量行情宇宙（3001/3006）：priority_ids 设优先块（分块轮询）
+        svc.set_subscriptions(list(stock_ids), list(priority_ids or []))
+    print(f"[s{idx}] variant={variant} pool={len(pool or [])} quotes={len(stock_ids or ['801044'])} "
+          f"observe={observe_s}s reconnect={reconnect} dump={dump.name}", flush=True)
     t0 = time.time()
     svc.start()
-    # 观察窗：会话自然死亡（rst_10054 ~60s）提前结束；长寿（eof_clean）等满窗
-    deadline = time.time() + observe_s
-    while time.time() < deadline and svc.is_running() and svc._status != "stopped":
-        time.sleep(1)
+    if reconnect:
+        # 重连模式：跑满 observe_s 总时长（多会话累积），不提前退出
+        time.sleep(observe_s)
+    else:
+        # 单会话：自然死亡（rst_10054 ~60s）提前结束；长寿（eof_clean）等满窗
+        deadline = time.time() + observe_s
+        while time.time() < deadline and svc.is_running() and svc._status != "stopped":
+            time.sleep(1)
     svc.stop()
     if svc._thread is not None:
         svc._thread.join(timeout=15)
@@ -170,6 +183,9 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool)
         "session_s": svc._stats.get("last_session_s"),
         "setup_s": svc._stats.get("last_setup_s"),
         "death_cause": svc._last_death_cause,
+        "death_cause_counts": dict(svc._death_cause_counts),
+        "sessions_n": svc._stats.get("sessions", 0),
+        "reconnect": reconnect,
         "err_code": svc._session_err_code,
         "sock_dead": svc._sock_dead,
         "session_death": [e for e in events if e["type"] == "session_death"],
@@ -220,6 +236,13 @@ def main() -> int:
     ap.add_argument("--tag", default="b1", help="证据文件名轮次标签（防跨轮覆盖）")
     ap.add_argument("--pool", default="", help="per-stock 受控池（逗号分隔 id，S2/S3 必需）")
     ap.add_argument("--dump-pool", action="store_true", help="只读 :8002 涨停池打印 id 后退出")
+    ap.add_argument("--reconnect", action="store_true",
+                    help="生产同款连续重连（螺旋退避）模式：验证 rst_10054 是否重连累积驱动"
+                         "（非盘中驱动）；observe-s 为总运行时长，死因取累计计数")
+    ap.add_argument("--stock-ids-file", default="",
+                    help="JSON {stock_ids,priority_ids}：复现生产全量 3001/3006 行情宇宙"
+                         "（默认仅 1 板块，与生产差异是隔离 confound）；"
+                         "来源 GET :8002/api/kpl/subscription-ids")
     args = ap.parse_args()
     if args.dump_pool:
         return dump_pool()
@@ -236,6 +259,11 @@ def main() -> int:
         if v in _PER_STOCK_VARIANTS and not pool:
             print(f"{v} 需 --pool（先 --dump-pool 取池）", file=sys.stderr)
             return 2
+    stock_ids = priority_ids = None
+    if args.stock_ids_file:
+        payload = json.loads(Path(args.stock_ids_file).read_text(encoding="utf-8"))
+        stock_ids = payload.get("stock_ids") or None
+        priority_ids = payload.get("priority_ids") or None
     codec = PCEmulatorCodec()   # pc 白盒轨（默认，无模拟器依赖）
     summaries = []
     idx = 0
@@ -245,7 +273,9 @@ def main() -> int:
             if idx > 1:
                 print(f"[cooldown] {args.cooldown_s}s ...", flush=True)
                 time.sleep(args.cooldown_s)
-            summaries.append(run_session(idx, variant, codec, args.observe_s, args.tag, pool))
+            summaries.append(run_session(idx, variant, codec, args.observe_s, args.tag, pool,
+                                         reconnect=args.reconnect,
+                                         stock_ids=stock_ids, priority_ids=priority_ids))
     out = TMP / f"kplburst_{args.tag}_run.json"
     out.write_text(json.dumps(summaries, ensure_ascii=False, indent=1), encoding="utf-8")
     # 裁决矩阵速览（预登记 §2.3）：各变体 session_s/death_cause 中位
