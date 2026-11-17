@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.operations import jev_answer_quality as Q
@@ -68,6 +70,10 @@ def test_flags_below_threshold_and_segments_by_generation():
     assert g18["flagRate"] == 0.5
     row = next(r for r in g18["rows"] if r["question"] == "leader_catalyst_hardness")
     assert row["maxProb"] == 0.57 and row["margin"] == 0.31 and row["choice"] == "hard_fact"
+    assert row["nOptions"] == 3 and row["confidence"] == 0.355   # 官方公式 (0.57−1/3)/(2/3)
+    assert g18["questionOptions"]["leader_catalyst_hardness"] == 3
+    assert g18["questionOptions"]["leader_nextday_continue"] == 2
+    assert rep["generations"]["h17"]["questionOptions"] == {"leader_nextday_continue": 1}
     assert rep["generations"]["h17"]["flagged"] == 0
     assert rep["generations"]["ha5"]["rows"][0]["margin"] == 0.11
     assert all(r["id"] != "2026-11-17:000002" for g in rep["generations"].values() for r in g["rows"])
@@ -87,6 +93,7 @@ def test_date_filter_and_confidence_fallback():
     assert rep["totalAnswers"] == 1 and rep["flagged"] == 1
     row = rep["generations"]["h"]["rows"][0]
     assert row["maxProb"] == 0.4 and row["margin"] is None
+    assert row["nOptions"] is None and row["confidence"] is None   # 回退档 n 不可算不编造
     rep_all = Q.low_confidence_report(db)
     assert rep_all["totalAnswers"] == 3   # 三日各 1；not-a-dict/缺值跳过
 
@@ -118,3 +125,43 @@ def test_non_numeric_and_bool_probabilities_skipped_not_fabricated():
     rows = {r["question"]: r for r in rep["generations"]["h"]["rows"]}
     assert rows["q1"]["maxProb"] == 0.4 and rows["q1"]["margin"] is None
     assert rows["q3"]["maxProb"] == 0.2 and rows["q3"]["margin"] is None
+
+
+def test_official_choice_confidence_formula():
+    """官方 Choice confidence=(p_max−1/n)/(1−1/n) worked examples 冻结
+    （docs.typesafe.ai/confidence，2026-11-18 官网查证采纳）：跨题同尺度
+    （2 档 0.75 与 10 档 0.55 同=0.5）；均匀=0；n=1 定义=1；畸形钳 0；缺值 None。"""
+    assert Q._choice_confidence(0.6, 3) == pytest.approx(0.4)
+    assert Q._choice_confidence(0.75, 2) == pytest.approx(0.5)
+    assert Q._choice_confidence(0.55, 10) == pytest.approx(0.5)
+    assert Q._choice_confidence(1 / 3, 3) == pytest.approx(0.0)
+    assert Q._choice_confidence(1.0, 1) == 1.0
+    assert Q._choice_confidence(0.2, 3) == 0.0   # p_max<1/n 畸形分布钳 0 不编造负值
+    assert Q._choice_confidence(None, 3) is None
+    assert Q._choice_confidence(0.5, None) is None
+    assert Q._choice_confidence(0.5, 0) is None
+
+
+def test_row_n_options_and_question_options_disclosure():
+    """行级 nOptions/confidence + 代际 questionOptions 披露（按题校准阈值铺路，
+    官方：set its threshold per question）；回退档不进 n 披露；不一致 sorted list。"""
+    docs = [
+        _doc("2026-11-12:000001", "h", "v", "a", {
+            "q3": {"choice": "a", "probabilities": {"a": 0.5, "b": 0.3, "c": 0.2}},
+            "q2": {"choice": "a", "probabilities": {"a": 0.55, "b": 0.45}},
+            "qfb": {"choice": "a", "confidence": 0.4},
+        }),
+        _doc("2026-11-13:000001", "h", "v", "a", {
+            "q2": {"choice": "a", "probabilities": {"a": 0.5}},
+        }),
+    ]
+    db = FakeDb(**{Q.COLLECTIONS[0]: FakeCol(docs)})
+    g = Q.low_confidence_report(db)["generations"]["h"]
+    assert g["questionOptions"] == {"q3": 3, "q2": [1, 2]}
+    rows = {(r["date"], r["question"]): r for r in g["rows"]}
+    r3 = rows[("2026-11-12", "q3")]
+    assert r3["nOptions"] == 3 and r3["confidence"] == 0.25   # (0.5−1/3)/(2/3)
+    r2 = rows[("2026-11-12", "q2")]
+    assert r2["nOptions"] == 2 and r2["confidence"] == pytest.approx(0.1, abs=1e-4)
+    rfb = rows[("2026-11-12", "qfb")]
+    assert rfb["nOptions"] is None and rfb["confidence"] is None

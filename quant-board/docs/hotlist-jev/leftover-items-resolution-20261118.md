@@ -1,6 +1,7 @@
 # 遗留待办项裁决与实施（2026-11-18）
 
-> 状态：已实施（除平台 feature request 为登记待办）。裁决：用户 2026-11-18「采纳全部建议，请实施」。
+> 状态：已实施（平台 reason feature request 经官网查证**关闭 won't-do**，架构性排除，见 §3.3）。
+> 裁决：用户 2026-11-18「采纳全部建议，请实施」+「待办项从官网找资料再定方案」→「采纳」。
 > 前序：西陇/广百两案审计 → v18/vA5 修复（`theme-leader-v18-questionset-corpus-fix-20261118.md`、
 > `auction-leader-vA5-questionset-corpus-fix-20261118.md`，commit c83c6d23）→ 本轮六项遗留处置。
 > 代际：**题面 hash 不变**（v18 `8f7f97a4680a` / vA5 `fb671c8f0223`，本轮全部为原料层/观测层，
@@ -11,7 +12,7 @@
 | 项 | 处置 | 类 |
 |---|---|---|
 | B9 产业树节点错配（「大消费-酒」↔百货零售） | Fix-1/2/3/4 实施 | 原料层修复 |
-| C1 平台 reason schema | 协议层查实 + 零调用质量观测投影实施 + 平台请求登记 | 观测层 |
+| C1 平台 reason schema | 协议层查实 + 零调用质量观测 + **官网查证关闭 feature request（架构性排除）** + 官方公式增强 | 观测层 |
 | 题材 B7 直播缺席行 | **保留关闭** | 裁决保护 |
 | 题材 B8 单维桶 | **保留关闭**（设计消费非闲置） | 设计消费 |
 | 竞价 B7 推送行 | **保留关闭** | 三重消费 |
@@ -86,12 +87,64 @@
   全扫描，千级 doc，非盘中链路）；零 jev 调用（§1.2-7）、不写库、不进叙事（§1.2-8）。
 - 判答质量不可审计 ≠ 不可观测：三分撕裂/低置信概率分布本身暴露失效。
 
-### 3.3 登记待办（外部依赖）
+### 3.3 官网查证：feature request 关闭（won't-do，架构性排除）
 
-- **向 typesafe 平台提 feature request**：answer schema 增 per-answer reason 字段。
-  客户端已零改动就绪；时间不可控。请求内容即本节 §3.1 协议事实 + 引用义务审计需求。
-- **不做**：二次「解释」调用（2x 成本违预算纪律）、换模型（断代际可比）、删引用义务
-  （仍塑造推理，~100 字/题成本 modest，删之降判定质量）。
+2026-11-18 用户裁决「从官网找相关资料再定方案」→ 查证 docs.typesafe.ai 后关闭原
+「向平台提 reason 字段 feature request」待办——**不是缺失功能，是产品核心架构排除**：
+
+| 证据 | 原文 |
+|---|---|
+| [System One 概念页](https://docs.typesafe.ai/concepts/system-one) | 「System One models **do not write replies, produce code, or generate explanations of their reasoning**.」 |
+| [API Reference](https://docs.typesafe.ai/api)（完整封闭 schema） | 请求仅 `{model, state, questions{type,instructions,criteria}, assets}` + 2 个 danger-zone header；响应仅 `{model, answers{choice/probabilities/confidence…}, usage}`——无 reason 字段、无输出 schema 参数、无解释性开关 |
+| [Model jaggedness #9](https://docs.typesafe.ai/model-jaggedness) | 「Jev is not trained to generate text. While you can force it to by chaining choices, **this will not work well and will be very slow**… If you really need to generate text… there are other models for that.」 |
+| [Changelog](https://docs.typesafe.ai/changelog)（jev-1.14.0, 2026-10-14） | Box/图像/长上下文/多语言——无解释性特性、无路线图信号 |
+
+官方可解释性路径＝**题目分解 × 概率分布形状 × 代码侧组合**（非模型生成文本）。
+提 reason 字段请求等于要求厂商违背核心架构，关闭。原「不做」三项维持（二次解释
+调用 2x 成本/换模型断代际/删引用义务降判定质量）。
+
+### 3.4 C1 增强：官方公式对齐（2026-11-18 采纳，零调用零代际）
+
+[Confidence 页](https://docs.typesafe.ai/confidence)验证现有设计并给增强点：
+
+- ✅ max_prob 主阈值＝官方推荐「For a Choice, [threshold on] the probability of the
+  option your code will act on」；margin＝官方 top-to-second「Many real decisions
+  come down to the top two candidates」；低置信→人工抽检＝官方三档路由
+  「Low confidence: Do not act. Route to a human」。
+- 🔧 行级补 `nOptions` + 官方 Choice confidence `(p_max−1/n)/(1−1/n)`（均匀=0、
+  单峰=1、n=1 定义=1、畸形 p_max<1/n 钳 0、回退档 None 不编造）。官方明示：
+  定 n 下 confidence 是 p_max 单调变换**无独立证据**，只作跨题可比报告量
+  （n 无关同尺度）；主阈值仍 max_prob。
+- 🔧 代际补 `questionOptions` 每题选项数披露（同题跨 doc n 不一致 → sorted list
+  fail-visible），为**按题校准阈值**铺路（官方「set its threshold per question」；
+  实测披露 2026-11-17 两链选项数 4/5/6（trial_settlement_pattern 6 档），共用 0.6
+  是粗粒度观察起点——官方：0.5 在 2 档是弱答在 10 档是强答）。调阈值非判据变更不需换代。
+- 测试冻结官方 worked examples：3 档 (0.6,0.3,0.1)→0.4；2 档 0.75→0.5；
+  10 档 0.55→0.5（跨题同尺度）；均匀→0；n=1→1。
+- 纯报告层：题面 hash/AMMO/落库载荷/前端不动。CLI 透传全报告 JSON 零改动。
+
+### 3.5 登记：两个官方背书审计工具（可选，需预登记+预算，不自动执行）
+
+1. **选项顺序敏感性探针**（[jaggedness #8](https://docs.typesafe.ai/model-jaggedness)：
+   「Jev leans toward the option that comes first… Reorder the options and check the
+   answer is consistent」）：同 state + criteria 重排 → 答案一致性核对，专捕顺序
+   伪影判答（我们 criteria 是 dict 插入序，硬度题 hard_fact 恒首位——潜在偏置可
+   实证）。2× 调用/探针 → 只走预登记+预算确认开火路径（§1.2-7）。
+2. **Companion Noul 证据在场题**（[patterns/companion-noul](https://docs.typesafe.ai/patterns)
+   + jaggedness #5）：审计关键题旁挂 Noul「state 是否含支持 X 的证据」→ 无文本的
+   证据在场信号。改题集 → 换代+预登记+预算；登记为未来设计选项不实施。
+
+### 3.6 现有设计的官方验证清单（加固既有裁决）
+
+| 我们的纪律/设计 | 官方依据 |
+|---|---|
+| 原子四题分解、代码侧组合 | 核心哲学「Atomic questions, composed in code」 |
+| 程序直读计数/日期/算术（排名/封单/桶/时点） | jaggedness #2「count in code」/ #3「arithmetic in code」 |
+| 档位用 Choice 不用 Score 插值 | #2「do not use score outputs to compute exact magnitude between levels」 |
+| 语料精简（西陇 −9.3%/广百 −15.1%） | #5「Accuracy falls as the state grows with content unrelated to the decision」——精简是精度手段不只是省钱 |
+| 叙事禁判据指引/开发注释（§1.2-8） | #6 adversarial content：「text that argues for its own classification can move the answer」——判据指引入语料＝官方定义的 steer 污染 |
+| v18 硬度①字面精确化 + ①×⑤正交 | #1「that explanation is the missing half of the instruction」/ #7「criteria as extension of instruction, align」 |
+| degraded 不入库、低置信观察桶 | 「"I don't know" is a useful signal」+ 三档路由 |
 
 ## 4. 关闭项（保留现状，理由登记）
 
@@ -133,6 +186,9 @@
   **零命中**；含数字节点名（3D打印/12英寸/GLP-1 等）均为合法技术词，与垃圾片段无交集。
   风险有界（残桩门+成分门+披露标注+单注入 break+limit=3）；「含数字长片段」确定性
   过滤登记为未来裁决项（仅实证误判时启用，本轮不加）。
+- **官网查证轮（2026-11-18 采纳）**：C1 行级 nOptions/官方 confidence + 代际
+  questionOptions 披露；官方 worked examples 冻结测试 + 跨题同尺度/畸形钳 0/回退档
+  None/不一致 fail-visible 断言；题面 hash/AMMO/落库载荷/前端零改动（纯报告层）。
 
 ## 6. 可比性
 

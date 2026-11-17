@@ -12,8 +12,18 @@ max_prob / top2 margin，max_prob < threshold 入观察桶，按 questionSetHash
 
 纪律：不触发任何 jev 调用（§1.2-7）；纯库读，on-demand 全扫描（两 collection
 千级 doc，CLI 人工触发，非盘中链路）；不写库、不投影进叙事（开发诊断不进语料，
-§1.2-8）。平台 reason 字段 feature request 已登记
-（docs/hotlist-jev/leftover-items-resolution-20261118.md §3），外部依赖时间不可控。
+§1.2-8）。
+
+官网查证（2026-11-18，docs.typesafe.ai）：reason 字段是**架构性排除**非缺失功能——
+System One「do not… generate explanations of their reasoning」；API schema 封闭无
+解释性参数；jaggedness #9 明示链式 choice 强造文本「will not work well and will be
+very slow」。feature request 待办关闭（won't-do），改走官方替代审计路径：
+概率分布形状 + 题目分解 × 冻结题面 × 冻结语料 = 可复现判答输入（详见
+leftover-items-resolution-20261118.md §3）。本模块行级附官方 Choice confidence
+公式 (p_max−1/n)/(1−1/n)（confidence 页）作跨题可比报告量——定 n 下是 p_max
+单调变换无独立证据（官方明示），主阈值仍用 max_prob（官方：threshold on the
+probability of the option your code will act on）；nOptions 披露为按题校准阈值
+铺路（官方：set its threshold per question；调阈值非判据变更不需换代）。
 """
 from __future__ import annotations
 
@@ -30,9 +40,9 @@ COLLECTIONS = (
 )
 
 
-def _answer_max_prob(a: dict) -> tuple[float | None, float | None]:
-    """单题判答 → (max_prob, top2_margin)。probabilities 优先（重算不信任存储
-    confidence）；缺概率分布时回退 confidence 字段（margin 不可算=None，不编造）。"""
+def _answer_max_prob(a: dict) -> tuple[float | None, float | None, int | None]:
+    """单题判答 → (max_prob, top2_margin, n_options)。probabilities 优先（重算不信任
+    存储 confidence）；缺概率分布时回退 confidence 字段（margin/n 不可算=None，不编造）。"""
     probs = a.get("probabilities")
     if isinstance(probs, dict) and probs:
         vals = sorted(
@@ -41,11 +51,24 @@ def _answer_max_prob(a: dict) -> tuple[float | None, float | None]:
              and math.isfinite(v)),
             reverse=True)
         if vals:
-            return vals[0], (vals[0] - vals[1]) if len(vals) > 1 else None
+            return (vals[0], (vals[0] - vals[1]) if len(vals) > 1 else None,
+                    len(vals))
     c = a.get("confidence")
     if isinstance(c, (int, float)) and not isinstance(c, bool) and math.isfinite(c):
-        return float(c), None
-    return None, None
+        return float(c), None, None
+    return None, None, None
+
+
+def _choice_confidence(mp: float | None, n: int | None) -> float | None:
+    """官方 Choice confidence 公式（docs.typesafe.ai/confidence）：
+    (p_max − 1/n) / (1 − 1/n)。均匀分布=0、单峰=1；n=1 定义上=1（全部概率在
+    唯一档）；n 缺（confidence 回退档）不可算=None。畸形分布 p_max<1/n 时
+    公式为负 → 钳 0（与官方 Score 公式 floor 同款防御，不编造负置信）。"""
+    if mp is None or n is None or n < 1:
+        return None
+    if n == 1:
+        return 1.0
+    return max(0.0, (mp - 1.0 / n) / (1.0 - 1.0 / n))
 
 
 def low_confidence_report(db: Any, *, date_start: str | None = None,
@@ -77,28 +100,38 @@ def low_confidence_report(db: Any, *, date_start: str | None = None,
             gkey = str(doc.get("questionSetHash") or "unknown")
             g = generations.setdefault(gkey, {
                 "questionSetVersion": doc.get("questionSetVersion"),
-                "ammoVersions": set(),
+                "ammoVersions": set(), "questionOptions": {},
                 "totalAnswers": 0, "flagged": 0, "rows": []})
             if doc.get("ammoVersion"):
                 g["ammoVersions"].add(str(doc["ammoVersion"]))
             for qk, a in answers.items():
                 if not isinstance(a, dict):
                     continue
-                mp, margin = _answer_max_prob(a)
+                mp, margin, n = _answer_max_prob(a)
                 if mp is None:
                     continue
+                if n is not None:
+                    g["questionOptions"].setdefault(qk, set()).add(n)
                 g["totalAnswers"] += 1
                 total += 1
                 if mp < threshold:
                     g["flagged"] += 1
                     flagged += 1
+                    conf = _choice_confidence(mp, n)
                     g["rows"].append({
                         "date": date, "id": _id, "docKind": doc.get("docKind"),
                         "question": qk, "choice": a.get("choice"),
                         "maxProb": round(mp, 4),
-                        "margin": round(margin, 4) if margin is not None else None})
+                        "margin": round(margin, 4) if margin is not None else None,
+                        "nOptions": n,
+                        "confidence": round(conf, 4) if conf is not None else None})
     for g in generations.values():
         g["ammoVersions"] = sorted(g["ammoVersions"])
+        # 每题选项数披露（按题校准阈值铺路）；同题跨 doc n 不一致 → sorted list
+        # fail-visible（题面冻结下不应发生，异常暴露不静默取首值）
+        g["questionOptions"] = {
+            qk: (next(iter(ns)) if len(ns) == 1 else sorted(ns))
+            for qk, ns in g["questionOptions"].items()}
         g["flagRate"] = (round(g["flagged"] / g["totalAnswers"], 4)
                          if g["totalAnswers"] else None)
         g["rows"].sort(key=lambda r: (r["date"], r["id"], r["question"]))
