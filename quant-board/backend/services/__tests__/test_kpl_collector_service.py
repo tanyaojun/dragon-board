@@ -1177,38 +1177,80 @@ class TestStagedSubs:
         w2, w3 = svc._staged_waves
         assert w2["kind"] == "pages" and len(w2["frames"]) == 35   # 5 非竞价 pid × 7 页
         assert w3["kind"] == "perstock"
-        assert w3["ids_zt"] == ["000001", "000002"] and w3["ids_theme"] == ["000001", "000002"]
+        assert w3["pool"] == ["000001", "000002"] and w3["remaining"] == 2
+        assert w3["zt"] is True and w3["theme"] is True
         assert len(svc._pending_zt_reason) == 0 and len(svc._pending_theme) == 0
         st = svc.status()
-        assert st["sub_staged"] is True and st["staged_pending_n"] == 39
+        assert st["sub_staged"] is True and st["staged_pending_n"] == 37
+        assert st["staged_pool_cursor"] == 0
 
-    def test_release_failsafe_and_counters(self):
+    def test_release_funnel_and_pages(self):
         svc = self._svc()
         svc._daban_lists = {1: {0: {"items": [{"stock_id": "000001"}]}}}
         svc._tls_connect = lambda: FakeSocket(self._auth_responses())
         svc._session()
-        # 未到点：不释放
+        # 未到点（wave2@15 / 漏斗@30）：不释放
         svc._release_staged_waves(svc._staged_t0 + 10)
         assert len(svc._staged_waves) == 2
-        # 过 failsafe（+150s）：全部释放
-        svc._release_staged_waves(svc._staged_t0 + 200)
-        assert svc._staged_waves == []
+        # +46s：pages(@15) 与漏斗首批(@45) 均到点（1 id → zt/theme 各 1）
+        svc._release_staged_waves(svc._staged_t0 + 46)
+        assert svc._staged_waves == []   # 漏斗 remaining=1 → 首批即轮完 cycle_done
         assert len(svc._pending_setup_frames) == 14 + 35
         assert len(svc._pending_zt_reason) == 1 and len(svc._pending_theme) == 1
         assert svc._stats["staged_released_n"] == 37
+        assert svc._stats["staged_funnel_batches"] == 1
         releases = [e for e in svc._history if e.get("type") == "staged_release"]
-        assert len(releases) == 2 and releases[0]["kind"] == "pages"
+        assert len(releases) == 2 and {e["kind"] for e in releases} == {"pages", "perstock"}
+        assert any(e.get("type") == "staged_cycle_done" for e in svc._history)
+
+    def test_funnel_cursor_rotation_and_wrap(self):
+        """漏斗跨窗轮转：批 ≤BATCH，游标推进，尾部回绕，轮完 cycle_done 收波。"""
+        svc = self._svc()
+        pool = [f"00000{i}" for i in range(1, 6)]   # 5 ids
+        svc._daban_lists = {1: {0: {"items": [{"stock_id": s} for s in pool]}}}
+        svc._STAGED_WAVE3_BATCH_IDS = 2   # 实例覆写缩批，便于断言
+        svc._tls_connect = lambda: FakeSocket(self._auth_responses())
+        svc._session()
+        w3 = next(w for w in svc._staged_waves if w["kind"] == "perstock")
+        assert w3["remaining"] == 5 and svc._staged_pool_cursor == 0
+        svc._release_staged_waves(svc._staged_t0 + 46)
+        assert svc._staged_pool_cursor == 2 and w3["remaining"] == 3
+        assert len(svc._pending_zt_reason) == 2
+        svc._release_staged_waves(svc._staged_t0 + 92)   # +45s 间隔锚定
+        assert svc._staged_pool_cursor == 4 and w3["remaining"] == 1
+        svc._release_staged_waves(svc._staged_t0 + 138)
+        assert svc._staged_pool_cursor == 0 and w3["remaining"] == 0
+        assert w3 not in svc._staged_waves
+        assert len(svc._pending_zt_reason) == 5   # 全池轮完
+        assert svc._stats["staged_funnel_batches"] == 3
+
+    def test_funnel_cursor_persists_across_sessions(self):
+        """游标跨会话持久：上会话轮到 cursor=2，下会话 remaining 从 2 处续算。"""
+        svc = self._svc()
+        pool = [f"00000{i}" for i in range(1, 6)]
+        svc._daban_lists = {1: {0: {"items": [{"stock_id": s} for s in pool]}}}
+        svc._STAGED_WAVE3_BATCH_IDS = 2
+        svc._tls_connect = lambda: FakeSocket(self._auth_responses())
+        svc._session()
+        svc._release_staged_waves(svc._staged_t0 + 46)
+        assert svc._staged_pool_cursor == 2
+        # 第二会话：游标 2 → remaining=(5-2)%5=3
+        svc._tls_connect = lambda: FakeSocket(self._auth_responses())
+        svc._session()
+        w3 = next(w for w in svc._staged_waves if w["kind"] == "perstock")
+        assert w3["remaining"] == 3 and svc._staged_pool_cursor == 2
 
     def test_staged_waves_dropped_on_new_session(self):
         svc = self._svc()
         svc._staged_waves = [{"release_at": 0, "failsafe_at": 1, "kind": "pages",
-                              "frames": [{}, {}], "ids_zt": ["x"],
-                              "ids_theme": None, "ids_detail": None}]
+                              "frames": [{}, {}]},
+                             {"kind": "perstock", "next_at": 0, "pool": ["x", "y", "z"],
+                              "remaining": 3, "zt": True, "theme": False, "detail": False}]
         svc._tls_connect = lambda: FakeSocket([])   # 立即关连 → 260 前死亡
         with pytest.raises(proto.FrameDecodeError):
             svc._session()
         assert svc._staged_waves == []
-        assert svc._stats["staged_dropped_n"] == 3
+        assert svc._stats["staged_dropped_n"] == 5
 
     def test_staged_off_zero_change(self):
         """默认关：全量入队（现有字节级会话用例已证帧序不变），无 staged 状态。"""

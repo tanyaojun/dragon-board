@@ -349,12 +349,15 @@ class KplCollectorService:
         self._session_err_code: Optional[int] = None   # 本会话最近 ErrResp code（每会话复位）
         self._session_streaming = False                # 本会话是否进入收流（setup 早退判别）
         # 分波订阅（2026-11-17 iso1 探针体积阈值定案，KPL_SUB_STAGED 默认关）：
-        # 订阅爆发 rst_10054 是**总体积阈值**触发（S3 全面 ~129 帧出 rst ~48s 与生产
-        # 同款；S1 55/S2 87 帧稳定）——非盘中专属。分波把初始爆发压到 ~20 帧
-        # （wave1=critical），wave2/3 错峰补齐；会话死亡未释放波次随会话作废重建。
+        # 订阅爆发 rst_10054 是**爆发窗体积阈值**触发（阈值 ∈ ~110-130 帧/窗，
+        # staged1 三会话收敛；非会话累计——累计 ~300 帧存活 130s）。分波把初始
+        # 爆发压到阈值下，wave2/3 漏斗错峰补齐；会话死亡未释放波次随会话作废。
         self._sub_staged = bool(sub_staged)
         self._staged_waves: List[Dict[str, Any]] = []
         self._staged_t0 = 0.0
+        # 漏斗轮转游标（方案 A，用户裁决 2026-11-17）：跨会话持久，全池 ~300 ids
+        # 约 2 会话轮完，单股 per-stock 刷新周期 ~3min
+        self._staged_pool_cursor = 0
         self._enforce_trading_hours = bool(enforce_trading_hours)
         # 打板/情绪订阅（0x40 通道 21xx 号段）；market_type 对应 app MoodPresenterImpl 的 l（市场类型）
         self._daban_subs = daban_subs
@@ -1251,10 +1254,12 @@ class KplCollectorService:
             # 分波订阅观测（2026-11-17 iso1 体积阈值定案；KPL_SUB_STAGED 默认关）
             "sub_staged": self._sub_staged,
             "staged_pending_n": sum(len(w.get("frames") or []) for w in self._staged_waves)
-                                + sum(len(w.get("ids_zt") or []) + len(w.get("ids_theme") or [])
-                                      + len(w.get("ids_detail") or []) for w in self._staged_waves),
+                                + sum(w.get("remaining") or 0 for w in self._staged_waves
+                                      if w.get("kind") == "perstock"),
             "staged_released_n": self._stats.get("staged_released_n", 0),
             "staged_dropped_n": self._stats.get("staged_dropped_n", 0),
+            "staged_pool_cursor": self._staged_pool_cursor,
+            "staged_funnel_batches": self._stats.get("staged_funnel_batches", 0),
             # 订阅构成观测（2026-11-11 行业页签空态排查）：hy=881 行业板块数，
             # 页面引导/补引导是否落地一眼可核（fail-visible，不藏状态）
             "subscriptions": {
@@ -1590,8 +1595,8 @@ class KplCollectorService:
         # 分波订阅：上会话未释放波次随会话作废（下会话重建；fail-visible 计数）
         if self._staged_waves:
             dropped = sum(len(w.get("frames") or []) for w in self._staged_waves)
-            dropped += sum(len(w.get("ids_zt") or []) + len(w.get("ids_theme") or [])
-                           + len(w.get("ids_detail") or []) for w in self._staged_waves)
+            dropped += sum(w.get("remaining") or 0 for w in self._staged_waves
+                           if w.get("kind") == "perstock")
             self._stats["staged_dropped_n"] = self._stats.get("staged_dropped_n", 0) + dropped
         self._staged_waves = []
         self._staged_t0 = time.time()
@@ -1836,7 +1841,7 @@ class KplCollectorService:
                             "priority": pid == 8,
                         }
                         if self._sub_staged and pid != 8:
-                            staged_wave2_frames.append(frame)   # 分波：非竞价页入 wave2(+45s)
+                            staged_wave2_frames.append(frame)   # 分波：非竞价页入 wave2(+15s)
                         else:
                             self._pending_setup_frames.append(frame)
                 if not self._sub_staged:
@@ -1875,12 +1880,12 @@ class KplCollectorService:
                     else:
                         self._pending_setup_frames.append(lhb_frame)
             if self._sub_staged:
-                # wave2（+45s）：非竞价 2103 页 + lhb 帧（iso1：S1 55 帧级别稳定）
+                # wave2（+15s）：非竞价 2103 页 + lhb 帧（staged1：80s 轮换内可达；
+                # S1 55 帧级别稳定，37 帧阈值内）
                 self._staged_waves.append({
                     "release_at": self._staged_t0 + self._STAGED_WAVE2_S,
                     "failsafe_at": self._staged_t0 + self._STAGED_FAILSAFE_S,
                     "kind": "pages", "frames": staged_wave2_frames,
-                    "ids_zt": None, "ids_theme": None, "ids_detail": None,
                 })
             # 6g-pre) 2026-11-10 探针实锤：0x40 帧只许在 setup 窗口内发送，内联模式下
             # daban 家族先发（池数据+页面优先于语料订阅），再 2203/2013
@@ -1925,15 +1930,22 @@ class KplCollectorService:
                     # 改 setup 窗口内内联发送（否则 6h 只入队、循环期永久静默）
                     self._flush_pending_inline(sock, next_seq, "detail")
             if self._sub_staged:
-                # wave3（+90s）：per-stock 2203/2013/detail 池 ids（iso1：S2 87 帧级别稳定）
-                self._staged_waves.append({
-                    "release_at": self._staged_t0 + self._STAGED_WAVE3_S,
-                    "failsafe_at": self._staged_t0 + self._STAGED_FAILSAFE_S,
-                    "kind": "perstock", "frames": [],
-                    "ids_zt": list(pool_ids) if self._zt_reason_subs else None,
-                    "ids_theme": list(pool_ids) if self._theme_subs else None,
-                    "ids_detail": list(pool_ids) if self._stock_detail_subs else None,
-                })
+                # wave3 漏斗（方案 A，用户裁决 2026-11-17）：per-stock 2203/2013/
+                # detail 池 ids 经持久游标轮转切片，每窗 ≤BATCH ids（~40 帧，
+                # 阈值 ~110-130 帧/窗的 65% 边际），批间隔 ≥35s；全池 ~300 ids
+                # 约 2 会话轮完。staged1 实证：全池一次性释放=自制超阈爆发
+                # （714 ids→354 帧→rst@+48s），且 +90s 波次在 80s 轮换内永不可达。
+                if pool_ids and (self._zt_reason_subs or self._theme_subs
+                                 or self._stock_detail_subs):
+                    n_pool = len(pool_ids)
+                    remaining = (n_pool - self._staged_pool_cursor % n_pool) % n_pool or n_pool
+                    self._staged_waves.append({
+                        "kind": "perstock",
+                        "next_at": self._staged_t0 + self._STAGED_WAVE3_S,
+                        "pool": list(pool_ids), "remaining": remaining,
+                        "zt": bool(self._zt_reason_subs), "theme": bool(self._theme_subs),
+                        "detail": bool(self._stock_detail_subs),
+                    })
             # setup 打点在 6g（2203/2013 订阅入队）之后：口径=「连接到内联订阅链
             # （3001/3006）全部完成」；daban 家族已重排为读循环续发，不占此口径
             # （实弹口径见 _drain_setup_subs 注释）
@@ -2244,40 +2256,70 @@ class KplCollectorService:
                     self._pending_unsub.append(e.sub_id)
             self._sub_registry.mark_unsub_sent(cands)
 
-    # 分波订阅波次参数（2026-11-17 iso1 探针体积阈值定案；KPL_SUB_STAGED 默认关）
-    _STAGED_WAVE2_S = 45.0      # wave2：非竞价 2103 页 + lhb 帧（S1 55 帧级别稳定）
-    _STAGED_WAVE3_S = 90.0      # wave3：per-stock 2203/2013/detail 池 ids（S2 87 帧级别稳定）
-    _STAGED_FAILSAFE_S = 150.0  # 到点强制清空剩余波次（防漏，fail-visible）
+    # 分波订阅波次参数（2026-11-17 iso1+staged1 定案；KPL_SUB_STAGED 默认关）
+    # 阈值窗模型：rst_10054 由 ~110-130 帧/爆发窗触发（非会话累计）；服务端
+    # 干净轮换 ~80s → 波次时刻表必须压进会话寿命内。
+    _STAGED_WAVE2_S = 15.0          # wave2：非竞价 2103 页 + lhb 帧（~37 帧阈值内）
+    _STAGED_WAVE3_S = 45.0          # wave3 漏斗首批（+45s，与 wave2 错开半窗）
+    _STAGED_WAVE3_BATCH_IDS = 50    # 每窗 ids（staged2 实测 ~1.5 帧/id → ~75 帧；窗内总量 ≤~135）
+    _STAGED_WAVE3_SPACING_S = 45.0  # 批间隔（锚定实际释放时刻，防停顿后连发并窗）
+    _STAGED_FAILSAFE_S = 150.0      # pages 波到点强制清空（防漏，fail-visible）
 
     def _release_staged_waves(self, now: float) -> None:
         """分波订阅到点释放（KPL_SUB_STAGED=1 时读循环每 tick 调用）。
 
-        iso1 探针定案：订阅爆发 rst_10054 是**总体积阈值**触发——S3 全面
-        （2103 页+per-stock+globals+行情宇宙）出 rst（~48s，与生产同款），
-        S1(55)/S2(87) 稳定。分波把初始爆发压到 ~20 帧（wave1=critical），
-        wave2/3 错峰补齐，+150s failsafe 强制清空防漏。会话死亡未释放波次
-        随会话作废（下会话重建，staged_dropped_n fail-visible）。"""
+        阈值窗模型（staged1 定案）：rst_10054 由爆发窗体积触发（~110-130 帧/窗），
+        非会话累计。pages 波到点整体释放（~37 帧阈值内）；per-stock 波为漏斗：
+        每窗最多 _STAGED_WAVE3_BATCH_IDS 个 ids 经持久游标 _staged_pool_cursor
+        轮转取片（zt/theme/detail 同片同步），批间隔 ≥35s（锚定实际释放时刻，
+        防停顿后多批连发并窗超阈），全池轮完即收（staged_cycle_done 事件）。
+        会话死亡未完成轮转计 staged_dropped_n（fail-visible，下会话续游标）。"""
         if not self._staged_waves:
             return
         released = 0
         for wave in list(self._staged_waves):
+            if wave.get("kind") == "perstock":
+                if now < wave["next_at"] or wave["remaining"] <= 0:
+                    continue
+                pool = wave["pool"]
+                n_pool = len(pool)
+                batch = min(self._STAGED_WAVE3_BATCH_IDS, wave["remaining"])
+                start = self._staged_pool_cursor % n_pool
+                ids = pool[start:start + batch]
+                if len(ids) < batch:   # 尾部回绕接片首
+                    ids = ids + pool[:batch - len(ids)]
+                self._staged_pool_cursor = (self._staged_pool_cursor + batch) % n_pool
+                ids_n = 0
+                for flag, fn in ((wave["zt"], self._queue_zt_reason_new),
+                                 (wave["theme"], self._queue_theme_new),
+                                 (wave["detail"], self._queue_detail_new)):
+                    if flag and ids:
+                        fn(list(ids))
+                        ids_n += len(ids)
+                wave["remaining"] -= batch
+                wave["next_at"] = now + self._STAGED_WAVE3_SPACING_S
+                released += ids_n
+                self._stats["staged_funnel_batches"] = self._stats.get(
+                    "staged_funnel_batches", 0) + 1
+                self._emit(KplEvent(type="staged_release", ts=time.time(),
+                                    kind="perstock", ids=ids_n, batch=batch,
+                                    at_s=round(now - self._staged_t0, 1)))
+                if wave["remaining"] <= 0:
+                    self._staged_waves.remove(wave)
+                    self._emit(KplEvent(type="staged_cycle_done", ts=time.time(),
+                                        cursor=self._staged_pool_cursor,
+                                        at_s=round(now - self._staged_t0, 1)))
+                continue
+            # pages 波：到点整体释放（release_at）或 failsafe 强制清空
             if now < wave["release_at"] and now < wave["failsafe_at"]:
                 continue
             frames = wave.get("frames") or []
             if frames:
                 self._pending_setup_frames.extend(frames)
-            ids_n = 0
-            for key, fn in (("ids_zt", self._queue_zt_reason_new),
-                            ("ids_theme", self._queue_theme_new),
-                            ("ids_detail", self._queue_detail_new)):
-                ids = wave.get(key) or []
-                if ids:
-                    fn(ids)
-                    ids_n += len(ids)
             self._staged_waves.remove(wave)
-            released += len(frames) + ids_n
+            released += len(frames)
             self._emit(KplEvent(type="staged_release", ts=time.time(),
-                                kind=wave.get("kind"), frames=len(frames), ids=ids_n,
+                                kind=wave.get("kind"), frames=len(frames), ids=0,
                                 at_s=round(now - self._staged_t0, 1)))
         if released:
             self._stats["staged_released_n"] = self._stats.get("staged_released_n", 0) + released
