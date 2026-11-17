@@ -90,7 +90,12 @@ class SubRegistry:
                 self._entries.pop(0)
                 self._counters["evicted_n"] += 1
         if not entry.sub_id_hint:
-            entry.sub_id_hint = entry.cmd
+            # 单一事实源（AGENTS §1.2-1）：hint 以线上 ext attr2 为权威（唯一 hint
+            # 时 ≠ cmd）；ext 非标准 02<hint2BE> 格式时回退 cmd。
+            if len(entry.ext) >= 3 and entry.ext[0] == 0x02:
+                entry.sub_id_hint = int.from_bytes(entry.ext[1:3], "big")
+            else:
+                entry.sub_id_hint = entry.cmd
         self._entries.append(entry)
         return entry
 

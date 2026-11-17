@@ -570,6 +570,13 @@ serve 无新 env（保护性精化默认开，回退靠 git）。
   后仍 ~60s 被杀（auth≠健康），故归零判据用**健康长会话 >=60s**（`_APP_HEALTHY_SESSION_S`）
   而非仅 auth——否则每次 auth 归零→快重连螺旋。「从未 auth」用 per-session
   `_session_streaming`（App this.f 为 sticky，PC 按会话）。
+- **PC 加重偏离③（诚实登记，独立 review Minor-1 补）**：PC 把 `rst_10054` 并入
+  `_is_server_reject`（+3s / b++ / 可降 60s），**比 App 更硬**。App 仅在 cmd 201 ErrResp
+  时置 `f6127a=20` 并 `i(code)` b++（`qn0.java:325-326`）；裸 RST/IOException 在
+  `LoopThread.java:67-71` 置 `f6127a=11`（SocketTimeout→12）**非 20** → `q()`→`v(0)` 仅走梯，
+  不 +3s/不 b++/不降 60s。PC 有意加重：生产主导 kill 是 RST（爆发体积阈值 §6.2），
+  故按服务端拒绝硬退避（fail-safe，防护不松）——非正确性 bug，是「忠实移植」措辞下
+  须明示的第三项偏离（前两项：健康>=60s 归零 / per-session streaming）。代码不动。
 
 **与 §14 差异 / 风险（诚实）**：App 梯封顶 30s(+3s=33s) **<** 旧拍脑袋 120s；首 retry
 ~0s **<** 旧 2s。对 PC 不可信指纹防护可能偏弱（App 受信任故敢快 retry/低封顶）。连续
@@ -588,3 +595,29 @@ errresp 归类 +3s / 健康干净 EOF 快 retry 0s / 健康网络瞬态 0s / 连
 增强）→ c3354c2b（分波+§15 代码）→ 3623a409（隔离定案文档）→ d5d25d99（§15 文档，含
 PC↔App 审计）。工作区干净，§15 代码 + TestAppRetryBackoff 均入 HEAD。serve 无新 env。
 爆发指纹根因经协作者 iso1 定案为总体积阈值（burst-fingerprint 文档 §6.2），审计文档 §8 已收口。
+
+## 16. 独立 code review 修复（2026-11-17，reviewer fresh-context 只读，用户「安排 subagent 审查修复后提交」）
+
+审查对象：主 agent authored 未独立审查的两处——特性 A 唯一 subId hint（536488a2）+
+特性 B §15 App 退避移植（c3354c2b 部分）。排除协作者 staged-subs 与已审 096d5493。
+裁决 **OK with notes**（无 blocker/major）；逐项修复：
+
+- **Minor-1（文档诚实性）**：RST→server_reject 是相对 App 的 PC 加重偏离（App 裸 RST/
+  IOException=f6127a=11 仅走梯，不 +3s/b++/60s；仅 cmd 201 ErrResp 才 =20），已在 §15
+  PC 适配段补登为第三项偏离（引 LoopThread.java:67-71 / qn0.java:325-326）。代码不动。
+- **Minor-2（衰减分支无测试）**：补 `test_server_disconnect_decay_after_10min`（gap>600s
+  → sd_count 衰减归零后 ++=1）+ `test_server_disconnect_no_decay_within_10min`（gap<600s
+  → 累加=4）。
+- **Nit-1（死代码）**：删 `_is_clean_transient`（§15 替换 §14 后无调用方）。
+- **Nit-2（单一事实源漂移）**：`SubRegistry.register` 的 `sub_id_hint` 改从**线上 ext attr2**
+  回填（原默认 cmd，唯一 hint 时与线上 ext 不一致）；ext 非标准格式回退 cmd。补
+  `test_registry_hint_matches_wire_ext`（注册表 hint == 线上 ext）。全局族 ext attr2=cmd 不变，
+  211 plan_batches 行为零变更（registry 旧测试全绿）。
+- **Nit-3（测试补强）**：补 `test_anti_cheat_floor_preserved`（5s 地板）+
+  `test_session_resets_hint_counter`（_session 会话级复位，auth 早退亦生效）。theme/detail/inline
+  唯一 hint 与 zt drain 共享 `_stock_sub_ext` helper（结构保证，zt drain + allocator 用例已覆盖）。
+
+**验证（全 mock）**：collector+registry **170 passed**；`services+api` **612 passed**（+5 新用例）/
+`tests/hotlist` **1585 passed, 6 skipped**。reviewer 只读无 shell，pytest 由 supervisor 实跑确认绿。
+残余风险（reviewer 登记）：§15 默认开（回退靠 git），干净失败封顶 120s→30s/首 retry 2s→~0s，
+HEAD 加载生产前应完成 burst `--reconnect` A/B 探针验证（持续 RST 仍经 degrade 硬退避，防护未失）。

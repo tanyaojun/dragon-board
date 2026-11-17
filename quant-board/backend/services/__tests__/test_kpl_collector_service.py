@@ -1395,6 +1395,27 @@ class TestAppRetryBackoff:
                                    jitter=lambda a, b: b)
         assert waits == [0.3, 1.2]            # base0→uniform(0,0.3)上界0.3；base1→1*1.2
 
+    def test_server_disconnect_decay_after_10min(self, svc, monkeypatch):
+        # App SocketRepository.i()：距上次服务端断连 >600s → 计数衰减归零后 ++
+        svc._server_disconnect_count = 3
+        svc._last_server_disconnect_ts = 300.0   # 假钟 1000 起 → gap ~700s > 600
+        rst = lambda: ConnectionResetError(10054, "RST")
+        self._run_sessions(svc, monkeypatch, [(0.5, rst(), None, False)])
+        assert svc._server_disconnect_count == 1   # 衰减归零后 ++，非累加到 4
+
+    def test_server_disconnect_no_decay_within_10min(self, svc, monkeypatch):
+        svc._server_disconnect_count = 3
+        svc._last_server_disconnect_ts = 999.0   # gap ~1.5s < 600 → 不衰减
+        rst = lambda: ConnectionResetError(10054, "RST")
+        self._run_sessions(svc, monkeypatch, [(0.5, rst(), None, False)])
+        assert svc._server_disconnect_count == 4   # 累加（>3 且未 streaming → +60s）
+
+    def test_anti_cheat_floor_preserved(self, svc, monkeypatch):
+        # anti_cheat 5s 地板保留（与 signsvc 共享 max 逻辑）
+        waits = self._run_sessions(svc, monkeypatch, [(0.5, AntiCheatError("261"), None, False)])
+        assert svc._last_death_cause == "anti_cheat"
+        assert waits == [5.0]
+
 
 class TestTradingHoursGate:
     """2026-11-11 交易时段门控：非交易时段不建连（防风控打标累积），时段内自动恢复。"""
@@ -2425,6 +2446,27 @@ class TestSubUniqueId:
         svc._sub_id_hint_next = 0x7FFF
         assert svc._next_sub_id_hint() == 0x7FFF
         assert svc._sub_id_hint_next == svc._SUB_ID_HINT_BASE   # Short 正域回绕
+
+    def test_registry_hint_matches_wire_ext(self):
+        # 单一事实源（AGENTS §1.2-1）：注册表 sub_id_hint 从线上 ext attr2 回填，
+        # 唯一 hint 时 ≠ cmd（修复 register 默认回填 cmd 的潜在漂移）。
+        svc = _mk_svc(sub_unique_id=True)
+        hints = self._zt_hints(svc, ["600001", "600002"])
+        entries = [e for e in svc._sub_registry.entries() if e.cmd == 2203]
+        assert [e.sub_id_hint for e in entries] == hints
+        assert all(h >= svc._SUB_ID_HINT_BASE for h in hints)
+
+    def test_session_resets_hint_counter(self, monkeypatch):
+        # _session 会话级复位 hint 分配器（§12，复位在 auth 之前，即使 auth 早退亦生效）
+        svc = _mk_svc(sub_unique_id=True, human_delay=False)
+        svc._sub_id_hint_next = 0x5000   # 模拟上会话已消费
+        monkeypatch.setattr(svc, "_tls_connect", lambda: FakeSocket([]))
+        monkeypatch.setattr(svc, "_read_frame", lambda sock: (_ for _ in ()).throw(OSError("eof")))
+        try:
+            svc._session()
+        except Exception:
+            pass
+        assert svc._sub_id_hint_next == svc._SUB_ID_HINT_BASE
 
 
 class TestUnsub402:

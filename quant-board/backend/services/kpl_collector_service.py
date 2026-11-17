@@ -1383,13 +1383,6 @@ class KplCollectorService:
         这类退避走 App r()：base 3s + 螺旋，连续 >3 降级 60s。"""
         return cause == "rst_10054" or cause.startswith("errresp_")
 
-    @staticmethod
-    def _is_clean_transient(cause: str) -> bool:
-        """干净/瞬态类死因（App 网络瞬断 v(0) 快 retry）：干净轮换 EOF / 超时 /
-        本地 abort / 其他网络异常。仅健康长会话(>=60s)才享快 retry（短命仍走螺旋兜底）。"""
-        return (cause in ("eof_clean", "timeout", "abort_10053")
-                or cause.startswith("network:"))
-
     def _err(self, msg: str, **extra: Any) -> None:
         self._last_error = msg
         self._stats["errors"] += 1
