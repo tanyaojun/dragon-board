@@ -12,6 +12,7 @@ import queue
 import io
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1157,43 +1158,76 @@ class TestTradingHoursGate:
         assert not svc._in_trading_session(utc_moment + 8 * 3600 + 60)   # 上海 19:01 已收市
 
     def test_resub_nt_requeues_cached_subs(self, svc):
-        """cmd 220 ResubNt（App qn0.j 同款，2026-11-17 破译源码落地）：
-        已发订阅缓存重入 setup 队列头；无缓存 fail-visible 事件。"""
+        """cmd 220 ResubNt（App qn0.j 同款；2026-11-17 注册表化 P1）：
+        注册表 acked 条目重入 setup 队列头；topics 非空选择性重发；
+        无匹配降级全量；无条目 fail-visible 事件。"""
         import backend.services.kpl_socket_protocol as proto
+        from backend.services.kpl_sub_registry import SubEntry
         svc._pending_setup_frames = []
-        svc._resub_cache = []
-        # 无缓存 → ok=False 留痕
+        # 无条目 → ok=False 留痕
         q = svc.subscribe()
         svc._handle_resub_nt(b"", dec_payload=b"")
         ev = [e for e in _drain_q(q) if e["type"] == "resub_nt"]
         assert ev and ev[-1]["ok"] is False and ev[-1]["reason"] == "no_cached_subs"
-        # 有缓存 → 全量重入队头
-        item = {"cmd": 2103, "req": bytes.fromhex("aa"),   # CMD_DABAN_STOCK_LIST
-                "ext": bytes.fromhex("02082a"), "priority": True}
-        svc._resub_cache = [dict(item)]
+        # 有 acked 条目（topic=b"ab"，priority）→ topics 空全量重入队头
+        def _reg(topic=b"ab", cmd=2103, prio=True):
+            e = SubEntry(cmd=cmd, req=bytes.fromhex("aa"),
+                         ext=bytes.fromhex("020837"), seq=100, lane="setup",
+                         priority=prio, sub_id=7, topic=topic)
+            svc._sub_registry.register(e)
+            svc._sub_registry.on_ack(100, sub_id=7, topic=topic)
+            return e
+        _reg()
         svc._handle_resub_nt(b"", dec_payload=b"")
-        assert svc._pending_setup_frames and svc._pending_setup_frames[0]["cmd"] == item["cmd"]
+        assert svc._pending_setup_frames and svc._pending_setup_frames[0]["cmd"] == 2103
+        assert svc._pending_setup_frames[0].get("priority") is True
         assert svc._stats.get("resub_requeued") == 1
-        # topics 非空 → 仍全量（topic 粒度不可靠）+ topics 透出
-        pb_topics = bytes.fromhex("0a026162")   # pb: field1 LEN 2 "ab"
+        # topics 命中 → 选择性重发（mode=selective）
+        _reg(topic=b"ab")
+        _reg(topic=b"cd", cmd=2114, prio=False)
         svc._pending_setup_frames = []
         q2 = svc.subscribe()
+        pb_topics = bytes.fromhex("0a026162")   # pb: field1 LEN 2 "ab"
         svc._handle_resub_nt(pb_topics, dec_payload=pb_topics)
         assert len(svc._pending_setup_frames) == 1
+        assert svc._pending_setup_frames[0]["cmd"] == 2103
         ev2 = [e for e in _drain_q(q2) if e["type"] == "resub_nt"]
         assert ev2[-1]["ok"] is True and ev2[-1]["topics"] == ["ab"]
+        assert ev2[-1]["mode"] == "selective"
+        # topics 无匹配 → 降级全量（fallback_all，fail-visible；此时 acked=
+        # b"cd"(2114，上轮选择性未命中留存) + b"xy"(2115) 共 2 条）
+        _reg(topic=b"xy", cmd=2115, prio=False)
+        svc._pending_setup_frames = []
+        q3 = svc.subscribe()
+        pb_none = bytes.fromhex("0a027a7a")   # "zz"
+        svc._handle_resub_nt(pb_none, dec_payload=pb_none)
+        assert len(svc._pending_setup_frames) == 2
+        ev3 = [e for e in _drain_q(q3) if e["type"] == "resub_nt"]
+        assert ev3[-1]["mode"] == "fallback_all"
+        # 开关关 → 全量旧行为（all_legacy）
+        svc._sub_registry_enabled = False
+        _reg(topic=b"ab")
+        _reg(topic=b"cd", cmd=2114, prio=False)
+        svc._pending_setup_frames = []
+        svc._handle_resub_nt(pb_topics, dec_payload=pb_topics)
+        assert len(svc._pending_setup_frames) == 2
+        svc._sub_registry_enabled = True
 
-    def test_resub_cache_dedupe_and_cap(self, svc):
-        """缓存去重（cmd/ext/req 三元组）+ 500 上限防 runaway。"""
-        svc._resub_cache = []
-        item = {"cmd": 2103, "req": bytes([1]), "ext": bytes([2])}
-        for _ in range(3):
-            svc._cache_resub_item(item)
-        assert len(svc._resub_cache) == 1
-        svc._resub_cache = [{"cmd": i, "req": b"", "ext": b""} for i in range(500)]
-        svc._cache_resub_item({"cmd": 999, "req": b"", "ext": b""})
-        assert len(svc._resub_cache) == 500
-        assert svc._resub_cache[-1]["cmd"] == 999
+    def test_drain_registers_into_registry(self, svc):
+        """旧 _resub_cache 已删（单一事实源 §1.2-1）：drain 发送成功 →
+        注册表 pending 条目（cmd/req/ext/seq/lane 原料齐全，220 重发可用）。"""
+        svc._pending_setup_frames = [
+            {"cmd": 2103, "req": b"\x01", "ext": bytes.fromhex("020837"),
+             "priority": True}]
+        fake = FakeSocket([])
+        seq = [10]
+        svc._drain_setup_subs(fake, lambda: seq.__setitem__(0, seq[0] + 1) or seq[0])
+        entries = svc._sub_registry.entries()
+        assert len(entries) == 1
+        e = entries[0]
+        assert (e.cmd, e.req, e.lane, e.state) == (2103, b"\x01", "setup", "pending")
+        assert e.seq == 11 and e.priority is True
+        assert not hasattr(svc, "_resub_cache")
 
     def test_session_boundaries(self, svc):
         f = svc._in_trading_session
@@ -1720,3 +1754,544 @@ class TestDabanIndexesJson20261111:
         import json as _json
         s = _json.dumps(out)   # 修复前：TypeError bytes not serializable
         assert b"" not in s.encode() and "600001" in s
+
+
+# ---- 订阅注册表化 + 211 批量 + 402 退订（2026-11-17 P0-P3）----
+
+def _echo_ext(seq: int, cmd: int, flags: int, ext: bytes, payload: bytes) -> bytes:
+    """带 ext 属性段的 echo 帧（订阅 ack attr2=subId/attr3=topic 载体）。"""
+    body = (seq.to_bytes(2, "big") + cmd.to_bytes(2, "big") + bytes([flags])
+            + len(ext).to_bytes(2, "big") + ext + payload)
+    return _wrap(proto.PKG_ROUTE, body)
+
+
+def _seq_gen(start: int = 10):
+    box = [start]
+
+    def nxt():
+        box[0] += 1
+        return box[0]
+    return nxt
+
+
+def _mk_svc(**kw) -> KplCollectorService:
+    base = dict(device_id="test-dev", user_id="0", token="",
+                stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False)
+    base.update(kw)
+    return KplCollectorService(FakeCodec(), **base)
+
+
+class TestSubAckCapture:
+    """P1：echo ack attr2/attr3 捕获入注册表（App qn0.o 同款）。"""
+
+    def test_subscription_ack_captured(self):
+        svc = _mk_svc()
+        svc._pending_setup_frames = [
+            {"cmd": 2103, "req": b"\x01", "ext": bytes.fromhex("020837")}]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        e = svc._sub_registry.entries()[0]
+        assert e.state == "pending"
+        q = svc.subscribe()
+        ext = proto.encode_ext_attrs({2: 501, 3: b"hq|1:20030/2103-0/"})
+        svc._dispatch(proto.parse_incoming(
+            _echo_ext(e.seq, 2103, 0x01, ext, b"\xaa\x00")))
+        assert e.state == "acked" and e.sub_id == 501
+        assert e.topic == b"hq|1:20030/2103-0/"
+        ev = [x for x in _drain_q(q) if x["type"] == "sub_ack"]
+        assert ev and ev[-1]["sub_id"] == 501
+        assert ev[-1]["topic"] == b"hq|1:20030/2103-0/".hex()   # _json_safe bytes→hex
+
+    def test_auth_ack_not_orphan(self):
+        svc = _mk_svc()
+        svc._dispatch(proto.parse_incoming(_echo(1, 610, 0x11, b"\xaa\x00")))
+        assert svc._sub_registry.stats()["orphan_ack_n"] == 0
+
+    def test_push_topic_hit_observed_not_routed(self):
+        """P1 只观测：topic 命中计数，dispatch 仍按 cmd 正常出事件。"""
+        from backend.services.kpl_sub_registry import SubEntry
+        svc = _mk_svc()
+        svc._sub_registry.register(SubEntry(
+            cmd=3006, req=b"", ext=b"", seq=1, lane="setup"))
+        svc._sub_registry.on_ack(1, sub_id=9, topic=bytes.fromhex("020bbe"))
+        fr = proto.parse_incoming(_push(3006, bytes.fromhex("020bbe"), _quotes_payload()))
+        q = svc.subscribe()
+        svc._dispatch(fr)
+        st = svc._sub_registry.stats()
+        assert st["push_topic_hit_n"] == 1 and st["push_topic_miss_n"] == 0
+        assert any(x["type"] == "stock_quotes" for x in _drain_q(q))
+
+    def test_ext_parse_error_fail_visible(self):
+        svc = _mk_svc()
+        svc._pending_setup_frames = [
+            {"cmd": 2103, "req": b"\x01", "ext": bytes.fromhex("020837")}]
+        svc._drain_setup_subs(FakeSocket([]), _seq_gen())
+        e = svc._sub_registry.entries()[0]
+        svc._dispatch(proto.parse_incoming(
+            _echo_ext(e.seq, 2103, 0x01, bytes.fromhex("0900"), b"\xaa\x00")))
+        assert svc._sub_registry.stats()["ext_parse_err_n"] == 1
+        assert e.state == "acked"   # ext 坏不影响 seq 匹配（sub_id/topic 缺位）
+
+
+class TestSubBatch211:
+    """P3：211 SubReqs 批量信封（flag 门控 + 会话级熔断）。"""
+
+    def test_batch_frame_shape_and_registry(self):
+        svc = _mk_svc(sub_batch_mode="211", sub_batch_codec=0)   # 明文形态断言（显式 codec=0）
+        reqs = [b"\x01", b"\x02", b"\x03"]
+        svc._pending_setup_frames = [
+            {"cmd": c, "req": r, "ext": bytes([2]) + c.to_bytes(2, "big")}
+            for c, r in zip((2114, 2116, 2115), reqs)]   # 全为 hqDaban 可批族（M2）
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        assert len(fake.sent) == 1                     # 3 项 → 1 批帧
+        fr = proto.parse_incoming(fake.sent[0])
+        assert fr["cmd"] == 211 and fr["kind"] == 4
+        assert fr["ext"] == bytes.fromhex("0200d3")    # 外层 ext=02 <211 BE>
+        # 帧体偏移：pkg1+len4+seq2+cmd2+flags1+extlen2+ext3=15，0xAA 前缀@15 → pb@16
+        items = proto.parse_sub_reqs_pb(fake.sent[0][16:])
+        assert [it["cmd"] for it in items] == [2114, 2116, 2115]
+        assert [it["data"] for it in items] == reqs    # codec=0 明文
+        assert all(it["codec"] == 0 and it["subId"] == it["cmd"] for it in items)
+        entries = svc._sub_registry.entries()
+        assert len(entries) == 3 and all(e.state == "pending" for e in entries)
+        assert [e.seq for e in entries] == [it["seqId"] for it in items]
+        assert all(e.batch_seq == fr["seq"] for e in entries)
+        assert svc._stats["batch_frames_sent"] == 1
+        assert svc._stats["queued_setup_subs"] == 0
+
+    def test_batch_split_by_max_items(self):
+        svc = _mk_svc(sub_batch_mode="211", sub_batch_max_items=10)
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": bytes([i]), "ext": bytes.fromhex("020842")}
+            for i in range(12)]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())        # 每 tick 取 8 项 → 1 批
+        assert len(fake.sent) == 1
+        svc._drain_setup_subs(fake, _seq_gen())        # 余 4 项 → 第 2 批
+        assert len(fake.sent) == 2
+        assert svc._stats["batch_frames_sent"] == 2
+
+    def test_batch_ack_expansion_then_item_ack(self):
+        svc = _mk_svc(sub_batch_mode="211")
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")},
+            {"cmd": 2116, "req": b"", "ext": bytes.fromhex("020844")}]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        fr = proto.parse_incoming(fake.sent[0])
+        items = proto.parse_sub_reqs_pb(fake.sent[0][16:])
+        q = svc.subscribe()
+        # 批 ack：SubReqs 回声带服务端分配 subId（U6 假说形态）
+        echo_items = [{"seqId": it["seqId"], "cmd": it["cmd"], "version": 0,
+                       "codec": 0, "subId": 900 + i, "data": b""}
+                      for i, it in enumerate(items)]
+        ack_ext = proto.encode_ext_attrs({2: 900, 3: b"batch|topic"})
+        svc._dispatch(proto.parse_incoming(_echo_ext(
+            fr["seq"], 211, 0x01, ack_ext, b"\xaa" + proto.build_sub_reqs_pb(echo_items))))
+        ev = [x for x in _drain_q(q) if x["type"] == "sub_batch_ack"]
+        assert ev and ev[-1]["matched"] == 2 and ev[-1]["orphan"] == 0
+        entries = svc._sub_registry.entries()
+        assert [e.sub_id for e in entries] == [900, 901]
+        assert all(e.state == "pending" for e in entries)   # 待逐项 ack
+        assert svc._sub_registry.unacked_batches() == []
+        # 逐项 ack（seq=item.seqId，U5 假说形态）
+        for it, e in zip(items, entries):
+            iext = proto.encode_ext_attrs({2: e.sub_id, 3: b"hq|t"})
+            svc._dispatch(proto.parse_incoming(_echo_ext(
+                it["seqId"], it["cmd"], 0x01, iext, b"\xaa\x00")))
+            assert e.state == "acked" and e.topic == b"hq|t"
+
+    def test_batch_ack_timeout_fallback_to_direct(self):
+        svc = _mk_svc(sub_batch_mode="211", sub_batch_ack_timeout_s=10)
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")}]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        assert svc._sub_batch_active()
+        q = svc.subscribe()
+        svc._check_batch_timeouts(time.time() + 100)
+        assert not svc._sub_batch_active() and svc._batch_broken
+        ev = [x for x in _drain_q(q) if x["type"] == "batch_fallback"]
+        assert ev and "batch_ack_timeout" in ev[-1]["reason"]
+        assert svc._stats["batch_fallback_n"] == 1
+        # 熔断后余量走单帧（direct 形态回归）
+        svc._pending_setup_frames = [
+            {"cmd": 2116, "req": b"", "ext": bytes.fromhex("020844")}]
+        svc._drain_setup_subs(fake, _seq_gen())
+        fr = proto.parse_incoming(fake.sent[-1])
+        assert fr["cmd"] == 2116   # 不再是 211 信封
+
+    def test_errresp_with_unacked_batch_fallback(self):
+        svc = _mk_svc(sub_batch_mode="211")
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")}]
+        svc._drain_setup_subs(FakeSocket([]), _seq_gen())
+        q = svc.subscribe()
+        err_pb = proto.pb_varint_field(1, 1002) + proto.pb_bytes(2, b"bad")
+        svc._dispatch(proto.parse_incoming(_srv(201, err_pb)))
+        assert svc._batch_broken
+        ev = [x for x in _drain_q(q) if x["type"] == "batch_fallback"]
+        assert ev and "server_error" in ev[-1]["reason"]
+
+    def test_codec1_encrypts_item_data(self):
+        svc = _mk_svc(sub_batch_mode="211", sub_batch_codec=1)
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")}]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        items = proto.parse_sub_reqs_pb(fake.sent[0][16:])
+        assert items[0]["codec"] == 1 and items[0]["data"] == b"\xaa\x01"
+
+    def test_inline_mode_stays_direct(self):
+        svc = _mk_svc(sub_batch_mode="211", setup_inline_subs=True)
+        assert not svc._sub_batch_active()
+
+    def test_invalid_mode_rejected(self):
+        with pytest.raises(ValueError):
+            _mk_svc(sub_batch_mode="999")
+
+    def test_full_session_211_mode(self, monkeypatch):
+        """会话级：7 内联帧不变 + daban 队列按批信封 drain（8 项/批/tick）。"""
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+            _echo(6, 3001, 0x01, _quotes_payload()),
+            _push(3001, b"hqList|1:20030/3001-0/", _quotes_payload()),
+        ]
+        svc = _mk_svc(sub_batch_mode="211")
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        assert len(fake.sent) == 7 + 11                # 2 tick×8 项=16 drain（7 批项+9 direct）
+        batch_frames = [f for f in fake.sent[7:] if proto.parse_incoming(f)["cmd"] == 211]
+        direct_frames = [f for f in fake.sent[7:] if proto.parse_incoming(f)["cmd"] != 211]
+        assert len(batch_frames) == 2
+        # M2 白名单：批内只允许 hqDaban 全局族，2103 页恒 direct
+        for f in batch_frames:
+            assert all(it["cmd"] in svc._BATCHABLE_CMDS
+                       for it in proto.parse_sub_reqs_pb(f[16:]))
+        assert all(proto.parse_incoming(f)["cmd"] == 2103 for f in direct_frames)
+        assert sum(len(proto.parse_sub_reqs_pb(f[16:])) for f in batch_frames) == 7
+        assert len(svc._sub_registry.entries()) == 18   # 16 drain + 内联 3001/3006 各 1
+        assert svc._stats["batch_frames_sent"] == 2
+        assert len(svc._pending_setup_frames) == 33    # 49 - 16
+
+    def test_default_codec_is_gcm(self):
+        """U2 实弹定案（2026-11-17 探针）：明文 item.data → 2008 杀连，默认必须 1。"""
+        assert _mk_svc()._sub_batch_codec == 1
+        assert _mk_svc(sub_batch_mode="211")._sub_batch_codec == 1
+
+    def test_inline_3001_3006_registered_and_acked(self, monkeypatch):
+        """内联 3001/3006 入注册表（探针实弹：ack attr3 topic 与推送 ext 逐字节匹配）。"""
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        svc = _mk_svc()
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        svc._session()
+        by_cmd = {e.cmd: e for e in svc._sub_registry.entries()}
+        assert 3001 in by_cmd and 3006 in by_cmd
+        # 3001 ack（seq=6）带 topic → acked；推送 ext 同字节 → 命中
+        # （会话响应不含 3001 echo，避免提前消费 pending seq）
+        topic = b"hqList|26:20030/3001-0/"
+        ext = proto.encode_ext_attrs({2: 3001, 3: topic})
+        svc._dispatch(proto.parse_incoming(_echo_ext(6, 3001, 0x01, ext, _quotes_payload())))
+        assert by_cmd[3001].state == "acked" and by_cmd[3001].topic == topic
+        svc._dispatch(proto.parse_incoming(_push(3001, topic, _quotes_payload())))
+        assert svc._sub_registry.stats()["push_topic_hit_n"] == 1
+
+    def test_error_nt_110_fail_visible(self):
+        """110 错误通知通道（211 探针实弹：批内被拒项 ErrResp 2000）解析上报不静默。"""
+        svc = _mk_svc()
+        q = svc.subscribe()
+        err_pb = proto.pb_varint_field(1, 2000) + proto.pb_bytes(2, "连接错误：2000".encode())
+        srv_body = (110).to_bytes(2, "big") + b"\x01" + (0).to_bytes(2, "big") + b"\xaa" + err_pb
+        svc._dispatch(proto.parse_incoming(_wrap(proto.PKG_SERVER, srv_body)))
+        ev = [x for x in _drain_q(q) if x["type"] == "error"]
+        assert ev and ev[-1]["channel"] == 110
+        assert ev[-1]["server"]["code"] == 2000
+        assert svc._stats["err_nt_n"] == 1
+
+    def test_non_batchable_cmds_go_direct(self):
+        """M2：211 模式下 2103/2203 等非白名单 cmd 恒 direct，不入批（U1 裁决）。"""
+        svc = _mk_svc(sub_batch_mode="211", sub_batch_codec=0)
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")},
+            {"cmd": 2103, "req": b"\x02", "ext": bytes.fromhex("020837")},
+            {"cmd": 2203, "req": b"\x03", "ext": bytes.fromhex("02089b"), "key": "600001"},
+        ]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        cmds = [proto.parse_incoming(f)["cmd"] for f in fake.sent]
+        assert cmds.count(211) == 1                 # 仅 2114 入批
+        assert 2103 in cmds and 2203 in cmds        # 非白名单 direct
+        batch = next(f for f in fake.sent if proto.parse_incoming(f)["cmd"] == 211)
+        assert [it["cmd"] for it in proto.parse_sub_reqs_pb(batch[16:])] == [2114]
+        e2203 = next(e for e in svc._sub_registry.entries() if e.cmd == 2203)
+        assert e2203.key == "600001" and e2203.batch_seq is None
+
+    def test_enc_failure_fallback_no_plaintext(self):
+        """m1：codec=1 enc 失败 → 熔断 + 全 direct，绝不产 codec=0 明文项（U2）。"""
+        svc = _mk_svc(sub_batch_mode="211", sub_batch_codec=1)
+        svc._codec.enc_fail = True
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")}]
+        fake = FakeSocket([])
+        q = svc.subscribe()
+        svc._drain_setup_subs(fake, _seq_gen())
+        assert svc._batch_broken and not svc._sub_batch_active()
+        assert proto.parse_incoming(fake.sent[0])["cmd"] == 2114   # direct 单帧
+        ev = [x for x in _drain_q(q) if x["type"] == "batch_fallback"]
+        assert ev and "batch_enc_failed" in ev[-1]["reason"]
+        assert svc._stats["batch_enc_fallback_n"] == 1
+
+    def test_invalid_codec_rejected(self):
+        """m2：codec 值域 fail-fast（非法整数不得静默变明文 lethal 模式）。"""
+        with pytest.raises(ValueError):
+            _mk_svc(sub_batch_codec=2)
+        with pytest.raises(ValueError):
+            _mk_svc(sub_batch_codec=-1)
+
+    def test_opaque_batch_ack_no_fallback(self):
+        """m8/U5：28B 不透明批 ack（本服务端真实形态）→ expanded=0、不熔断、
+        逐项 ack 仍匹配。"""
+        svc = _mk_svc(sub_batch_mode="211")
+        svc._pending_setup_frames = [
+            {"cmd": 2114, "req": b"\x01", "ext": bytes.fromhex("020842")},
+            {"cmd": 2116, "req": b"", "ext": bytes.fromhex("020844")}]
+        fake = FakeSocket([])
+        svc._drain_setup_subs(fake, _seq_gen())
+        fr = proto.parse_incoming(fake.sent[0])
+        items = proto.parse_sub_reqs_pb(fake.sent[0][16:])
+        q = svc.subscribe()
+        blob = bytes.fromhex("238ca62f000000002a1ab2b4") + b"\x00" * 16   # 28B 不可解
+        ack_ext = proto.encode_ext_attrs({2: 211})
+        svc._dispatch(proto.parse_incoming(_echo_ext(fr["seq"], 211, 0x01, ack_ext, blob)))
+        ev = [x for x in _drain_q(q) if x["type"] == "sub_batch_ack"]
+        assert ev and ev[-1]["expanded"] == 0 and ev[-1]["batch_known"]
+        assert not svc._batch_broken                # 不透明 ack 不误熔断
+        assert svc._sub_registry.unacked_batches() == []
+        for it in items:                            # 逐项 ack（subId=cmd 回声）仍匹配
+            iext = proto.encode_ext_attrs({2: it["cmd"], 3: b"hq|t"})
+            svc._dispatch(proto.parse_incoming(_echo_ext(
+                it["seqId"], it["cmd"], 0x01, iext, b"\xaa\x00")))
+        assert all(e.state == "acked" for e in svc._sub_registry.entries())
+
+    def test_heartbeat_dispatch_no_kill(self):
+        """M1：kind1 心跳（pkg 0x10，无 cmd 键）dispatch skip+计数，不 KeyError 杀会话。"""
+        svc = _mk_svc()
+        q = svc.subscribe()
+        hb = proto.parse_incoming(_wrap(0x10, b"\x00" * 4))
+        assert hb.get("fmt") == "heartbeat" and "cmd" not in hb
+        svc._dispatch(hb)                           # 不抛
+        assert svc._stats["heartbeat_n"] == 1
+        assert [x for x in _drain_q(q) if x["type"] == "error"] == []
+
+
+class TestUnsub402:
+    """P2：402/pkg 0x50 退订（flag 门控默认关）。"""
+
+    def _acked_zt(self, svc, key, sub_id, seq):
+        from backend.services.kpl_sub_registry import SubEntry
+        e = svc._sub_registry.register(SubEntry(
+            cmd=2203, req=proto.build_hq_req_pb(key),
+            ext=bytes.fromhex("02089b"), seq=seq, lane="zt_reason", key=key))
+        svc._sub_registry.on_ack(seq, sub_id=sub_id, topic=b"t" + key.encode())
+        return e
+
+    def test_unsub_disabled_zero_action(self):
+        svc = _mk_svc()
+        e = self._acked_zt(svc, "600001", 101, 1)
+        svc._sync_unsub_surface()
+        assert svc._pending_unsub == [] and e.state == "acked"
+
+    def test_unsub_diff_frame_and_ack(self):
+        svc = _mk_svc(unsub_enabled=True)
+        e1 = self._acked_zt(svc, "600001", 101, 1)
+        e2 = self._acked_zt(svc, "600002", 102, 2)
+        # 池快照只含 600001 → 600002 应退订
+        svc._daban_lists[1] = {0: {"items": [{"stock_id": "600001"}]}}
+        svc._sync_unsub_surface()
+        assert svc._pending_unsub == [102]
+        assert e1.state == "acked" and e2.state == "unsub_sent"
+        fake = FakeSocket([])
+        q = svc.subscribe()
+        svc._drain_unsub(fake, _seq_gen())
+        assert len(fake.sent) == 1
+        fr = proto.parse_incoming(fake.sent[0])
+        assert fr["cmd"] == 402 and fake.sent[0][0] == 0x50   # pkg 0x50
+        assert proto.parse_unsub_id_req_pb(fake.sent[0][13:]) == [102]
+        assert svc._stats["unsub_sent_n"] == 1
+        ev = [x for x in _drain_q(q) if x["type"] == "sub_unsub"]
+        assert ev and ev[-1]["sub_ids"] == [102]
+        # kind5 ack（UnsubIdReq 回声）→ 注册表移除
+        ack_body = (99).to_bytes(2, "big") + (402).to_bytes(2, "big") + b"\x01" \
+            + (0).to_bytes(2, "big") + b"\xaa" + proto.build_unsub_id_req_pb([102])
+        svc._dispatch(proto.parse_incoming(_wrap(0x50, ack_body)))
+        assert e2.state == "unsubscribed"
+        ev2 = [x for x in _drain_q(q) if x["type"] == "sub_unsub_ack"]
+        assert ev2 and ev2[-1]["removed"] == 1
+
+    def test_unsub_opaque_ack_seq_fallback(self):
+        """P3' 实弹定案（2026-11-17）：kind5 ack payload=28B 不透明状态块
+        （DEC 失败，非 UnsubIdReq 回声）→ subIds 按 seq 从已发原请求取。"""
+        svc = _mk_svc(unsub_enabled=True)
+        e1 = self._acked_zt(svc, "600001", 101, 1)
+        svc._pending_unsub = [101]
+        svc._sub_registry.mark_unsub_sent([e1])
+        fake = FakeSocket([])
+        q = svc.subscribe()
+        svc._drain_unsub(fake, _seq_gen())
+        sent_seq = proto.parse_incoming(fake.sent[0])["seq"]
+        assert svc._unsub_seq_ids[sent_seq] == [101]
+        # 28B 状态块（实弹样本同构：8B 前缀 + 20B 不可解）
+        blob = bytes.fromhex("72993e82000000002a6477fdfa4413bab9d41f8330319f29d6fb5584")
+        ack_body = sent_seq.to_bytes(2, "big") + (402).to_bytes(2, "big") \
+            + b"\x01" + (0).to_bytes(2, "big") + blob
+        svc._dispatch(proto.parse_incoming(_wrap(0x50, ack_body)))
+        assert e1.state == "unsubscribed"
+        assert sent_seq not in svc._unsub_seq_ids
+        ev = [x for x in _drain_q(q) if x["type"] == "sub_unsub_ack"]
+        assert ev and ev[-1]["sub_ids"] == [101] and ev[-1]["removed"] == 1
+        assert svc._stats.get("unsub_ack_unmatched_n", 0) == 0
+
+    def test_unsub_ack_unmatched_fail_visible(self):
+        """seq 无映射且 payload 不可解 → 计数暴露不静默。"""
+        svc = _mk_svc(unsub_enabled=True)
+        blob = bytes.fromhex("72993e8200000000" + "2a" * 20)
+        ack_body = (77).to_bytes(2, "big") + (402).to_bytes(2, "big") \
+            + b"\x01" + (0).to_bytes(2, "big") + blob
+        svc._dispatch(proto.parse_incoming(_wrap(0x50, ack_body)))
+        assert svc._stats["unsub_ack_unmatched_n"] == 1
+
+    def test_unsub_ack_seq_priority_over_garbage_payload(self):
+        """m5：seq 映射优先；payload 含垃圾 f1 varint 不误清条目。"""
+        svc = _mk_svc(unsub_enabled=True)
+        e1 = self._acked_zt(svc, "600001", 101, 1)
+        svc._pending_unsub = [101]
+        svc._sub_registry.mark_unsub_sent([e1])
+        fake = FakeSocket([])
+        svc._drain_unsub(fake, _seq_gen())
+        sent_seq = proto.parse_incoming(fake.sent[0])["seq"]
+        garbage = b"\xaa" + proto.pb_varint_field(1, 999)   # 若 parse-first 会误取 [999]
+        ack_body = sent_seq.to_bytes(2, "big") + (402).to_bytes(2, "big") \
+            + b"\x01" + (0).to_bytes(2, "big") + garbage
+        svc._dispatch(proto.parse_incoming(_wrap(0x50, ack_body)))
+        assert e1.state == "unsubscribed"           # 按 seq 取 [101]，非垃圾 999
+        assert svc._stats.get("unsub_ack_unmatched_n", 0) == 0
+
+    def test_unsub_session_frame_cap(self):
+        """m6：会话级 402 帧预算耗尽 → 门禁拦截（off 长寿会话防超 §5 预算）。"""
+        svc = _mk_svc(unsub_enabled=True)
+        svc._unsub_frames_sent = svc._UNSUB_MAX_FRAMES
+        svc._pending_unsub = [101]
+        fake = FakeSocket([])
+        svc._drain_unsub(fake, _seq_gen())
+        assert fake.sent == []
+
+    def test_resub_requeue_preserves_key_for_unsub(self):
+        """m4：220 重发保留 key/lane → 重发后 per-stock 条目仍可被 unsub diff 命中。"""
+        svc = _mk_svc()
+        e = self._acked_zt(svc, "600001", 2203, 1)   # topic=b"t600001", lane=zt_reason
+        svc._handle_resub_nt(b"", dec_payload=proto.pb_bytes(1, e.topic))
+        assert svc._pending_setup_frames, "选择性重发应入队"
+        rq = svc._pending_setup_frames[0]
+        assert rq["key"] == "600001" and rq["lane"] == "zt_reason"
+
+    def test_unsub_debounce_and_max_ids(self):
+        svc = _mk_svc(unsub_enabled=True)
+        svc._pending_unsub = list(range(1, 26))   # 25 id → 首帧 20，余 5
+        fake = FakeSocket([])
+        svc._drain_unsub(fake, _seq_gen())
+        assert len(fake.sent) == 1
+        assert proto.parse_unsub_id_req_pb(fake.sent[0][13:]) == list(range(1, 21))
+        assert svc._pending_unsub == list(range(21, 26))
+        svc._drain_unsub(fake, _seq_gen())        # 防抖 5s 内 → 不发
+        assert len(fake.sent) == 1
+        svc._unsub_last_ts -= 10                  # 模拟防抖窗口已过
+        svc._drain_unsub(fake, _seq_gen())
+        assert len(fake.sent) == 2
+        assert proto.parse_unsub_id_req_pb(fake.sent[1][13:]) == list(range(21, 26))
+
+    def test_unsub_empty_pool_unsub_all(self):
+        svc = _mk_svc(unsub_enabled=True)
+        self._acked_zt(svc, "600001", 101, 1)
+        svc._sync_unsub_surface()                 # 无池快照 → keep 空
+        assert svc._pending_unsub == [101]
+
+
+class TestKaMode:
+    """P4 保活 A/B flag（2026-11-17 实弹裁决）：610 重发第 5 次→1106 确定性
+    杀连（3/3 中位 67s）；off 全 tick 3001 轮转 3/3 零错误 >120s，且 App 每连接
+    仅认证一次——默认 off；回退 KPL_KA_MODE=610。"""
+
+    def _run_loop_session(self, monkeypatch, **kw):
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = (b"\xaa" + proto.pb_varint_field(1, 1793033481)
+                      + proto.pb_bytes(7, b"https://x/1.data"))
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        svc = _mk_svc(loop_send_grace_s=0.0, daban_subs=False, daban_lhb=False,
+                      lhb_realtime=False, zt_reason_subs=False, theme_subs=False,
+                      stock_detail_subs=False, **kw)
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
+        clock = [1000.0]
+        monkeypatch.setattr(time, "time", lambda: clock[0])
+        orig_read = svc._read_frame
+        reads = [0]
+
+        def fake_read(sock):
+            if fake._stream or svc._rx:   # auth 相位：真实读（_rx 残帧也算有数据），时钟不动
+                return orig_read(sock)
+            clock[0] += 1.1             # 读循环：每 tick 推进 >1s 触发保活块
+            reads[0] += 1
+            return "timeout" if reads[0] <= 10 else None
+
+        monkeypatch.setattr(svc, "_read_frame", fake_read)
+        svc._session()
+        return svc, fake
+
+    @staticmethod
+    def _cmd_count(fake, cmd):
+        return sum(1 for f in fake.sent if f[7:9] == cmd.to_bytes(2, "big"))
+
+    def test_610_resends_every_8_ticks(self, monkeypatch):
+        svc, fake = self._run_loop_session(monkeypatch, ka_mode="610")
+        assert svc._ka_mode == "610"
+        # 10 tick：hb_flip 1/9 两次重发 + 初始认证 1 = 3 帧 610
+        assert self._cmd_count(fake, 610) == 3
+        assert self._cmd_count(fake, 3001) == 1 + 8   # 内联 1 + 轮转 8
+        assert svc.status()["ka_mode"] == "610"
+
+    def test_default_off_no_610_resend_all_3001(self, monkeypatch):
+        svc, fake = self._run_loop_session(monkeypatch)
+        assert svc._ka_mode == "off"                  # P4 裁决后默认
+        assert self._cmd_count(fake, 610) == 1        # 仅初始认证，零重发
+        assert self._cmd_count(fake, 3001) == 1 + 10  # 全 tick 轮转
+        assert svc.status()["ka_mode"] == "off"
+
+    def test_invalid_ka_mode_raises(self):
+        with pytest.raises(ValueError):
+            _mk_svc(ka_mode="bogus")

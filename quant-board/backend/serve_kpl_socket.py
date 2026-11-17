@@ -75,6 +75,30 @@ _THEME_SUBS = _env_flag("KPL_THEME_SUBS")
 # rplate=2010，频控预算=池成员×4 帧/会话，每 lane 每 tick 1 帧 + 0.3s 拟人停顿）。
 _STOCK_DETAIL_SUBS = os.environ.get("KPL_STOCK_DETAIL_SUBS", "0").strip().lower() in (
     "1", "true", "on", "yes")
+# 订阅注册表化 + 211 批量增强（2026-11-17 P0-P3，方案唯一来源
+# docs/kpl-socket/sub-registry-refactor-plan.md）：
+# KPL_SUB_REGISTRY=0 → 220 全量重发旧行为（注册表观测始终在）；默认开。
+# KPL_SUB_BATCH=direct|211 → 订阅帧形态；默认 direct（现状逐字节），211 需探针
+#   U1-U8 钉死 + 用户批准后灰度；会话级熔断自动回退单帧。
+# KPL_SUB_BATCH_CODEC=0|1 → 211 item.data 明文/GCM（U2 实弹定案：必须 GCM，默认 1）。
+# KPL_UNSUB_ENABLED=1 → 402/pkg 0x50 退订（探针 P3 钉死前默认关）。
+# KPL_KA_MODE=610|off → 保活模式（P4 A/B 实弹裁决 2026-11-17：610 重发第 5 次
+#   →1106 确定性杀连（3/3 中位 67s）；off 3/3 零错误 >120s 且更贴 App（每连接
+#   仅认证一次）→ 默认 off；回退置 610。生产短命双因素：610 重发第 5 次→1106
+#   （最小订阅面受控实验）+ 全订阅面爆发指纹→10054（主导，方案 §7.1.1）。
+_SUB_REGISTRY = _env_flag("KPL_SUB_REGISTRY")
+_SUB_BATCH_MODE = os.environ.get("KPL_SUB_BATCH", "direct").strip().lower()
+if _SUB_BATCH_MODE not in ("direct", "211"):
+    raise RuntimeError(f"KPL_SUB_BATCH 非法值 {_SUB_BATCH_MODE!r}（仅支持 direct|211）")
+_SUB_BATCH_CODEC_RAW = os.environ.get("KPL_SUB_BATCH_CODEC", "1").strip()
+if _SUB_BATCH_CODEC_RAW not in ("0", "1"):
+    raise RuntimeError(f"KPL_SUB_BATCH_CODEC 非法值 {_SUB_BATCH_CODEC_RAW!r}（仅 0|1）")
+_SUB_BATCH_CODEC = int(_SUB_BATCH_CODEC_RAW)   # U2 实弹：明文=2008 杀连，默认 1；m2 值域 fail-fast
+_UNSUB_ENABLED = os.environ.get("KPL_UNSUB_ENABLED", "0").strip().lower() in (
+    "1", "true", "on", "yes")
+_KA_MODE = os.environ.get("KPL_KA_MODE", "off").strip().lower()
+if _KA_MODE not in ("610", "off"):
+    raise RuntimeError(f"KPL_KA_MODE 非法值 {_KA_MODE!r}（仅支持 610|off）")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
 _LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
@@ -113,7 +137,15 @@ _service = KplCollectorService(
     loop_send_grace_s=float(os.environ.get("KPL_LOOP_SEND_GRACE", "5")),
     # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；
     # 显式关闭 KPL_ENFORCE_TRADING_HOURS=0（切换需重启进程）
-    enforce_trading_hours=_env_flag("KPL_ENFORCE_TRADING_HOURS"))
+    enforce_trading_hours=_env_flag("KPL_ENFORCE_TRADING_HOURS"),
+    # 订阅注册表化 + 211 批量 + 402 退订（2026-11-17，切换需重启进程）
+    sub_registry_enabled=_SUB_REGISTRY,
+    sub_batch_mode=_SUB_BATCH_MODE,
+    sub_batch_codec=_SUB_BATCH_CODEC,
+    sub_batch_max_items=int(os.environ.get("KPL_SUB_BATCH_MAX_ITEMS", "10") or 10),
+    sub_batch_ack_timeout_s=float(os.environ.get("KPL_SUB_BATCH_ACK_TIMEOUT", "10") or 10),
+    unsub_enabled=_UNSUB_ENABLED,
+    ka_mode=_KA_MODE)
 
 
 def _get_service() -> KplCollectorService:

@@ -241,20 +241,48 @@ QuantBoard 主后端 :8000
 - **★ 我们缺失的续命机制：订阅包缓存 + ResubNt（cmd 220）重发**（`qn0.j`）：
   App 维护 `this.e`=已成功订阅包列表（「订阅成功, cmd:X, 当前订阅个数:N」，
   ack 后入列、会话断开清空）；服务端发 220（`Base.ResubNt{topics}`）=订阅注册表
-  失效通知：topics 空→全量重发、非空→按 topic 匹配重发。**已落地**（本日）：
-  `_resub_cache`（四个 drain 发送成功后缓存 {cmd,req,ext} 原料，去重+500 上限）+
-  `_handle_resub_nt`（220 → 全量重入 setup 队头，8 帧/tick 拟人节流复用；topic
-  粒度不可靠——0x40 ext 是二进制路由头非 App 字符串 topic——故两种情况都全量，
-  topics 进事件供诊断）+ `parse_resub_topics` + stats `resub_events/resub_requeued`。
+  失效通知：topics 空→全量重发、非空→按 topic 匹配重发。**已落地**（2026-11-17
+  注册表化 P1，替代旧 `_resub_cache`）：`kpl_sub_registry.SubRegistry`（四 drain +
+  内联 3001/3006 发送成功后 register {cmd,req,ext,seq,lane,key}，ack attr2/attr3
+  回填权威 subId/topic）+ `_handle_resub_nt`（220 → topics 非空按 ack attr3 topic
+  **选择性**重发、无匹配降级全量 fallback_all、`KPL_SUB_REGISTRY=0` 过渡全量
+  all_legacy；重发项置 stale 移出再 register，8 帧/tick 拟人节流复用；topic 逐字节
+  匹配已实弹验证）+ `parse_resub_topics` + stats `resub_events/resub_requeued/
+  resub_selective_n/resub_fallback_n`。旧 `_resub_cache`（去重+500 上限、两种情况
+  都全量）已删除（单一事实源 §1.2-1）。
   注：捕获窗内未观察到 220 帧（服务端何时发未定），此为 App 同款正确性投资。
-- **另发现 App 批量订阅协议 cmd 211 SubReqs**（`{seqId,cmd,version,codec,subId,data}`，
-  ack 带 subId；配套 UnsubReq/UnsubIdReq）——服务端管理的订阅注册表。我们直发
-  0x40 帧可用（有响应+推送）但无注册表语义；211 化是后续可选重构（需协议 RE）。
+- **App 批量订阅协议 cmd 211 SubReqs —— RE 收口（2026-11-17）**：proto 合同
+  `{reqs=1 repeated Item{seqId=1,cmd=2,version=3,codec=4,subId=5,data=20}}` +
+  `qn0.o()` 211 ack 逐项展开（按 item.seqId/subId 预置待回复包）确实存在，但
+  **当前 App 版本全量反编译源中无 211 发送路径**——实际订阅=单帧 0x40 + ext
+  attr2=subId（客户端 hint，观测值=cmd，2BE 线格式与我们现行 ext 逐字节同构），
+  注册表是客户端 qn0.e 列表，**权威 subId 取 ack 帧 attr2（服务端分配）**、
+  topic=ack attr3（推送按 topic 路由非按 cmd）；退订=cmd 402/pkg 0x50
+  UnsubIdReq{subIds}。211 属「服务端可选批量信封」，请求侧语义未验证。
+  重构方案（注册表化主轴 + 211 批量可选增强 + 402 退订 + 610 保活 A/B，
+  五阶段/频控预算/探针预登记）唯一来源：
+  [sub-registry-refactor-plan.md](sub-registry-refactor-plan.md)（**P0-P4 全部实施 +
+  探针全部开火裁决**：全 mock 413 passed；211 有条件受理——item.data 必须 GCM
+  （明文→2008 杀连），且仅 hqDaban 全局族可批（2103/2203/2013 批内逐项拒 2000，
+  cmd 110 错误通知通道）；可批仅 ~8 帧/会话 ~170，**裁决保持 KPL_SUB_BATCH=direct
+  默认不启用**；逐项 ack seq=item.seqId/subId=cmd 回声/推送 ext==ack attr3 topic
+  逐字节匹配实弹验证；**批内盘中推送交付已验证**（pushbatch vs pushdirect
+  11/18/16 vs 12/19/17 同量级）；**402 已裁决**：kind5 ack=28B 不透明状态块，
+  subIds 按 seq 从原请求取（App qn0.d/q 同款），退订后推送即停差分实弹成立，
+  KPL_UNSUB_ENABLED 仍默认关——**per-stock 共享 subId 误退阻塞**（生产 collision_n=133），
+  需唯一 subId/topic 退订设计+探针后方可启用（方案 §12）；**P4 已裁决：610 重发第 5 次→1106 确定性
+  杀连（3/3 中位 67s），off 3/3 零错误 >120s → 默认已切 KPL_KA_MODE=off**；
+  裁决与证据链见方案 §1.3/§7.1/§11）。
 - **已对齐项（逐项比对确认）**：TLS+SNI(socket.kaipan.com) ✓、connType=99 ✓
   （App `SocketRepository.f6127a=99`）、flags=(d<<3)|enc ✓、auth d=2（flags 0x11）✓。
-- **差异项（已知未动）**：我们每 8 tick 重发 610 AuthReq 保活——App 无此行为
-  （历史调优产物，暂保留观察）；我们 15s 读超时 continue（App 20s 自断重连）。
-- **运维含义**：不再追求单会话长寿；正确姿势=每个短会话的爆发前段就含关键订阅
+- **差异项（P4 已裁决消除，2026-11-17 下午盘 A/B）**：旧行为每 8 tick 重发 610
+  AuthReq 保活（App 无此行为）——实弹 3/3 确定性：**第 5 次重发→1106 立即杀连**
+  （最小订阅面受控实验，中位寿命 67s）；off（全 tick 3001 轮转）3/3 零错误
+  存活 >120s（右删失）且推送持续流转非僵尸 → **默认已切 KPL_KA_MODE=off**
+  （更贴 App 每连接仅认证一次；回退置 610）。另：我们 15s 读超时 continue
+  （App 20s 自断重连）仍保留。
+- **运维含义**：P4 裁决后单会话长寿已可达（off >120s 零错误，上限待长窗观测），
+  重连链仍作兑底；爆发前段含关键订阅的纪律不变
   （已落地：09:00 门禁 + pid=8 priority 前插 + 序列窗 (9,15)-(9,27)，见
   hotlist-jev 预登记 §7.12）。§3.4 各轮「螺旋控流」补丁方向正确（逼近 App 行为
   模型），本节补齐了缺失的注册表层。
@@ -385,6 +413,15 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
 ## 六、测试合同
 
 - `backend/services/__tests__/test_kpl_socket_protocol.py`（16 用例，含负数 varint 回归）+ `test_kpl_collector_service.py`（14 用例，含 signsvc EOF 哨兵回归）+ `test_kpl_daban_protocol.py`（14 用例）+ `tests/api/test_kpl_proxy_routes.py`（4 用例，mock 上游 502 fail-visible + WS 双向中继）+ `test_kpl_pc_codec.py`（8 用例，全 mock PC codec 合同），**HEAD 口径合计 56 passed**（以 pytest 实跑为准；工作区含他人未提交测试时总数会更大）。
+- **2026-11-17 订阅注册表化 P0-P3 落地后基线**：新增 `test_kpl_sub_registry.py`
+  （注册表纯逻辑 25 用例）；协议层增 SubReqs/UnsubIdReq/ext 属性/kind5/kind1
+  用例；collector 增 ack 捕获/220 选择性/211 批信封+熔断/402 退订用例。
+  KPL 九文件专项实跑 **413 passed**（含 211 开火后修正：110 错误通道/内联
+  3001/3006 登记/codec 安全默认；下午盘增 P4 ka_mode + 402 不透明 ack seq 回填；
+  独立 review 修复 M1 heartbeat/M2 白名单/M3 冲突护栏/m1-m8 等，见方案 §13）；
+  `backend/services/__tests__ + tests/api`
+  合计 **573 passed**；`tests/hotlist` **1582 passed, 6 skipped**（全 mock，
+  零真实连接/signsvc/jev；211/402/P4 探针为预登记开火路径，非 pytest）。
 - **红线：pytest 一律全 mock（FakeCodec/FakeSocket/FakeCore），零真实 KPL 连接、零真实 WBE 调用、零真实 ELF 加载**。真实连接与 PC 模拟核差分只走预登记的开火路径（人工运维诊断 / 开发期差分脚本）。
 - 会话状态机测试覆盖：全帧序（260/610/602/2301/2303/2304/3001/3006）、fail-visible 断言（解码失败必须广播 error 事件，不静默丢弃）。
 
@@ -697,8 +734,12 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where-Object { $_.Co
   逐日回退（≤7 天）并**显式标注**「实时无快照·回退存档 YYYY-MM-DD」（统计行 + 页头数据源），
   轮询不停、实时帧到流即清标记切回实时；回退态不改历史选日/日期框（否则被当成历史模式停 4s
   轮询），回退扫档 60s 节流；同一条降级消息 60s 内只进一次状态栏（现场被刷 22 条）。无本地
-  存档通道的【即将涨停/风向标】保持结构化原因（不冒领存档）。**已知未解**：会话寿命仍由上游
-  风控/拟人链决定（261 作答链虽已实现但服务器不下发，见 §11.10）；本回退只保证「实时缺帧期仍
+  存档通道的【即将涨停/风向标】保持结构化原因（不冒领存档）。**会话寿命双因素
+  （2026-11-17 P4 A/B + 生产观测）**：① 610 重发第 5 次→1106 确定性杀连（最小
+  订阅面受控实验 3/3，中位 67s）——默认已切 KPL_KA_MODE=off 消除该因素；
+  ② 生产全订阅面（~170 帧爆发）仍受爆发指纹风控 ~56-63s 10054 重置（off 后
+  实测，既有问题非 P4 引入，§3.4 螺旋控流方向继续跟踪）；261 作答链服务器
+  不下发见 §11.10。本回退只保证「实时缺帧期仍
   可见最近事实」，不掩盖 `no_daban_list_snapshot`。验证：Playwright 静态页 6 项（复现 pid=2/3
   无快照 + 11-06 有档：回退渲染、统计行/页头标注、日期框保持空、切模式互不污染、状态栏不刷
   重复、无 JS 错误）+ pytest 静态守卫 10/10（`tests/hotlist/test_relay_page_kplstock.py`）。

@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.services import kpl_socket_protocol as proto  # noqa: E402
@@ -546,3 +548,113 @@ class TestStockDetailChannels20261111:
                        proto.parse_stock_related_plate_resp):
             d = parser(b"\xff\xff\xff")
             assert isinstance(d, dict) and "raw_len" in d
+
+
+class TestSubReqs211:
+    """211 SubReqs 批量订阅信封（2026-11-17 P0，Base.java 描述符合同）。"""
+
+    def test_build_sub_reqs_pb_bytes(self):
+        items = [{"seqId": 7, "cmd": 2103, "version": 0, "codec": 0,
+                  "subId": 2103, "data": b"\x08\x08"}]
+        pb = proto.build_sub_reqs_pb(items)
+        # reqs=f1 LEN；Item 内 f1..f5 varint + f20 LEN（tag=a2 01 两字节）
+        assert pb[0] == 0x0A                      # f1 wire2
+        assert pb[2] == 0x08 and pb[3] == 7       # seqId=7
+        assert pb[4] == 0x10 and pb[5] == 0xB7 and pb[6] == 0x10  # cmd=2103
+        assert b"\xa2\x01\x02\x08\x08" in pb      # f20 data
+        back = proto.parse_sub_reqs_pb(pb)
+        assert back == items
+
+    def test_build_multi_items_roundtrip(self):
+        items = [
+            {"seqId": 1, "cmd": 2114, "version": 0, "codec": 0, "subId": 2114, "data": b""},
+            {"seqId": 2, "cmd": 2203, "version": 3, "codec": 1, "subId": 99,
+             "data": b"\x0a\x06600001"},
+        ]
+        assert proto.parse_sub_reqs_pb(proto.build_sub_reqs_pb(items)) == items
+
+    def test_parse_tolerates_garbage(self):
+        assert proto.parse_sub_reqs_pb(b"") == []
+        assert proto.parse_sub_reqs_pb(b"\xff\xff") == []
+        # 缺位字段补 0/空（宽容模式）
+        out = proto.parse_sub_reqs_pb(proto.pb_bytes(1, proto.pb_varint_field(2, 2116)))
+        assert out == [{"seqId": 0, "cmd": 2116, "version": 0, "codec": 0,
+                        "subId": 0, "data": b""}]
+
+
+class TestUnsubIdReq402:
+    def test_build_nonpacked_roundtrip(self):
+        pb = proto.build_unsub_id_req_pb([7, 300])
+        assert pb == proto.pb_varint_field(1, 7) + proto.pb_varint_field(1, 300)
+        assert proto.parse_unsub_id_req_pb(pb) == [7, 300]
+
+    def test_parse_packed_compat(self):
+        packed = proto.pb_bytes(1, proto.encode_varint(5) + proto.encode_varint(9))
+        assert proto.parse_unsub_id_req_pb(packed) == [5, 9]
+
+    def test_parse_empty(self):
+        assert proto.parse_unsub_id_req_pb(b"") == []
+
+
+class TestExtAttrs:
+    """ext 属性线类型（App SocketReaderThread：key1=8B/key2=2B/key3=len2+bytes/key4=4B）。"""
+
+    def test_attr2_subid_two_bytes_be(self):
+        # z6.c(int) 只写 2 字节 BE——与现行订阅 ext `02 <cmd BE>` 逐字节同构
+        ext = proto.encode_ext_attrs({2: 3006})
+        assert ext == bytes.fromhex("020bbe")
+        assert proto.parse_ext_attrs(ext) == {2: 3006}
+
+    def test_attr3_topic_string(self):
+        ext = proto.encode_ext_attrs({3: b"hq|1:20030/3006-0/"})
+        assert ext[0] == 3
+        assert proto.parse_ext_attrs(ext) == {3: b"hq|1:20030/3006-0/"}
+        # str 输入按 utf-8 编码
+        assert proto.encode_ext_attrs({3: "ab"}) == bytes.fromhex("0300026162")
+
+    def test_mixed_attrs_sorted_roundtrip(self):
+        attrs = {4: 0x01020304, 2: 211, 3: b"t", 1: 2**40}
+        ext = proto.encode_ext_attrs(attrs)
+        assert ext[0] == 1 and ext[9] == 2     # key 升序
+        assert proto.parse_ext_attrs(ext) == attrs
+
+    def test_unknown_key_fail_visible(self):
+        with pytest.raises(proto.FrameDecodeError):
+            proto.encode_ext_attrs({9: 1})
+        with pytest.raises(proto.FrameDecodeError):
+            proto.parse_ext_attrs(bytes.fromhex("0900"))
+
+    def test_truncated_fail_visible(self):
+        for bad in (bytes.fromhex("0200"), bytes.fromhex("0300056162"),
+                    bytes.fromhex("0100"), bytes.fromhex("040000")):
+            with pytest.raises(proto.FrameDecodeError):
+                proto.parse_ext_attrs(bad)
+
+
+class TestFrameParseExtensions:
+    def test_echo_frame_ext_captured(self):
+        ext = bytes.fromhex("0208370300026162")   # attr2=2103 + attr3="ab"
+        body = (42).to_bytes(2, "big") + (2103).to_bytes(2, "big") \
+            + b"\x01" + len(ext).to_bytes(2, "big") + ext + b"\xaa\x00"
+        fr = proto.parse_incoming(bytes([0x40]) + len(body).to_bytes(4, "big") + body)
+        assert fr["fmt"] == "echo" and fr["kind"] == 4
+        assert fr["seq"] == 42 and fr["ext"] == ext
+        assert proto.parse_ext_attrs(fr["ext"]) == {2: 2103, 3: b"ab"}
+
+    def test_unsub_ack_pkg_0x50(self):
+        payload = b"\xaa" + proto.build_unsub_id_req_pb([7])
+        body = (9).to_bytes(2, "big") + (402).to_bytes(2, "big") + b"\x01" \
+            + (0).to_bytes(2, "big") + payload
+        fr = proto.parse_incoming(bytes([0x50]) + len(body).to_bytes(4, "big") + body)
+        assert fr["fmt"] == "unsub_ack" and fr["kind"] == 5 and fr["cmd"] == 402
+
+    def test_heartbeat_pkg_0x10(self):
+        fr = proto.parse_incoming(bytes([0x10]) + (2).to_bytes(4, "big") + b"\x00\x01")
+        assert fr["fmt"] == "heartbeat" and fr["kind"] == 1
+
+    def test_push_ext_raw_preserved(self):
+        ext = bytes.fromhex("020bbe")   # 二进制 topic（utf-8 replace 有损）
+        body = len(ext).to_bytes(2, "big") + ext + (3006).to_bytes(2, "big") \
+            + b"\x01" + (0).to_bytes(2, "big") + b"\xaa"
+        fr = proto.parse_incoming(bytes([0x60]) + len(body).to_bytes(4, "big") + body)
+        assert fr["ext_raw"] == ext

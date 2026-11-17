@@ -34,6 +34,7 @@ import datetime
 from backend.services import kpl_daban_protocol as daban
 from backend.services import kpl_lhb_protocol as lhb
 from backend.services import kpl_socket_protocol as proto
+from backend.services.kpl_sub_registry import SubEntry, SubRegistry
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 # 与 .tmp_review/kpl_collector.py 一致的连接参数（实测有效组合）
@@ -289,7 +290,25 @@ class KplCollectorService:
         # 详情四通道每 lane 订阅面限量（2026-11-11 探针定案：块发后静默才触发
         # 服务器 flush，块长必须压缩到会话寿命内；env KPL_DETAIL_MAX_STOCKS）
         stock_detail_max_stocks: int = 15,
+        # 订阅注册表化 + 211 批量增强（2026-11-17 P0-P3，方案唯一来源
+        # docs/kpl-socket/sub-registry-refactor-plan.md）：
+        # sub_registry_enabled：220 选择性重发开关（False=全量重发旧行为；
+        #   注册表观测始终在，单一事实源不双轨）
+        # sub_batch_mode：direct=单帧（现状逐字节）| 211=SubReqs 批量信封
+        #   （探针 U1-U8 钉死前默认 direct；会话级熔断自动回退）
+        # sub_batch_codec：item.data 编码 0=明文 pb / 1=GCM（U2 待探针）
+        # unsub_enabled：402/pkg 0x50 退订（探针 P3 钉死前默认关）
+        sub_registry_enabled: bool = True,
+        sub_batch_mode: str = "direct",
+        sub_batch_codec: int = 1,   # U2 实弹定案（2026-11-17）：item.data 必须 GCM，
+                                    # 明文（0）→ ErrResp 2008 杀连，默认 1 为安全值
+        sub_batch_max_items: int = 10,
+        sub_batch_ack_timeout_s: float = 10.0,
+        unsub_enabled: bool = False,
+        ka_mode: str = "off",
     ):
+        if ka_mode not in ("610", "off"):
+            raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off）")
         self._codec = codec
         self._host = host
         self._port = port
@@ -305,10 +324,12 @@ class KplCollectorService:
         self._auth_phase_delay = max(0.0, float(auth_phase_delay))
         self._auth_phase_jitter = max(0.0, float(auth_phase_jitter))
         self._loop_send_grace_s = max(0.0, float(loop_send_grace_s))
-        # drain 帧间停顿（实验旋钮：降速到 App 逐股节奏时调大）；610 重发开关
-        # （App 每连接仅认证一次，重发认证帧是异常指纹候选，实验判别用）
+        # drain 帧间停顿（实验旋钮：降速到 App 逐股节奏时调大）；保活模式
+        # （P4 A/B 实弹裁决 2026-11-17：610 重发第 5 次→1106 确定性杀连
+        # （3/3，中位寿命 67s）；off 全 tick 3001 轮转 3/3 零错误存活 >120s，
+        # 且 App 每连接仅认证一次——off 更贴 App。默认 off；回退 KPL_KA_MODE=610）
         self._drain_pause = (0.3, 0.15)
-        self._ka_610 = True
+        self._ka_mode = ka_mode
         self._setup_inline_subs = bool(setup_inline_subs)
         self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
         self._DETAIL_BLOCK_MAX_STOCKS = self._stock_detail_max_stocks
@@ -347,9 +368,28 @@ class KplCollectorService:
         # 2026-11-10 重排：daban 家族（21xx/2103/2112/3004/3101）不再在 setup 内联发送，
         # 改为入队由读循环限流续发（_drain_setup_subs）——见 _session 6c 注释
         self._pending_setup_frames: List[Dict[str, Any]] = []
-        # 已发订阅缓存（App qn0.this.e 同款语义：会话内已成功发出的订阅包原料，
-        # 供 cmd 220 ResubNt 重发；会话重建时随 setup 队列重建自然失效，不需清理）
-        self._resub_cache: List[Dict[str, Any]] = []
+        # 订阅注册表（2026-11-17 P1，App qn0.e 同款语义，单一事实源替代旧
+        # _resub_cache）：已发订阅原料 + ack attr2/attr3 回填 + 220 选择性重发
+        # + 402 退订 diff + 211 批跟踪；会话重建时 clear_session（App qn0.f）
+        self._sub_registry = SubRegistry()
+        self._sub_registry_enabled = bool(sub_registry_enabled)
+        mode = str(sub_batch_mode or "direct").strip().lower()
+        if mode not in ("direct", "211"):
+            raise ValueError(f"sub_batch_mode 非法值 {sub_batch_mode!r}（仅 direct|211）")
+        self._sub_batch_mode = mode
+        if int(sub_batch_codec) not in (0, 1):
+            raise ValueError(f"sub_batch_codec 非法值 {sub_batch_codec!r}（仅 0|1）")
+        self._sub_batch_codec = int(sub_batch_codec)
+        self._sub_batch_max_items = max(1, int(sub_batch_max_items))
+        self._sub_batch_ack_timeout_s = max(1.0, float(sub_batch_ack_timeout_s))
+        self._batch_broken = False   # 会话级熔断：批 ack 超时/ErrResp → 本会话回退单帧
+        self._unsub_enabled = bool(unsub_enabled)
+        self._pending_unsub: List[int] = []   # 待退订 subId（防抖 ≥5s，≤1 帧/tick）
+        # 402 已发帧 seq→subIds（2026-11-17 P3' 实弹：kind5 ack payload=28B 不透明
+        # 状态块非 UnsubIdReq 回声，App qn0.d/q 同款按 seq 从原请求取 subIds）
+        self._unsub_seq_ids: Dict[int, List[int]] = {}
+        self._unsub_frames_sent = 0   # 会话级 402 帧计数（_session 复位，m6）
+        self._unsub_last_ts = 0.0
         self._zt_reason_lock = threading.Lock()
         # 2013 个股题材库热度推送（2026-11-08 题材龙头语料第 2 项）：与 2203 完全同款
         # 模式——订阅面=涨停池（2103 pid=1）成员自动跟随、无退订、每会话重建订阅
@@ -685,6 +725,116 @@ class KplCollectorService:
     # 回队头由下一收流 tick 续发（保活/读流不被长时间阻塞）。
     _DRAIN_TICK_FRAMES = 8
 
+    # 211 可批白名单（U1 实弹：仅 hqDaban 全局族受理；2103 列表页/2203/2013/
+    # detail per-stock 批内逐项拒 2000+无 topic。仅 2114/2115/2116 经探针验证，
+    # 其余同族推定；flag 默认 direct 不启用，白名单为灰度前置硬护栏，review M2）。
+    _BATCHABLE_CMDS = frozenset(daban.DABAN_SUB_CMDS)
+
+    # ---- 订阅注册表化 + 211 批量增强（2026-11-17 P0-P3）----
+
+    def _sub_batch_active(self) -> bool:
+        """211 批量信封是否生效：flag=211 且未熔断且非 inline 模式
+        （setup_inline_subs 的 0x40 窗口合同特殊，始终单帧，方案 §4 P3）。"""
+        return (self._sub_batch_mode == "211" and not self._batch_broken
+                and not self._setup_inline_subs)
+
+    def _batch_fallback(self, reason: str) -> None:
+        """会话级熔断：本会话后续订阅回退单帧 drain（fail-visible 事件+计数）。
+        触发源：批 ack 超时 / 批 ack 解析失败 / 未决批期间收 ErrResp。
+        新会话复位（探针未钉死前不跨会话持久化熔断态）。"""
+        if self._batch_broken:
+            return
+        self._batch_broken = True
+        self._stats["batch_fallback_n"] = self._stats.get("batch_fallback_n", 0) + 1
+        self._err(f"211 batch fallback to direct: {reason}")
+        self._emit(KplEvent(type="batch_fallback", ts=time.time(), reason=reason,
+                            session=self._session_no,
+                            unacked=self._sub_registry.unacked_batches()))
+
+    def _drain_send(self, sock: Any, next_seq: Any, items: List[Dict[str, Any]],
+                    lane: str, *, block_pause: bool = False) -> int:
+        """订阅帧发送统一出口（drain 四队列共用；2026-11-17 P3）。
+
+        items=[{cmd, req, ext, key?, priority?}]。direct 模式与旧实现逐字节
+        同款（帧序/拟人停顿/enc 回退）；211 模式打包 ≤max_items 项/批信封
+        （item.data 编码按 sub_batch_codec flag，U2 待探针）。发送成功后
+        register 入注册表（P1 单一事实源，替代旧 _resub_cache）。
+        返回已发项数；OSError 附 sent_count 上抛，调用方按各自既有语义
+        置 _sock_dead + fail-visible + 回队/丢弃。"""
+        sent = 0
+        try:
+            direct_items = list(items)
+            if self._sub_batch_active():
+                # M2 白名单分流：仅 hqDaban 全局族入批，其余（2103 页/per-stock/
+                # detail/lhb）恒 direct——批内必拒通道不得入批（U1 裁决）。
+                batchable = [it for it in items if it["cmd"] in self._BATCHABLE_CMDS]
+                direct_items = [it for it in items if it["cmd"] not in self._BATCHABLE_CMDS]
+                if batchable and self._sub_batch_codec == 1:
+                    # m1 预检 enc：任一项失败→熔断+全部回退 direct，绝不产出
+                    # codec=0 明文项（U2 实弹：明文→2008 杀连）。
+                    if any(not self._codec.enc(it["req"]) for it in batchable):
+                        self._stats["batch_enc_fallback_n"] = \
+                            self._stats.get("batch_enc_fallback_n", 0) + 1
+                        self._batch_fallback("batch_enc_failed")
+                        direct_items, batchable = list(items), []
+                if batchable:
+                    entries = [SubEntry(cmd=it["cmd"], req=it["req"], ext=it["ext"],
+                                        seq=0, lane=str(it.get("lane") or lane),
+                                        key=str(it.get("key") or ""),
+                                        priority=bool(it.get("priority")))
+                               for it in batchable]
+                    for chunk in self._sub_registry.plan_batches(
+                            entries, next_seq, max_items=self._sub_batch_max_items):
+                        batch_seq = next_seq()
+                        specs = []
+                        for spec in chunk:
+                            data, codec = spec["data"], 0
+                            if self._sub_batch_codec == 1:
+                                data, codec = self._codec.enc(spec["data"]), 1  # 预检已保非空
+                            specs.append({**spec, "data": data, "codec": codec})
+                        pb = proto.build_sub_reqs_pb(specs)
+                        enc = self._codec.enc(pb)
+                        frame = proto.build_frame(
+                            proto.CMD_SUB_BATCH, batch_seq, enc or pb, d=0,
+                            encrypted=bool(enc), pkg=proto.PKG_ROUTE,
+                            ext=bytes([0x02]) + struct.pack(">H", proto.CMD_SUB_BATCH))
+                        self._dbg("C", frame)
+                        if sent:
+                            self._human_pause(*self._drain_pause)   # 批帧间拟人停顿
+                        sock.sendall(frame)
+                        now = time.time()
+                        chunk_entries = [s["_entry"] for s in chunk]
+                        for s, e in zip(chunk, chunk_entries):
+                            e.seq = int(s["seqId"])
+                            e.sent_at = now
+                            self._sub_registry.register(e)
+                        self._sub_registry.bind_batch(batch_seq, chunk_entries)
+                        self._sub_registry.track_batch(batch_seq, len(chunk), now)
+                        self._stats["batch_frames_sent"] = \
+                            self._stats.get("batch_frames_sent", 0) + 1
+                        sent += len(chunk)
+            for it in direct_items:
+                enc = self._codec.enc(it["req"])
+                seq = next_seq()
+                frame = proto.build_frame(it["cmd"], seq, enc or it["req"], d=0,
+                                          encrypted=bool(enc), pkg=proto.PKG_ROUTE,
+                                          ext=it["ext"])
+                self._dbg("C", frame)
+                if sent and not block_pause:
+                    self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
+                sock.sendall(frame)
+                self._sub_registry.register(SubEntry(
+                    cmd=it["cmd"], req=it["req"], ext=it["ext"], seq=seq,
+                    lane=str(it.get("lane") or lane), key=str(it.get("key") or ""),
+                    priority=bool(it.get("priority")), sent_at=time.time()))
+                sent += 1
+                if block_pause:
+                    self._human_pause(*self._drain_pause)   # detail 块尾停顿（flush 合同）
+            return sent
+        except OSError as exc:
+            exc.sent_count = sent   # 调用方 drop 计数/回队用
+            raise
+
     def _flush_pending_inline(self, sock: Any, next_seq: Any, lane: str) -> None:
         """2026-11-10 setup_inline_subs 模式：把待发订阅帧在 setup 窗口内一次性
         内联发完（0x40 帧窗口关闭后发送→ErrResp 1002 断连，探针 E1-E4 实锤）。
@@ -697,11 +847,16 @@ class KplCollectorService:
                 enc = self._codec.enc(it["req"])
                 # pkg=0x40 订阅路由（2026-11-10 根因修复：daban 族帧此前漏传 pkg，
                 # build_frame 默认 0x30 鉴权通道 + ext 路由头=非法帧，服务器杀连）
-                frame = proto.build_frame(it["cmd"], next_seq(), enc or it["req"], d=0,
+                seq = next_seq()
+                frame = proto.build_frame(it["cmd"], seq, enc or it["req"], d=0,
                                           encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=it["ext"])
                 self._human_pause(*self._drain_pause)
                 self._dbg("C", frame)
                 sock.sendall(frame)
+                self._sub_registry.register(SubEntry(
+                    cmd=it["cmd"], req=it["req"], ext=it["ext"], seq=seq,
+                    lane="setup", priority=bool(it.get("priority")),
+                    sent_at=time.time()))
             return
         if lane == "detail":
             # 2026-11-11 评审 major-2：setup_inline_subs=True 时详情四通道改 setup
@@ -714,11 +869,16 @@ class KplCollectorService:
                 for sid in batch:
                     req = self._detail_req_for(dcmd, sid)
                     enc = self._codec.enc(req)
-                    frame = proto.build_frame(dcmd, next_seq(), enc or req, d=0,
+                    seq = next_seq()
+                    dext = bytes([0x02]) + struct.pack(">H", dcmd)
+                    frame = proto.build_frame(dcmd, seq, enc or req, d=0,
                                               encrypted=bool(enc), pkg=proto.PKG_ROUTE,
-                                              ext=bytes([0x02]) + struct.pack(">H", dcmd))
+                                              ext=dext)
                     self._dbg("C", frame)
                     sock.sendall(frame)
+                    self._sub_registry.register(SubEntry(
+                        cmd=dcmd, req=req, ext=dext, seq=seq,
+                        lane=f"detail:{dl}", key=sid, sent_at=time.time()))
                     self._human_pause(*self._drain_pause)
             return
         lock, pending_ref = ((self._zt_reason_lock, self._pending_zt_reason) if lane == "zt_reason"
@@ -732,11 +892,15 @@ class KplCollectorService:
             req = proto.build_hq_req_pb(sid)
             enc = self._codec.enc(req)
             cmd = proto.CMD_HQ_REASONS if lane == "zt_reason" else proto.CMD_STOCK_RELATED_THEME
-            frame = proto.build_frame(cmd, next_seq(), enc or req, d=0,
+            seq = next_seq()
+            frame = proto.build_frame(cmd, seq, enc or req, d=0,
                                       encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
             self._human_pause(*self._drain_pause)
             self._dbg("C", frame)
             sock.sendall(frame)
+            self._sub_registry.register(SubEntry(
+                cmd=cmd, req=req, ext=ext, seq=seq, lane=lane, key=sid,
+                sent_at=time.time()))
 
     def _drain_setup_subs(self, sock: Any, next_seq: Any) -> None:
         """发送待发 setup 订阅帧（daban 家族 21xx/2103/2112/3004/3101，2026-11-10 重排）。
@@ -750,29 +914,24 @@ class KplCollectorService:
             return   # setup_inline_subs 模式循环期永久静默（0x40 帧窗口外发送=1002 断连）
         batch = self._pending_setup_frames[:self._DRAIN_TICK_FRAMES]
         self._pending_setup_frames = self._pending_setup_frames[self._DRAIN_TICK_FRAMES:]
-        sent = 0
-        for item in batch:
-            enc = self._codec.enc(item["req"])
-            frame = proto.build_frame(item["cmd"], next_seq(), enc or item["req"], d=0,
-                                      encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=item["ext"])
-            self._dbg("C", frame)
-            try:
-                if sent:
-                    self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
-                sock.sendall(frame)
-                self._cache_resub_item(item)   # 220 ResubNt 重发缓存（App this.e 同款）
-            except OSError as exc:
-                self._sock_dead = True
-                dropped = len(batch) - sent + len(self._pending_setup_frames)
-                self._stats["setup_send_drops"] = self._stats.get("setup_send_drops", 0) + dropped
-                self._err(f"setup subscribe send failed (cmd={item['cmd']}): {exc} "
-                          f"(sent={sent} dropped={dropped}, next-session rebuild)")
-                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
-                                    lane="setup", cmd=item["cmd"],
-                                    sent=sent, dropped=dropped, session=self._session_no,
-                                    error=str(exc)))
-                return
-            sent += 1
+        items = [{"cmd": it["cmd"], "req": it["req"], "ext": it["ext"],
+                  "priority": it.get("priority"),
+                  "key": it.get("key"), "lane": it.get("lane")} for it in batch]   # m4：保留 key/lane
+        try:
+            self._drain_send(sock, next_seq, items, "setup")
+        except OSError as exc:
+            sent = getattr(exc, "sent_count", 0)
+            self._sock_dead = True
+            dropped = len(batch) - sent + len(self._pending_setup_frames)
+            self._stats["setup_send_drops"] = self._stats.get("setup_send_drops", 0) + dropped
+            fail_cmd = items[min(sent, len(items) - 1)]["cmd"] if items else 0
+            self._err(f"setup subscribe send failed (cmd={fail_cmd}): {exc} "
+                      f"(sent={sent} dropped={dropped}, next-session rebuild)")
+            self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                lane="setup", cmd=fail_cmd,
+                                sent=sent, dropped=dropped, session=self._session_no,
+                                error=str(exc)))
+            return
         # 队深观测随 drain 递减（评审 P2：否则 status 读到的是会话初队深非当前队深）
         self._stats["queued_setup_subs"] = len(self._pending_setup_frames)
 
@@ -794,31 +953,23 @@ class KplCollectorService:
             with self._zt_reason_lock:
                 self._pending_zt_reason[:0] = rest   # 回队头保序，下一 tick 续发
         ext = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_REASONS)
-        sent = 0
-        for sid in batch:
-            req = proto.build_hq_req_pb(sid)
-            enc = self._codec.enc(req)
-            frame = proto.build_frame(proto.CMD_HQ_REASONS, next_seq(), enc or req,
-                                      d=0, encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
-            self._dbg("C", frame)
-            try:
-                if sent:
-                    self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
-                sock.sendall(frame)
-                self._cache_resub_item({"cmd": proto.CMD_HQ_REASONS,
-                                        "req": req, "ext": ext})
-            except OSError as exc:
-                self._sock_dead = True
-                dropped = len(batch) - sent + len(rest)
-                self._stats["zt_reason_send_drops"] = self._stats.get("zt_reason_send_drops", 0) + dropped
-                self._err(f"2203 subscribe send failed ({sid}): {exc} "
-                          f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
-                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
-                                    lane="zt_reason", cmd=proto.CMD_HQ_REASONS,
-                                    sent=sent, dropped=dropped, session=self._session_no,
-                                    error=str(exc)))
-                return
-            sent += 1
+        items = [{"cmd": proto.CMD_HQ_REASONS, "req": proto.build_hq_req_pb(sid),
+                  "ext": ext, "key": sid} for sid in batch]
+        try:
+            self._drain_send(sock, next_seq, items, "zt_reason")
+        except OSError as exc:
+            sent = getattr(exc, "sent_count", 0)
+            self._sock_dead = True
+            dropped = len(batch) - sent + len(rest)
+            self._stats["zt_reason_send_drops"] = self._stats.get("zt_reason_send_drops", 0) + dropped
+            fail_sid = batch[min(sent, len(batch) - 1)] if batch else ""
+            self._err(f"2203 subscribe send failed ({fail_sid}): {exc} "
+                      f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
+            self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                lane="zt_reason", cmd=proto.CMD_HQ_REASONS,
+                                sent=sent, dropped=dropped, session=self._session_no,
+                                error=str(exc)))
+            return
 
     def _queue_detail_new(self, stock_ids: List[str]) -> int:
         """四通道新入池成员入队订阅（去重；会话线程 drain 块发）。开关关 → 零动作。
@@ -881,31 +1032,23 @@ class KplCollectorService:
             with self._theme_lock:
                 self._pending_theme[:0] = rest
         ext = bytes([0x02]) + struct.pack(">H", proto.CMD_STOCK_RELATED_THEME)
-        sent = 0
-        for sid in batch:
-            req = proto.build_hq_req_pb(sid)
-            enc = self._codec.enc(req)
-            frame = proto.build_frame(proto.CMD_STOCK_RELATED_THEME, next_seq(), enc or req,
-                                      d=0, encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=ext)
-            self._dbg("C", frame)
-            try:
-                if sent:
-                    self._human_pause(0.3, 0.15)
-                sock.sendall(frame)
-                self._cache_resub_item({"cmd": proto.CMD_STOCK_RELATED_THEME,
-                                        "req": req, "ext": ext})
-            except OSError as exc:
-                self._sock_dead = True
-                dropped = len(batch) - sent + len(rest)
-                self._stats["theme_send_drops"] = self._stats.get("theme_send_drops", 0) + dropped
-                self._err(f"2013 subscribe send failed ({sid}): {exc} "
-                          f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
-                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
-                                    lane="theme", cmd=proto.CMD_STOCK_RELATED_THEME,
-                                    sent=sent, dropped=dropped, session=self._session_no,
-                                    error=str(exc)))
-                return
-            sent += 1
+        items = [{"cmd": proto.CMD_STOCK_RELATED_THEME, "req": proto.build_hq_req_pb(sid),
+                  "ext": ext, "key": sid} for sid in batch]
+        try:
+            self._drain_send(sock, next_seq, items, "theme")
+        except OSError as exc:
+            sent = getattr(exc, "sent_count", 0)
+            self._sock_dead = True
+            dropped = len(batch) - sent + len(rest)
+            self._stats["theme_send_drops"] = self._stats.get("theme_send_drops", 0) + dropped
+            fail_sid = batch[min(sent, len(batch) - 1)] if batch else ""
+            self._err(f"2013 subscribe send failed ({fail_sid}): {exc} "
+                      f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
+            self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                lane="theme", cmd=proto.CMD_STOCK_RELATED_THEME,
+                                sent=sent, dropped=dropped, session=self._session_no,
+                                error=str(exc)))
+            return
 
     # 详情四通道发送语义（2026-11-11 探针 K1/K3/I1 定案）：服务器对 detail 订阅的
     # 响应是「静默期 flush」——订阅帧连续发送期间零响应，发送停止后 <1s 内全量
@@ -939,35 +1082,28 @@ class KplCollectorService:
             with self._detail_locks[lane]:
                 batch = list(self._pending_detail[lane])
                 self._pending_detail[lane] = []
-            sent = 0
-            for sid in batch:
-                req = self._detail_req_for(cmd, sid)
-                enc = self._codec.enc(req)
-                frame = proto.build_frame(cmd, next_seq(), enc or req, d=0,
-                                          encrypted=bool(enc), pkg=proto.PKG_ROUTE,
-                                          ext=bytes([0x02]) + struct.pack(">H", cmd))
-                self._dbg("C", frame)
-                try:
-                    sock.sendall(frame)
-                    self._cache_resub_item(
-                        {"cmd": cmd, "req": req,
-                         "ext": bytes([0x02]) + struct.pack(">H", cmd)})
-                except OSError as exc:
-                    self._sock_dead = True
-                    rest = batch[sent:]
-                    with self._detail_locks[lane]:
-                        self._pending_detail[lane][:0] = rest
-                    self._stats["detail_send_drops"] = \
-                        self._stats.get("detail_send_drops", 0) + len(rest)
-                    self._err(f"detail {lane} subscribe send failed ({sid}): {exc} "
-                              f"(sent={sent} dropped={len(rest)}, next-session 6g resubscribe)")
-                    self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
-                                        lane=lane, cmd=cmd, sent=sent,
-                                        dropped=len(rest), session=self._session_no,
-                                        error=str(exc)))
-                    return
-                sent += 1
-                self._human_pause(0.3, 0.15)
+            dext = bytes([0x02]) + struct.pack(">H", cmd)
+            items = [{"cmd": cmd, "req": self._detail_req_for(cmd, sid),
+                      "ext": dext, "key": sid} for sid in batch]
+            try:
+                self._drain_send(sock, next_seq, items, f"detail:{lane}",
+                                 block_pause=True)
+            except OSError as exc:
+                sent = getattr(exc, "sent_count", 0)
+                self._sock_dead = True
+                rest = batch[sent:]
+                with self._detail_locks[lane]:
+                    self._pending_detail[lane][:0] = rest
+                self._stats["detail_send_drops"] = \
+                    self._stats.get("detail_send_drops", 0) + len(rest)
+                fail_sid = batch[min(sent, len(batch) - 1)] if batch else ""
+                self._err(f"detail {lane} subscribe send failed ({fail_sid}): {exc} "
+                          f"(sent={sent} dropped={len(rest)}, next-session 6g resubscribe)")
+                self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                    lane=lane, cmd=cmd, sent=sent,
+                                    dropped=len(rest), session=self._session_no,
+                                    error=str(exc)))
+                return
 
     def get_lhb_realtime(self) -> Dict[str, Any]:
         """3004/3101 RealtimeLHB 快照读口（task-4）：空帧抑制后最新非空帧。
@@ -1048,6 +1184,17 @@ class KplCollectorService:
             "stock_detail_snaps": {lane: len(self._detail_snaps[lane])
                                    for lane in self._detail_snaps},
             "stock_detail_cap": self._DETAIL_BLOCK_MAX_STOCKS,
+            # 订阅注册表/211 批量/402 退订观测（2026-11-17 P0-P3，fail-visible）
+            "sub_registry": self._sub_registry.stats(),
+            "sub_registry_enabled": self._sub_registry_enabled,
+            "sub_batch_mode": self._sub_batch_mode,
+            "sub_batch_active": self._sub_batch_active(),
+            "batch_frames_sent": self._stats.get("batch_frames_sent", 0),
+            "batch_fallback_n": self._stats.get("batch_fallback_n", 0),
+            "unsub_enabled": self._unsub_enabled,
+            "unsub_sent_n": self._stats.get("unsub_sent_n", 0),
+            "unsub_pending_n": len(self._pending_unsub),
+            "ka_mode": self._ka_mode,
             # 订阅构成观测（2026-11-11 行业页签空态排查）：hy=881 行业板块数，
             # 页面引导/补引导是否落地一眼可核（fail-visible，不藏状态）
             "subscriptions": {
@@ -1283,12 +1430,19 @@ class KplCollectorService:
 
         def next_seq() -> int:
             seq[0] += 1
+            if seq[0] >= 32767:   # App t31.c 同款：≥Short.MAX_VALUE 回绕到 1
+                seq[0] = 1
             return seq[0]
 
         sock = self._tls_connect()
         self._rx = bytearray()   # 新会话新流：残帧缓冲必须清零
         self._sock_dead = False  # 新会话新 socket：drain 失败门禁复位
         self._pending_setup_frames = []   # 新会话重建订阅面：上会话残留待发帧作废
+        self._sub_registry.clear_session()   # App qn0.f：断线清空注册表（c/d/e）
+        self._batch_broken = False   # 熔断会话级复位（新会话重新尝试 211，若 flag 开）
+        self._pending_unsub = []     # 退订队随会话重建作废（订阅面本就要全量重建）
+        self._unsub_seq_ids = {}
+        self._unsub_frames_sent = 0
         try:
             sock.settimeout(2)
             # 1) 260 challenge
@@ -1300,7 +1454,7 @@ class KplCollectorService:
                     break   # deadline 到 → 下方 no-challenge 路径接管（会话存活不硬死）
                 if fr is None:
                     raise proto.FrameDecodeError("closed before 260")
-                if fr["cmd"] == proto.CMD_CHALLENGE:
+                if fr.get("cmd") == proto.CMD_CHALLENGE:
                     server_time, challenge, _ = proto.parse_challenge_260(fr["payload"])
                     break
             if not challenge:
@@ -1346,7 +1500,7 @@ class KplCollectorService:
                     break   # deadline 到 → 下方 no-ack 路径接管
                 if fr is None:
                     raise proto.FrameDecodeError("closed awaiting 610 ack")
-                if fr["fmt"] == "echo" and fr["cmd"] == proto.CMD_AUTH:
+                if fr.get("fmt") == "echo" and fr.get("cmd") == proto.CMD_AUTH:
                     try:
                         dec = self._codec.dec(fr["payload"].hex())
                     except SignSvcError:
@@ -1368,7 +1522,7 @@ class KplCollectorService:
                         )
                     auth_ok = True
                     break
-                if fr["cmd"] == proto.CMD_ERROR:
+                if fr.get("cmd") == proto.CMD_ERROR:
                     err = proto.parse_err_resp(fr["payload"])
                     self._err(f"auth rejected: {err}")
                     self._emit(KplEvent(type="auth", ts=time.time(), ok=False, error=err))
@@ -1445,11 +1599,17 @@ class KplCollectorService:
             for chunk in (self._sub_prio + self._sub_rest) or [self._stock_ids]:
                 gq = proto.build_group_quotas_req_pb(chunk)
                 enc_gq = self._codec.enc(gq)
-                gq_frame = proto.build_frame(proto.CMD_GROUP_QUOTAS, next_seq(), enc_gq or gq, d=0,
+                gq_seq = next_seq()
+                gq_frame = proto.build_frame(proto.CMD_GROUP_QUOTAS, gq_seq, enc_gq or gq, d=0,
                                              encrypted=bool(enc_gq), pkg=proto.PKG_ROUTE, ext=ext3)
                 self._human_pause(0.3, 0.15)
                 self._dbg("C", gq_frame)
                 sock.sendall(gq_frame)
+                # 内联订阅也入注册表（2026-11-17 探针实弹：ack attr3 topic 与推送 ext
+                # 逐字节匹配；3001/3006 不登记则 topic 命中率观测永远缺口）
+                self._sub_registry.register(SubEntry(
+                    cmd=proto.CMD_GROUP_QUOTAS, req=gq, ext=ext3, seq=gq_seq,
+                    lane="setup", key=",".join(chunk), sent_at=time.time()))
             # 6b) 3006 个股行情订阅：HQStockIdListReq{f1 repeated stockIds}（个股实时价）。
             #     与 3001 同款分块（单请求 id 超 ~241 会被 1106 拒绝；2026-10-27 实测：
             #     精选板块引导后 id≈500 单帧全发即触发 server error 1106）
@@ -1461,11 +1621,15 @@ class KplCollectorService:
             for ci, chunk in enumerate(self._chunks(list(self._stock_ids))):
                 hq = b"".join(proto.pb_bytes(1, sid.encode()) for sid in chunk)
                 enc_hq = self._codec.enc(hq)
-                hq_frame = proto.build_frame(proto.CMD_HQ_ID_LIST, next_seq(), enc_hq or hq, d=0,
+                hq_seq = next_seq()
+                hq_frame = proto.build_frame(proto.CMD_HQ_ID_LIST, hq_seq, enc_hq or hq, d=0,
                                              encrypted=bool(enc_hq), pkg=proto.PKG_ROUTE, ext=ext6)
                 self._human_pause(0.3, 0.15)
                 self._dbg("C", hq_frame)
                 sock.sendall(hq_frame)
+                self._sub_registry.register(SubEntry(
+                    cmd=proto.CMD_HQ_ID_LIST, req=hq, ext=ext6, seq=hq_seq,
+                    lane="setup", key=",".join(chunk), sent_at=time.time()))
             # 6c) 打板/情绪订阅（service_hq_daban.proto，2026-10-27 逆向）：
             #     2114/2115/2118/2119/2116/2126/2120/2121 发 QxMarketEnergyReq{type}；2116/2126 空 Req；
             #     2120/2121 发 QxZtSituationStockReq{bsType}。逐 cmd 一帧，同 0x40 通道与 ext 路由头。
@@ -1626,7 +1790,7 @@ class KplCollectorService:
                     # 保活交替: 每 8 tick 一次 610 AuthReq 原样重发（签名绑定初始
                     # challenge/curTime）/ 其余 tick 3001 分块轮询（下一块）
                     hb_flip[0] += 1
-                    if hb_flip[0] % 8 == 1 and self._ka_610:
+                    if hb_flip[0] % 8 == 1 and self._ka_mode == "610":
                         if hb_flip[0] == 1:
                             auth2 = proto.build_auth_req_pb(
                                 device_id=self._device_id,
@@ -1663,6 +1827,8 @@ class KplCollectorService:
                             self._dbg("C", ka_frame)
                             sock.sendall(ka_frame)
                     last_keepalive = now
+                # 211 批 ack 超时熔断（2026-11-17 P3）：超时无 ack → 本会话回退单帧
+                self._check_batch_timeouts(now)
                 # 2203/2013 待订阅帧 drain（新入池成员数秒内补订，不占保活节奏）。
                 # 2026-11-10 时序竞争修复（生产实测：会话 ~50s 被 TTL/风控杀，daban 页
                 # 42 帧排前导致 2203/2013 实际发出已是会话 ~35-46s，服务器响应未回会话
@@ -1677,6 +1843,7 @@ class KplCollectorService:
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)
                 self._drain_setup_subs(sock, next_seq)
+                self._drain_unsub(sock, next_seq)   # 402 退订（flag 门控，≤1 帧/tick）
                 if fr == "timeout":
                     continue
                 self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
@@ -1758,44 +1925,176 @@ class KplCollectorService:
                             value=int(value), d=d, encrypted=bool(enc),
                             token_len=len(token)))
 
-    def _cache_resub_item(self, item: Dict[str, Any]) -> None:
-        """已发订阅原料缓存（去重、上限 500 防 runaway；220 重发用）。"""
-        key = (item.get("cmd"), bytes(item.get("ext") or b""),
-               bytes(item.get("req") or b""))
-        for it in self._resub_cache:
-            k2 = (it.get("cmd"), bytes(it.get("ext") or b""), bytes(it.get("req") or b""))
-            if k2 == key:
-                return
-        if len(self._resub_cache) >= 500:
-            self._resub_cache.pop(0)
-        self._resub_cache.append(dict(item))
-
     def _handle_resub_nt(self, payload: bytes, *, dec_payload: bytes) -> None:
         """cmd 220 ResubNt：服务端订阅注册表失效通知（App qn0.j 同款语义）。
 
-        破译源码（2026-11-17，.tmp_review c2_src/main_src）：App 维护 this.e=
-        已成功订阅包列表，收到 220 时 topics 空 → 全量重发、非空 → 按 topic 匹配
-        重发；会话断开 e 清空。我们的 topic 粒度不可靠（0x40 ext 是二进制路由头
-        非 App 的字符串 topic），故两种情况都全量重入 setup 队列（8 帧/tick 拟人
-        节流复用），topics 进事件供诊断。重发帧重建 seq（App x() 每次 write 生成
-        新帧同款）。"""
+        2026-11-17 注册表化 P1：topics 非空 → 按 ack attr3 topic 选择性重发；
+        无任何匹配 → 降级全量（fallback_all，fail-visible 计数）；
+        sub_registry_enabled=False → 全量（旧行为过渡开关）。重发条目置 stale
+        移出活跃注册表（App j 同款），drain 重发后重新 register；重发帧重建 seq
+        （App x() 每次 write 生成新帧同款）。pid=8 priority 前插保持。"""
         topics = proto.parse_resub_topics(dec_payload or payload)
-        if not self._resub_cache:
+        entries, mode = self._sub_registry.on_resub(
+            topics if self._sub_registry_enabled else [])
+        if not self._sub_registry_enabled:
+            mode = "all_legacy"   # n3：过渡全量仅重发 ACKED 条目（略窄于旧 _resub_cache
+                                  # 含 pending；220 生产从未观测，影响可忽略）
+        if not entries:
             self._stats["resub_events"] = self._stats.get("resub_events", 0) + 1
             self._emit(KplEvent(type="resub_nt", ts=time.time(), ok=False,
-                                reason="no_cached_subs", topics=topics))
+                                reason="no_cached_subs", topics=topics, mode=mode))
             return
-        requeued = list(self._resub_cache)
-        # pid=8 priority 前插保持（同 setup 构造语义）；重发帧由 drain 重建 seq
+        requeued = [{"cmd": e.cmd, "req": e.req, "ext": e.ext,
+                     "key": e.key, "lane": e.lane,   # m4：保留 key/lane，重发后 unsub diff 不漏项
+                     **({"priority": True} if e.priority else {})} for e in entries]
         self._pending_setup_frames[0:0] = requeued
         self._stats["resub_events"] = self._stats.get("resub_events", 0) + 1
         self._stats["resub_requeued"] = self._stats.get("resub_requeued", 0) + len(requeued)
         self._emit(KplEvent(type="resub_nt", ts=time.time(), ok=True,
-                            requeued=len(requeued), topics=topics))
+                            requeued=len(requeued), topics=topics, mode=mode))
+
+    def _check_batch_timeouts(self, now: float) -> None:
+        """211 批 ack 超时检查（读循环每 tick 调用；单独成方法供 mock 测试）。"""
+        if not self._sub_batch_active():
+            return
+        timed_out = self._sub_registry.timed_out_batches(
+            now, self._sub_batch_ack_timeout_s)
+        if timed_out:
+            self._batch_fallback(f"batch_ack_timeout:{timed_out[:3]}")
+
+    def _capture_sub_ack(self, fr: Dict[str, Any]) -> None:
+        """echo/unsub_ack → 注册表（2026-11-17 P1，App qn0.o/q 同款）。
+
+        权威 sub_id=ack ext attr2（服务端分配）、topic=attr3 原始字节；
+        非订阅 ack（auth/行情等无登记 seq）跳过不计 orphan；ext 解析失败
+        fail-visible 计数不吞。211 批 ack 逐项展开（qn0.o）；402 退订 ack
+        按 subIds 清注册表（qn0.q）。"""
+        cmd = fr["cmd"]
+        seq = fr.get("seq")
+        payload = fr.get("payload", b"")
+        attrs: Dict[int, Any] = {}
+        ext = fr.get("ext") or b""
+        if ext:
+            try:
+                attrs = proto.parse_ext_attrs(ext)
+            except proto.FrameDecodeError:
+                self._sub_registry.mark_ext_parse_error()
+        sub_id = attrs.get(2)
+        topic = attrs.get(3)
+        if cmd == proto.CMD_SUB_BATCH:
+            dec = self._dec_if_flags(payload, fr)
+            try:
+                items = proto.parse_sub_reqs_pb(dec)
+            except Exception as exc:
+                self._err(f"211 batch ack parse error: {exc}")
+                self._emit(KplEvent(type="sub_batch_error", ts=time.time(),
+                                    seq=seq, reason=f"parse error: {exc}"))
+                self._batch_fallback("batch_ack_parse_error")
+                return
+            res = self._sub_registry.on_ack(seq, sub_id=sub_id, topic=topic,
+                                            sub_reqs=items, now=time.time())
+            self._emit(KplEvent(type="sub_batch_ack", ts=time.time(), **res))
+            return
+        if cmd == proto.CMD_UNSUB and fr.get("fmt") == "unsub_ack":
+            # m5：seq 映射优先（裁决：payload 恒为 28B 不透明状态块，宽容 parse_pb
+            # 可能从 blob 提取垃圾 f1 varint 误清条目）；无映射再试 payload 解析。
+            sub_ids = self._unsub_seq_ids.pop(seq, []) if seq is not None else []
+            if not sub_ids:
+                dec = self._dec_if_flags(payload, fr)
+                try:
+                    sub_ids = proto.parse_unsub_id_req_pb(dec)
+                except Exception:
+                    sub_ids = []
+            if not sub_ids:
+                self._stats["unsub_ack_unmatched_n"] = \
+                    self._stats.get("unsub_ack_unmatched_n", 0) + 1
+            removed = self._sub_registry.on_unsub_ack(sub_ids)
+            self._emit(KplEvent(type="sub_unsub_ack", ts=time.time(),
+                                sub_ids=sub_ids, removed=removed))
+            return
+        if seq is None or not self._sub_registry.has_pending_seq(seq):
+            return   # 非订阅 ack（610/602/3001 等）：无登记条目，不入 orphan
+        res = self._sub_registry.on_ack(seq, sub_id=sub_id, topic=topic,
+                                        now=time.time())
+        if res.get("kind") == "ack":
+            self._emit(KplEvent(type="sub_ack", ts=time.time(), **res))
+
+    # ---- 402 退订（2026-11-17 P2，flag 门控默认关；探针 P3 钉死前不启用）----
+
+    _UNSUB_DEBOUNCE_S = 5.0   # 变更防抖（频控预算 §5：≤1 帧/tick、≥5s 间隔）
+    _UNSUB_MAX_IDS = 20       # 单帧 subIds 上限（超出下一帧续发）
+    _UNSUB_MAX_FRAMES = 20    # 会话级 402 帧预算上限（方案 §5，review m6；off 长寿会话防超）
+
+    def _sync_unsub_surface(self) -> None:
+        """池成员收缩 → 402 退订计划（2103 pid=1 页更新后调用）。
+
+        只处理 per-stock 通道（2203/2013/detail 四 lane）；列表型订阅
+        （3001/3006）不参与 diff（新帧覆盖语义）。只取 sub_id 已回填条目
+        （服务端未分配 subId 无法按 id 退订，留待会话重建自然失效）。
+        空帧抑制保旧页 → keep 面保守偏大，不误退（fail-visible 由 stats 承载）。"""
+        if not self._unsub_enabled or self._sock_dead:
+            return
+        keep = set(self._pool_stock_ids())
+        lanes: List[Tuple[str, int]] = [
+            ("zt_reason", proto.CMD_HQ_REASONS),
+            ("theme", proto.CMD_STOCK_RELATED_THEME),
+        ] + [(f"detail:{dl}", c) for dl, c in self._detail_lane_cmds.items()]
+        for lane_prefix, cmd in lanes:
+            cands = self._sub_registry.unsub_candidates(lane_prefix, cmd, keep)
+            for e in cands:
+                if e.sub_id not in self._pending_unsub:
+                    self._pending_unsub.append(e.sub_id)
+            self._sub_registry.mark_unsub_sent(cands)
+
+    def _drain_unsub(self, sock: Any, next_seq: Any) -> None:
+        """发送 402/pkg 0x50 UnsubIdReq 退订帧（≤1 帧/tick，防抖 ≥5s）。
+        inline 模式不发（0x50 窗口语义未探针，保守门禁同 0x40）。"""
+        if (not self._unsub_enabled or self._sock_dead or self._setup_inline_subs
+                or not self._pending_unsub):
+            return
+        if self._unsub_frames_sent >= self._UNSUB_MAX_FRAMES:
+            return   # 会话级帧预算耗尽（m6）；余量留待下一会话重建
+        now = time.time()
+        if now - self._unsub_last_ts < self._UNSUB_DEBOUNCE_S:
+            return
+        ids = self._pending_unsub[:self._UNSUB_MAX_IDS]
+        self._pending_unsub = self._pending_unsub[self._UNSUB_MAX_IDS:]
+        req = proto.build_unsub_id_req_pb(ids)
+        enc = self._codec.enc(req)
+        unsub_seq = next_seq()
+        frame = proto.build_frame(proto.CMD_UNSUB, unsub_seq, enc or req, d=0,
+                                  encrypted=bool(enc), pkg=proto.PKG_UNSUB)
+        self._dbg("C", frame)
+        try:
+            sock.sendall(frame)
+        except OSError as exc:
+            self._sock_dead = True
+            self._pending_unsub[:0] = ids   # 回队头，下一会话重建兼底
+            self._err(f"402 unsub send failed: {exc}")
+            self._emit(KplEvent(type="sub_unsub_dropped", ts=time.time(),
+                                sub_ids=ids, session=self._session_no, error=str(exc)))
+            return
+        self._unsub_last_ts = now
+        self._unsub_frames_sent += 1
+        self._unsub_seq_ids[unsub_seq] = list(ids)   # kind5 ack 按 seq 回填 subIds
+        self._stats["unsub_sent_n"] = self._stats.get("unsub_sent_n", 0) + 1
+        self._emit(KplEvent(type="sub_unsub", ts=time.time(), sub_ids=ids,
+                            session=self._session_no))
 
     def _dispatch(self, fr: Dict[str, Any], *, sender: Any = None, next_seq: Any = None) -> None:
+        if fr.get("fmt") == "heartbeat":
+            # kind1 心跳（pkg 0x10）：App SocketReaderThread msg22 同款 skip，
+            # 无 cmd 键，计数不路由（review M1：避免 fr["cmd"] KeyError 杀会话）
+            self._stats["heartbeat_n"] = self._stats.get("heartbeat_n", 0) + 1
+            return
         cmd = fr["cmd"]
         payload = fr.get("payload", b"")
+        # 订阅注册表观测（2026-11-17 P1）：echo/unsub_ack 捕获 attr2/attr3；
+        # 推送 topic 命中率只记录不改路由（dispatch 仍按 cmd，方案 §4 P1）
+        if fr.get("fmt") in ("echo", "unsub_ack"):
+            self._capture_sub_ack(fr)
+        elif fr.get("fmt") == "push":
+            self._sub_registry.on_push_topic(fr.get("ext_raw") or b"")
         if cmd == proto.CMD_RESUB_NT:
             self._handle_resub_nt(payload, dec_payload=self._dec_if_flags(payload, fr))
             return
@@ -1803,6 +2102,20 @@ class KplCollectorService:
             err = proto.parse_err_resp(payload)
             self._err(f"server error: {err}")
             self._emit(KplEvent(type="error", ts=time.time(), server=err))
+            # 211 熔断：未决批期间收 ErrResp → 本会话回退单帧（保守归因，
+            # 探针未钉死前不拿生产会话赌批信封语义）
+            if self._sub_batch_active() and self._sub_registry.unacked_batches():
+                self._batch_fallback(f"server_error:{err}")
+            return
+        if cmd == proto.CMD_ERROR_NT:
+            # 110 错误通知通道（2026-11-17 211 探针实弹定案）：payload=ErrResp
+            # {code,msg} GCM 加密；批量被拒项逐项下发 2000（非致命，会话存活）。
+            # fail-visible 解析上报，不静默当 raw；无 seq 无法归因到项，只计数。
+            dec = self._dec_if_flags(payload, fr)
+            err = proto.parse_err_resp(dec)
+            self._stats["err_nt_n"] = self._stats.get("err_nt_n", 0) + 1
+            self._err(f"server error nt(110): {err}")
+            self._emit(KplEvent(type="error", ts=time.time(), server=err, channel=110))
             return
         if cmd == proto.CMD_ANTI_CHEAT:
             # 261 反作弊轮：读侧解密与 cmd 无关（App SocketReaderThread：flags enc=1 → DEC），
@@ -2031,6 +2344,13 @@ class KplCollectorService:
                                     [str(it.get("stock_id") or "").strip() for it in pool_items])
                     except (TypeError, ValueError):
                         pass
+                # 402 退订 diff（2026-11-17 P2，flag 门控）：pid=1 页更新后
+                # 池成员收缩 → 已 ack 且 key 不在保留面的 per-stock 订阅入退订队
+                try:
+                    if int(data.get("pid_type", 0)) == 1:
+                        self._sync_unsub_surface()
+                except (TypeError, ValueError):
+                    pass
             event_type = DABAN_EVENT_NAMES.get(cmd) or LHB_EVENT_NAMES.get(cmd, "daban")
             if cmd == daban.CMD_FORECAST_LHB:
                 # 2112 空帧抑制（同 2103/3004 规；2026-10-29 午间实测：休市推流

@@ -228,6 +228,20 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
 - **协议事实**：认证命令号是 **610 不是 601**；260 challenge 每连接随机；pb tag 是 varint
   （f100→a2 06）；价格 ×10000 整数缩放；服务器会话寿命与认证速度相关（非固定 TTL），
   稳定性合同=2s 重连链而非单连接长寿命；keepalive 必须递增 seq（重复 seq 立即断连）。
+- **订阅注册表重构（2026-11-17，P0-P3 已实施）**：RE 定案当前 App 版本不发 211 SubReqs
+  （仅 proto+ack 展开在）；实际订阅=单帧 0x40+ext attr2=subId（hint=cmd）+客户端注册表，
+  权威 subId/topic 取 ack attr2/attr3，退订=402/pkg 0x50。已落地：`kpl_sub_registry.py`
+  注册表（替代旧 _resub_cache，单一事实源）+ 220 选择性重发 + 402 退订（flag 默认关）
+  + 211 批量信封（KPL_SUB_BATCH 默认 direct，会话级熔断回退）；全 mock 413 passed，
+  direct 订阅帧形态逐字节零变更。**探针全部开火裁决（2026-11-17）**：211 item.data
+  必须 GCM（明文→2008 杀连），仅 hqDaban 全局族可批（2103/2203/2013 批内拒
+  2000/cmd 110），收益 ~7 帧/会话不抵风控面 → 保持 direct 不启用；批内盘中推送
+  交付==direct 实弹验证；402 语义钉死（ack=28B 状态块，subIds 按 seq 取原请求，
+  退订推送即停差分成立，KPL_UNSUB_ENABLED 仍默认关——per-stock 共享 subId 误退阻塞见方案 §12）；**P4：610 重发第 5 次
+  →1106 确定性杀连（受控实验 3/3 中位 67s），off 3/3 零错误 >120s →
+  默认已切 KPL_KA_MODE=off**。方案唯一来源
+  [kpl-socket/sub-registry-refactor-plan.md](kpl-socket/sub-registry-refactor-plan.md)
+  （§1.3 裁决/§7.1 下午盘/§11 开火记录）。
 - **已知缺陷与待办（2026-10-27 待办轮已全部收口）**：3006 负数 varint 已修复（`_signed64` 补码还原）；
   3001 quotas 关键位语义已独立源核实（[0]板块标签/[1]最新价(板块=点位)/[2]涨跌幅%/[3]成交额/
   [7]-[9]主力流入流出净额，东财接口交叉对照精确匹配）；signsvc readline 阻塞已改守护读线程

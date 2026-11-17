@@ -29,6 +29,9 @@ from typing import Any, Dict, List, Optional, Tuple
 CMD_AUTH = 610  # TYPE_QUANTIZE_MOTIONSTEPS；601 是历史误判（app 从未发送 601）
 CMD_LOGIN_STATE = 602
 CMD_UNSUB = 402
+CMD_SUB_BATCH = 211  # Base.SubReqs 批量订阅信封（RE 收口 2026-11-17：当前 App 版本
+                     # 无发送路径，仅 proto+qn0.o ack 展开在；请求侧语义待探针钉死，
+                     # 见 docs/kpl-socket/sub-registry-refactor-plan.md §1.3）
 CMD_PLATE_LIST = 2301  # Hq.PlateSearchListResp（版本 + dataUrl）
 CMD_STOCK_LIST = 2303  # Hq.StockSearchListNewResp（version + txtUrl）
 CMD_HK_LIST = 2304
@@ -74,12 +77,16 @@ CMD_CHALLENGE = 260
 CMD_ANTI_CHEAT = 261
 CMD_ANTI_CHEAT_ANS = 262
 CMD_ERROR = 201  # Base.ErrResp（服务器拒绝/错误）
+CMD_ERROR_NT = 110  # 服务器错误通知通道（2026-11-17 211 探针实弹：payload 同 ErrResp
+                    # {code,msg}，GCM 加密；批量订阅被拒项逐项下发 2000，非致命不断连）
 CMD_RESUB_NT = 220  # Base.ResubNt（服务端订阅注册表失效→客户端重发订阅；App qn0.j）
 
 PKG_SERVER = 0x20
 PKG_AUTH = 0x30  # e(3)<<4
 PKG_ROUTE = 0x40  # e(4)<<4
+PKG_UNSUB = 0x50  # e(5)<<4 退订通道（App SocketRepository.n：cmd 402 + UnsubIdReq）
 PKG_PUSH = 0x60
+PKG_HEARTBEAT = 0x10  # 服务端心跳（kind1，App 只读延迟统计，无需应答）
 
 FLAG_ENC_BIT = 0x01
 
@@ -291,15 +298,20 @@ def parse_server_frame(body: bytes) -> Dict[str, Any]:
 
 
 def parse_echo_frame(body: bytes) -> Dict[str, Any]:
-    """服务器应答帧（echo）：[seq 2BE][cmd 2BE][flags 1][extlen 2BE][payload]。"""
+    """服务器应答帧（echo）：[seq 2BE][cmd 2BE][flags 1][extlen 2BE][ext][payload]。
+
+    ext 原始字节透出（2026-11-17 注册表化 P0：订阅 ack 的 attr2=subId/attr3=topic
+    是注册表权威 key，App qn0.o 同款；此前 ext 被丢弃）。"""
     if len(body) < 7:
         raise FrameDecodeError(f"echo frame too short: {len(body)}B")
     seq = struct.unpack(">H", body[0:2])[0]
     cmd = struct.unpack(">H", body[2:4])[0]
     fl = body[4]
     extlen = struct.unpack(">H", body[5:7])[0]
+    ext = body[7 : 7 + extlen]
     payload = body[7 + extlen :]
-    return {"fmt": "echo", "cmd": cmd, "seq": seq, "flags": fl, "payload": payload}
+    return {"fmt": "echo", "cmd": cmd, "seq": seq, "flags": fl, "ext": ext,
+            "payload": payload}
 
 
 def parse_push_frame(body: bytes) -> Dict[str, Any]:
@@ -320,6 +332,7 @@ def parse_push_frame(body: bytes) -> Dict[str, Any]:
         "cmd": cmd,
         "flags": fl,
         "ext": ext.decode("utf-8", "replace"),
+        "ext_raw": ext,   # 注册表 topic 匹配用原始字节（utf-8 replace 有损，2026-11-17）
         "payload": payload,
     }
 
@@ -333,14 +346,21 @@ def parse_incoming(payload: bytes) -> Dict[str, Any]:
     body = payload[5 : 5 + ln]
     if pkg == PKG_SERVER:
         return parse_server_frame(body)
+    if pkg == PKG_HEARTBEAT:
+        # kind1 服务端心跳：App SocketReaderThread 只统计延迟（len≠0 记 err heart
+        # len），无需应答；payload 原样透出供观测
+        return {"fmt": "heartbeat", "kind": 1, "payload": body}
     if pkg == PKG_PUSH:
         info = parse_push_frame(body)
         info["kind"] = 6
         return info
-    if pkg in (PKG_AUTH, PKG_ROUTE):
-        # 客户端帧不会有服务器发来；容忍服务器 echo 客户端格式
+    if pkg in (PKG_AUTH, PKG_ROUTE, PKG_UNSUB):
+        # 客户端帧不会有服务器发来；容忍服务器 echo 客户端格式。
+        # pkg 0x50 = 退订 ack（kind5，App qn0.q 按 UnsubIdReq.subIds 清注册表）
         info = parse_echo_frame(body)
         info["kind"] = pkg >> 4
+        if pkg == PKG_UNSUB:
+            info["fmt"] = "unsub_ack"
         return info
     raise FrameDecodeError(f"unknown pkg {pkg:#x}")
 
@@ -433,6 +453,116 @@ def parse_plate_snapshot(data: bytes) -> Dict[str, Dict[str, str]]:
         pid = s(1)
         if pid:
             out[pid] = {"name": s(2), "parent": s(6), "flag": s(4), "py": s(3)}
+    return out
+
+
+# ── 订阅注册表化协议层（2026-11-17 P0，RE 合同见 sub-registry-refactor-plan.md §1）──
+
+def build_sub_reqs_pb(items: List[Dict[str, Any]]) -> bytes:
+    """Base.SubReqs{reqs=1 repeated Item} 构造（cmd 211 批量订阅信封）。
+
+    Item{seqId=1 u32, cmd=2 u32, version=3 u32, codec=4 u32, subId=5 u32, data=20 bytes}
+    （Base.java 描述符逐字）。六字段显式写入（含 0 值，proto2/3 解析器均兼容）；
+    data=f20 → tag varint 两字节 a2 01。请求侧 data=内层 req pb（编码由 codec
+    字段指示，语义待探针 U2 钉死）；ack 侧 data=首帧 resp 快照（qn0.o 用 x() 解析）。"""
+    out = b""
+    for it in items:
+        body = b""
+        body += pb_varint_field(1, int(it.get("seqId", 0)))
+        body += pb_varint_field(2, int(it.get("cmd", 0)))
+        body += pb_varint_field(3, int(it.get("version", 0)))
+        body += pb_varint_field(4, int(it.get("codec", 0)))
+        body += pb_varint_field(5, int(it.get("subId", 0)))
+        body += pb_bytes(20, bytes(it.get("data") or b""))
+        out += pb_bytes(1, body)
+    return out
+
+
+def parse_sub_reqs_pb(payload: bytes) -> List[Dict[str, Any]]:
+    """SubReqs 解析（ack 回声/请求回读共用）。宽容模式：非法项跳过不抛
+    （fail-visible 由调用方计数）；缺位字段补 0/空 bytes。"""
+    pb = parse_pb(payload)
+    out: List[Dict[str, Any]] = []
+    for raw in pb.get(1, []):
+        if not isinstance(raw, (bytes, bytearray)):
+            continue
+        ip = parse_pb(bytes(raw))
+        out.append({
+            "seqId": int(pb_first(ip, 1, 0) or 0),
+            "cmd": int(pb_first(ip, 2, 0) or 0),
+            "version": int(pb_first(ip, 3, 0) or 0),
+            "codec": int(pb_first(ip, 4, 0) or 0),
+            "subId": int(pb_first(ip, 5, 0) or 0),
+            "data": bytes(pb_first(ip, 20, b"") or b""),
+        })
+    return out
+
+
+def build_unsub_id_req_pb(sub_ids: List[int]) -> bytes:
+    """Base.UnsubIdReq{subIds=1 repeated u32}（cmd 402 / pkg 0x50 退订）。
+    非 packed 逐项 tag（proto2 基线；proto3 解析器亦兼容非 packed）。"""
+    return b"".join(pb_varint_field(1, int(s)) for s in sub_ids)
+
+
+def parse_unsub_id_req_pb(payload: bytes) -> List[int]:
+    """UnsubIdReq 解析（退订 ack 回声）：兼容 packed/非 packed f1。"""
+    pb = parse_pb(payload)
+    out: List[int] = []
+    for v in pb.get(1, []):
+        out.extend(decode_packed_varints(v))
+    return out
+
+
+def encode_ext_attrs(attrs: Dict[int, Any]) -> bytes:
+    """帧 ext 属性段构造（App ux0.n/x6 线格式，SocketReaderThread ext 解析同款）：
+    key1=Long(8B BE)、key2=Short(2B BE)、key3=String(len2+bytes)、key4=Int(4B BE)。
+    订阅帧 attr2=subId（2BE，z6.c 只写 2 字节——与现行 `02 <cmd BE>` 逐字节同构）；
+    ack 侧 attr3=topic 字符串。未知 key 拒绝（fail-fast，不造非法帧）。"""
+    out = b""
+    for key in sorted(attrs):
+        v = attrs[key]
+        if key == 1:
+            out += bytes([1]) + struct.pack(">q", int(v))
+        elif key == 2:
+            out += bytes([2]) + struct.pack(">H", int(v))
+        elif key == 3:
+            raw = v.encode("utf-8") if isinstance(v, str) else bytes(v)
+            out += bytes([3]) + struct.pack(">H", len(raw)) + raw
+        elif key == 4:
+            out += bytes([4]) + struct.pack(">I", int(v))
+        else:
+            raise FrameDecodeError(f"unknown ext attr key {key}")
+    return out
+
+
+def parse_ext_attrs(ext: bytes) -> Dict[int, Any]:
+    """ext 属性段解析（echo/push 的 attr2=subId、attr3=topic 捕获）。
+    截断/未知 key 抛 FrameDecodeError（fail-visible，调用方计数不吞）。"""
+    out: Dict[int, Any] = {}
+    i, n = 0, len(ext)
+    while i < n:
+        key = ext[i]; i += 1
+        if key == 1:
+            if i + 8 > n:
+                raise FrameDecodeError(f"ext attr1 truncated at {i}")
+            out[1] = struct.unpack(">q", ext[i:i + 8])[0]; i += 8
+        elif key == 2:
+            if i + 2 > n:
+                raise FrameDecodeError(f"ext attr2 truncated at {i}")
+            out[2] = struct.unpack(">H", ext[i:i + 2])[0]; i += 2
+        elif key == 3:
+            if i + 2 > n:
+                raise FrameDecodeError(f"ext attr3 len truncated at {i}")
+            ln = struct.unpack(">H", ext[i:i + 2])[0]; i += 2
+            if i + ln > n:
+                raise FrameDecodeError(f"ext attr3 body truncated at {i}")
+            out[3] = ext[i:i + ln]; i += ln
+        elif key == 4:
+            if i + 4 > n:
+                raise FrameDecodeError(f"ext attr4 truncated at {i}")
+            out[4] = struct.unpack(">I", ext[i:i + 4])[0]; i += 4
+        else:
+            raise FrameDecodeError(f"unknown ext attr key {key} at {i - 1}")
     return out
 
 
