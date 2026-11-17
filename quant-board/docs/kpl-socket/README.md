@@ -305,6 +305,52 @@ QuantBoard 主后端 :8000
   两通道）——时钟注入一致性，缺省真实钟使回填窗随日期漂移（11-17 测试日期腐烂
   实证：11-06 档超 10 天窗被判 no_pool_date）；该测试补 `clock=_TEST_CLOCK`。
 
+### 3.6 订阅风暴 App 原始逻辑定案（2026-11-17 破译源码，用户裁决「探针和猜测解决不了问题，看源码」）
+
+**背景**：分波/漏斗两轮探针验证均未消除 rst（staged1 1/3、staged2 5/6），
+阈值模型反复重标定仍拟合不了全部数据点。回到反编译源码读 App 原始逻辑。
+
+**App 订阅架构（qn0 + SocketViewModel + 屏 Presenter，用户裁决后定案）**：
+
+1. **屏生命周期驱动订阅**（`SocketViewModel`）：每屏经 `@y51` 注解声明 cmd 集
+   （`c` SparseIntArray），`onResume → v()` 对每 cmd 发**一帧**订阅
+   （`SocketRepository.m → k(ux0,i)`），`onPause → r() → t() → z(cmd)` 发 402
+   退订（`SocketRepository.n`）。状态机 1=已订 / 2=已退。
+2. **连接后一次性全发 b 队列**（`qn0.z()`，日志 sendPacketsWhenSocketConnected）：
+   **零节流零分波**——App 不怕「爆发」，因为它面小。
+3. **2103 每屏一帧**（BiddingZTlQuota/PatternPresenter `k(2103)`）：
+   `DaBanStockListReq{pidType=m(默认8 竞价), sortType, orderType, index, count}`，
+   `k0() → a0(0,30)`= index 0、count 30 ——**从不订 7 池×7 页**；翻页/加载更多
+   = 改 index/count 重发同一帧（幂等替换，`n()` 会先从 d/e 移除同 subId 旧帧）。
+   搜索时甚至 `z(2103)` 主动退订 + HTTP 兕底。
+4. **per-stock 2203/2013 仅详情屏单股**（全部调用点：StockInfoBottomSelectBar、
+   StockBatchAddActivity、ThemeExcavateDetail*、w30——均为查看某一只股时订阅
+   该股），**从不订阅整个池**。池个股的行情/原因/热度数据由 2103 页推送自带
+   （quotas 列含 price/zf/tur/plate_id/hot_val/reason，kpl_daban_protocol L484）。
+5. **活跃订阅表 e 即当前屏面**：`o()` 订阅成功入 e；220 ResubNt 全量重发 e
+   （topics 空则全发，否则按 topic 过滤——`j()`）；断连 `f()` 清 d/e 留 b
+   （下会话 z() 重发）。
+6. **典型活跃面**：情绪屏 MoodPresenterImpl = @y51 十 cmd（2100/2106/2109/
+   2111/2114/2115/2116/2118/2119/2126）各一帧；PatternPresenter 4 cmd；
+   PlatePresenter 4 cmd。叠层最多 **~15-30 帧并发订阅**，per-stock 详情屏另加
+   1-2 帧。
+
+**定案**：rst_10054 是服务端对**并发订阅总量超预算**连接的处置——App 从不
+进入该区域（恒 ≤~30 帧），collector 旧面 ~750 帧（331 行情轮转 + 49 页 +
+~600 per-stock）是 App 画像的 25 倍。分波/漏斗只调时序，不动总量，必然失败；
+staged1/staged2 的「阈值窗」拟合是过拟合（150-170 帧/窗恰好拟合却机制错误——
+真实判据是活跃订阅数预算，具体数值待服务端源码/实弹定界）。
+
+**修正方向（架构级，待用户裁决数据语义）**：
+- P1：2103 收敛为 App 同款——每池 1 帧（index=0 count=30），49→4 帧；
+  深池走分页重订阅（幂等替换）而非订阅更多页。
+- P2：per-stock 2203/2013 池级订阅移除或按需单股；zt_reason 链改读 2103
+  推送自带 reason/hot_val（无缺口）；**题材链缺口**：2013 题材关系 2103
+  不自带，热榜 jev 题材链消费 get_theme_heat——需裁决（top-N 常驻 / 接受
+  缺口 / 仅详情按需）。
+- P3：3001 行情宇宙轮转（~13 帧/窗背景量）保留评估。
+- 目标：活跃订阅 ≤30 帧/会话（App 画像），fail-visible 面积进 status。
+
 ## 四、数据语义与已知限制
 
 - **价格是 ×10000 整数缩放**：113000=11.30 元、8900980=890.098（板块点位）。展示层需自行除以 10000 或标注口径。
