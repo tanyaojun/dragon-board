@@ -144,17 +144,19 @@ QuantBoard 主后端 :8000
   stats `reconnect_backoff_s`），长命会话归零；③ 保留宽限期（`loop_send_grace_s`
   默认 5s）与 drain 限流（8 帧/tick+0.3s 拟人），`setup_inline_subs` 开关保留
   默认关（内联/ drain 两架构均可，C3 验证 drain 架构 + 修复后语料正常到流）。
-- **死因感知退避（2026-11-17，App ReconnectManager 对齐，方案 §14）**：原螺旋仅看
-  会话时长 <60s，不分死因；App `ReconnectManager.java` 区分服务端拒绝（`f6127a==20`
-  → `r()` base 3s，连续 >3 降级 `a.d=60000ms`）vs 网络瞬断（`v(0)` 退避梯
-  {0,1,2,4,8,15,30}s±20% 抖动，成功 `u()` 归零）。PC 对齐：① 服务端拒绝类
-  （`rst_10054`/`errresp_*`）→ base 3s + 螺旋，`_server_reject_streak>3` → **60s**；
-  ② 干净/瞬态类（`eof_clean`/`timeout`/`network:*`/`abort_10053`）且健康长会话 ≥60s
-  → 快 retry 1s；③ 其余短命/本地故障/未知 → **保留原 <60s 螺旋兜底**（fail-safe，
-  不弱化防护）。健康长会话归零两 streak。status 新增 `server_reject_streak`/
-  `last_backoff_cause`。测试 `TestCauseAwareBackoff`（6 用例：>3→60s / errresp 归类 /
-  干净快 retry / 短命兜底 / 健康归零）。**与爆发指纹议题关系**：rst_10054 仍走硬退避
-  （防护不松）；仅干净轮换享快 retry。高频重连非 App 保活机制（保活=会话内 3001 心跳）。
+- **App ReconnectManager 忠实移植（2026-11-17，方案 §15；§14 死因感知→§15 值对齐）**：
+  原退避值拍脑袋（2s 基/<60s/2·2^n/封顶 120s）未对照 App。App `ReconnectManager.java`
+  实证：退避梯 `j={0,1,2,4,8,15,30}s±20%`（fail-count 索引，`v()` 每次重连 c++）；服务端
+  主动断开（`f6127a==20`）`r()` +3s，从未 auth-success 且 `SocketRepository.b>3` → +60s
+  （`a.d`）；断连计数 >10min 衰减（`i()`）；auth-success/app-resume 归零（`u()/j()`）。
+  PC 移植：`backoff=梯[min(fail,6)]±20% + server_extra`；`_retry_fail_count`/`_server_disconnect_count`
+  替换旧 streak；server_active=`rst_10054`/`errresp_*` → +3s，未 streaming 且断连计数>3 → +60s；
+  signsvc/anticheat 5s 地板保留。**PC 适配**：App auth≈健康长会话故归零；PC auth 后仍
+  ~60s 被杀，归零判据用**健康长会话 >=60s**（仅 auth 归零会致快重连螺旋）。status
+  `retry_fail_count`/`server_disconnect_count`/`last_backoff_cause`。测试 `TestAppRetryBackoff`
+  （8 用例，jitter 受控）。**风险**：App 梯封顶 30s(+3s=33s) < 旧 120s、首 retry ~0s < 旧 2s，
+  对 PC 不可信指纹防护可能偏弱，**须探针验证后加载生产**（burst `--reconnect` 可 A/B）。
+  高频重连非 App 保活机制（保活=会话内 3001 心跳）。
 - **交易时段门控（2026-11-11，防设备风控累积）**：非交易时段不建连——夜间 7×24
   TTL 重连的纯空转连接（~1500 次/日）是风控打标的累积来源，砍掉后日常连接数降
   一个数量级。窗口 09:15（含集合竞价）-11:30、13:00-15:35（下午收盘 15:30

@@ -541,3 +541,49 @@ PC 不可以吗」——逆向核实**前提不成立**：App 保活=会话内 3
 **131 passed**；KPL 九文件 **428 passed** / `services+api` **600 passed** / `tests/hotlist`
 **1585 passed, 6 skipped**（计数含用户并行新增 `/api/kpl/subscription-ids` 路由枚举测试）。
 serve 无新 env（保护性精化默认开，回退靠 git）。
+
+## 15. App ReconnectManager 忠实移植（2026-11-17，用户「之前风控拍脑袋，参照 App 优化」）
+
+**问题**：§14 虽加死因感知，但退避**值**仍是拍脑袋（2s 基/<60s 判据/2·2^n/封顶 120s），
+未对照 App 代码。用户指出之前风控方案凭经验定、未参照 App 重试机制→忠实移植。
+
+**App 重试状态机实证（ReconnectManager.java + SocketRepository.java）**：
+- `v(j2)`：退避梯 `j={0,1000,2000,4000,8000,15000,30000}ms`（末项 WorkRequest.
+  DEFAULT_BACKOFF_DELAY），`j3=j[min(c,6)]`±20% 抖动（j3==0→nextInt(301)ms）+ j2；`c++`。
+- `r()`：`f6127a==20`（服务端主动断开）→ j2=3000；`!this.f`（从未 auth-success）且
+  `SocketRepository.b>3` → j2=`a.d`=60000（「服务端连续拒绝降级 60000ms」）。
+- `SocketRepository.i(code)`：服务端断连 `b++`；距上次 >600000ms(10min) → b=0 衰减。
+  `j(cause)`：auth-success/app-resume → b=0。
+- `u(cause)`：auth-success/app-resume → failCount c=0。`q()`：后台(!b)→f6127a=1 不重连；
+  无网络→f6127a=10 等网络事件。
+
+**PC 移植（collector `_run_loop` 退避块，替换 §14 拍脑袋值）**：
+- 常量 `_APP_RETRY_LADDER_S=(0,1,2,4,8,15,30)` / `_APP_RETRY_JITTER=0.2` /
+  `_APP_SERVER_REJECT_BASE_S=3` / `_APP_SERVER_REJECT_DEGRADE_S=60` /
+  `_APP_SERVER_DISCONNECT_DECAY_S=600` / `_APP_HEALTHY_SESSION_S=60`。
+- 状态 `_retry_fail_count`(App c) / `_server_disconnect_count`(App b) /
+  `_last_server_disconnect_ts`(App this.c) 替换 §14 `_short_session_streak`/`_server_reject_streak`。
+- `backoff = 梯[min(fail,6)]±20% + server_extra`；server_active=`_is_server_reject`
+  (rst_10054/errresp_*) → +3s；`not _session_streaming` 且 sd_count>3 → +60s；fail++。
+  signsvc/anticheat 5s 地板保留（`max(app_backoff, floor)`，初始 floor 0→App 梯从 0 起）。
+- **PC 适配（关键，诚实登记）**：App auth-success≈健康长会话（故 c/b 归零）；PC auth
+  后仍 ~60s 被杀（auth≠健康），故归零判据用**健康长会话 >=60s**（`_APP_HEALTHY_SESSION_S`）
+  而非仅 auth——否则每次 auth 归零→快重连螺旋。「从未 auth」用 per-session
+  `_session_streaming`（App this.f 为 sticky，PC 按会话）。
+
+**与 §14 差异 / 风险（诚实）**：App 梯封顶 30s(+3s=33s) **<** 旧拍脑袋 120s；首 retry
+~0s **<** 旧 2s。对 PC 不可信指纹防护可能偏弱（App 受信任故敢快 retry/低封顶）。连续
+失败仍经 fail_count 梯递增（0/1/2/4/8/15/30）+ 服务端 persistent 拒绝 60s 保护。**须探针
+验证封顶充分性后再加载生产**（用户 burst `--reconnect` 可 A/B）；回退靠 git。
+
+**验证（全 mock，jitter 受控）**：`TestAppRetryBackoff` 8 用例（服务端拒绝 >3→64s /
+errresp 归类 +3s / 健康干净 EOF 快 retry 0s / 健康网络瞬态 0s / 连续干净失败梯递增
+0/1/2/4 / 健康归零 / signsvc 5s 地板 / jitter +20% 上界）；TestDeathCause 单退避用例
+同步（3.0）。collector 我的用例 35 passed；全套件 `services+api` **607 passed**（含用户
+并行 staged-subs 特性测试）。
+
+**提交冲突登记（2026-11-17）**：用户并发开发 `sub_staged` 分波订阅特性，与本 §15 同改
+`kpl_collector_service.py` + `test_kpl_collector_service.py`（init/status 块细粒度交织）；
+用户 `TestStagedSubs` 有 `daban` 未局部导入的测试隔离缺陷（隔离跑 NameError，全套件
+命名空间污染下绿）。**本轮未提交**（避免整文件混入用户未完成特性）；提交方式待用户裁决
+（用户先提交 staged-subs / 授权 git add -p 隔离 §15 hunks）。serve 无新 env。
