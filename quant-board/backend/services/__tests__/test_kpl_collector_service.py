@@ -1433,6 +1433,63 @@ class TestDeathCause:
         assert waits == [3.0]
 
 
+class TestEofCleanReconnect:
+    """eof_clean=服务端计划内 TTL 轮转（2026-11-18 修复）：不计 fail、秒级重连。
+
+    此前 41s TTL 会话低于 60s 健康阈，fail 累积爬梯至退避 35s，会话间 ~35s
+    数据空窗（盘中实弹观测，11-18）。App 对干净断开=auth 归零+梯[0]=0。"""
+
+    def test_eof_clean_zero_backoff_and_fail_reset(self, svc, monkeypatch):
+        import backend.services.kpl_collector_service as mod
+        monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
+        monkeypatch.setattr(mod.random, "uniform", lambda a, b: 0.0)
+
+        def _eof_session():
+            # 已 streaming（auth 完成）+ 无错误码/无 sock 死 → 分类 eof_clean
+            svc._session_streaming = True
+            svc._session_err_code = None
+            svc._sock_dead = False
+            return                                 # 无异常 = 干净 EOF（TTL ~41s 轮转）
+
+        monkeypatch.setattr(svc, "_session", _eof_session)
+        waits = []
+        monkeypatch.setattr(svc, "_stop", type(svc._stop)())
+        monkeypatch.setattr(svc._stop, "wait", lambda s: waits.append(s) or svc._stop.set() or True)
+        svc._run_loop()
+        assert svc._last_death_cause == "eof_clean"
+        assert svc._retry_fail_count == 0          # 不计 fail（fail 先归零再 +=1）
+        assert svc._server_disconnect_count == 0
+        st = svc.status()
+        assert st["last_backoff_cause"] == "eof_clean"
+        assert st["reconnect_backoff_s"] <= 0.3    # 梯[0]=0 + jitter≤0.3s，秒级重连
+        assert waits and waits[0] <= 0.3           # 无 35s 空窗
+
+    def test_eof_clean_does_not_mask_failures(self, svc, monkeypatch):
+        """eof_clean 归零不影响真失败退避：紧接 rst 仍走 server_extra。"""
+        import backend.services.kpl_collector_service as mod
+        monkeypatch.setattr(svc, "_in_trading_session", lambda ts=None: True)
+        monkeypatch.setattr(mod.random, "uniform", lambda a, b: 0.0)
+
+        def _eof():
+            svc._session_streaming = True
+            svc._session_err_code = None
+            svc._sock_dead = False
+
+        sessions = [
+            _eof,                                  # 会话1：干净 EOF
+            lambda: (_ for _ in ()).throw(
+                ConnectionResetError(10054, "RST")),  # 会话2：真失败
+        ]
+        monkeypatch.setattr(svc, "_session", lambda: sessions.pop(0)())
+        waits = []
+        monkeypatch.setattr(svc, "_stop", type(svc._stop)())
+        monkeypatch.setattr(svc._stop, "wait", lambda s: (waits.append(s),
+                                                          len(waits) >= 2 and svc._stop.set(),
+                                                          True)[2])
+        svc._run_loop()
+        assert waits == [0.0, 3.0]                 # EOF 零退避；rst 仍 3s server_extra
+
+
 class TestAppRetryBackoff:
     """§15 App ReconnectManager 忠实移植：梯{0,1,2,4,8,15,30}s±20% + 服务端主动断开
     +3s（从未 auth 且断连计数>3→+60s）；健康长会话>=60s 归零（PC 适配）。jitter 受控全 mock。"""
@@ -1492,7 +1549,7 @@ class TestAppRetryBackoff:
         waits = self._run_sessions(svc, monkeypatch, [(75.0, None, None, True)])
         assert svc._last_death_cause == "eof_clean"
         assert waits == [0.0]                 # App v(0) 干净轮换首 retry ~0s
-        assert svc._retry_fail_count == 1
+        assert svc._retry_fail_count == 0     # 2026-11-18：eof_clean 不消耗 fail 计数
         assert svc._server_disconnect_count == 0
 
     def test_healthy_network_transient_fast_retry(self, svc, monkeypatch):
@@ -1500,12 +1557,14 @@ class TestAppRetryBackoff:
         assert svc._last_death_cause == "timeout"
         assert waits == [0.0]
 
-    def test_consecutive_clean_failures_escalate_ladder(self, svc, monkeypatch):
-        # 连续短命干净 EOF（非服务端拒绝）→ App 梯随 fail_count 递增（0/1/2/4）
+    def test_consecutive_clean_eof_zero_backoff(self, svc, monkeypatch):
+        # 2026-11-18 修复改判：干净 EOF=服务端计划内 TTL 轮转（非失败），连续
+        # EOF 全部秒级重连（梯[0]=0），fail 不累积（旧判据「短命 EOF 爬梯」随
+        # eof_clean 豁免作废——41s TTL 会话曾累积退避至 35s 造成数据空窗）。
         waits = self._run_sessions(svc, monkeypatch,
                                    [(30.0, None, None, True) for _ in range(4)])
-        assert waits == [0.0, 1.0, 2.0, 4.0]
-        assert svc._retry_fail_count == 4
+        assert waits == [0.0, 0.0, 0.0, 0.0]
+        assert svc._retry_fail_count == 0
         assert svc._server_disconnect_count == 0
 
     def test_healthy_session_resets_counters(self, svc, monkeypatch):
@@ -1515,7 +1574,7 @@ class TestAppRetryBackoff:
             [(0.5, rst(), None, False), (0.5, rst(), None, False), (75.0, None, None, True)])
         assert waits == [3.0, 4.0, 0.0]
         assert svc._server_disconnect_count == 0   # App u()/j()：健康长会话归零
-        assert svc._retry_fail_count == 1
+        assert svc._retry_fail_count == 0          # 2026-11-18：健康归零 + EOF 不再消耗 fail
 
     def test_signsvc_floor_preserved(self, svc, monkeypatch):
         # signsvc 故障 5s 地板保留（本地服务恢复需时）；App 梯[0]0 不抵消地板
@@ -1524,11 +1583,12 @@ class TestAppRetryBackoff:
         assert waits == [5.0]
 
     def test_ladder_jitter_upper_bound(self, svc, monkeypatch):
-        # jitter 取上界 +20%：第2次干净失败 base=1s → 1.2s（App v() ±20%）
+        # jitter 取上界 +20%（App v() ±20%）。2026-11-18 修复后连续干净 EOF=计划内
+        # 轮转，fail 恒 0 → base 恒梯[0]=0 → 上界 0.3s（旧判据「第2次 base=1s」作废）。
         waits = self._run_sessions(svc, monkeypatch,
                                    [(30.0, None, None, True), (30.0, None, None, True)],
                                    jitter=lambda a, b: b)
-        assert waits == [0.3, 1.2]            # base0→uniform(0,0.3)上界0.3；base1→1*1.2
+        assert waits == [0.3, 0.3]
 
     def test_server_disconnect_decay_after_10min(self, svc, monkeypatch):
         # App SocketRepository.i()：距上次服务端断连 >600s → 计数衰减归零后 ++

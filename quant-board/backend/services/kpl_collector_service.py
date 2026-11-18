@@ -1621,6 +1621,14 @@ class KplCollectorService:
             #   首 retry ~0s < 旧 2s——对 PC 不可信指纹防护可能偏弱，须探针验证后加载生产。
             cause = self._last_death_cause
             healthy = self._stats["last_session_s"] >= self._APP_HEALTHY_SESSION_S
+            # 2026-11-18 修复：eof_clean=服务端计划内 TTL 轮转（非失败），App 同款
+            # 秒级重连——不计 fail、不进退避梯（归零后梯[0]=0 + jitter≤0.3s）。
+            # 此前 41s TTL 会话低于 60s 健康阈 → fail 累积爬梯至 35s，会话间
+            # ~35s 数据空窗（利用率 ~55%，11-18 盘中实弹观测）。真失败类死因
+            # （rst/errresp/网络）退避语义不变。
+            if cause == "eof_clean":
+                self._retry_fail_count = 0
+                self._server_disconnect_count = 0
             if healthy:
                 # App u()/j() resetFailCount：健康长会话证明恢复（PC 适配判据）
                 self._retry_fail_count = 0
@@ -1645,7 +1653,8 @@ class KplCollectorService:
                 if not self._session_streaming and self._server_disconnect_count > 3:
                     server_extra = self._APP_SERVER_REJECT_DEGRADE_S
             backoff = max(jittered + server_extra, backoff)   # backoff=signsvc/anticheat 5s 地板或 0
-            self._retry_fail_count += 1                       # App v()：c++
+            if cause != "eof_clean":                          # eof_clean=计划内轮转，不消耗 fail 计数
+                self._retry_fail_count += 1                   # App v()：c++
             self._stats["reconnect_backoff_s"] = round(backoff, 3)
             self._stats["last_backoff_cause"] = cause
             if self._stop.is_set():
