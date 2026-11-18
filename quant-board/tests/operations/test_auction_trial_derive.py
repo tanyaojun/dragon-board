@@ -305,6 +305,22 @@ def test_derive_jj_authority_open0925_archive():
     assert state["open0925N"] == 1 and state["open0925MissingN"] == 0
 
 
+def test_derive_pct0915_series_first_fallback_and_archive_priority():
+    """竞价涨幅（0915）：存档缺 → 回退序列首帧观测值（p0915 缺席不伪）；
+    存档在 → 权威覆盖（open0915_archive）。与 0925 开盘涨幅两时点分列。"""
+    rows, _ = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
+    r = rows["605255"]
+    assert r["pct0915"] == 4.0 and r["jj915Src"] == "series_first"
+    assert r["p0915"] is None, "无存档价 → p0915 缺席（不伪）"
+    auct = {"s0915": {"605255": {"price": 4.84, "pct": 10.0}}}
+    rows2, _ = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), _mbl_rows(), auct=auct), "2026-11-17")
+    r2 = rows2["605255"]
+    assert r2["pct0915"] == 10.0 and r2["jj915Src"] == "open0915_archive"
+    assert r2["p0915"] == 4.84
+
+
 def test_derive_open0925_missing_fallback_disclosure():
     """存档缺 → 回退旧链（MBL→bid→序列末帧），open0925N/MissingN 结构化披露。"""
     rows, state = M.derive_trial_rows_from_series(

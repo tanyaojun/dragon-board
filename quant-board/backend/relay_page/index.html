@@ -9652,7 +9652,7 @@ async function kplFetchBreadthHist(date){
 const AT = {doc: null, dates: [], nameMiss: 0, boardMiss: 0, boardMeta: null, unmapped: [], rootMeta: null,
             prevPctMiss: 0, priceMiss: 0,
             loading: false, error: null, fb: null, seq: 0, pollTimer: null,
-            sel: '', boardSort: {key: 'n', dir: -1}, stockSort: {key: 'jjPctN', dir: -1},
+            sel: '', boardSort: {key: 'n', dir: -1}, stockSort: {key: 'aucPctN', dir: -1},
             codeBoards: {}, jy: {doc: null, error: null, fb: null}};
 function atCode6(c){ const m = String(c || '').match(/(\d{6})\s*$/); return m ? m[1] : ''; }
 // 粗桶口径统一（2026-11-14 用户确认）：当日打标分组名同义归一（aliasMap 由读口
@@ -9951,6 +9951,7 @@ function atRender(){
   const decorated = rightRows.map(r => {
     return {...r, jjPctN: atNum(r.jj_percent), jjTurN: atNum(r.jj_turnover),
             jjAmtN: atNum(r.jj_amount), priceN: atNum(r.price), pctN: atNum(r.percent),
+            aucPctN: atNum(r.pct0915),
             openPctN: atNum(r.pct0925), openPrN: atNum(r.p0925),
             prePctN: atNum(r.pre_percent), floatN: atNum(r.circulated_value),
             firstN: atNum(r.first_amount), firstAddN: atNum(r.first_add),
@@ -9968,7 +9969,7 @@ function atRender(){
     return sdir * (cmp || String(a.code).localeCompare(String(b.code)));
   });
   const atDerived = (AT.doc || {}).source === 'kpl_bidding_series_derived';
-  const pctTip = atDerived ? '竞价涨幅=09:25 开盘涨幅（权威=3006 存档 kpl_auction_price，掉池股亦有；缺位回退 MBL→bid→序列末帧，详见 jjSource）' : AT_PCT_TIP;
+  const pctTip = atDerived ? '竞价涨幅=09:15 竞价涨幅（权威=3006 存档 s0915；缺档回退序列首帧观测值，时点见子标签）' : AT_PCT_TIP;
   const amtTip = k => atDerived
     ? (k === 'firstN' ? '首开额=首帧委买额（官方序列观测值，§7.9 派生口径），单位=元'
       : k === 'firstAddN' ? '首加额=首笔观测追加委买增量（tick 分笔计算，2026-11-18 用户裁决；稀疏采样观测口径）'
@@ -9979,7 +9980,7 @@ function atRender(){
     : k === 'maxN' ? '峰值额=max_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
     : '最终额=last_amount：语义待 App 同屏核对（勘察 §6.4），单位=元';
   let html = '<thead><tr><th>代码</th><th>名称</th>'
-    + lbThSort('竞价涨幅', 'jjPctN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('竞价涨幅', 'aucPctN', AT.stockSort, 'atStockSortBy')
     + lbThSort('开盘涨幅', 'openPctN', AT.stockSort, 'atStockSortBy')
     + lbThSort('竞价换手', 'jjTurN', AT.stockSort, 'atStockSortBy')
     + lbThSort('竞价成交额', 'jjAmtN', AT.stockSort, 'atStockSortBy')
@@ -10001,7 +10002,7 @@ function atRender(){
       : '名称不可考：stock_names 字典 miss 且未入韭研板块（不猜名）';
     html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
       + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
-      + `<td class="kpl-uni ${kcls(r.jjPctN)}" title="${esc(pctTip)}">${atPct(r.jjPctN)}${r.jjSource === 'open0925_archive' ? '<div class=\"kpl-sub\">开盘 09:25</div>' : r.jjFrozen ? '<div class=\"kpl-sub\">冻结 09:25</div>' : r.end_time ? '<div class=\"kpl-sub\">至 ' + esc(String(r.end_time)) + '</div>' : ''}</td>`
+      + `<td class="kpl-uni ${kcls(r.aucPctN)}" title="${esc(pctTip)}">${atPct(r.aucPctN)}${r.jj915Src === 'open0915_archive' ? '<div class=\"kpl-sub\">竞价 09:15</div>' : r.start_time ? '<div class=\"kpl-sub\">首帧 ' + esc(String(r.start_time)) + '</div>' : ''}</td>`
       + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅=09:25 撮合开盘涨幅（kpl_auction_price 存档；历史日=TDX 开盘回补 src=tdx_lday）${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价换手=09:25 冻结 bidding_turnover（MBL→bid）优先，缺位=序列末帧观测值' : '竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）'}">${atPct(r.jjTurN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价成交额=09:25 冻结 bidding_amount（MBL→bid）优先，缺位=末帧观测值（board_amt Σ口径），单位=元' : '竞价成交额=jj_amount（元，rank 原值）'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`

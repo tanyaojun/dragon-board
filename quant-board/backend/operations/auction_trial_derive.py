@@ -9,8 +9,11 @@
 
 派生口径（仅消费 roster 实读字段，其余不猜不补 0）：
 - jj_percent = 09:25 存档开盘涨幅权威（3006 现有流归档 kpl_auction_price，
-  2026-11-18 用户裁决：真 09:25=撮合开盘，掉池股亦有；p0915/pct0915/p0925/pct0925
-  全披露）；缺位逐层回退 MBL→bid→序列末帧（jjSource/jjFrozen 逐行披露）
+  2026-11-18 用户裁决：真 09:25=撮合开盘，掉池股亦有；p0925/pct0925 全披露）；
+  缺位逐层回退 MBL→bid→序列末帧（jjSource/jjFrozen 逐行披露）
+- pct0915 = 竞价涨幅（09:15 竞价，2026-11-18 用户裁决与 09:25 开盘涨幅两时点
+  分列展示）：权威=存档 s0915；缺档回退序列首帧 bidding_pct 观测值
+  （jj915Src=open0915_archive/series_first 逐行披露；p0915 仅存档在场时有值）
 - first/last/max_amount = 首帧/末帧/峰值帧 zt_buy_amount（委买额时序统计）
 - first_add         = 首笔观测追加委买增量（tick 分笔首正 delta，2026-11-18
   用户裁决：首加额按 tick 分笔计算，非 KPL 推送字段；稀疏采样观测口径，
@@ -204,6 +207,12 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
             frozen_n += 1
         if jj_src == "open0925_archive":
             open_n += 1
+        # 竞价涨幅（09:15 竞价）：权威=存档 s0915；缺档回退序列首帧观测值（时点披露）
+        pct915 = _f(a15.get("pct"))
+        src915 = "open0915_archive" if pct915 is not None else None
+        if pct915 is None:
+            pct915 = _f(first.get("bidding_pct"))
+            src915 = "series_first" if pct915 is not None else None
         rows[code] = {
             "code": code,
             "bk_name": plate,   # 桥接主链靠它；缺 → 板块归属缺席（fail-visible）
@@ -212,7 +221,7 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
             "jj_turnover": jj_tur,
             "jjSource": jj_src,
             "jjFrozen": is_frozen,
-            "p0915": _f(a15.get("price")), "pct0915": _f(a15.get("pct")),
+            "p0915": _f(a15.get("price")), "pct0915": pct915, "jj915Src": src915,
             "p0925": _f(a25.get("price")), "pct0925": _f(a25.get("pct")),
             "first_amount": _f(first.get("zt_buy_amount")) if first else None,
             "first_add": first_add,
