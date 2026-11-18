@@ -254,7 +254,6 @@ class KplCollectorService:
         stock_ids: Optional[List[str]] = None,
         history: int = 200,
         human_delay: bool = True,
-        # auth 相位延迟（2026-11-09 会话抖动根因修复）：§3.4 实证会话时长与 auth 阶段
         daban_subs: bool = True,
         daban_market_type: int = 1,
         daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1, 2, 3),

@@ -1833,9 +1833,9 @@ class TestHumanPausePacing:
         assert seen == []   # pytest 零停顿（既有合同不变）
 
     def test_auth_no_phase_delay(self, monkeypatch):
-        """2026-11-18 拆除守卫：发 610 前零 auth 相位延迟（App 同款）——
-        首个 _human_pause 必须是订阅帧 pacing（0.3/0.6/0.8 基数），不得出现
-        5.0 基数（auth_phase_delay 复活即红）。"""
+        """2026-11-18 拆除守卫：发 610 前零 auth 相位延迟（App 同款）。
+        直接判据：每条 _human_pause 调用记录发出帧数，断言全部发生在 610
+        auth 帧已发出之后（610 前插任意停顿——无论基数多少——即红）。"""
         svc = KplCollectorService(
             FakeCodec(), device_id="d", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=True)
@@ -1851,9 +1851,15 @@ class TestHumanPausePacing:
             _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
         ]
         fake = FakeSocket(responses)
+        monkeypatch.setattr(svc, "_human_pause",
+                            lambda b, s=0.0: pauses.append((b, s, len(fake.sent))))
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
-        assert all(p[0] != 5.0 for p in pauses), "auth 相位延迟已拆，不得复活"
+        six10 = next((i for i, f in enumerate(fake.sent)
+                      if len(f) >= 9 and int.from_bytes(f[7:9], "big") == 610), None)
+        assert six10 is not None, "会话未发出 610 auth 帧"
+        assert all(p[2] > six10 for p in pauses), \
+            "610 发送前出现 _human_pause（auth 相位延迟复活，任意基数都算）"
         assert pauses and pauses[0][0] in (0.3, 0.6, 0.8), "首停顿=订阅帧 pacing"
 
     def test_status_exposes_session_observability(self, svc):

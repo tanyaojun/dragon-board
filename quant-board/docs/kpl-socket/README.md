@@ -91,6 +91,7 @@ QuantBoard 主后端 :8000
   `last_session_s` / `auth_phase_delay` 供实弹验证（预期 last_session_s 进 75-160s 档）。
   **验证状态：待重启 :8002 后实弹观测**；若仍未进长会话档，下一层排查用 KPL_DEBUG
   帧级抓包对照 adb 模式逐帧时序（预置观测字段已就位）。
+  **2026-11-18 用户裁决已全拆（README §3.10 C1，App 收 260 即 userAuth 零延迟）**：本条仅历史存档，「待重启实弹观测」作废——实测拆除后 setup_s 13-18s→8.8s，无杀连升级（会话死因真凶=3101 错通道+3001 跑步机，§3.7）。
 - **2203/2013 drain 爆发→10054 循环修复（2026-11-10，实弹定性）**：板块行情页状态栏
   周期性报 `2203/2013 subscribe send failed: WinError 10054`，一直未修。实弹 ：8002
   status 佐证：sessions=26/errors=51/last_session_s=28.5（setup 占 28.2s），会话仍在
