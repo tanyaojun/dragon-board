@@ -316,14 +316,13 @@ class KplCollectorService:
         ka_mode: str = "off",
         sub_unique_id: bool = False,
         sub_staged: bool = False,
-        # 2026-11-18 消融定案：0x40 订阅窗口 ≈20s（inline 33 帧×0.3s 停顿=22.6s
-        # 照样 1002@23.2s；App 每连接 ~10 帧秒级发完）。动态行情面硬帽=把面压回
-        # App 量级使 setup 在窗口内发完；0=不限（旧行为）。溢出截断 fail-visible
-        # 计数（quote_face_dropped_n）。
+        # 2026-11-18 复盘更正：0=不限（生产常态）。cap 旋钮仅为总量卫生实验保留
+        # （App 活跃面 ≤~30 帧），生产禁用——截断会致 relay 页板块行情缺推
+        # （消融期误启 100 已复盘移除；「0x40 时间窗」动机已证伪，真凶=3101 错通道）。
         quote_face_cap: int = 0,
-        # 2026-11-18 窗口定案：0x40 订阅窗口按时间 ~20s 关闭（与体积无关；
-        # 33 帧×0.3s=18.8s 贴沿照样 1002@19s）。drain_pause 覆盖旋钮：把 setup
-        # 压进窗口（App 每连接 ~10 帧也是亚秒级连发；0.3s 停顿是过保守旧档）。
+        # 2026-11-18 复盘更正：停顿覆盖旋钮。生产 100ms=实弹验证保守档；App 实际
+        # 零节流连发（qn0.z()），0.3s 旧档无源码依据。当初「贴沿 20s 窗口」动机
+        # 已证伪（真凶=3101 错通道），留值纯因实弹稳定。
         drain_pause: Optional[tuple] = None,
     ):
         if ka_mode not in ("610", "off", "none"):
@@ -914,9 +913,11 @@ class KplCollectorService:
             raise
 
     def _flush_pending_inline(self, sock: Any, next_seq: Any, lane: str) -> None:
-        """2026-11-10 setup_inline_subs 模式：把待发订阅帧在 setup 窗口内一次性
-        内联发完（0x40 帧窗口关闭后发送→ErrResp 1002 断连，探针 E1-E4 实锤）。
-        逐帧拟人停顿（同款节奏）；OSError 直接上抛交给 _run_loop 重连链（此时
+        """setup_inline_subs 模式：待发订阅帧 setup 内一次性连发（App qn0.z()
+        连接后一次性全发 b 队列同款，零分波）。历史注：当初「0x40 帧窗口关闭后
+        发送→1002」的动机已证伪——11-18 源码定案 ErrResp 1002 真凶=3101 错用
+        0x40 通道（README §3.7），E1-E4 探针结论同为该误归因；inline 保留纯因
+        App 同款且实弹稳定。OSError 直接上抛交给 _run_loop 重连链（此时
         连接已死，继续 setup 无意义，fail-visible 由 network 错误日志承载）。"""
         if lane == "setup":
             items = list(self._pending_setup_frames)
@@ -1222,11 +1223,9 @@ class KplCollectorService:
             yield lst[i:i + size]
 
     def _apply_face_cap(self) -> None:
-        """行情面硬帽（2026-11-18 窗口消融）：cap>0 且超限时保 priority 头部截断。
-
-        App 量级参照：单屏 ~10-50 id；0x40 窗口 ~20s 内 setup 必须发完——面体积
-        直接决定帧数×拟人停顿总时长。溢出截断计数 fail-visible（status 透出）。
-        """
+        """行情面硬帽（总量卫生实验旋钮，生产 cap=0 不启用）：cap>0 且超限时保
+        priority 头部截断。溢出截断计数 fail-visible（status 透出）。
+        复盘注：窗口动机已证伪（真凶=3101 错通道，README §3.7）。"""
         cap = self._quote_face_cap
         if cap <= 0 or len(self._stock_ids) <= cap:
             return

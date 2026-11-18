@@ -143,12 +143,12 @@ _service = KplCollectorService(
     zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS,
     stock_detail_subs=_STOCK_DETAIL_SUBS,
     stock_detail_max_stocks=int(os.environ.get("KPL_DETAIL_MAX_STOCKS", "15") or 15),
-    # 2026-11-18 消融定案：1002 时间线=setup 内联 13.5s → 读循环 5s 宽限 → daban
-    # drain 至 ~24s → 0x40 窗口已关（E1-E4 合同）→ ErrResp 1002。inline=全部订阅
-    # 压进 setup 窗口发完，读循环零 0x40 发送。KPL_SETUP_INLINE_SUBS=1 启用。
+    # 2026-11-18：订阅 setup 内联连发（App qn0.z() 同款）。历史注：「0x40 时间窗」
+    # 动机已证伪（真凶=3101 错用 0x40 通道，README §3.7），inline 保留纯因 App 同款。
     setup_inline_subs=_env_flag("KPL_SETUP_INLINE_SUBS"),
+    # 行情面硬帽：生产禁用（0=不限）——截断致 relay 页板块行情缺推；总量卫生实验旋钮
     quote_face_cap=int(os.environ.get("KPL_QUOTE_FACE_CAP", "0") or 0),
-    # KPL_DRAIN_PAUSE_MS=100 → (0.1, 0.05)：压进 ~20s 0x40 窗口（默认 0.3 旧档）
+    # KPL_DRAIN_PAUSE_MS=100 → (0.1, 0.05)：实弹验证保守档（App 实际零节流连发）
     **({"drain_pause": (float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 1000,
                         float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 2000)}
         if os.environ.get("KPL_DRAIN_PAUSE_MS") else {}),
