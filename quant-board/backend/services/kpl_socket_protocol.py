@@ -1041,6 +1041,15 @@ def parse_index_simple_quotes(payload: bytes) -> Dict[str, Any]:
             inc_price = inc_price.decode("utf-8", "replace")
         if isinstance(inc_rate, bytes):
             inc_rate = inc_rate.decode("utf-8", "replace")
+        # review 2026-11-18 M1：wire5 float 可产 NaN/Inf（struct.unpack("<f")）——
+        # 非法 JSON 序列化杀 relay 整帧 + 下游 round(inf) OverflowError 杀会话 +
+        # NaN 占首帧名额；非有限→None 按缺字段处理（镜像 2013 守卫，fail-visible）
+        if isinstance(price, float) and not math.isfinite(price):
+            price = None
+        if isinstance(inc_price, float) and not math.isfinite(inc_price):
+            inc_price = None
+        if isinstance(inc_rate, float) and not math.isfinite(inc_rate):
+            inc_rate = None
         item["price"] = price
         item["inc_price"] = inc_price
         item["inc_rate"] = inc_rate

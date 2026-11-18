@@ -176,3 +176,41 @@ def test_series_section_wired_into_detail(html):
 def test_series_cache_no_refetch(html):
     body = _fn(html, "alSeriesEnsure")
     assert "if (cur && !cur.loading) return" in body, "结果态按日缓存，防重复外呼"
+
+
+def test_trial_two_pct_columns_20261118(html):
+    """review m5：竞价涨幅(0915)/开盘涨幅(0925) 两列拆分守卫——映射/表头/排序键/
+    子标签门控（aucPctN null 不出「首帧」假暗示，review n1）。"""
+    fn = _fn(html, "atRender")
+    assert "aucPctN: atNum(r.pct0915)" in fn
+    assert "openPctN: atNum(r.pct0925)" in fn and "openPrN: atNum(r.p0925)" in fn
+    assert "lbThSort('竞价涨幅', 'aucPctN'" in fn
+    assert "lbThSort('开盘涨幅', 'openPctN'" in fn
+    assert "r.aucPctN != null ? (r.jj915Src === 'open0915_archive'" in fn, \
+        "子标签以值在场门控（null 不暗示存在观测）"
+    assert "开盘涨幅=09:25 撮合开盘涨幅" in fn and "src=tdx_lday" in fn
+    assert "stockSort: {key: 'aucPctN', dir: -1}" in html, "默认排序键与竞价涨幅列一致"
+
+
+def test_trial_board_mean_label_0925(html):
+    """review m4：左板均值列=jj_percent(09:25 打分口径)——标签改「开盘涨幅均值」
+    消除与右表 09:15 竞价涨幅的同名两时点漂移，tooltip 披露口径。"""
+    fn = _fn(html, "atRender")
+    assert "lbThSort('开盘涨幅均值', 'pct'" in fn
+    assert "竞价涨幅均值" not in fn
+    assert "打分/均值门口径" in fn
+
+
+def test_trial_null_last_sort(html):
+    """review m3：AT 数值排序 null 恒末尾不随方向翻转（新列高缺位率升序不浮顶）。"""
+    fn = _fn(html, "atRender")
+    assert "(a[skey] ?? null)" in fn and "(b[skey] ?? null)" in fn
+    assert "if (va == null) return 1;" in fn and "if (vb == null) return -1;" in fn
+    assert "-Infinity" not in fn
+
+
+def test_trial_state_coverage_in_stats(html):
+    """review n4：trialState 0925/0915 覆盖计数进页头（fail-visible 页面层补齐）。"""
+    assert "AT.trialState = (r && r.trialState) || null;" in html
+    fn = _fn(html, "atRender")
+    assert "0925存档" in fn and "0915存档" in fn and "seriesFirst0915N" in fn

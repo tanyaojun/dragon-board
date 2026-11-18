@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import queue
 import random
@@ -687,19 +688,22 @@ class KplCollectorService:
         new25: Dict[str, dict] = {}
         for it in (quotes or {}).get("items") or []:
             code = str(it.get("stock_id") or "")[-6:]
-            if not code:
+            # review m2：订阅面含板块 801044/885423 等——只收个股（A 股前缀白名单：
+            # 沪深主板 60/00、创 30、科 68、北交 43/83/87/92；勿用 ^8 粗匹配误伤板块）
+            if not code or not code.startswith(("60", "00", "30", "68", "43", "83", "87", "92")):
                 continue
             rec: Dict[str, Any] = {"ts": now}
             try:
                 p = float(it.get("price"))
-                if p > 0:
+                if p > 0 and math.isfinite(p):
                     rec["price"] = round(p / 10000.0, 4)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
             try:
                 pct = float(it.get("inc_rate"))   # float 原值即百分数，不缩放
-                rec["pct"] = round(pct, 4)
-            except (TypeError, ValueError):
+                if math.isfinite(pct):            # review M1：NaN/Inf 不占首帧名额
+                    rec["pct"] = round(pct, 4)
+            except (TypeError, ValueError, OverflowError):
                 pass
             if not ({"price", "pct"} & rec.keys()):
                 continue   # price/inc_rate 全缺帧不占首帧名额（fail-visible 不伪存）
@@ -727,6 +731,11 @@ class KplCollectorService:
         except Exception as exc:  # noqa: BLE001 — 落库失败不阻断收流（fail-visible）
             self._corpus_persist_stats["auct_fail"] += 1
             self._corpus_persist_stats["last_error"] = f"auction_price:{type(exc).__name__}"
+            # review m1：失败批次退回名额（archive 单批 update_one 原子，失败=零写入，
+            # 下帧重试安全），不永久锁死当日存档；镜像 _persist_corpus 的 _err 披露
+            self._auct15.difference_update(new15.keys())
+            self._auct25.difference_update(new25.keys())
+            self._err(f"auction_price persist failed: {exc}")
 
     def _persist_corpus(self, lane: str, payload: Dict[str, Any]) -> None:
         """单条推送即时落库（线程内同步写，单写者=本采集线程；失败不阻断收流）。

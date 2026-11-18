@@ -1991,3 +1991,12 @@ console.log(JSON.stringify({table, kpiMid, kpiLab}));
     assert "未打标 3" in got["kpiMid"] and "真连板未定" not in got["kpiMid"], \
         "午盘全未打标：KPI 覆盖度保留、真连板未定注记移除"
     assert "1家真连板未定" in got["kpiLab"], "打标行断板股仍计入 KPI 注记（fail-visible）"
+
+
+def test_lb_pct_cap_board_aware_20261118(html):
+    """review M2：越界护栏板籍感知——北交 43/83/87/92 → 31（30cm+浮动），其余 21；
+    修 21% 一刀切误杀北交所涨停 +30% 有效行情（§4.0 展示不得把合法值转缺失）。"""
+    stocks = _fn(html, "lbRenderStocks")
+    assert "const pctCap = /^(43|83|87|92)/.test(String(code || '')) ? 31 : 21;" in stocks
+    assert "Math.abs(rateRaw) <= pctCap" in stocks
+    assert "北交 31%" in stocks, "tooltip 披露板籍护栏"

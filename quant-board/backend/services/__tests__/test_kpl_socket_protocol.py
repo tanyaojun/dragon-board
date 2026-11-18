@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import struct
 import sys
 from pathlib import Path
 
@@ -658,3 +659,46 @@ class TestFrameParseExtensions:
             + b"\x01" + (0).to_bytes(2, "big") + b"\xaa"
         fr = proto.parse_incoming(bytes([0x60]) + len(body).to_bytes(4, "big") + body)
         assert fr["ext_raw"] == ext
+
+
+class TestIndexSimpleQuotes:
+    """3006 IndexSimpleQuotasResp 解析守卫（review 2026-11-18 m5/M1）。
+
+    字段合同（Hq.java descriptor）：id=1 str / name=2 str / price=3 uint32 /
+    incPrice=4 int64 / incRate=5 **float**（wire fixed32，百分数直用不缩放）。
+    """
+
+    @staticmethod
+    def _item(code: str, price: int, inc_price: int, inc_rate: float) -> bytes:
+        b = proto.pb_bytes(1, code.encode()) + proto.pb_bytes(2, b"n")
+        b += proto._tag_varint(3, 0) + proto.encode_varint(price)
+        b += proto._tag_varint(4, 0) + proto.encode_varint(inc_price & ((1 << 64) - 1))
+        b += proto._tag_varint(5, 5) + struct.pack("<f", inc_rate)
+        return b
+
+    def _payload(self, *items: bytes) -> bytes:
+        return b"".join(proto.pb_bytes(1, it) for it in items)
+
+    def test_field_mapping_float_pct_and_negative_inc_price(self):
+        p = self._payload(self._item("002652", 44000, -150, 11.1194))
+        q = proto.parse_index_simple_quotes(p)
+        it = q["items"][0]
+        assert it["stock_id"] == "002652"
+        assert it["price"] == 44000            # uint32 原值（×10000 由消费方换算）
+        assert it["inc_price"] == -150         # int64 负数补码还原
+        assert abs(it["inc_rate"] - 11.1194) < 1e-3   # float 百分数原样，不缩放
+
+    def test_nan_inf_sanitized_to_none(self):
+        p = self._payload(self._item("002652", 44000, 0, float("nan")),
+                          self._item("300786", 200000, 0, float("inf")),
+                          self._item("600000", 48400, 0, float("-inf")))
+        q = proto.parse_index_simple_quotes(p)
+        assert q["items"][0]["inc_rate"] is None   # NaN 不得进 JSON/存档/首帧名额
+        assert q["items"][1]["inc_rate"] is None
+        assert q["items"][2]["inc_rate"] is None
+        assert q["items"][0]["price"] == 44000     # 有限字段不受牵连
+
+    def test_truncated_float_buffer_tolerant(self):
+        full = self._payload(self._item("002652", 44000, 0, 1.5))
+        q = proto.parse_index_simple_quotes(full[:-2])   # float 截断 → 宽容停止不抛
+        assert isinstance(q["items"], list)

@@ -156,6 +156,8 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
     float_n = 0
     frozen_n = 0
     open_n = 0
+    open0915_n = 0
+    first0915_n = 0
     for code, f in facts.items():
         first, last, mx = f.get("first"), f.get("last"), f.get("max")
         last_amount = _f((last or {}).get("zt_buy_amount"))
@@ -213,6 +215,10 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         if pct915 is None:
             pct915 = _f(first.get("bidding_pct"))
             src915 = "series_first" if pct915 is not None else None
+        if src915 == "open0915_archive":
+            open0915_n += 1
+        elif src915 == "series_first":
+            first0915_n += 1
         rows[code] = {
             "code": code,
             "bk_name": plate,   # 桥接主链靠它；缺 → 板块归属缺席（fail-visible）
@@ -242,7 +248,8 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
            "plateJoinedN": plate_hit,
            "firstAddN": first_add_n, "floatJoinedN": float_n,
            "frozenJoinedN": frozen_n,
-           "open0925N": open_n, "open0925MissingN": len(rows) - open_n}
+           "open0925N": open_n, "open0925MissingN": len(rows) - open_n,
+           "open0915N": open0915_n, "seriesFirst0915N": first0915_n}
     if plate_source_error:
         out["plateSourceError"] = plate_source_error
     if not plates:

@@ -308,17 +308,19 @@ def test_derive_jj_authority_open0925_archive():
 def test_derive_pct0915_series_first_fallback_and_archive_priority():
     """竞价涨幅（0915）：存档缺 → 回退序列首帧观测值（p0915 缺席不伪）；
     存档在 → 权威覆盖（open0915_archive）。与 0925 开盘涨幅两时点分列。"""
-    rows, _ = M.derive_trial_rows_from_series(
+    rows, st = M.derive_trial_rows_from_series(
         FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
     r = rows["605255"]
     assert r["pct0915"] == 4.0 and r["jj915Src"] == "series_first"
     assert r["p0915"] is None, "无存档价 → p0915 缺席（不伪）"
+    assert st["seriesFirst0915N"] == 1 and st["open0915N"] == 0
     auct = {"s0915": {"605255": {"price": 4.84, "pct": 10.0}}}
-    rows2, _ = M.derive_trial_rows_from_series(
+    rows2, st2 = M.derive_trial_rows_from_series(
         FakeSeriesDb(_doc(), _mbl_rows(), auct=auct), "2026-11-17")
     r2 = rows2["605255"]
     assert r2["pct0915"] == 10.0 and r2["jj915Src"] == "open0915_archive"
     assert r2["p0915"] == 4.84
+    assert st2["open0915N"] == 1 and st2["seriesFirst0915N"] == 0
 
 
 def test_derive_open0925_missing_fallback_disclosure():
@@ -434,3 +436,96 @@ def test_archive_auction_price_field_set_and_load():
     assert doc["s0925"]["600000"]["pct"] == 1.0
     assert AR.archive_auction_price(db, "") == {"ok": False, "reason": "no_date"}
     assert AR.archive_auction_price(db, "2026-11-17") == {"ok": False, "reason": "empty"}
+
+
+def _mk_capture_inst(CS, db_factory):
+    inst = object.__new__(CS.KplCollectorService)
+    inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
+                                  "auct_fail": 0, "last_error": ""}
+    inst._auct_date, inst._auct15, inst._auct25 = "", set(), set()
+    inst._corpus_db_factory = db_factory
+    inst._last_error, inst._stats, inst._emit = "", {"errors": 0}, lambda ev: None
+    return inst
+
+
+class _AuctStoreDb:
+    """点键 $set 假库（capture 测试共用）。"""
+
+    def __init__(self):
+        self.store: dict = {}
+
+    def __getitem__(self, name):
+        outer = self
+
+        class Coll:
+            def update_one(self, q, u, upsert=False):
+                outer.store.setdefault(q["_id"], {}).update(u["$set"])
+
+        return Coll()
+
+
+def test_collector_capture_pct_only_bad_floats_and_board_filter(monkeypatch):
+    """review M1/m2/m5：pct-only rec 可存；NaN/Inf 按缺字段不占名额；板块 id 不入个股档。"""
+    from backend.services import kpl_collector_service as CS
+    db = _AuctStoreDb()
+    inst = _mk_capture_inst(CS, lambda: db)
+    t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
+    monkeypatch.setattr(CS.time, "time", lambda: t15)
+    inst._capture_auction_price({"items": [
+        {"stock_id": "002652", "price": 0, "inc_rate": 10.0},          # pct-only
+        {"stock_id": "300786", "price": 200000, "inc_rate": float("nan")},
+        {"stock_id": "600000", "price": 48400, "inc_rate": float("inf")},
+        {"stock_id": "600001", "price": float("nan"), "inc_rate": float("nan")},
+        {"stock_id": "801044", "price": 100000, "inc_rate": 1.0},      # 板块 → 拒
+    ]})
+    d = db.store["2026-11-17"]
+    assert d["s0915.002652"]["pct"] == 10.0 and "price" not in d["s0915.002652"]
+    assert d["s0915.300786"]["price"] == 20.0 and "pct" not in d["s0915.300786"]
+    assert "pct" not in d["s0915.600000"]
+    assert not any(k.startswith("s0915.600001") for k in d), "全 NaN 帧不占首帧名额"
+    assert not any(k.startswith("s0915.801044") for k in d), "板块 id 不入个股双价档"
+    # 600001 后续有效帧仍可收（名额未被坏帧锁死）
+    inst._capture_auction_price({"items": [
+        {"stock_id": "600001", "price": 50000, "inc_rate": 5.0}]})
+    assert db.store["2026-11-17"]["s0915.600001"]["pct"] == 5.0
+
+
+def test_collector_capture_cross_day_reset(monkeypatch):
+    """跨日重置去重集：次日同股重新开档（review m5）。"""
+    from backend.services import kpl_collector_service as CS
+    db = _AuctStoreDb()
+    inst = _mk_capture_inst(CS, lambda: db)
+    q = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 10.0}]}
+    monkeypatch.setattr(CS.time, "time",
+                        lambda: _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp())
+    inst._capture_auction_price(q)
+    monkeypatch.setattr(CS.time, "time",
+                        lambda: _dt.datetime(2026, 11, 18, 9, 16, tzinfo=_TZ).timestamp())
+    inst._capture_auction_price(q)
+    assert "s0915.002652" in db.store["2026-11-17"]
+    assert "s0915.002652" in db.store["2026-11-18"]
+
+
+def test_collector_capture_persist_fail_retries_next_frame(monkeypatch):
+    """review m1：落库失败退回名额（下帧重试），不永久锁死当日存档；_err 披露。"""
+    from backend.services import kpl_collector_service as CS
+    db = _AuctStoreDb()
+    calls = {"n": 0}
+
+    def factory():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("mongo down")
+        return db
+
+    inst = _mk_capture_inst(CS, factory)
+    t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
+    monkeypatch.setattr(CS.time, "time", lambda: t15)
+    q = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 10.0}]}
+    inst._capture_auction_price(q)
+    assert inst._corpus_persist_stats["auct_fail"] == 1
+    assert "002652" not in inst._auct15, "失败批次退回名额"
+    assert inst._last_error, "_err 披露（镜像 _persist_corpus）"
+    inst._capture_auction_price(q)   # 下帧重试成功
+    assert db.store["2026-11-17"]["s0915.002652"]["pct"] == 10.0
+    assert inst._corpus_persist_stats["auct15_ok"] == 1

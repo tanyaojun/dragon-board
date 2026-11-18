@@ -5107,7 +5107,8 @@ function toggleSidebar(){ $('app').classList.toggle('collapsed'); }
 // 动态更新（60s 轮询），不落库、服务端不缓存。行情列=KPL socket 3006 个股实时价：
 //   price ×10000 缩放（113000=11.30 元，README §四独立源核实）；
 //   inc_rate 为 proto float 百分数直用不缩放（App DataStyleHelper.b 直显 "#0.00"+"%"，
-//   2026-11-18 源码核实推翻早期 ×100 错锚），越界护栏 |pct|>21 → '--'（口径异常不猜数）；
+//   2026-11-18 源码核实推翻早期 ×100 错锚），板籍感知越界护栏（北交 43/83/87/92 → 31，
+//   其余 21；review M2 修 30cm 误杀）→ '--'（口径异常不猜数；无限制新股 >阈仍拦，残余局限）；
 //   3006 未到流时现价兑底韭研盘口快照价（title 标注），涨幅如实 '--'。
 // 订阅复用 kplSyncStockSubscription 共享签名缓存（与板块行情/直播页同一份记账，页间切换自动重对账）。
 const LB = { doc: null, dates: [], loading: false, error: null, selected: null, nodesRows: {}, seq: 0,
@@ -5243,9 +5244,9 @@ function lbZtCountOf(board){
 // 新列首击=降序（行情榜热→冷常用序），同列再击切换升降；数组值逐位比较（封板 今/昨 双键）。
 const NODE_ORD = { ice: 0, collapse: 1, weakening: 2, unknown: 3, normal: 4,
                    brewing: 5, fermenting: 6, mainline: 7, wzs: 8 };   // 节点语义序：弱→强
-function lbThSort(label, key, st, fn){
+function lbThSort(label, key, st, fn, tip){
   const arrow = st.key === key ? (st.dir === 1 ? ' ▲' : ' ▼') : '';
-  return `<th class="th-sort" title="点击排序（新列首击降序，再击切换升降）" onclick="${fn}('${key}')">${label}${arrow}</th>`;
+  return `<th class="th-sort" title="${tip || '点击排序（新列首击降序，再击切换升降）'}" onclick="${fn}('${key}')">${label}${arrow}</th>`;
 }
 function lbSortToggle(st, key){
   if (st.key === key) st.dir = -st.dir;
@@ -5676,7 +5677,10 @@ function lbRenderStocks(){
       : (hq && hq.price != null ? hq.price / 10000 : s.price);
     const rateRaw = gv(KQ.PCT) != null ? gv(KQ.PCT)
       : (hq && hq.inc_rate != null ? hq.inc_rate : null);   // 3006 incRate=float 百分数，不缩放
-    const pct = (rateRaw != null && Math.abs(rateRaw) <= 21) ? rateRaw : null;   // 越界=口径异常 → '--'
+    // review M2：板籍感知越界护栏（镜像 limit_rules：北交 43/83/87/92 → 30cm 用 31，
+    // 其余 21；勿用 ^8 粗匹配误伤板块码）；无涨跌幅限制新股 >阈仍被拦（残余局限披露）
+    const pctCap = /^(43|83|87|92)/.test(String(code || '')) ? 31 : 21;
+    const pct = (rateRaw != null && Math.abs(rateRaw) <= pctCap) ? rateRaw : null;   // 越界=口径异常 → '--'
     // 连板列：韭研打标口径优先（本页核心名单），缺则回 KPL meta board_status；
     // num 实测为「X天X板」字符串（2026-10-29 修「X天X板板」）——纯数字才拼「板」，其余原样
     const numRaw = s.num == null ? '' : String(s.num);
@@ -5722,7 +5726,7 @@ function lbRenderStocks(){
     html += `<tr data-code="${code}"><td class="kpl-uni">${esc(code || '--')}</td><td>${esc(s.name || '--')}</td>`
       + `<td><span class="badge b-purple">${esc(rank || dash)}</span></td>`
       + `<td class="kpl-uni"${liveMark}>${kfmtNum(price)}</td>`
-      + `<td class="kpl-uni ${kcls(pct)}" title="${pct == null ? '等待个股行情（3001 quotas / 3006 incRate 百分数直用，越界护栏 21%）' : 'KPL 实时涨幅'}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni ${kcls(pct)}" title="${pct == null ? '等待个股行情（3001 quotas / 3006 incRate 百分数直用，板籍护栏 21%/北交 31%）' : 'KPL 实时涨幅'}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
       + `<td class="kpl-uni">${turn != null ? kfmtNum(turn, 1) : dash}</td>`
       + `<td class="kpl-uni">${esc(lbTxt)}</td>`
       + `<td class="kpl-uni ${kcls(d.mainNet)}">${kfmtAmt(d.mainNet)}</td>`
@@ -9645,13 +9649,13 @@ async function kplFetchBreadthHist(date){
 //   ⑤ 四级全 miss → 「未分板块」行（2026-11-06 用户裁决：不回推 KPL bk_name
 //      题材名，避免单列双口径）。
 //   KPL bk_name 仅作右表参考列（tooltip 标注不作分组）。
-// 语义警示（勘察 §4/§6.3，右表 tooltip 如实标注，不猜语义入叙事）：
-//   jj_percent/jj_turnover 是 end_time 时点快照——end=09:25 → 09:25 冻结值；
-//   end<09:20 → 试盘结束（可撤窗内撤单前）时点值；
+// 语义警示（右表 tooltip 如实标注，不猜语义入叙事）：
+//   jj_percent = 09:25 开盘涨幅权威（s0925 存档→MBL→bid→序列末帧，jjSource 披露，
+//   打分/均值门口径）；竞价涨幅列 = pct0915（09:15 存档→序列首帧，jj915Src 披露）；
 //   circulated_value 流通值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生；
-//   first/first_add/max/last 金额语义待 App 同屏核对（勘察 §6.4），列名只用中性词。
+//   first/first_add/max/last 金额 = 官方序列观测值口径（§7.9/§7.12），列名只用中性词。
 const AT = {doc: null, dates: [], nameMiss: 0, boardMiss: 0, boardMeta: null, unmapped: [], rootMeta: null,
-            prevPctMiss: 0, priceMiss: 0,
+            prevPctMiss: 0, priceMiss: 0, trialState: null,
             loading: false, error: null, fb: null, seq: 0, pollTimer: null,
             sel: '', boardSort: {key: 'n', dir: -1}, stockSort: {key: 'aucPctN', dir: -1},
             codeBoards: {}, jy: {doc: null, error: null, fb: null}};
@@ -9871,6 +9875,7 @@ async function atLoad(){
   AT.prevPctMiss = (r && r.prevPctMissCount) || 0;
   AT.priceMiss = (r && r.priceMissCount) || 0;
   AT.fb = (r && r.dateFallback) || null;
+  AT.trialState = (r && r.trialState) || null;
   AT.error = (r && (r.ok === false || r.degraded)) ? (r.reason || r.error || '读口降级') : null;
   AT.jy.doc = (jy && jy.doc) || null;
   AT.jy.fb = (jy && jy.dateFallback) || null;
@@ -9893,7 +9898,7 @@ function atRender(){
   let ph = '<thead><tr><th>#</th>'
     + lbThSort('板块', 'name', AT.boardSort, 'atBoardSortBy')
     + lbThSort('试盘', 'n', AT.boardSort, 'atBoardSortBy')
-    + lbThSort('竞价涨幅均值', 'pct', AT.boardSort, 'atBoardSortBy')
+    + lbThSort('开盘涨幅均值', 'pct', AT.boardSort, 'atBoardSortBy', '开盘涨幅均值=成员 jj_percent（09:25 开盘涨幅权威，打分/均值门口径）均值；缺值不进分母（fail-visible）；与右表 09:15 竞价涨幅列不同时点')
     + lbThSort('竞价成交额合计', 'amt', AT.boardSort, 'atBoardSortBy')
     + lbThSort('竞价换手均值', 'tur', AT.boardSort, 'atBoardSortBy')
     + '</tr></thead><tbody>';
@@ -9912,11 +9917,16 @@ function atRender(){
   bsort.sort((a, b) => {
     const k = AT.boardSort.key, d = AT.boardSort.dir;
     const va = k === 'name' ? a.name : k === 'n' ? a.members.length
-      : k === 'pct' ? (atAgg(a.members).pct ?? -Infinity) : k === 'amt' ? (atAgg(a.members).amt ?? -Infinity)
-      : (atAgg(a.members).tur ?? -Infinity);
+      : k === 'pct' ? atAgg(a.members).pct : k === 'amt' ? atAgg(a.members).amt
+      : atAgg(a.members).tur;
     const vb = k === 'name' ? b.name : k === 'n' ? b.members.length
-      : k === 'pct' ? (atAgg(b.members).pct ?? -Infinity) : k === 'amt' ? (atAgg(b.members).amt ?? -Infinity)
-      : (atAgg(b.members).tur ?? -Infinity);
+      : k === 'pct' ? atAgg(b.members).pct : k === 'amt' ? atAgg(b.members).amt
+      : atAgg(b.members).tur;
+    if (k !== 'name') {   // review m3 同约定：null 恒末尾不随方向翻转
+      if (va == null && vb == null) return a.name.localeCompare(b.name, 'zh');
+      if (va == null) return 1;
+      if (vb == null) return -1;
+    }
     return k === 'name' ? d * String(va).localeCompare(String(vb), 'zh') : d * ((va > vb ? 1 : va < vb ? -1 : 0) || a.name.localeCompare(b.name, 'zh'));
   });
   for (const b of bsort){
@@ -9962,10 +9972,14 @@ function atRender(){
   decorated.sort((a, b) => {
     const va = skey === 'code' ? a.code : skey === 'name' ? (a.name || a.jyName || '')
       : skey === 'end' ? String(a.end_time || '') : skey === 'start' ? String(a.start_time || '')
-      : skey === 'bk' ? String(a.bk_name || '') : (a[skey] ?? -Infinity);
+      : skey === 'bk' ? String(a.bk_name || '') : (a[skey] ?? null);
     const vb = skey === 'code' ? b.code : skey === 'name' ? (b.name || b.jyName || '')
       : skey === 'end' ? String(b.end_time || '') : skey === 'start' ? String(b.start_time || '')
-      : skey === 'bk' ? String(b.bk_name || '') : (b[skey] ?? -Infinity);
+      : skey === 'bk' ? String(b.bk_name || '') : (b[skey] ?? null);
+    // review m3：null 恒末尾不随方向翻转（与 lbSortedRows 共享约定；新列高缺位率升序不浮顶）
+    if (va == null && vb == null) return String(a.code).localeCompare(String(b.code));
+    if (va == null) return 1;
+    if (vb == null) return -1;
     const cmp = (typeof va === 'string' || typeof vb === 'string') ? String(va).localeCompare(String(vb), 'zh') : (va > vb ? 1 : va < vb ? -1 : 0);
     return sdir * (cmp || String(a.code).localeCompare(String(b.code)));
   });
@@ -10003,7 +10017,7 @@ function atRender(){
       : '名称不可考：stock_names 字典 miss 且未入韭研板块（不猜名）';
     html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
       + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
-      + `<td class="kpl-uni ${kcls(r.aucPctN)}" title="${esc(pctTip)}">${atPct(r.aucPctN)}${r.jj915Src === 'open0915_archive' ? '<div class=\"kpl-sub\">竞价 09:15</div>' : r.start_time ? '<div class=\"kpl-sub\">首帧 ' + esc(String(r.start_time)) + '</div>' : ''}</td>`
+      + `<td class="kpl-uni ${kcls(r.aucPctN)}" title="${esc(pctTip)}">${atPct(r.aucPctN)}${r.aucPctN != null ? (r.jj915Src === 'open0915_archive' ? '<div class=\"kpl-sub\">竞价 09:15</div>' : r.start_time ? '<div class=\"kpl-sub\">首帧 ' + esc(String(r.start_time)) + '</div>' : '') : ''}</td>`
       + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅=09:25 撮合开盘涨幅（kpl_auction_price 存档；历史日=TDX 开盘回补 src=tdx_lday）${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价换手=09:25 冻结 bidding_turnover（MBL→bid）优先，缺位=序列末帧观测值' : '竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）'}">${atPct(r.jjTurN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价成交额=09:25 冻结 bidding_amount（MBL→bid）优先，缺位=末帧观测值（board_amt Σ口径），单位=元' : '竞价成交额=jj_amount（元，rank 原值）'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
@@ -10033,7 +10047,11 @@ function atRender(){
       + (AT.prevPctMiss ? ` · 昨涨幅缺 ${AT.prevPctMiss}` : '')
       + (AT.priceMiss ? ` · 现价缺 ${AT.priceMiss}` : '')
       + (AT.nameMiss ? ` · 名称缺失 ${AT.nameMiss} 只` : '')
-      + (model.unboarded.length ? ` · 未分板块 ${model.unboarded.length} 只` : '') + fb;
+      + (model.unboarded.length ? ` · 未分板块 ${model.unboarded.length} 只` : '') + fb
+      + (AT.trialState && AT.trialState.open0925N != null
+        ? ` · 0925存档 ${AT.trialState.open0925N}/缺 ${AT.trialState.open0925MissingN}` : '')
+      + (AT.trialState && AT.trialState.open0915N != null
+        ? ` · 0915存档 ${AT.trialState.open0915N}/首帧回退 ${AT.trialState.seriesFirst0915N}` : '');
   // 2026-11-14 用户裁决：页头长段「数据源：…」描述删除；fail-visible 收敛到
   // atStats 短计数（桥未收录词数）+ sbLog 错误日志（降级/回落/异常原因全量在状态栏）
   $('atStats').textContent += (AT.unmapped && AT.unmapped.length)

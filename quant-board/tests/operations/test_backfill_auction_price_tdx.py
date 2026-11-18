@@ -103,3 +103,71 @@ def test_backfill_fills_missing_skips_live(tmp_path):
     assert s2["2026-11-18"]["filled"] == 0 and s2["2026-11-18"]["skippedLive"] == 1
     doc2 = db2["kpl_auction_price"].find_one({"_id": "2026-11-18"})
     assert doc2["s0925"]["002652"]["pct"] == 5.0, "live 值不被 TDX 回补覆盖"
+
+
+def test_backfill_ex_rights_band_suspect_skipped(tmp_path):
+    """review B1：除权日 raw 前收 pct 系统性错（10送10 → 伪 -50%）——
+    limit_rules 真实涨/跌停价 band 校验拦截，宁缺勿错只披露（不污染打分链）。"""
+    root = str(tmp_path)
+    _write_day(os.path.join(root, "vipdoc", "sz", "lday", "sz002652.day"),
+               [(20261117, 2000, 2010, 1990, 2000),   # 前收 20.00
+                (20261118, 1000, 1010, 990, 1000)])    # 除权开 10.00 → raw pct -50%
+    db = _mkdb({"2026-11-18": ["002652"]}, {})
+    s = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
+    assert s["filled"] == 0 and s["bandSuspectN"] == 1
+    assert s["bandSuspectSamples"][0]["code"] == "002652"
+    assert db["kpl_auction_price"].find_one({"_id": "2026-11-18"}) is None, "嫌疑值不写库"
+
+
+def test_backfill_band_allows_tick_rounding_low_price(tmp_path):
+    """低价股 tick 取整：真实涨停 pct 可超名义 10%（1.05→1.16=10.48%）——
+    band 用真实涨停价（limit_rules 单源）而非名义百分比，不误杀。"""
+    root = str(tmp_path)
+    _write_day(os.path.join(root, "vipdoc", "sz", "lday", "sz002652.day"),
+               [(20261117, 105, 106, 104, 105),
+                (20261118, 116, 116, 115, 116)])   # round(1.05*1.1,2)=1.16 真实涨停
+    db = _mkdb({"2026-11-18": ["002652"]}, {})
+    s = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
+    assert s["filled"] == 1 and s["bandSuspectN"] == 0
+
+
+def test_open_pct_window_head_prev_available(tmp_path):
+    """review n2：目标日恰为 TAKE 窗首棒时多读 1 棒保 prevclose（不保守漏填）。"""
+    path = str(tmp_path / "vipdoc" / "sz" / "lday" / "sz002652.day")
+    bars = [(20261001 + i, 400 + i, 410 + i, 390 + i, 400 + i) for i in range(31)]
+    _write_day(path, bars)
+    rec = open_pct_for_date(path, "2026-10-02")   # 倒数第 30 棒（旧 TAKE=30 窗首 → 漏）
+    assert rec is not None and rec["prevClose"] == 4.0
+    assert rec["pct"] == round((4.01 / 4.0 - 1) * 100, 4)
+
+
+def test_open_pct_bad_price_none(tmp_path):
+    path = str(tmp_path / "vipdoc" / "sz" / "lday" / "sz002652.day")
+    _write_day(path, [(20261117, 484, 484, 440, 440),
+                      (20261118, 0, 0, 0, 0)])   # 坏价（停牌零棒）
+    assert open_pct_for_date(path, "2026-11-18") is None
+
+
+def test_intraday_forbidden_guard():
+    """review n2：当日 15:00 CST 前禁跑（单写者=live collector）。"""
+    from datetime import datetime, timedelta, timezone
+    from scripts.backfill_auction_price_tdx import _intraday_forbidden
+    tz = timezone(timedelta(hours=8))
+    assert _intraday_forbidden("2026-11-18", datetime(2026, 11, 18, 10, 0, tzinfo=tz))
+    assert not _intraday_forbidden("2026-11-18", datetime(2026, 11, 18, 15, 0, tzinfo=tz))
+    assert not _intraday_forbidden("2026-11-17", datetime(2026, 11, 18, 10, 0, tzinfo=tz))
+
+
+def test_backfill_noop_writeok_and_prevclose_not_persisted(tmp_path):
+    """review n2：无可填=无操作成功（writeOk=True 与真失败区分）；prevClose 仅校验不落库。"""
+    root = str(tmp_path)
+    _write_day(os.path.join(root, "vipdoc", "sz", "lday", "sz002652.day"),
+               [(20261117, 484, 484, 440, 440),
+                (20261118, 440, 441, 428, 428)])
+    db = _mkdb({"2026-11-18": ["002652"]}, {})
+    s = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
+    assert s["writeOk"] and s["filled"] == 1
+    rec = db["kpl_auction_price"].find_one({"_id": "2026-11-18"})["s0925"]["002652"]
+    assert "prevClose" not in rec and rec["src"] == "tdx_lday"
+    s2 = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
+    assert s2["filled"] == 0 and s2["writeOk"], "全已存 → 无操作成功非失败"
