@@ -475,7 +475,12 @@ class KplCollectorService:
         self._lhb_realtime_snap: Optional[Dict[str, Any]] = None
         self._daban_lists: Dict[int, Dict[int, Dict[str, Any]]] = {}   # pidType → {index: 页快照}
         # 板块(801044/885423) + 个股(000001 平安银行)：3001 同时承载板块与个股行情订阅
-        self._stock_ids = stock_ids or ["801044", "885423", "000001"]
+        self._default_stock_ids = list(stock_ids or ["801044", "885423", "000001"])
+        self._stock_ids = list(self._default_stock_ids)
+        # 行情订阅面来源（2026-11-18 用户裁决：只进不出累积器是 rst_10054 残余根因
+        # ——浏览器 relay 页板块树 merge 717 板块+31 股后永不衰减，852 id×2cmd/会话
+        # 全量重发 vs App 离屏即清；ws 全断开时回落默认面，修 SubSource 透出）
+        self._sub_source = "default"
         self._sub_prio_all: List[str] = []   # 优先块成员（分块轮询见 _resplit）
         self._sub_prio: List[List[str]] = []
         self._sub_rest: List[List[str]] = []
@@ -1221,6 +1226,7 @@ class KplCollectorService:
         self._stock_ids = ids
         self._sub_prio_all = prio
         self._resplit()
+        self._sub_source = "dynamic"
         return {"ok": True, "count": len(ids),
                 "chunks": len(self._sub_prio) + len(self._sub_rest),
                 "running": self.is_running()}
@@ -1272,6 +1278,7 @@ class KplCollectorService:
             # 页面引导/补引导是否落地一眼可核（fail-visible，不藏状态）
             "subscriptions": {
                 "count": len(self._stock_ids),
+                "source": self._sub_source,
                 "priority": len(self._sub_prio_all),
                 "hy": sum(1 for i in self._stock_ids if len(i) == 6 and i.startswith("881")),
                 "sectors": sum(1 for i in self._stock_ids
@@ -1324,6 +1331,29 @@ class KplCollectorService:
         with self._subs_lock:
             if q in self._subs:
                 self._subs.remove(q)
+
+    def subscriber_count(self) -> int:
+        """当前事件订阅者数（ws 客户端）；0 = 无浏览器在听（回落判据）。"""
+        with self._subs_lock:
+            return len(self._subs)
+
+    def reset_subscriptions_to_default(self) -> Dict[str, Any]:
+        """行情订阅面回落默认（2026-11-18 用户裁决，App 同款离屏生命周期）。
+
+        根因：relay 页 merge 进来的板块/个股 id 只进不出，浏览器关闭后仍每会话
+        全量重发（852 id×2cmd），构成 rst_10054 残余超支。浏览器 ws 全断开时由
+        serve 层调用本方法；页面重开时自会重新 POST。默认面=构造参数（3 id）。
+        fail-visible：结构化返回变更前后，不掭不假。
+        """
+        with self._subs_lock:
+            before = {"count": len(self._stock_ids), "prio": len(self._sub_prio_all)}
+            self._stock_ids = list(self._default_stock_ids)
+            self._sub_prio_all = []
+            self._resplit()
+            self._sub_source = "default"
+            after = {"count": len(self._stock_ids), "prio": 0}
+        return {"ok": True, "before": before, "after": after,
+                "default_ids": list(self._default_stock_ids)}
 
     # ---- 内部 ----
 

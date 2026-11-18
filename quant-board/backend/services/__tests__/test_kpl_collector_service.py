@@ -390,6 +390,43 @@ class TestSetSubscriptions:
         svc.set_subscriptions(["881001"])
         assert svc._stock_ids == ["881001"]   # 默认仍替换（旧合同不变）
 
+    def test_idle_reset_restores_default_face(self, svc):
+        """2026-11-18 用户裁决（rst_10054 残余根因）：浏览器 merge 进来的 852 id
+        只进不出；ws 全断开时 serve 层调 reset → 回落构造默认面。App 同款离屏
+        生命周期（qn0 f() 清 d/e）。"""
+        svc.set_subscriptions(["801001", "600000"], priority_ids=["801001"])
+        svc.set_subscriptions(["881001"], merge=True)
+        assert svc._stock_ids == ["801001", "600000", "881001"]  # merge 只进不出
+        r = svc.reset_subscriptions_to_default()
+        assert r["ok"] is True
+        assert r["before"] == {"count": 3, "prio": 1}
+        assert r["after"] == {"count": 1, "prio": 0}      # 回落构造默认（["801044"]）
+        assert svc._stock_ids == ["801044"]
+        assert svc._sub_prio_all == []
+        assert svc.status()["subscriptions"]["source"] == "default"
+
+    def test_set_subscriptions_marks_dynamic_source(self, svc):
+        """来源观测：任何 set_subscriptions 生效后 sub_source=dynamic（status 透出）。"""
+        svc.set_subscriptions(["600000"])
+        assert svc.status()["subscriptions"]["source"] == "dynamic"
+
+    def test_subscriber_count_tracks_event_subs(self, svc):
+        """ws 客户端计数（回落判据）：subscribe/unsubscribe 对称。"""
+        assert svc.subscriber_count() == 0
+        q1 = svc.subscribe()
+        q2 = svc.subscribe()
+        assert svc.subscriber_count() == 2
+        svc.unsubscribe(q1)
+        assert svc.subscriber_count() == 1
+        svc.unsubscribe(q2)
+        assert svc.subscriber_count() == 0
+
+    def test_reset_noop_reports_same_counts(self, svc):
+        """默认面直接 reset：结构化返回 before/after 同值，不报错不假写。"""
+        r = svc.reset_subscriptions_to_default()
+        assert r["ok"] is True
+        assert r["before"] == r["after"]
+
     def test_status_exposes_subscription_composition(self, svc):
         """订阅构成观测（行业页签空态排查）：hy/sectors/stocks/chunks 一眼可核。"""
         svc.set_subscriptions(["801001", "881001", "881002", "600000"],

@@ -20,6 +20,7 @@ pytest 纪律：本模块的测试不得启动真实采集线程/真实 signsvc 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import queue
 import time
@@ -49,8 +50,6 @@ _DEVICE_ID = (
     or os.environ.get("QUANT_BOARD_KPL_APP_DEVICEID", "")
 ).strip()   # 两支统一 strip：空白字符串不得当作「已配置」（评审 P2）
 if not _DEVICE_ID:
-    import logging
-
     logging.getLogger(__name__).warning(
         "KPL DeviceID 缺失（KPL_DEVICE_ID / QUANT_BOARD_KPL_APP_DEVICEID 均未配置）："
         "WBE 签名将用空设备指纹，登录态校验端点可能拒绝——请把模拟器提取的 DeviceID "
@@ -58,8 +57,8 @@ if not _DEVICE_ID:
 
 # 龙虎榜采集开关（task-4）：默认开（2112 预测 + 3004/3101 实时）。
 # 显式关闭：KPL_DABAN_LHB=0 / KPL_LHB_REALTIME=0（切换需重启进程）。
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "1").strip().lower() not in ("0", "false", "off", "no")
+def _env_flag(name: str, *, default: str = "1") -> bool:
+    return os.environ.get(name, default).strip().lower() not in ("0", "false", "off", "no")
 
 
 _DABAN_LHB = _env_flag("KPL_DABAN_LHB")
@@ -292,3 +291,14 @@ async def ws_quotes(ws: WebSocket) -> None:
         pass
     finally:
         svc.unsubscribe(q)
+        # 行情订阅面回落默认（2026-11-18 用户裁决）：浏览器全断开 = App 离屏
+        # （qn0 f() 清 d/e 同款）；否则 merge 进来的 852 id 每会话全量重发
+        # （3001+3006 ×2cmd），构成 rst_10054 残余超支。页面重开自会重新 POST。
+        # 回落仅动态面在位时触发（default 面不重置不刷写）；KPL_SUB_IDLE_RESET=0
+        # 可关（需重启，兼容 headless 长听场景）。
+        if (_env_flag("KPL_SUB_IDLE_RESET")
+                and svc.subscriber_count() == 0):
+            reset = svc.reset_subscriptions_to_default()
+            if reset.get("before", {}).get("count", 0) != reset.get("after", {}).get("count", 0):
+                logging.getLogger(__name__).info(
+                    "行情订阅面回落默认：%s → %s", reset.get("before"), reset.get("after"))
