@@ -387,7 +387,7 @@ from backend.services.jev.jiuyan_board import (  # noqa: E402
 from backend.operations.auction_trial_derive import (  # noqa: E402
     COLLECTION_SERIES, load_trial_rows)
 from backend.services.market.trial_quote_supplement import (  # noqa: E402
-    COLLECTION_PREV_PCT, read_realtime_prices)
+    read_realtime_prices)
 
 
 @router.get("/auction-trial")
@@ -502,8 +502,8 @@ def get_auction_trial(date: str | None = None) -> dict[str, Any]:
         n_prev_miss = n_price_miss = 0
         price_ts = None
         try:
-            prev_rows = (db[COLLECTION_PREV_PCT].find_one(
-                {"_id": served}, {"rows": 1}) or {}).get("rows") or {}
+            prev_rows = (db[TRIAL_RAW_COLLECTION].find_one(
+                {"_id": served}, {"prev_pct": 1}) or {}).get("prev_pct") or {}
             prices, price_ts = read_realtime_prices(list(named_rows))
             for c, r in named_rows.items():
                 if r.get("pre_percent") is None:

@@ -698,8 +698,8 @@ def test_auction_trial_quote_supplement_join(client, monkeypatch):
     for t in db["kpl_bidding_series"].docs[DATE]["ticks"]:
         for it in t["it"]:
             it.pop("price", None)   # 实测 pid=8 price 列空 → 派生 price=None
-    db["stock_prev_day_pct"].docs[DATE] = {"_id": DATE, "rows": {
-        "600102": {"pct": 5.5}, "600100": {"pct": -1.2}}}
+    db["auction_trial_raw"].docs[DATE]["prev_pct"] = {
+        "600102": {"pct": 5.5}, "600100": {"pct": -1.2}}
     monkeypatch.setattr(R, "read_realtime_prices",
                         lambda codes: ({"600102": {"price": 12.5}}, 1794965169000))
     try:

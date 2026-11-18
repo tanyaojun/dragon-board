@@ -489,14 +489,18 @@ roster/判据链同源消费冻结值（选龙口径=官方终值，单一事实
 零新增外呼，红线 9）；仅补缺位（历史档自有值不覆盖）；quotes.py 加 `<key>:ts` 单源
 ts 透出（读侧 priceFetchedAtMs 披露档龄）；miss 计数 priceMissCount 透出。
 
-**昨涨幅落库**：`stock_prev_day_pct` 日档（_id=日期，rows code→pct/prevClose/
-prevPrevClose/prevDate）；archiver 挂 prevPct 通道每轮限量懒取（单写者=:8000）；
-TDX 日线（tdx_daily_bars，python-bridge 同款协议）(昨收/前昨收−1)×100，未复权披露。
+**昨涨幅落库（用户裁决归并）**：`auction_trial_raw` **加字段**——`prev_pct`
+（code→pct/prevClose/prevPrevClose/prevDate）+ `prev_pct_state`（attempts/退避/
+failed/pending 审计 meta）；字段级 $set、单写者=:8000 archiver prevPct 通道，
+绝不触碰 rows/历史 envelope；不建新集合（红线 1 单一事实源）。原
+`stock_prev_day_pct` 已 mongodump 归档 `data/backups/stock_prev_day_pct_retire_20261118`
+后单集合 drop（红线 4，用户明确授权）。TDX 日线（tdx_daily_bars，python-bridge
+同款协议）(昨收/前昨收−1)×100，未复权披露。
 **频控预算（§1.2-9）**：≤30 只/轮、offset=15 单档、max_probe=3、日尝试上限 600
-（attempts_n 落库）、连续全失败指数退避跳轮上限 8（backoff_rounds 落库跨重启）、
-进程缓存+日档 rows 双重去重；宇宙=当日序列∪MBL，无宇宙零外呼 skip；
+（prev_pct_state.attempts_n 落库）、连续全失败指数退避跳轮上限 8（backoff_rounds
+落库跨重启）、进程缓存+prev_pct 双重去重；宇宙=当日序列∪MBL，无宇宙零外呼 skip；
 KPL_PREV_PCT_ENABLED 开关；conftest 测试进程强制 0（零外呼纪律，单测 monkeypatch）。
-11-18 首跑 256/256 落库 55.7s、0 失败。
+11-18 prev_pct 256/256、0 失败。
 
 **验证**：pytest 5443 passed 7 skipped（含 conftest 门控后 archiver/schedule 全绿；
 schedule 既有 market_cycle 子进程 600s 超时为用户既有 WIP 的测试外呼泄漏，非本轮

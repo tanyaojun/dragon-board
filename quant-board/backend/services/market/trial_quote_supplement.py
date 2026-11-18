@@ -4,15 +4,18 @@
 - **现价**：读 MarketQuotesCache 全市场行情共享 Redis 快照（腾讯源，跨进程单源，
   读侧零新增外呼，红线 9）；刷新频率归写侧（≥60s），ts 经 `<key>:ts` 透出披露。
 - **昨涨幅**：采集路径 TDX 日线（tdx_daily_bars，与 python-bridge 同款 TDX 协议）
-  算 (昨收/前昨收−1)×100 落库 `stock_prev_day_pct` 日档（_id=日期）；archiver
-  盘中每轮限量懒取，单写者=:8000 archiver。未复权口径（除权除息罕见失真，披露）。
+  算 (昨收/前昨收−1)×100，**落库 auction_trial_raw 加字段**（2026-11-18 用户裁决：
+  不建新集合，单一集合；prev_pct=code→行 map，prev_pct_state=采集审计 meta；
+  字段级 $set 单写者=:8000 archiver，绝不触碰 rows/历史 envelope）。
+  未复权口径（除权除息罕见失真，披露）。原 stock_prev_day_pct 集合已 mongodump
+  归档 data/backups/stock_prev_day_pct_retire_20261118 后单集合 drop（红线 4）。
 
 频控预算（§1.2-9，会话型 TDX + 轮询型 archiver 双形态登记）：
 - TDX 日线 ≤ KPL_PREV_PCT_ROUND_LIMIT(30) 只/轮，单档 offset=15、max_probe=3
   （坏节点探测上限 3×5s，socket 10s 兜底，tdx_daily_bars 既有护栏）；
-- 日尝试上限 KPL_PREV_PCT_DAILY_CAP(600)（attempts_n 落库，防坏节点无限重试）；
+- 日尝试上限 KPL_PREV_PCT_DAILY_CAP(600)（prev_pct_state.attempts_n 落库）；
 - 连续全失败轮指数退避跳轮（backoff_rounds 上限 8，落库跨重启生效）；
-- 进程级 _BARS_CACHE + 日档 rows 双重去重：成功后零重拉；失败码下轮自愈至日上限。
+- 进程级 _BARS_CACHE + prev_pct rows 双重去重：成功后零重拉；失败码下轮自愈至日上限。
 - 宇宙=当日 kpl_bidding_series ∪ kpl_morning_bidding_raw（纯库读）；无宇宙零外呼 skip。
 """
 from __future__ import annotations
@@ -21,7 +24,8 @@ import os
 import time
 from typing import Any
 
-COLLECTION_PREV_PCT = "stock_prev_day_pct"
+from backend.operations.auction_trial_fetch import COLLECTION_TRIAL_RAW
+
 COLLECTION_SERIES = "kpl_bidding_series"
 COLLECTION_MBL_RAW = "kpl_morning_bidding_raw"
 
@@ -49,18 +53,21 @@ def trial_universe_codes(db: Any, date: str) -> list[str]:
 
 
 def collect_prev_day_pct(db: Any, date: str, *, limit: int | None = None) -> dict:
-    """昨涨幅限量懒取落库（archiver 单写者调用；失败留痕不抛，§4.0）。"""
+    """昨涨幅限量懒取 → auction_trial_raw.prev_pct 加字段（archiver 单写者；
+    失败留痕不抛，§4.0；字段级 $set 不覆盖 rows/历史 envelope）。"""
     if os.environ.get("KPL_PREV_PCT_ENABLED", "1") == "0":
         return {"state": "disabled"}
-    col = db[COLLECTION_PREV_PCT]
-    doc = col.find_one({"_id": date}) or {}
-    rows = dict(doc.get("rows") or {})
-    failed = dict(doc.get("failed") or {})
-    attempts = int(doc.get("attempts_n") or 0)
-    consec = int(doc.get("consec_fail") or 0)
-    backoff = int(doc.get("backoff_rounds") or 0)
+    col = db[COLLECTION_TRIAL_RAW]
+    doc = col.find_one({"_id": date}, {"prev_pct": 1, "prev_pct_state": 1}) or {}
+    rows = dict(doc.get("prev_pct") or {})
+    meta = dict(doc.get("prev_pct_state") or {})
+    failed = dict(meta.get("failed") or {})
+    attempts = int(meta.get("attempts_n") or 0)
+    consec = int(meta.get("consec_fail") or 0)
+    backoff = int(meta.get("backoff_rounds") or 0)
     if backoff > 0:
-        col.update_one({"_id": date}, {"$set": {"backoff_rounds": backoff - 1}},
+        meta["backoff_rounds"] = backoff - 1
+        col.update_one({"_id": date}, {"$set": {"prev_pct_state": meta}},
                        upsert=True)
         return {"state": "backoff", "remaining": backoff - 1}
     universe = trial_universe_codes(db, date)
@@ -92,18 +99,19 @@ def collect_prev_day_pct(db: Any, date: str, *, limit: int | None = None) -> dic
             failed[c] = "no_two_closes" if bars else "bars_unavailable"
     consec = 0 if ok_n else consec + 1
     new_backoff = min(8, consec) if ok_n == 0 else 0
-    col.update_one({"_id": date}, {"$set": {
-        "date": date, "rows": rows, "failed": failed,
-        "attempts_n": attempts, "consec_fail": consec,
+    meta.update({
+        "failed": failed, "attempts_n": attempts, "consec_fail": consec,
         "backoff_rounds": new_backoff,
         "pending_n": len([c for c in universe if c not in rows]),
         "source": "tdx_daily_bars",
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+    col.update_one({"_id": date}, {"$set": {
+        "prev_pct": rows, "prev_pct_state": meta,
     }}, upsert=True)
     return {**base, "state": "ok" if ok_n else "all_failed",
             "batch_n": len(batch), "ok_n": ok_n, "attempts_n": attempts,
-            "pending_n": len([c for c in universe if c not in rows]),
-            "backoff_rounds": new_backoff}
+            "pending_n": meta["pending_n"], "backoff_rounds": new_backoff}
 
 
 def read_realtime_prices(codes: list[str]) -> tuple[dict[str, dict], int | None]:

@@ -10010,7 +10010,7 @@ function atRender(){
       + `<td class="kpl-uni" title="${esc(amtTip('lastN'))}">${r.lastN != null ? kfmtAmt(r.lastN) : '--'}</td>`
       + `<td class="kpl-uni"${atDerived ? ' title="现价=腾讯全市场实时快照（共享 Redis，写侧≥60s 刷新；缺位如实--）"' : ''}>${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
       + `<td class="kpl-uni ${kcls(r.pctN)}" title="${atDerived ? '涨幅=末帧 pct（官方序列观测值）' : 'percent 当日涨幅（收盘口径以行情源为准）'}">${atPct(r.pctN)}</td>`
-      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（stock_prev_day_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（auction_trial_raw.prev_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '流通值=末帧 real_float（bid 口径实际流通，≠Wzs 历史口径，禁止跨源派生比率）' : 'circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）'}">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
       + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
   }
