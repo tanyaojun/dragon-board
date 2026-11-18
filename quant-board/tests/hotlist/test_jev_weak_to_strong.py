@@ -178,7 +178,9 @@ def test_weak_to_strong_line_hit_and_miss(monkeypatch):
     assert "T+1 延续率" not in hit_line and "今日反包率" not in hit_line
     assert "历史基线" not in hit_line and "一日游" not in hit_line
     miss_line = R.weak_to_strong_line(db, "2026-03-06")
-    assert "昨日 relayIndex 60.0（中强区）" in miss_line and "不贴形态标" in miss_line
+    assert "昨日 relayIndex 60.0（中强区）" in miss_line
+    # v11 补遗 A2：跨链打标行为注「不贴形态标」删（§1.2-8，relay 7 题零消费）
+    assert "不贴形态标" not in miss_line and "今日结构" in miss_line
     assert "T+1 延续率" not in miss_line
 
 
@@ -197,7 +199,8 @@ def test_weak_to_strong_line_midday_no_fake_confirm(monkeypatch):
         "2026-03-03": 30.0, "2026-03-04": 55.0})
     monkeypatch.setattr(W, "zt_series", lambda db, *a, **k: {"2026-03-03": 30})
     line = R.weak_to_strong_line(db, "2026-03-04", slot="11:30")
-    assert "午盘预检" in line and "跌停盘后写入" in line and "形态盘后定档" in line
+    assert "午盘预检" in line and "跌停盘后写入" in line
+    assert "形态盘后定档" not in line   # v11 补遗 A2：流程注删
     assert "符合历史弱转强形态" not in line
 
 
@@ -220,7 +223,7 @@ def test_weak_to_strong_line_idx_below_but_structural_confirm_wording():
             r["relayIndex"] = 44.0
     from backend.operations.jev_relay_index import weak_to_strong_line
     line = weak_to_strong_line(db, "2026-03-04")
-    assert "指数未达强势区（44.0" in line and "不贴形态标" in line
+    assert "指数未达强势区（44.0" in line and "不贴形态标" not in line   # v11 补遗 A2
     # 夹具无涨停帧，确认侧只有跌停证据（与 classify 的 confirm=[dt_down] 一致）
     assert "结构确认已满足：跌停 20→5↓" in line
     assert "结构确认未命中" not in line

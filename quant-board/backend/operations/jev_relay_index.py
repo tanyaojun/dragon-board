@@ -444,8 +444,6 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         prem_txt = f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(elig)}）"
     else:
         prem_txt = _sample_short_txt("隔日溢价样本", len(elig), len(prem))
-    # 涨停家数口径对账（2026-10-16）：同花顺涨停池参照，差集=触板未封/新股，防两口径数字打架
-    caliber = _zt_caliber_note(db, prev_date, dataset_id, set(base), prev_pool)
     # 钱效近20日分位（v7 D3）：今日值 vs 严格早于当日的近 20 日序列（zero 前视）。
     # 今日断板中位/大面须过 F4 样本门（cur_stats_ok）才参与，防 n=1 伪精度进分位。
     if money_hist is None:
@@ -608,9 +606,10 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
         cmp_txt = (f"边际对比：昨日池今日晋级率 {d1_rate}%"
                    f"（{stats_b['denom']}→{len(stats_b['promoted'])}）"
                    f" vs 前日池昨日 {r1}%（{den_a}→{len(s1)}），{round(d1_rate - r1, 1):+.1f}pct")
-    # 涨停家数口径对账（2026-10-16，同 relay_flow_line）：D-2 家数给同花顺池参照+差集
-    d2_caliber = _zt_caliber_note(db, d2, dataset_id, base2, p2)
-    return (f"三日晋级链：{d2} 涨停 {len(base2)} 只 → "
+    # v11 补遗 M5a（2026-11-17 裁决 a）：链首家数 = 晋级率分母 den_a（停牌/不可验剔除），
+    # 与率/边际对比同式自洽——旧 len(base2) 在停牌日产出「38→11=29.7%」矛盾式。
+    # 停牌股已在高位股轨迹点名，信息不丢；flow 行保持 base+「停牌跳过」披露（可互核）。
+    return (f"三日晋级链：{d2} 涨停 {den_a} 只 → "
             f"{d1} 仍涨停 {len(s1)} 只（{r1_txt}）"
             f"{step_txt} · 高位股轨迹：{'；'.join(fate) if fate else '无'}{calib} · {cmp_txt}")
 
@@ -1486,18 +1485,6 @@ def _ths_sealed_codes(db: Any, date: str, dataset_id: str) -> set[str] | None:
     return codes or None
 
 
-def _zt_caliber_note(db: Any, date: str, dataset_id: str,
-                     bisect_codes: set[str], pool: dict[str, dict[str, Any]]) -> str:
-    """涨停家数口径对账注（2026-10-16，relay_flow/three_day_chain 共用）。
-
-    二分口径（韭研触板−炸板池）与 THS 连板层同日两个数，差集点名让模型自己核，不代断
-    成因——10-15 实证那 3 只（*ST美丽/*ST中迪/*ST开元）是 THS 涨停池剔除 ST/北交所，
-    不是「触板未封」，旧文案把单一成因写死会教给模型假状态。THS 池缺失日不附注
-    （不伪造差值 0，fail-visible）。
-    """
-    return ""   # 2026-10-30g+：口径对账注整行删（用户裁决，叙事只留行情数字）
-
-
 def _ths_pool_items(db: Any, date: str, dataset_id: str, key: str) -> tuple[list[dict], bool]:
     """THS 15:00 帧指定池 items（rushing 等）；(items, found)。
 
@@ -1745,7 +1732,7 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
         weak_zone = prev_i <= WEAK_IDX_MAX
         if slot != "15:00":
             # 午盘档：形态不落地，只给预检参照（分类器确认基于收盘序列，不伪判）
-            parts.append(f"午盘预检：{'、'.join(conf) if conf else '无确认项'}（形态盘后定档）")
+            parts.append(f"午盘预检：{'、'.join(conf) if conf else '无确认项'}")
         elif first_run:
             # 首判（审查 MF-1）：今日评分未落库，形态不可判，只给结构预检；不冒充未命中
             # v10 A1：「待落库」流程注删（AGENTS §1.2-8），只留结构预检事实
@@ -1757,14 +1744,13 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
                 # 未达标的是指数侧（idx/Δ），结构侧状态单独表述（2026-10-22 措辞修复：
                 # 10-20 重跑后 idx 47.8<50 但 dt↓+zt↑ 均确认，旧文案误写「结构确认未命中」自相矛盾）
                 parts.append(f"指数未达强势区（{cls.get('idx')}）"
-                             + (f" · 结构确认已满足：{'、'.join(conf)}" if conf else " · 结构确认未满足")
-                             + "，不贴形态标")
+                             + (f" · 结构确认已满足：{'、'.join(conf)}" if conf else " · 结构确认未满足"))
             else:
-                parts.append(f"结构确认未命中（{'、'.join(conf)}），不贴形态标" if conf
-                         else "结构确认未命中，不贴形态标")
+                parts.append(f"结构确认未命中（{'、'.join(conf)}）" if conf
+                         else "结构确认未命中")
         else:
-            parts.append(f"今日结构：{'、'.join(conf)}，昨日非弱势区，不贴形态标"
-                         if conf else "今日结构：无确认项，不贴形态标")
+            parts.append(f"今日结构：{'、'.join(conf)}，昨日非弱势区"
+                         if conf else "今日结构：无确认项")
     # 定格 vs 重评分歧注记（fail-visible，不静默）：重跑改了评分但节点已定格
     if slot == "15:00" and cls.get("idx") is not None:
         _d = (db[COLLECTION].find_one({"_id": f"{date}:RELAY"}) or {}).get("relayIndex")

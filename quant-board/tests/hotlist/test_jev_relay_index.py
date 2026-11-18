@@ -687,7 +687,7 @@ def test_questions_schema():
 
 
 def _frame_ths_sealed(date, codes_by_pool, pool_ok=None):
-    """带 THS 连板层五池的 15:00 帧（_ths_sealed_codes/_zt_caliber_note 专用）。
+    """带 THS 连板层五池的 15:00 帧（_ths_sealed_codes 专用）。
 
     pool_ok=None = 五池全 ok；否则只有集合内的池 ok（模拟单池被限流返空）。
     """
@@ -716,13 +716,18 @@ def test_ths_sealed_codes_requires_every_pool_ok():
 
 
 def test_zt_caliber_note_removed_20261030g():
-    """2026-10-30g+（用户裁决）：口径对账注整行删，叙事只留行情数字。"""
-    pool = {"600001": {"name": "A"}, "600003": {"name": "C"}}
-    db = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(_D0, {"one": ["600001"]})])})
-    assert relay._zt_caliber_note(db, _D0, "dragonboard_live", {"600001", "600003"}, pool) == ""
-    db2 = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(
-        _D0, {"one": ["600001"], "two": ["600002"]})])})
-    assert relay._zt_caliber_note(db2, _D0, "dragonboard_live", {"600001"}, pool) == ""
+    """2026-10-30g+（用户裁决）：口径对账注整行删，叙事只留行情数字。
+
+    v11 补遗 nit：_zt_caliber_note 残根函数与两处死调用一并删除（整行删后函数恒返 ""
+    且调用方丢弃结果，白耗 DB 读）；断言升级到叙事层：flow/链行不得出现对账措辞。
+    """
+    assert not hasattr(relay, "_zt_caliber_note")
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final(d, _STOCKS[d]) for d in (_D2, _D1, _D0)]),
+    })
+    for line in (relay.relay_flow_line(db, _D0), relay.three_day_chain_line(db, _D0)):
+        assert "口径" not in line and "差集" not in line and "对账" not in line
 
 
 
@@ -869,6 +874,11 @@ def test_three_day_chain_suspension_skip_not_break(monkeypatch):
     assert "新华传媒 9天9板→昨日停牌今日回封（连板11板）" in line
     assert "今日断板" not in line          # 假断板红线（停牌不得当断板）
     assert "今日停牌跳过" not in line
+    # v11 补遗 M5a（裁决 a）：链首 = 分母 den_a（D-2 池 2 只 − 停牌 1 = 1），
+    # 与率/边际同式自洽；旧 len(base2)=2 产出「2→1=100%」矛盾式。
+    assert f"三日晋级链：{_D2} 涨停 1 只" in line
+    assert "涨停 2 只" not in line
+    assert "前日池昨日 100.0%（1→1）" in line
 
 
 def test_relay_flow_line_suspension_skips_denominator(monkeypatch):
