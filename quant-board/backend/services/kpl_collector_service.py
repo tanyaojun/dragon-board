@@ -886,17 +886,25 @@ class KplCollectorService:
             for it in direct_items:
                 enc = self._codec.enc(it["req"])
                 seq = next_seq()
+                plain = bool(it.get("plain"))
+                # 2026-11-18 源码定案：plain 项（3101 一次性查询）走 0x30 普通通道
+                # 无 ext 路由头、不入注册表（App e((byte)3) 同款；0x40 通道发 3101
+                # = ErrResp 1002 杀连）
                 frame = proto.build_frame(it["cmd"], seq, enc or it["req"], d=0,
-                                          encrypted=bool(enc), pkg=proto.PKG_ROUTE,
-                                          ext=it["ext"])
+                                          encrypted=bool(enc),
+                                          pkg=proto.PKG_AUTH if plain else proto.PKG_ROUTE,
+                                          ext=b"" if plain else it["ext"])
                 self._dbg("C", frame)
                 if sent and not block_pause:
                     self._human_pause(*self._drain_pause)   # 帧间拟人停顿（节奏实验旋钮）
                 sock.sendall(frame)
-                self._sub_registry.register(SubEntry(
-                    cmd=it["cmd"], req=it["req"], ext=it["ext"], seq=seq,
-                    lane=str(it.get("lane") or lane), key=str(it.get("key") or ""),
-                    priority=bool(it.get("priority")), sent_at=time.time()))
+                if not plain:
+                    self._sub_registry.register(SubEntry(
+                        cmd=it["cmd"], req=it["req"], ext=it["ext"], seq=seq,
+                        lane=str(it.get("lane") or lane), key=str(it.get("key") or ""),
+                        priority=bool(it.get("priority")), sent_at=time.time()))
+                else:
+                    self._stats["plain_req_sent"] = self._stats.get("plain_req_sent", 0) + 1
                 sent += 1
                 if block_pause:
                     self._human_pause(*self._drain_pause)   # detail 块尾停顿（flush 合同）
@@ -916,13 +924,20 @@ class KplCollectorService:
             for it in items:
                 enc = self._codec.enc(it["req"])
                 # pkg=0x40 订阅路由（2026-11-10 根因修复：daban 族帧此前漏传 pkg，
-                # build_frame 默认 0x30 鉴权通道 + ext 路由头=非法帧，服务器杀连）
+                # build_frame 默认 0x30 鉴权通道 + ext 路由头=非法帧，服务器杀连）；
+                # plain 项（3101）走 0x30 普通通道（2026-11-18 源码定案，不入注册表）
                 seq = next_seq()
+                plain = bool(it.get("plain"))
                 frame = proto.build_frame(it["cmd"], seq, enc or it["req"], d=0,
-                                          encrypted=bool(enc), pkg=proto.PKG_ROUTE, ext=it["ext"])
+                                          encrypted=bool(enc),
+                                          pkg=proto.PKG_AUTH if plain else proto.PKG_ROUTE,
+                                          ext=b"" if plain else it["ext"])
                 self._human_pause(*self._drain_pause)
                 self._dbg("C", frame)
                 sock.sendall(frame)
+                if plain:
+                    self._stats["plain_req_sent"] = self._stats.get("plain_req_sent", 0) + 1
+                    continue
                 self._sub_registry.register(SubEntry(
                     cmd=it["cmd"], req=it["req"], ext=it["ext"], seq=seq,
                     lane="setup", priority=bool(it.get("priority")),
@@ -1943,21 +1958,27 @@ class KplCollectorService:
                     staged_wave2_frames.append(lhb_frame)   # 分波：lhb 非关键延后
                 else:
                     self._pending_setup_frames.append(lhb_frame)
-            # 6f) 3004 RealtimeLHB 订阅 + 3101 当日区间单发（ServiceHqList 族，同 0x40 通道
-            #     ext 路由头；Req 基线见 kpl_lhb_protocol.REALTIME_LHB_BASELINE，App 原 UI
-            #     count=1，采集放宽 30；3101 无区间实测零应答（2026-10-29 开火），改带
-            #     当日区间 0925→当前 HHMM（同 App MainIndexQuotationInfoPresenter 用法））
+            # 6f) 3004 RealtimeLHB 订阅（0x40 通道 ext 路由头）+ 3101 当日区间单发
+            #     （2026-11-18 源码定案：App MainIndexQuotationInfoPresenter L288/
+            #     RealTimeChartsPresenter L288 发 3101 用 e((byte)3)→pkg=0x30 普通请求帧
+            #     （ux0.p()=(f11466a<<4) 反编译实锶），从不走 0x40 订阅通道；我们旧版
+            #     把 3101 当 0x40 订阅发→服务器拒收 ErrResp 1002 杀连（每会话必死，
+            #     被 rst_10054 跑步机长期掩盖）。3101=一次性查询：不注册表、不 402 退订。
+            #     Req 基线见 kpl_lhb_protocol.REALTIME_LHB_BASELINE，App 原 UI count=1，
+            #     采集放宽 30）
             if self._lhb_realtime:
                 req_sub = lhb.build_realtime_lhb_req_pb(count=self._lhb_realtime_count)
-                reqs_lhb = [(lhb.CMD_REALTIME_LHB_SUB, req_sub),
+                reqs_lhb = [(lhb.CMD_REALTIME_LHB_SUB, req_sub, False),
                             (lhb.CMD_REALTIME_LHB_RANGE,
                              lhb.build_realtime_lhb_req_pb(
                                  count=self._lhb_realtime_count,
-                                 start_time=925, end_time=int(time.strftime("%H%M"))))]
-                for lhb_cmd, req_rl in reqs_lhb:
+                                 start_time=925, end_time=int(time.strftime("%H%M"))),
+                             True)]   # True=plain 0x30 单发（App 同款）
+                for lhb_cmd, req_rl, plain in reqs_lhb:
                     lhb_frame = {
                         "cmd": lhb_cmd, "req": req_rl,
                         "ext": bytes([0x02]) + struct.pack(">H", lhb_cmd),
+                        "plain": plain,
                     }
                     if self._sub_staged:
                         staged_wave2_frames.append(lhb_frame)   # 分波：lhb 非关键延后

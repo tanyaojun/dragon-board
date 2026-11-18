@@ -707,6 +707,39 @@ class TestRealtimeLHB3004:
         assert ev["items"][0]["stock_id"] == "600229"
         assert ev["items"][0]["quotas"] == ["12.34", "3.5亿"]
 
+    def test_3101_plain_0x30_3004_sub_0x40(self, monkeypatch):
+        """2026-11-18 源码定案：App 发 3101 用 e((byte)3)→pkg=0x30 普通请求帧
+        （ux0.p()=(f11466a<<4)），从不走 0x40 订阅通道；我们旧版 0x40 发 3101
+        →ErrResp 1002 每会话必死。守卫：3101=0x30 无 ext 不入注册表；3004=0x40
+        订阅入注册表。"""
+        from backend.services import kpl_collector_service as cc
+        from backend.services import kpl_lhb_protocol as lhb
+        import struct as _struct
+        monkeypatch.setattr(cc.time, "strftime", lambda fmt: "1035")
+        svc2 = KplCollectorService(
+            FakeCodec(), device_id="t", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            daban_subs=False, lhb_realtime=True, lhb_realtime_count=120,
+            daban_list_pages=7)
+        fake = FakeSocket([])
+        seq = iter(range(100))
+        ext = lambda c: bytes([0x02]) + _struct.pack(">H", c)
+        items = [
+            {"cmd": 3004, "req": lhb.build_realtime_lhb_req_pb(count=120),
+             "ext": ext(3004), "lane": "setup"},
+            {"cmd": 3101, "req": lhb.build_realtime_lhb_req_pb(
+                count=120, start_time=925, end_time=1035),
+             "ext": ext(3101), "plain": True, "lane": "setup"},
+        ]
+        svc2._drain_send(fake, lambda: next(seq), items, "setup")
+        f3004, f3101 = fake.sent[0], fake.sent[1]
+        assert f3004[0] == 0x40 and f3101[0] == 0x30            # pkg 字节
+        assert int.from_bytes(f3004[7:9], "big") == 3004
+        assert int.from_bytes(f3101[7:9], "big") == 3101
+        reg_cmds = [e.cmd for e in svc2._sub_registry._entries]
+        assert 3004 in reg_cmds and 3101 not in reg_cmds        # 单发不占订阅注册表
+        assert svc2._stats.get("plain_req_sent") == 1
+
     def test_3101_same_parser_registered(self):
         from backend.services import kpl_lhb_protocol as lhb
         assert lhb.LHB_RESP_PARSERS[lhb.CMD_REALTIME_LHB_RANGE] is lhb.parse_realtime_lhb
