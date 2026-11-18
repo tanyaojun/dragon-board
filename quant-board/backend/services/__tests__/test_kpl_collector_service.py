@@ -152,10 +152,10 @@ def svc() -> KplCollectorService:
 
 
 class TestSessionStateMachine:
-    def test_loop_send_grace_suppresses_loop_phase_sends(self, monkeypatch):
-        """2026-11-10 假说判别实验：宽限期内读循环零发送（保活/drain 全延后），
-        行情推送照常 dispatch；杀连时刻落在宽限期内→setup 打标定时处决，
-        落在宽限期结束时→循环期发送触发。"""
+    def test_no_grace_loop_drains_immediately(self, monkeypatch):
+        """2026-11-18 用户裁决拆 loop_send_grace：读循环无纯读宽限，pending
+        订阅首 tick 整队发完（App qn0.z() 连接后即发同款）。旧「宽限抑制」
+        判据随门控拆除作废。"""
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
         vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
         responses = [
@@ -171,16 +171,14 @@ class TestSessionStateMachine:
         svc = KplCollectorService(
             FakeCodec(), device_id="test-dev", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
-            loop_send_grace_s=1000, daban_list_pages=7,
+            daban_list_pages=7,
         )
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
-        # 内联订阅链照发（7 帧）；循环期（会话在宽限期内被服务器关连而结束）零发送
-        assert len(fake.sent) == 7
-        assert len(svc._pending_setup_frames) == 19          # 7 globals + pid8 7 页 + 5 池×1 页（P1）
-        # 原 49（全池 7 页）——队列原封不动
-        assert "grace_end_pending" not in svc._stats         # 宽限期未结束，无打点
+        # 内联 7 帧 + 循环首 tick 整队 19 帧（7 globals + pid8 7 页 + 5 池×1 页）
+        assert len(fake.sent) == 7 + 19
+        assert svc._pending_setup_frames == []               # 整队发完，无余量
 
     def test_full_session_emits_auth_and_quotes(self, svc, monkeypatch):
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
@@ -201,10 +199,10 @@ class TestSessionStateMachine:
 
         assert len(svc._codec.wbe_calls) == 1
         assert svc._codec.wbe_calls[0][0] == "2db64e49ca378ac2a21331deca1a7425"
-        # 2026-11-10 重排：内联仅 7 基础帧（610/602/2301/2303/2304/3001/3006），
-        # daban 家族（7+42 帧）入 _pending_setup_frames 由读循环限流续发；
-        # 剩余响应（echo3001+push3001）供两轮 drain 各发 8 帧，余量留队（本会话丢失自愈）
-        assert len(fake.sent) == 7 + 16
+        # 内联 7 基础帧（610/602/2301/2303/2304/3001/3006）+ daban 家族入
+        # _pending_setup_frames 由读循环续发；2026-11-18 拆 8 帧/tick 限流：
+        # 首 tick 整队 19 帧一次发完（帧间拟人停顿保留）
+        assert len(fake.sent) == 7 + 19
         assert fake.sent[0][7:9] == (610).to_bytes(2, "big")
         assert fake.sent[1][7:9] == (602).to_bytes(2, "big")
         assert fake.sent[2][7:9] == (2301).to_bytes(2, "big")
@@ -213,19 +211,11 @@ class TestSessionStateMachine:
         assert fake.sent[5][7:9] == (3001).to_bytes(2, "big")
         assert fake.sent[6][7:9] == (3006).to_bytes(2, "big")  # 个股订阅
         from backend.services import kpl_daban_protocol as daban
-        # 已发 16 帧（2 tick×8）：pid8 竞价池 7 页最前（2026-11-17 订阅爆发时序
-        # 修复：priority 前插，首迭代即发，服务端初始页推送提前到会话 ~5-15s）+
-        # 7 个 21xx cmd + pid0 前 2 页；队列剩余 33 页
+        # 整队 19 帧：pid8 竞价池 7 页最前（priority 前插）+ 7 个 21xx cmd +
+        # 5 池×1 页（P1 收敛）；队列清空
         sent_cmds = [int.from_bytes(f[7:9], "big") for f in fake.sent[7:]]
-        assert sent_cmds == [2103] * 7 + [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 2
-        # 队列余量：body=0xAA+req → pidType=f1、index=f4、count=f5=30（从 (0,60) 续起）
-        pages = [(daban.pb_first(daban.parse_pb_f32(it["req"]), 1, -1),
-                  daban.pb_first(daban.parse_pb_f32(it["req"]), 4, -1),
-                  daban.pb_first(daban.parse_pb_f32(it["req"]), 5, -1))
-                 for it in svc._pending_setup_frames]
-        assert len(pages) == 3   # 19 - 16（drain 2 tick×8）
-        # P1 收敛：pid8 竞价池保 7 页，其余池 1 页；drain 2 tick×8 后余 3 帧
-        assert pages == [(1, 0, 30), (2, 0, 30), (3, 0, 30)]
+        assert sent_cmds == [2103] * 7 + [2114, 2115, 2116, 2119, 2120, 2126, 2100] + [2103] * 5
+        assert svc._pending_setup_frames == []
         for f, c in zip(fake.sent[7:14], sent_cmds[:7]):
             assert f[12] == 0x02 and f[13:15] == c.to_bytes(2, "big")  # ext=[02][cmd BE]
 
@@ -1210,26 +1200,20 @@ class TestThemeHeat2013:
         assert off._pending_theme == []
         assert off.get_theme_heat()["reason"] == "no_theme_snapshot"
 
-    def test_drain_rate_limited_per_tick(self, svc):
-        """2026-11-10 修复 10054 循环：drain 每 tick 限量 _DRAIN_TICK_FRAMES 帧，
-        余量回队头保序，下一 tick 续发（爆发=机器指纹，§3.4 机制）。"""
+    def test_drain_full_queue_per_call(self, svc):
+        """2026-11-18 用户裁决拆 8 帧/tick 限流：整队一次发完（帧间拟人停顿
+        保留），无余量回队。旧「限量+回队头」判据随门控拆除作废。"""
         ids = [f"6000{i:02d}" for i in range(20)]
         svc._queue_zt_reason_new(ids)
         sock = FakeSocket([])
         seq = iter(range(100, 400))
         svc._drain_zt_reason_subs(sock, lambda: next(seq))
-        assert len(sock.sent) == svc._DRAIN_TICK_FRAMES                 # 第一 tick 只发限量
-        assert svc._pending_zt_reason == ids[svc._DRAIN_TICK_FRAMES:]   # 余量回队头保序
-        svc._drain_zt_reason_subs(sock, lambda: next(seq))
-        assert len(sock.sent) == 2 * svc._DRAIN_TICK_FRAMES
-        svc._drain_zt_reason_subs(sock, lambda: next(seq))
-        assert len(sock.sent) == 20 and svc._pending_zt_reason == []    # 全部发完
-        # 帧号/路由头不变（与限量前同构）：cmd=2203 在 [7:9]
+        assert len(sock.sent) == 20 and svc._pending_zt_reason == []    # 一次发完
         assert sock.sent[0][7:9] == proto.CMD_HQ_REASONS.to_bytes(2, "big")
 
-    def test_drain_send_failure_gates_and_emits(self, svc):
-        """sendall 失败：置 _sock_dead 本会话静默，余量丢失（下一会话 6g 自愈），
-        结构化事件 subscribe_send_dropped 带 sent/dropped/lane。"""
+    def test_drain_send_failure_fail_fast(self, svc):
+        """2026-11-18 拆 _sock_dead：sendall 失败 fail-visible 后上抛 OSError
+        结束会话重连（不再本会话静默 limp），事件带 sent/dropped/lane。"""
         class DeadSocket(FakeSocket):
             def __init__(self):
                 super().__init__([])
@@ -1246,18 +1230,14 @@ class TestThemeHeat2013:
         q = svc.subscribe()
         sock = DeadSocket()
         seq = iter(range(100, 400))
-        svc._drain_zt_reason_subs(sock, lambda: next(seq))
-        assert svc._sock_dead is True
+        with pytest.raises(OSError):                                    # fail-fast 上抛
+            svc._drain_zt_reason_subs(sock, lambda: next(seq))
         assert len(sock.sent) == 2                                      # 前 2 帧成功后第 3 帧死
         evs = _drain_q(q)
         ev = next(e for e in evs if e["type"] == "subscribe_send_dropped")
         assert ev["lane"] == "zt_reason" and ev["sent"] == 2 and ev["dropped"] == 18
         assert "10054" in ev["error"]
         assert svc._stats["zt_reason_send_drops"] == 18
-        # 门禁：后续 drain（含 2013 通道）本会话静默跳过，不再刷错误
-        svc._queue_theme_new(ids)
-        svc._drain_zt_reason_subs(sock, lambda: next(seq))
-        svc._drain_theme_subs(sock, lambda: next(seq))
         assert len(sock.sent) == 2
         assert not any(e["type"] == "subscribe_send_dropped" for e in _drain_q(q))
 
@@ -1437,16 +1417,12 @@ class TestDeathCause:
         for code in (1106, 1002, 2008):
             svc._session_err_code = code
             assert f(None) == f"errresp_{code}"
-        # code 优先于 sock_dead/streaming
+        # code 优先于 streaming
         svc._session_err_code = 1002
-        svc._sock_dead = True
         assert f(None) == "errresp_1002"
-        # 无 code：drain send 失败门禁 → send_dead
+        # 无 code：setup 早退 vs 干净 EOF（send_dead 分类随 _sock_dead 拆除作废，
+        # drain send 失败改 fail-fast 上抛走异常分类）
         svc._session_err_code = None
-        svc._sock_dead = True
-        assert f(None) == "send_dead"
-        # 无 code 无 sock_dead：setup 早退 vs 干净 EOF
-        svc._sock_dead = False
         svc._session_streaming = False
         assert f(None) == "setup_fail"
         svc._session_streaming = True
@@ -1505,7 +1481,6 @@ class TestEofCleanReconnect:
             # 已 streaming（auth 完成）+ 无错误码/无 sock 死 → 分类 eof_clean
             svc._session_streaming = True
             svc._session_err_code = None
-            svc._sock_dead = False
             return                                 # 无异常 = 干净 EOF（TTL ~41s 轮转）
 
         monkeypatch.setattr(svc, "_session", _eof_session)
@@ -1530,7 +1505,6 @@ class TestEofCleanReconnect:
         def _eof():
             svc._session_streaming = True
             svc._session_err_code = None
-            svc._sock_dead = False
 
         sessions = [
             _eof,                                  # 会话1：干净 EOF
@@ -1567,7 +1541,6 @@ class TestAppRetryBackoff:
             clock[0] += dur
             svc._session_err_code = code
             svc._session_streaming = streaming
-            svc._sock_dead = False
             if exc is not None:
                 raise exc
 
@@ -2401,10 +2374,9 @@ class TestSubBatch211:
             {"cmd": 2114, "req": bytes([i]), "ext": bytes.fromhex("020842")}
             for i in range(12)]
         fake = FakeSocket([])
-        svc._drain_setup_subs(fake, _seq_gen())        # 每 tick 取 8 项 → 1 批
-        assert len(fake.sent) == 1
-        svc._drain_setup_subs(fake, _seq_gen())        # 余 4 项 → 第 2 批
+        svc._drain_setup_subs(fake, _seq_gen())        # 2026-11-18 拆限流：12 项整队 → 2 批（10+2）
         assert len(fake.sent) == 2
+        assert svc._pending_setup_frames == []
         assert svc._stats["batch_frames_sent"] == 2
 
     def test_batch_ack_expansion_then_item_ack(self):
@@ -2487,7 +2459,7 @@ class TestSubBatch211:
             _mk_svc(sub_batch_mode="999")
 
     def test_full_session_211_mode(self, monkeypatch):
-        """会话级：7 内联帧不变 + daban 队列按批信封 drain（8 项/批/tick）。"""
+        """会话级：7 内联帧不变 + daban 队列整队批信封 drain（2026-11-18 拆限流）。"""
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
         vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
         responses = [
@@ -2504,19 +2476,19 @@ class TestSubBatch211:
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
-        assert len(fake.sent) == 7 + 11                # 2 tick×8 项=16 drain（7 批项+9 direct）
+        assert len(fake.sent) == 7 + 13                # 整队 19 项=7 批项(1 批)+12 direct(2103 页)
         batch_frames = [f for f in fake.sent[7:] if proto.parse_incoming(f)["cmd"] == 211]
         direct_frames = [f for f in fake.sent[7:] if proto.parse_incoming(f)["cmd"] != 211]
-        assert len(batch_frames) == 2
+        assert len(batch_frames) == 1
         # M2 白名单：批内只允许 hqDaban 全局族，2103 页恒 direct
         for f in batch_frames:
             assert all(it["cmd"] in svc._BATCHABLE_CMDS
                        for it in proto.parse_sub_reqs_pb(f[16:]))
         assert all(proto.parse_incoming(f)["cmd"] == 2103 for f in direct_frames)
         assert sum(len(proto.parse_sub_reqs_pb(f[16:])) for f in batch_frames) == 7
-        assert len(svc._sub_registry.entries()) == 18   # 16 drain + 内联 3001/3006 各 1
-        assert svc._stats["batch_frames_sent"] == 2
-        assert len(svc._pending_setup_frames) == 3     # 19 - 16（P1 面收敛）
+        assert len(svc._sub_registry.entries()) == 21   # 19 drain + 内联 3001/3006 各 1
+        assert svc._stats["batch_frames_sent"] == 1
+        assert svc._pending_setup_frames == []          # 整队发完
 
     def test_default_codec_is_gcm(self):
         """U2 实弹定案（2026-11-17 探针）：明文 item.data → 2008 杀连，默认必须 1。"""
@@ -2831,19 +2803,17 @@ class TestUnsub402:
         rq = svc._pending_setup_frames[0]
         assert rq["key"] == "600001" and rq["lane"] == "zt_reason"
 
-    def test_unsub_debounce_and_max_ids(self):
+    def test_unsub_no_debounce_full_queue_chunks(self):
+        """2026-11-18 用户裁决拆防抖：整队按单帧 20 id 协议上限分块一次发完，
+        无 ≥5s 间隔（App 屏 onPause 即发 402）。旧防抖判据作废。"""
         svc = _mk_svc(unsub_enabled=True)
-        svc._pending_unsub = list(range(1, 26))   # 25 id → 首帧 20，余 5
+        svc._pending_unsub = list(range(1, 26))   # 25 id → 20+5 两帧一次发完
         fake = FakeSocket([])
         svc._drain_unsub(fake, _seq_gen())
-        assert len(fake.sent) == 1
-        assert proto.parse_unsub_id_req_pb(fake.sent[0][13:]) == list(range(1, 21))
-        assert svc._pending_unsub == list(range(21, 26))
-        svc._drain_unsub(fake, _seq_gen())        # 防抖 5s 内 → 不发
-        assert len(fake.sent) == 1
-        svc._unsub_last_ts -= 10                  # 模拟防抖窗口已过
-        svc._drain_unsub(fake, _seq_gen())
         assert len(fake.sent) == 2
+        assert proto.parse_unsub_id_req_pb(fake.sent[0][13:]) == list(range(1, 21))
+        assert proto.parse_unsub_id_req_pb(fake.sent[1][13:]) == list(range(21, 26))
+        assert svc._pending_unsub == []
         assert proto.parse_unsub_id_req_pb(fake.sent[1][13:]) == list(range(21, 26))
 
     def test_unsub_empty_pool_unsub_all(self):
@@ -2872,7 +2842,7 @@ class TestKaMode:
             _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
             _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
         ]
-        svc = _mk_svc(loop_send_grace_s=0.0, daban_subs=False, daban_lhb=False,
+        svc = _mk_svc(daban_subs=False, daban_lhb=False,
                       lhb_realtime=False, zt_reason_subs=False, theme_subs=False,
                       stock_detail_subs=False, **kw)
         fake = FakeSocket(responses)

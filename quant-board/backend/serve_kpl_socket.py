@@ -156,7 +156,6 @@ _service = KplCollectorService(
                         float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 2000)}
         if os.environ.get("KPL_DRAIN_PAUSE_MS") else {}),
     auth_phase_delay=_AUTH_PHASE_DELAY,
-    loop_send_grace_s=float(os.environ.get("KPL_LOOP_SEND_GRACE", "5")),
     # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；
     # 显式关闭 KPL_ENFORCE_TRADING_HOURS=0（切换需重启进程）
     enforce_trading_hours=_env_flag("KPL_ENFORCE_TRADING_HOURS"),

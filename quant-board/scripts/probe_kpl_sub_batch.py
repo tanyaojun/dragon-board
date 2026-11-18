@@ -203,7 +203,7 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str) -> di
         sub_unique_id=(variant == "uid"),
         ka_mode=("off" if variant in ("kaoff", "uid", "uidcmd") else "610"),
         human_delay=True, auth_phase_delay=5.0, auth_phase_jitter=3.0,
-        loop_send_grace_s=0.0, enforce_trading_hours=False)
+        enforce_trading_hours=False)
     print(f"[s{idx}] variant={variant} items={len(items)} observe={observe_s}s "
           f"dump={dump.name}", flush=True)
     t0 = time.time()

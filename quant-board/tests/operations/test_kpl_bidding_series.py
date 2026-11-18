@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """竞价过程事实序列（kpl_bidding_series）测试——纯假库，零网络零真实 collector。
 
-锁定口径（2026-11-16 用户裁决「页面实时看竞价过程」→ 事实采集落库）：
-1. 单写者=collector 推送即落库（2013/2203 同款），窗 09:15-09:27 门控，
-   窗外结构化拒绝（out_of_window，不猜不补）；
-2. tick 节流 ≥5s（skipped_throttled 非错误）、$slice 400 上限防爆量；
+锁定口径（2026-11-16 事实采集裁决；2026-11-18 用户裁决拆窗门控+节流）：
+1. 单写者=collector 推送即全量落库（§4.0 数据链禁硬门禁），无窗门控无节流；
+   竞价语义窗 [09:15,09:27) 过滤由消费层 derive 承担（计数留痕）；
+2. $slice 存储预算（SERIES_MAX_TICKS，非数据门控）；
 3. tick=压缩行（具名竞价字段短键），不冒充 WzsLinker 试盘字段语义；
 4. 读口派生 first/max/last 观测值（缺字段如实缺失，不补 0）。
 """
@@ -68,12 +68,14 @@ def _in_window(dt: datetime) -> datetime:
     return dt.replace(tzinfo=TZ_SHANGHAI)
 
 
-def test_out_of_window_rejected_no_write():
+def test_out_of_window_now_appended():
+    """2026-11-18 拆窗门控：窗外 tick 同样入档（全量保存，消费层过滤）。
+    旧 out_of_window 拒绝判据作废。"""
     db = FakeSeriesDb()
     r = archive_bidding_series(db, _snap(1000.0),
                                now=_in_window(datetime(2026, 11, 17, 10, 0)))
-    assert r["ok"] is False and r["reason"] == "out_of_window"
-    assert db.docs == {}, "窗外不得写库"
+    assert r["ok"] is True and r["tick_n"] == 1
+    assert "2026-11-17" in db.docs
 
 
 def test_in_window_append_and_compact():
@@ -91,16 +93,18 @@ def test_in_window_append_and_compact():
     assert "quotas" not in it
 
 
-def test_throttle_within_5s_skipped_not_appended():
+def test_no_throttle_consecutive_ticks_all_appended():
+    """2026-11-18 拆节流：相邻 tick（<5s）全部入档——tick 密度=服务器推送
+    密度，不再人为稀释（11-18 与 WZS 对拍失真教训：稀疏采样致 first/last/peak
+    全错）。旧 skipped_throttled 判据作废。"""
     db = FakeSeriesDb()
     t0 = _in_window(datetime(2026, 11, 17, 9, 20))
     archive_bidding_series(db, _snap(1000.0), now=t0)
     r2 = archive_bidding_series(db, _snap(1002.0), now=t0)
-    assert r2.get("skipped") == "throttled" and r2["ok"] is True
-    assert len(db.docs["2026-11-17"]["ticks"]) == 1, "5s 内第二个 tick 不落"
-    # ≥5s → 追加
+    assert r2["ok"] is True and r2.get("skipped") is None
+    assert len(db.docs["2026-11-17"]["ticks"]) == 2, "相邻 tick 全落"
     r3 = archive_bidding_series(db, _snap(1006.0), now=t0)
-    assert r3["ok"] is True and r3["tick_n"] == 2
+    assert r3["ok"] is True and r3["tick_n"] == 3
 
 
 def test_slice_cap_drops_oldest():

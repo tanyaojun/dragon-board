@@ -81,7 +81,6 @@ class ProbeSurfaceCollector(KplCollectorService):
         kw.setdefault("human_delay", True)
         kw.setdefault("auth_phase_delay", 5.0)
         kw.setdefault("auth_phase_jitter", 3.0)
-        kw.setdefault("loop_send_grace_s", 0.0)
         kw.setdefault("enforce_trading_hours", False)
         super().__init__(codec, daban_list_pages=7, **surface, **kw)
         self._variant = variant
@@ -115,7 +114,7 @@ class ProbeSurfaceCollector(KplCollectorService):
         self._emit(KplEvent(type="session_death", ts=time.time(),
                             session=self._session_no, cause=cause,
                             session_s=self._stats["last_session_s"],
-                            err_code=self._session_err_code, sock_dead=self._sock_dead))
+                            err_code=self._session_err_code))
         self._status = "stopped"
 
 
@@ -191,7 +190,6 @@ def run_session(idx: int, variant: str, codec, observe_s: float, tag: str, pool,
         "sessions_n": svc._stats.get("sessions", 0),
         "reconnect": reconnect,
         "err_code": svc._session_err_code,
-        "sock_dead": svc._sock_dead,
         "session_death": [e for e in events if e["type"] == "session_death"],
         "frame_family": frame_family,
         "push_events": {t: sum(1 for e in events if e["type"] == t)

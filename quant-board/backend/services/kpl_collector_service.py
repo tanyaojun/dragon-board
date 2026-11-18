@@ -284,7 +284,6 @@ class KplCollectorService:
         # 2026-11-10 假说判别实验：读循环开始后前 N 秒纯读不发（保活/drain 全部延后），
         # 看杀连时刻落在宽限期内（=setup 打标定时处决）还是宽限期结束时（=循环期发送
         # 触发）。生产经 serve_kpl_socket env KPL_LOOP_SEND_GRACE 传 5；测试传 0。
-        loop_send_grace_s: float = 0.0,
         # 2026-11-10 探针 E1-E4 曾定性「0x40 帧只许 setup 窗口内发送，窗外→1002」——
         # 2026-11-18 源码定案证伪：E1-E4 队列尾同样带 3101 错通道帧，1002 真凶是它
         # 而非时间窗（README §3.7）。inline 保留纯因 App qn0.z() 零节流同款且实弹稳定。
@@ -344,7 +343,6 @@ class KplCollectorService:
         self._human_delay = human_delay
         self._auth_phase_delay = max(0.0, float(auth_phase_delay))
         self._auth_phase_jitter = max(0.0, float(auth_phase_jitter))
-        self._loop_send_grace_s = max(0.0, float(loop_send_grace_s))
         # drain 帧间停顿（实验旋钮）；保活模式。2026-11-18 源码定案默认 none：
         # App 无周期保活（610 仅 userAuth 一次、无 Timer，独立审计 C2 实锤）；
         # off=3001 轮转跑步机（根因①）。历史注：P4「off 更贴 App」是 3 id 小面
@@ -407,7 +405,6 @@ class KplCollectorService:
         self._zt_reason_snap: Dict[str, Dict[str, Any]] = {}   # stock_id → 推送解析 + ts
         self._zt_reason_subscribed: set = set()
         self._pending_zt_reason: List[str] = []
-        self._sock_dead = False   # 会话内 drain 失败门禁（_session 每会话复位）
         # 2026-11-10 重排：daban 家族（21xx/2103/2112/3004/3101）不再在 setup 内联发送，
         # 改为入队由读循环限流续发（_drain_setup_subs）——见 _session 6c 注释
         self._pending_setup_frames: List[Dict[str, Any]] = []
@@ -436,7 +433,6 @@ class KplCollectorService:
         # 状态块非 UnsubIdReq 回声，App qn0.d/q 同款按 seq 从原请求取 subIds）
         self._unsub_seq_ids: Dict[int, List[int]] = {}
         self._unsub_frames_sent = 0   # 会话级 402 帧计数（_session 复位，m6）
-        self._unsub_last_ts = 0.0
         self._zt_reason_lock = threading.Lock()
         # 2013 个股题材库热度推送（2026-11-08 题材龙头语料第 2 项）：与 2203 完全同款
         # 模式——订阅面=涨停池（2103 pid=1）成员自动跟随、无退订、每会话重建订阅
@@ -476,10 +472,9 @@ class KplCollectorService:
             "bdo_ok": 0, "bdo_fail": 0, "bf_ok": 0, "bf_fail": 0,
             "abn_ok": 0, "abn_fail": 0, "rplate_ok": 0, "rplate_fail": 0,
             # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集落库）
-            "bid_series_ok": 0, "bid_series_fail": 0, "bid_series_throttled": 0,
+            "bid_series_ok": 0, "bid_series_fail": 0,
             "last_error": ""}
         # 竞价序列 tick 节流（采集线程内时间戳；窗内每 ≥5s 落一个合并快照 tick）
-        self._bid_series_last_ts: float = 0.0
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
@@ -775,11 +770,6 @@ class KplCollectorService:
         return len(new_ids)
 
     # drain 每 tick 最多发送帧数（2026-11-10 修复 10054 循环）：6g 一次性入队全池成员
-    # ×2 通道 ≈170 帧，原实现零停顿一次性全发——爆发=机器指纹（§3.4 机制），服务器
-    # 在 setup 刚结束时即 RST，drain sendall 撞死 socket → WinError 10054 每会话循环。
-    # 限量+帧间拟人停顿对齐 setup 订阅链已验证安全节奏（0.3+U(0,0.15)s/帧）；余量
-    # 回队头由下一收流 tick 续发（保活/读流不被长时间阻塞）。
-    _DRAIN_TICK_FRAMES = 8
 
     # App ReconnectManager 忠实移植（§15，替换 §14 拍脑袋 2·2^n/<60s/120s）：
     # 退避梯 j={0,1,2,4,8,15,30}s（App j 数组，末项 WorkRequest.DEFAULT_BACKOFF_DELAY=30000），
@@ -828,12 +818,12 @@ class KplCollectorService:
                     lane: str, *, block_pause: bool = False) -> int:
         """订阅帧发送统一出口（drain 四队列共用；2026-11-17 P3）。
 
-        items=[{cmd, req, ext, key?, priority?}]。direct 模式与旧实现逐字节
-        同款（帧序/拟人停顿/enc 回退）；211 模式打包 ≤max_items 项/批信封
-        （item.data 编码按 sub_batch_codec flag，U2 待探针）。发送成功后
-        register 入注册表（P1 单一事实源，替代旧 _resub_cache）。
-        返回已发项数；OSError 附 sent_count 上抛，调用方按各自既有语义
-        置 _sock_dead + fail-visible + 回队/丢弃。"""
+        items=[{cmd, req, ext, key?, priority?, plain?}]。direct 模式逐帧
+        （帧序/拟人停顿/enc 回退）；211 模式打包 ≤max_items 项/批信封。
+        plain 项走 0x30 普通通道不入注册表（3101，README §3.7）。发送成功后
+        register 入注册表（P1 单一事实源）。返回已发项数；OSError 附
+        sent_count 上抛，调用方 fail-visible 后 fail-fast 结束会话重连
+        （2026-11-18 拆 _sock_dead 静默门禁）。"""
         sent = 0
         try:
             direct_items = list(items)
@@ -995,14 +985,14 @@ class KplCollectorService:
         """发送待发 setup 订阅帧（daban 家族 21xx/2103/2112/3004/3101，2026-11-10 重排）。
 
         历史注：当年「setup 结束后 ~1s 被上游 RST」的误归因已证伪——真凶=队列尾
-        3101 错用 0x40 通道（README §3.7，2026-11-18 源码定案）。重排架构保留：
-        daban 家族由读循环限流续发（8 帧/tick + 拟人停顿）；sendall 失败置
-        _sock_dead（同 2203/2013 门禁），未发帧本会话丢失，下一会话重建。
+        3101 错用 0x40 通道（README §3.7，2026-11-18 源码定案）。2026-11-18 拆
+        门控：整队一次发完（帧间拟人停顿保留）；sendall 失败 fail-fast 结束会话
+        重连重建（拆 _sock_dead）；inline 模式循环期不再静默（新入池成员续发）。
         plain 项（3101）必须透传（独立 review blocker-1：丢键=杀连帧型复活）。"""
-        if self._sock_dead or self._setup_inline_subs or not self._pending_setup_frames:
-            return   # inline 模式循环期静默（「窗外 0x40=1002」已证伪，README §3.7；保留=App 连接后一次性全发同款）
-        batch = self._pending_setup_frames[:self._DRAIN_TICK_FRAMES]
-        self._pending_setup_frames = self._pending_setup_frames[self._DRAIN_TICK_FRAMES:]
+        if not self._pending_setup_frames:
+            return
+        batch = self._pending_setup_frames   # 2026-11-18 拆 8 帧/tick 限流：整队一次发完
+        self._pending_setup_frames = []
         items = [{"cmd": it["cmd"], "req": it["req"], "ext": it["ext"],
                   "priority": it.get("priority"),
                   "key": it.get("key"), "lane": it.get("lane"),
@@ -1013,17 +1003,16 @@ class KplCollectorService:
             self._drain_send(sock, next_seq, items, "setup")
         except OSError as exc:
             sent = getattr(exc, "sent_count", 0)
-            self._sock_dead = True
             dropped = len(batch) - sent + len(self._pending_setup_frames)
             self._stats["setup_send_drops"] = self._stats.get("setup_send_drops", 0) + dropped
             fail_cmd = items[min(sent, len(items) - 1)]["cmd"] if items else 0
             self._err(f"setup subscribe send failed (cmd={fail_cmd}): {exc} "
-                      f"(sent={sent} dropped={dropped}, next-session rebuild)")
+                      f"(sent={sent} dropped={dropped}, fail-fast reconnect)")
             self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
                                 lane="setup", cmd=fail_cmd,
                                 sent=sent, dropped=dropped, session=self._session_no,
                                 error=str(exc)))
-            return
+            raise   # 2026-11-18 拆 _sock_dead：send 失败=连接已死，结束会话重连重建
         # 队深观测随 drain 递减（评审 P2：否则 status 读到的是会话初队深非当前队深）
         self._stats["queued_setup_subs"] = len(self._pending_setup_frames)
 
@@ -1043,39 +1032,33 @@ class KplCollectorService:
         return v
 
     def _drain_zt_reason_subs(self, sock: Any, next_seq: Any) -> None:
-        """发送待订阅 2203 帧（仅会话线程调用；异常 fail-visible 不杀会话）。
-
-        2026-11-10 修复：限流+拟人停顿（见 _DRAIN_TICK_FRAMES 注释）；sendall 失败
-        → 置 _sock_dead 本会话后续 drain 静默跳过（死 socket 重试只会刷错误），
-        未发帧本会话丢失，下一会话 6g 全量补订自愈（2026-11-08 评审 P2 不变）。"""
-        if not self._zt_reason_subs or self._sock_dead or self._setup_inline_subs:
-            return   # 2026-11-10 时序竞争修复：不再让路 daban 页队列（2203 优先，见读循环注释）
+        """发送待订阅 2203 帧（仅会话线程调用）。2026-11-18 拆门控：整队一次
+        发完（帧间拟人停顿保留）；sendall 失败 fail-visible 后 fail-fast 结束
+        会话重连，下一会话 6g 全量补订自愈。"""
+        if not self._zt_reason_subs:
+            return
         with self._zt_reason_lock:
             pending = list(self._pending_zt_reason)
             self._pending_zt_reason = []
         if not pending:
             return
-        batch, rest = pending[:self._DRAIN_TICK_FRAMES], pending[self._DRAIN_TICK_FRAMES:]
-        if rest:
-            with self._zt_reason_lock:
-                self._pending_zt_reason[:0] = rest   # 回队头保序，下一 tick 续发
+        batch = pending   # 2026-11-18 拆 8 帧/tick 限流：整队一次发完（帧间拟人停顿保留）   # 回队头保序，下一 tick 续发
         items = [{"cmd": proto.CMD_HQ_REASONS, "req": proto.build_hq_req_pb(sid),
                   "ext": self._stock_sub_ext(proto.CMD_HQ_REASONS), "key": sid} for sid in batch]
         try:
             self._drain_send(sock, next_seq, items, "zt_reason")
         except OSError as exc:
             sent = getattr(exc, "sent_count", 0)
-            self._sock_dead = True
-            dropped = len(batch) - sent + len(rest)
+            dropped = len(batch) - sent
             self._stats["zt_reason_send_drops"] = self._stats.get("zt_reason_send_drops", 0) + dropped
             fail_sid = batch[min(sent, len(batch) - 1)] if batch else ""
             self._err(f"2203 subscribe send failed ({fail_sid}): {exc} "
-                      f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
+                      f"(sent={sent} dropped={dropped}, fail-fast reconnect)")
             self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
                                 lane="zt_reason", cmd=proto.CMD_HQ_REASONS,
                                 sent=sent, dropped=dropped, session=self._session_no,
                                 error=str(exc)))
-            return
+            raise   # 2026-11-18 拆 _sock_dead：send 失败=结束会话重连重建
 
     def _queue_detail_new(self, stock_ids: List[str]) -> int:
         """四通道新入池成员入队订阅（去重；会话线程 drain 块发）。开关关 → 零动作。
@@ -1124,36 +1107,32 @@ class KplCollectorService:
         return len(new_ids)
 
     def _drain_theme_subs(self, sock: Any, next_seq: Any) -> None:
-        """发送待订阅 2013 帧（与 _drain_zt_reason_subs 同款限流/拟人/失败门禁：
-        send 失败置 _sock_dead 静默，未发帧下一会话 6g 全量补订自愈）。"""
-        if not self._theme_subs or self._sock_dead or self._setup_inline_subs:
-            return   # 同 2203：不再让路 daban 页队列（2013 优先）
+        """发送待订阅 2013 帧（与 _drain_zt_reason_subs 同款：整队一次发完，
+        send 失败 fail-fast 重连，下一会话 6g 全量补订自愈）。"""
+        if not self._theme_subs:
+            return
         with self._theme_lock:
             pending = list(self._pending_theme)
             self._pending_theme = []
         if not pending:
             return
-        batch, rest = pending[:self._DRAIN_TICK_FRAMES], pending[self._DRAIN_TICK_FRAMES:]
-        if rest:
-            with self._theme_lock:
-                self._pending_theme[:0] = rest
+        batch = pending   # 2026-11-18 拆 8 帧/tick 限流：整队一次发完（帧间拟人停顿保留）
         items = [{"cmd": proto.CMD_STOCK_RELATED_THEME, "req": proto.build_hq_req_pb(sid),
                   "ext": self._stock_sub_ext(proto.CMD_STOCK_RELATED_THEME), "key": sid} for sid in batch]
         try:
             self._drain_send(sock, next_seq, items, "theme")
         except OSError as exc:
             sent = getattr(exc, "sent_count", 0)
-            self._sock_dead = True
-            dropped = len(batch) - sent + len(rest)
+            dropped = len(batch) - sent
             self._stats["theme_send_drops"] = self._stats.get("theme_send_drops", 0) + dropped
             fail_sid = batch[min(sent, len(batch) - 1)] if batch else ""
             self._err(f"2013 subscribe send failed ({fail_sid}): {exc} "
-                      f"(sent={sent} dropped={dropped}, next-session 6g resubscribe)")
+                      f"(sent={sent} dropped={dropped}, fail-fast reconnect)")
             self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
                                 lane="theme", cmd=proto.CMD_STOCK_RELATED_THEME,
                                 sent=sent, dropped=dropped, session=self._session_no,
                                 error=str(exc)))
-            return
+            raise   # 2026-11-18 拆 _sock_dead：send 失败=结束会话重连重建
 
     # 详情四通道发送语义（2026-11-11 探针 K1/K3/I1 定案）：服务器对 detail 订阅的
     # 响应是「静默期 flush」——订阅帧连续发送期间零响应，发送停止后 <1s 内全量
@@ -1178,11 +1157,11 @@ class KplCollectorService:
         """发送待订阅详情四通道帧。2026-11-11 块发语义（探针 K1/K3/I1 定案的静默期
         flush 合同）：一次调用发完整个 pending 队列（块），随后读循环不再发 detail
         帧（新入池成员的小块同理）→ 服务器静默期触发全量批回。与 _drain_zt_reason_subs
-        同款失败门禁：send 失败置 _sock_dead 静默，未发帧下一会话 6g 全量补订自愈。
-        setup_inline_subs=True 时本函数永久早退，改由 6h 处 _flush_pending_inline
-        在 setup 内联发送（「窗外 0x40=1002」的 E1-E4 结论已证伪：真凶=3101 错通道，
-        README §3.7）。"""
-        if not self._stock_detail_subs or self._sock_dead or self._setup_inline_subs:
+        send 失败 fail-fast 结束会话重连，下一会话 6g 全量补订自愈。
+        setup_inline_subs=True 时 setup 队列已由 6h _flush_pending_inline 内联
+        发完；循环期新入池成员仍由本函数续发（2026-11-18 拆 inline 循环期静默，
+        App 屏 onResume 随时可发订阅）。"""
+        if not self._stock_detail_subs:
             return
         for lane, cmd in self._detail_lane_cmds.items():
             with self._detail_locks[lane]:
@@ -1195,7 +1174,6 @@ class KplCollectorService:
                                  block_pause=True)
             except OSError as exc:
                 sent = getattr(exc, "sent_count", 0)
-                self._sock_dead = True
                 rest = batch[sent:]
                 with self._detail_locks[lane]:
                     self._pending_detail[lane][:0] = rest
@@ -1203,12 +1181,12 @@ class KplCollectorService:
                     self._stats.get("detail_send_drops", 0) + len(rest)
                 fail_sid = batch[min(sent, len(batch) - 1)] if batch else ""
                 self._err(f"detail {lane} subscribe send failed ({fail_sid}): {exc} "
-                          f"(sent={sent} dropped={len(rest)}, next-session 6g resubscribe)")
+                          f"(sent={sent} dropped={len(rest)}, fail-fast reconnect)")
                 self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
                                     lane=lane, cmd=cmd, sent=sent,
                                     dropped=len(rest), session=self._session_no,
                                     error=str(exc)))
-                return
+                raise   # 2026-11-18 拆 _sock_dead：send 失败=结束会话重连重建
 
     def get_lhb_realtime(self) -> Dict[str, Any]:
         """3004/3101 RealtimeLHB 快照读口（task-4）：空帧抑制后最新非空帧。
@@ -1351,7 +1329,6 @@ class KplCollectorService:
             "last_setup_s": self._stats.get("last_setup_s", 0.0),
             "last_session_s": self._stats.get("last_session_s", 0.0),
             "auth_phase_delay": self._auth_phase_delay,
-            "loop_send_grace_s": self._loop_send_grace_s,
             # 重连螺旋防线观测（2026-11-10）：连续短命会话退避秒数 + 当前连击数
             "reconnect_backoff_s": self._stats.get("reconnect_backoff_s"),
             "retry_fail_count": self._retry_fail_count,
@@ -1453,8 +1430,8 @@ class KplCollectorService:
         网络/auth/反作弊失败，供隔离探针（README §3.4 爆发指纹议题）与**死因感知
         退避**（§14，App ReconnectManager 对齐）提供实证底座。
 
-        判据优先级：异常类型/winerror → 本会话 ErrResp code → drain send 失败门禁 →
-        setup 早退 → 干净 EOF。10054=服务器 RST；1106/1002=ErrResp 杀连；2008=明文
+        判据优先级：异常类型/winerror → 本会话 ErrResp code →
+        setup 早退 → 干净 EOF。（drain send 失败已改 fail-fast 上抛，走异常分类。）10054=服务器 RST；1106/1002=ErrResp 杀连；2008=明文
         211 lethal；eof_clean=无错误码服务器关连（干净轮换）。历史注：「爆发指纹主导」
         归因已证伪（10054=3001 跑步机超支、1002=3101 错通道，README §3.7）。
         """
@@ -1475,8 +1452,6 @@ class KplCollectorService:
         code = self._session_err_code
         if code is not None:
             return f"errresp_{code}"
-        if self._sock_dead:
-            return "send_dead"
         if not self._session_streaming:
             return "setup_fail"
         return "eof_clean"
@@ -1618,7 +1593,7 @@ class KplCollectorService:
                                     session=self._session_no, cause=cause,
                                     session_s=self._stats["last_session_s"],
                                     err_code=self._session_err_code,
-                                    sock_dead=self._sock_dead))
+                                    ))
             # App ReconnectManager 忠实移植（§15，替换 §14 拍脑袋 2·2^n/<60s/120s）：
             # backoff = 梯[min(fail,6)]±20% + server_extra；fail++；健康长会话(>=60s)归零。
             # server_extra：服务端主动断开(rst_10054/errresp_*) +3s；从未 auth(未 streaming)
@@ -1706,7 +1681,6 @@ class KplCollectorService:
 
         sock = self._tls_connect()
         self._rx = bytearray()   # 新会话新流：残帧缓冲必须清零
-        self._sock_dead = False  # 新会话新 socket：drain 失败门禁复位
         self._session_err_code = None   # 死因观测：本会话 ErrResp code 复位
         self._session_streaming = False  # 死因观测：收流标志复位
         # 分波订阅：上会话未释放波次随会话作废（下会话重建；fail-visible 计数）
@@ -2091,8 +2065,6 @@ class KplCollectorService:
             auth_frame_cache = [None]
             hb_flip = [0]
             # 宽限期（2026-11-10 假说判别）：期首只读不发；结束时结构化打点（fail-visible）
-            t_loop = time.time()
-            grace_end_fired = [False]
             while not self._stop.is_set():
                 try:
                     fr = self._read_frame(sock)
@@ -2104,22 +2076,8 @@ class KplCollectorService:
                     self._err(f"session#{self._session_no} closed by server")
                     return
                 now = time.time()
-                in_grace = (now - t_loop) < self._loop_send_grace_s
-                if not in_grace and not grace_end_fired[0] and self._loop_send_grace_s > 0:
-                    grace_end_fired[0] = True
-                    self._stats["grace_end_pending"] = [len(self._pending_setup_frames),
-                                                        len(self._pending_zt_reason),
-                                                        len(self._pending_theme)]
-                    self._emit(KplEvent(type="status", ts=time.time(), status="loop_grace_end",
-                                        session=self._session_no,
-                                        pending=[len(self._pending_setup_frames),
-                                                 len(self._pending_zt_reason),
-                                                 len(self._pending_theme)]))
-                if in_grace:
-                    if fr == "timeout":
-                        continue
-                    self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
-                    continue
+                # 2026-11-18 用户裁决拆门控：loop_send_grace 5s 纯读宽限拆除——
+                # App qn0.z() 连接/auth 后即发订阅，无宽限期。
                 if self._ka_mode != "none" and now - last_keepalive > 1:
                     # 保活交替: 每 8 tick 一次 610 AuthReq 原样重发（签名绑定初始
                     # challenge/curTime）/ 其余 tick 3001 分块轮询（下一块）
@@ -2186,7 +2144,7 @@ class KplCollectorService:
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)
                 self._drain_setup_subs(sock, next_seq)
-                self._drain_unsub(sock, next_seq)   # 402 退订（flag 门控，≤1 帧/tick）
+                self._drain_unsub(sock, next_seq)   # 402 退订（flag 门控；防抖已拆，整队分块发）
                 if fr == "timeout":
                     continue
                 self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
@@ -2364,7 +2322,6 @@ class KplCollectorService:
 
     # ---- 402 退订（2026-11-17 P2，flag 门控默认关；探针 P3 钉死前不启用）----
 
-    _UNSUB_DEBOUNCE_S = 5.0   # 变更防抖（频控预算 §5：≤1 帧/tick、≥5s 间隔）
     _UNSUB_MAX_IDS = 20       # 单帧 subIds 上限（超出下一帧续发）
     _UNSUB_MAX_FRAMES = 20    # 会话级 402 帧预算上限（方案 §5，review m6；off 长寿会话防超）
 
@@ -2375,7 +2332,7 @@ class KplCollectorService:
         （3001/3006）不参与 diff（新帧覆盖语义）。只取 sub_id 已回填条目
         （服务端未分配 subId 无法按 id 退订，留待会话重建自然失效）。
         空帧抑制保旧页 → keep 面保守偏大，不误退（fail-visible 由 stats 承载）。"""
-        if not self._unsub_enabled or self._sock_dead:
+        if not self._unsub_enabled:
             return
         keep = set(self._pool_stock_ids())
         lanes: List[Tuple[str, int]] = [
@@ -2458,40 +2415,36 @@ class KplCollectorService:
             self._stats["staged_released_n"] = self._stats.get("staged_released_n", 0) + released
 
     def _drain_unsub(self, sock: Any, next_seq: Any) -> None:
-        """发送 402/pkg 0x50 UnsubIdReq 退订帧（≤1 帧/tick，防抖 ≥5s）。
-        inline 模式不发（保守门禁；「0x40 窗口」动机已证伪，README §3.7，
-        0x50 退订帧 App 随时可发——重启用循环期退订需重评估）。"""
-        if (not self._unsub_enabled or self._sock_dead or self._setup_inline_subs
-                or not self._pending_unsub):
+        """发送 402/pkg 0x50 UnsubIdReq 退订帧。2026-11-18 用户裁决拆防抖：
+        整队按单帧协议上限（_UNSUB_MAX_IDS）分块一次发完，无 ≥5s 间隔/≤1 帧/tick
+        限制（App 屏 onPause 即发 402，无防抖）；会话级帧预算（红线 10 频控预算）
+        保留。send 失败 fail-fast 结束会话重连。"""
+        if not self._unsub_enabled or not self._pending_unsub:
             return
-        if self._unsub_frames_sent >= self._UNSUB_MAX_FRAMES:
-            return   # 会话级帧预算耗尽（m6）；余量留待下一会话重建
-        now = time.time()
-        if now - self._unsub_last_ts < self._UNSUB_DEBOUNCE_S:
-            return
-        ids = self._pending_unsub[:self._UNSUB_MAX_IDS]
-        self._pending_unsub = self._pending_unsub[self._UNSUB_MAX_IDS:]
-        req = proto.build_unsub_id_req_pb(ids)
-        enc = self._codec.enc(req)
-        unsub_seq = next_seq()
-        frame = proto.build_frame(proto.CMD_UNSUB, unsub_seq, enc or req, d=0,
-                                  encrypted=bool(enc), pkg=proto.PKG_UNSUB)
-        self._dbg("C", frame)
-        try:
-            sock.sendall(frame)
-        except OSError as exc:
-            self._sock_dead = True
-            self._pending_unsub[:0] = ids   # 回队头，下一会话重建兼底
-            self._err(f"402 unsub send failed: {exc}")
-            self._emit(KplEvent(type="sub_unsub_dropped", ts=time.time(),
-                                sub_ids=ids, session=self._session_no, error=str(exc)))
-            return
-        self._unsub_last_ts = now
-        self._unsub_frames_sent += 1
-        self._unsub_seq_ids[unsub_seq] = list(ids)   # kind5 ack 按 seq 回填 subIds
-        self._stats["unsub_sent_n"] = self._stats.get("unsub_sent_n", 0) + 1
-        self._emit(KplEvent(type="sub_unsub", ts=time.time(), sub_ids=ids,
-                            session=self._session_no))
+        while self._pending_unsub:
+            if self._unsub_frames_sent >= self._UNSUB_MAX_FRAMES:
+                return   # 会话级帧预算耗尽（m6，频控预算非门控）；余量下一会话重建
+            ids = self._pending_unsub[:self._UNSUB_MAX_IDS]
+            self._pending_unsub = self._pending_unsub[self._UNSUB_MAX_IDS:]
+            req = proto.build_unsub_id_req_pb(ids)
+            enc = self._codec.enc(req)
+            unsub_seq = next_seq()
+            frame = proto.build_frame(proto.CMD_UNSUB, unsub_seq, enc or req, d=0,
+                                      encrypted=bool(enc), pkg=proto.PKG_UNSUB)
+            self._dbg("C", frame)
+            try:
+                sock.sendall(frame)
+            except OSError as exc:
+                self._pending_unsub[:0] = ids   # 回队头留痕（会话即将结束重建）
+                self._err(f"402 unsub send failed: {exc}")
+                self._emit(KplEvent(type="sub_unsub_dropped", ts=time.time(),
+                                    sub_ids=ids, session=self._session_no, error=str(exc)))
+                raise   # 2026-11-18 拆 _sock_dead：fail-fast 重连
+            self._unsub_frames_sent += 1
+            self._unsub_seq_ids[unsub_seq] = list(ids)   # kind5 ack 按 seq 回填 subIds
+            self._stats["unsub_sent_n"] = self._stats.get("unsub_sent_n", 0) + 1
+            self._emit(KplEvent(type="sub_unsub", ts=time.time(), sub_ids=ids,
+                                session=self._session_no))
 
     def _dispatch(self, fr: Dict[str, Any], *, sender: Any = None, next_seq: Any = None) -> None:
         if fr.get("fmt") == "heartbeat":
@@ -2711,22 +2664,13 @@ class KplCollectorService:
                 except (TypeError, ValueError):
                     pass
                 if int(data.get("pid_type", 0) or 0) == 8 and new_items:
-                    # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集）。
-                    # 推送即落库（单写者先例）；采集线程内 ≥5s 节流（≥300 tick/窗），
-                    # 窗门控双层：此处 09:15-09:27 粗门（09:15=集合竞价起点，09:00
-                    # 门禁后盘前会话爆发会推昨日终态页——防陈旧态入档污染 first
-                    # 基线；09:27=冻结+2min，防连续竞价 regime），归档函数再细门
-                    # （fail-visible）；失败不阻断收流（fail-visible 进 corpus_persist_stats）。
+                    # 竞价过程事实序列（2026-11-16 事实采集裁决；2026-11-18 用户裁决
+                    # 拆窗门控+节流）：pid=8 推送即全量落库，无 09:15-09:27 粗门、无
+                    # ≥5s 节流（§4.0 数据链禁硬门禁：全量保存；竞价语义窗过滤由消费层
+                    # derive_trial_rows_from_series 自带 [09:15,09:27) tick 过滤 +
+                    # early/lateTicksFiltered 计数承担）。失败不阻断收流。
                     try:
-                        now_dt = datetime.datetime.now()
-                        hm = now_dt.hour * 60 + now_dt.minute
-                        if not (9 * 60 + 15 <= hm < 9 * 60 + 27):
-                            pass   # 窗外：静默跳过（归档层亦门控，不计数不告警）
-                        elif time.time() - self._bid_series_last_ts < 5.0:
-                            self._corpus_persist_stats["bid_series_throttled"] += 1
-                        else:
-                            self._bid_series_last_ts = time.time()
-                            self._persist_corpus("bid_series", self.get_daban_list(8))
+                        self._persist_corpus("bid_series", self.get_daban_list(8))
                     except Exception as exc:   # noqa: BLE001 — 落库失败不阻断收流
                         self._corpus_persist_stats["bid_series_fail"] = \
                             self._corpus_persist_stats.get("bid_series_fail", 0) + 1

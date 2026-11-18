@@ -303,12 +303,13 @@ def archive_dt_snapshot(db: Any, snapshot: dict[str, Any], *, now: Optional[date
 # 单写者=collector（:8002）推送即落库先例（2013/2203 同款）；独立集合（与
 # kpl_daban_pool bid_ 通道的「终态覆盖」单一事实源并存，序列=过程事实、bid_=终态）。
 _SERIES_COLLECTION = "kpl_bidding_series"
-SERIES_WINDOW = (dtime(9, 15), dtime(9, 27))   # 采集窗：09:15 集合竞价起点 → 09:25 冻结+2min
-#   （11-17 两教训：① 窗收 09:35 混入连续竞价 regime 污染末帧（selectedN 1→0 实证）；
-#   ② 交易门禁改 09:00 后，盘前会话爆发会推昨日终态页——窗起 09:15 防陈旧态
-#   污染 first 基线；09:10-09:15 无竞价数据，原「预热」窗本就空转）
-SERIES_MIN_INTERVAL_S = 5.0                     # tick 节流：≥5s（17min 窗 ≤204 tick）
-SERIES_MAX_TICKS = 400                          # $slice 上限（防异常刷屏撑爆日档）
+SERIES_WINDOW = (dtime(9, 15), dtime(9, 27))   # 竞价语义窗（元数据）：09:15 集合竞价起点 → 09:25 冻结+2min
+#   2026-11-18 用户裁决拆采集窗门控：本常量仅作日档 window 元数据与消费层语义
+#   参照（derive_trial_rows_from_series 自带同窗 tick 过滤+计数）；采集层全量
+#   落库不再以此为门（§4.0 数据链禁硬门禁）。
+SERIES_MAX_TICKS = 1200                         # $slice 存储预算（非数据门控）：拆节流后全日
+#   tick 入档，1200×~10KB≈12MB < 16MB BSON 上限；旧 400 上限在拆节流后会把竞价窗
+#   早帧挤出（$slice 保尾），故扩容保竞价基线。
 _SERIES_FIELDS = ("bidding_pct", "bidding_amount", "bidding_net", "bidding_turnover",
                   "zt_buy_amount", "price", "pct", "real_float")
 
@@ -316,16 +317,13 @@ _SERIES_FIELDS = ("bidding_pct", "bidding_amount", "bidding_net", "bidding_turno
 def archive_bidding_series(db: Any, snapshot: dict[str, Any], *, now: Optional[datetime] = None) -> dict[str, Any]:
     """竞价过程事实序列追加（collector 推送即落库，单写者；append-only tick）。
 
-    - 窗门控：仅 09:10-09:35（CST）追加；窗外结构化拒绝（out_of_window，不猜不补）；
-    - 节流：距上一 tick <5s → skipped_throttled（非错误，fail-visible 计数）；
-    - tick 内容 = 合并快照压缩行（仅具名竞价字段短键，不全量 quotas，控量 ≤6MB/日）；
-    - fail-visible：空快照/无日期结构化拒绝；$slice 上限内追加。
+    2026-11-18 用户裁决拆门控：无窗门控、无节流——pid=8 推送全量入档（§4.0
+    数据链禁硬门禁）；竞价语义窗 [09:15,09:27) 过滤由消费层
+    derive_trial_rows_from_series 承担（early/lateTicksFiltered 计数留痕）。
+    - tick 内容 = 合并快照压缩行（仅具名竞价字段短键，不全量 quotas）；
+    - fail-visible：空快照/无日期结构化拒绝；$slice 存储预算内追加。
     """
     now = now or datetime.now(TZ_SHANGHAI)
-    if not (SERIES_WINDOW[0] <= now.time() < SERIES_WINDOW[1]):
-        return {"ok": False, "reason": "out_of_window",
-                "window": [str(SERIES_WINDOW[0]), str(SERIES_WINDOW[1])],
-                "now": now.isoformat(timespec="seconds")}
     date = str(snapshot.get("date") or "")
     items = [it for it in (snapshot.get("items") or []) if isinstance(it, dict)]
     if not date or not items:
@@ -338,9 +336,6 @@ def archive_bidding_series(db: Any, snapshot: dict[str, Any], *, now: Optional[d
                    for it in items]}
     prev = db[_SERIES_COLLECTION].find_one({"_id": date}) or {}
     ticks = prev.get("ticks") or []
-    if ticks and (tick["ts"] - float(ticks[-1].get("ts") or 0)) < SERIES_MIN_INTERVAL_S:
-        return {"ok": True, "skipped": "throttled", "date": date,
-               "tick_n": len(ticks), "last_age": round(tick["ts"] - float(ticks[-1].get("ts") or 0), 1)}
     db[_SERIES_COLLECTION].update_one(
         {"_id": date},
         {"$push": {"ticks": {"$each": [tick], "$slice": -SERIES_MAX_TICKS}},
@@ -1478,6 +1473,20 @@ class DabanPoolArchiver:
                         results["notice"]["plan_reason"] = plan.get("reason")
             except Exception as error:
                 results["notice"] = {"ok": False, "reason": f"archive_failed:{error}"}
+            # 试盘昨涨幅落库（2026-11-18 用户裁决「昨涨幅需落库」）：TDX 日线每轮限量
+            # 懒取（频控预算/退避/日上限见 trial_quote_supplement 头注释，§1.2-9）；
+            # 单写者=本服务；宇宙=当日序列∪MBL，无宇宙零外呼 skip。
+            try:
+                if os.environ.get("KPL_PREV_PCT_ENABLED", "1") == "0":
+                    results["prevPct"] = {"ok": True, "note": "disabled"}
+                else:
+                    from backend.services.market.trial_quote_supplement import (
+                        collect_prev_day_pct)
+                    results["prevPct"] = await asyncio.to_thread(
+                        collect_prev_day_pct, self._database_factory(),
+                        _ctx_now.date().isoformat())
+            except Exception as error:  # noqa: BLE001 单通道失败不阻断
+                results["prevPct"] = {"ok": False, "reason": f"archive_failed:{error}"}
             # 监管风险语料（2026-11-15 预登记）：HTTP 非推送型 → 本服务单写者；交易日
             # 17:00 收盘槽后每日一次（17:30 题材投喂 / 次日 09:26 竞价投喂消费；
             # 16:10 竞价结局回填消费 T−1 槽）。频控预算 §1.2-9：5 发/日、无重试（部分失败
