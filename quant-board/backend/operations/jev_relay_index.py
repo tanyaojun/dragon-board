@@ -8,7 +8,7 @@
   总账（不含 THS 交叉分布）→ 大盘指数 → 今日炸板面 → 反包修复 → 弱转强参照（仅昨日分区+结构预检）
   → 晋级断板（含钱效 20 日分位）→ 梯队量化（含昨日分层）→ 三日链 → 题材演化
   → 题材事件（仅命中，v10）→ 板块接力链（三日；主线结论/同桶基线 v10 撤出，struct 保留）
-  → 高位股多日轨迹 → 题材梯队表（仅龙一，v10）→ 龙头结构（含标签）→ 龙头档案（位置/板序/板型）
+  → 高位股多日轨迹 → 题材梯队表（龙一/二/三，v11 补遗恢复）→ 龙头结构（含标签）→ 龙头档案（位置/板序/板型）
   → 近10日轨迹（无摆动锚，v10）→ 近20日参照锚（含分位刻度）→ 市场情绪周期 → 昨日相位
 - 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v11）
 - 存储：hotlist_jev_relay_index，_id={date}:RELAY；幂等跳过 status=ok
@@ -810,7 +810,8 @@ def high_position_trajectory_lines(db: Any, date: str, dataset_id: str = DEFAULT
 
 def theme_ladder_lines(db: Any, date: str, top: int = 5,
                        mainline: str | None = None) -> list[str]:
-    """top5 题材：龙一（day desc, time asc；v10 只留龙一，龙二/三与板内标签聚合撤出）。
+    """top5 题材：龙一/二/三（高度优先/封板时间次之；v11 补遗裁决 a 恢复龙二/三，
+    推翻 v10 B3 删除；板内标签聚合仍撤出）。
 
     2026-10-16 口径修正（用户报「其他板块龙一语料写成10板，应写14天10板」）：龙序仍按
     区间高度 M 排（14天10板 本就是该板块最显高位股），但文案补「N天M板」+ 真连板数——
@@ -852,9 +853,11 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5,
                 # 锚定日个别板块不在龙一台账（无龙头行/空间缺料跳过）：逐板块注记回退，
                 # 不吃掉表头的全局锚定声明（P2-11 评审）
                 board_fallback_note = "·龙一档缺该板块"
-        # v10：relay 侧只留龙一（8 题判据不消费龙二/三；题材链自有完整龙序供给）
+        # v11 补遗（2026-11-18 用户裁决 a，推翻 v10 B3 删除）：恢复龙二/三——龙一未封日
+        # 实际封板身位披露 + 板内深度结构参照；与前端领涨列同构（dragon_rows 单源）。
+        # 板内标签聚合仍撤出（theme_pulse 孤儿字段，题材链自有供给）。
         dragons = []
-        for i, d in enumerate(dragons_rows[:1], 1):
+        for i, d in enumerate(dragons_rows[:3], 1):
             code = d.get("code")
             st = d.get("streak")
             if d.get("ledgerUnsealed"):

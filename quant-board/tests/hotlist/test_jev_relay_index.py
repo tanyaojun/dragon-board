@@ -529,7 +529,7 @@ def test_ladder_structure_first_board_pct_no_prev_no_fake():
 
 def test_theme_ladder_lines_dragon_order():
     """题材梯队：高度优先、封板时间次之；区间文案「N天M板」+ 真连板（2026-10-16 口径）。
-    v10 B3：relay 侧只留龙一；龙二/三与新鲜/延续/驱动主类打标撤出（题材链自有供给）。"""
+    v11 补遗（裁决 a）：恢复龙二/三（推翻 v10 B3）；板内标签聚合仍撤出。"""
     db = _db()
     db.cols["hotlist_jev_driver_labels"] = FakeCol([
         {"tradingDate": _D0, "status": "ok", "code": "600001", "label": "product_event",
@@ -539,7 +539,9 @@ def test_theme_ladder_lines_dragon_order():
     # 妖股 16天8板：龙序仍按区间 M 居首，但文案补跨度与真连板（昨日不在池 → 连板1板）
     assert any("龙一 E(16天8板" in x for x in lines)
     assert any("连板1板" in x for x in lines)
-    assert "龙二" not in text and "龙三" not in text
+    # v11 补遗：龙二恢复（D0 板块A 仅 2 只 → 龙二 A 4天4板，龙三自然缺席）
+    assert "龙二 A(4天4板" in text
+    assert "龙三" not in text   # 信息量门槛：2 只板块不出龙三
     assert "新鲜" not in text and "驱动主类" not in text and "无标签" not in text
     assert "龙一=板块节点空间龙一档" not in text   # v10 A2：口径图例删
     # D0 五只全部有板数（600005 16天8板 / 600001 4天4板），无首板股——不断言首板，
@@ -2043,11 +2045,12 @@ def test_v10_full_narrative_hygiene_and_slim_lock(monkeypatch):
     for gone in ("待落库", "候选池含停牌复牌未分辨", "龙一=板块节点空间龙一档",
                  "同桶隔日连板基线", "主线板块：", "龙头档案：", "摆动锚",
                  "历史基线", "一日游为主", "驱动主类", "（交叉 ",
-                 "板块级催化", "无匹配", "龙二", "龙三"):
+                 "板块级催化", "无匹配"):
         assert gone not in narrative, gone
     # 保留事实：结构预检/反包率/归因分布/龙一/总龙头/昨日相位轴
     assert "反包修复：" in narrative and "晋级与断板：" in narrative
     assert "题材梯队表：" in narrative and "龙一" in narrative
+    assert "龙二" in narrative   # v11 补遗：龙二/三恢复（甲板块 2 只 → 龙二在场）
     assert "总龙头" in narrative and "板块接力链（三日" in narrative
     assert "连板轨迹（含今日" in narrative
 
@@ -2122,6 +2125,29 @@ def test_v10_ladder_anchor_fallback_notes(monkeypatch):
     text = "\n".join(theme_ladder_lines(db, _D0))
     assert "·龙一档缺该板块" in text
     assert "龙序回退区间高度口径" not in text and "·龙一档缺失" not in text
+
+
+def test_v11_ladder_restores_dragon_two_three(monkeypatch):
+    """v11 补遗（裁决 a）：龙二/三恢复——龙一未封（重锚合成行）时龙二/三=实际封板身位；
+    单股板块自然只出龙一（信息量门槛，不补占位）。"""
+    from backend.operations import sector_nodes as SN
+    db = _db()
+    # 台账龙一=不在今日池的断板反包候选（合成行）→ 龙二/三由 dragon_rows 补位
+    monkeypatch.setattr(SN, "ledger_leaders", lambda *a, **k: {
+        "板块A": {"code": "600009", "name": "旧龙", "streak": 5, "time": "09:30",
+                  "leaderSealedToday": False}})
+    text = "\n".join(theme_ladder_lines(db, _D0))
+    assert "龙一 旧龙(断板反包·今日未封" in text
+    assert "龙二 E(16天8板" in text and "龙三 A(4天4板" in text
+    # 单股板块：只出龙一，龙二/三缺席（不补占位）——先撤台账 mock 走真实缺档路径
+    monkeypatch.undo()
+    db2 = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final(_D2, _STOCKS[_D2]), _final(_D1, _STOCKS[_D1]),
+                                  _final(_D0, [{"code": "600005", "name": "E", "num": "16天8板"}])]),
+    })
+    text2 = "\n".join(theme_ladder_lines(db2, _D0))
+    assert "龙一 E(16天8板" in text2 and "龙二" not in text2
 
 
 # ── v11 匹配度修复专项（2026-11-17 审计裁决，预注册 relay-v11-match-fix-preregistration-20261117.md）──
