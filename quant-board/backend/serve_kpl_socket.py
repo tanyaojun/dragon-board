@@ -130,10 +130,6 @@ elif _CODEC_MODE == "pc":
 else:
     raise RuntimeError(f"KPL_CODEC 非法值 {_CODEC_MODE!r}（仅支持 pc|adb）")
 
-# auth 相位延迟（2026-11-09 会话抖动根因修复）：§3.4 实证 auth 耗时决定会话档位
-# （<1s→~6s 断；~1-2s→15-25s 拟人档；adb 5-8s→75-160s）。默认 5.0 对齐 adb 档
-# （实际 5.0+U(0,3.0)s）；置 0 = 回退旧拟人档（auth 相位仅剩 U(0,3)s 抖动）。
-# 切换需重启进程。
 
 # 构造无副作用，饿汉单例避免懒初始化竞态
 _service_lock = asyncio.Lock()
