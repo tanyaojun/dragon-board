@@ -66,9 +66,9 @@ class ProbeSurfaceCollector(KplCollectorService):
         if variant in _PER_STOCK_VARIANTS and not pool:
             raise ValueError(f"{variant} 需 --pool 受控池（per-stock 订阅面）")
         self._reconnect = bool(reconnect)
-        # 分波订阅模式（KPL_SUB_STAGED 同款）：验证「爆发体积阈值是短窗速率还是会话
-        # 累计」——staged 下全面订阅面分窗释放（wave1/2/3+failsafe），若仍 rst 则
-        # 阈值是累计型，分波只是延迟不是解决。
+        # 分波订阅模式（KPL_SUB_STAGED 同款）：历史探针件——「爆发体积阈值」假设
+        # 2026-11-18 已证伪（真凶=3101 错通道+3001 跑步机，README §3.7），本模式
+        # 保留作历史复现工具，不再作为根因验证路径。
         kw["sub_staged"] = bool(staged)
         # 控制变量固定（消除 610/211 因素，唯一变量=订阅面族）
         kw.setdefault("ka_mode", "off")
@@ -247,8 +247,7 @@ def main() -> int:
                     help="生产同款连续重连（螺旋退避）模式：验证 rst_10054 是否重连累积驱动"
                          "（非盘中驱动）；observe-s 为总运行时长，死因取累计计数")
     ap.add_argument("--staged", action="store_true",
-                    help="分波订阅模式（同生产 KPL_SUB_STAGED）：验证爆发体积阈值是"
-                         "短窗速率还是会话累计——若 staged 下仍 rst 则阈值累计型")
+                    help="分波订阅模式（历史件；体积阈值假设已证伪，README §3.7）")
     ap.add_argument("--stock-ids-file", default="",
                     help="JSON {stock_ids,priority_ids}：复现生产全量 3001/3006 行情宇宙"
                          "（默认仅 1 板块，与生产差异是隔离 confound）；"

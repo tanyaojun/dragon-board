@@ -82,14 +82,17 @@ _STOCK_DETAIL_SUBS = os.environ.get("KPL_STOCK_DETAIL_SUBS", "0").strip().lower(
 # KPL_SUB_BATCH_CODEC=0|1 → 211 item.data 明文/GCM（U2 实弹定案：必须 GCM，默认 1）。
 # KPL_UNSUB_ENABLED=1 → 402/pkg 0x50 退订（需先 KPL_SUB_UNIQUE_ID=1 使 per-stock
 #   subId 唯一，否则冲突护栏使 per-stock 退订为安全空操作；方案 §12）。
-# KPL_KA_MODE=610|off → 保活模式（P4 A/B 实弹裁决 2026-11-17：610 重发第 5 次
-#   →1106 确定性杀连（3/3 中位 67s）；off 3/3 零错误 >120s 且更贴 App（每连接
-#   仅认证一次）→ 默认 off；回退置 610。生产短命双因素：610 重发第 5 次→1106
-#   （最小订阅面受控实验）+ 全订阅面爆发指纹→10054（主导，方案 §7.1.1）。
+# KPL_KA_MODE=610|off|none → 保活模式。2026-11-18 源码定案默认 none：App 无周期
+#   保活（610 仅 userAuth 一次、无 Timer/schedule，独立审计 C2 源码实锤）；
+#   off=3001 轮转跑步机（852 面下每 6s 全量重订阅，rst_10054 根因①）。
+#   历史注：P4「off 更贴 App」结论是小面（3 id）实验，动态面未复验即失效；
+#   「全订阅面爆发指纹→10054 主导」已证伪（真凶=3101 错通道，README §3.7）。
 _SUB_REGISTRY = _env_flag("KPL_SUB_REGISTRY")
-# 分波订阅（2026-11-17 iso1 体积阈值定案：初始爆发 rst_10054 阈值触发，非盘中专属；
-# wave1=critical ~20 帧，wave2/3 (+45s/+90s) 错峰补齐，+150s failsafe）
-_SUB_STAGED = _env_flag("KPL_SUB_STAGED")
+# 分波订阅（历史件：iso1「体积阈值」动机已证伪，真凶=3101 错通道，README §3.7；
+# wave1=critical，wave2/3 (+15s/+45s) 错峰补齐，+150s failsafe）。
+# 2026-11-18 独立 review major-2 修复：默认必须 0——_env_flag 缺省"1"会与
+# setup_inline_subs 默认 1 互斥（服务类 ValueError），干净环境启动即崩。
+_SUB_STAGED = _env_flag("KPL_SUB_STAGED", default="0")
 # 2103 竞价池（pid=8）页数：竞价链 universe 依赖页深，默认保持 7；非竞价池
 # 恒 1 页（P1 收敛，README §3.6）。回滚口=本 env（仅作用于 pid=8）。
 _DABAN_LIST_PAGES = int(os.environ.get("KPL_DABAN_LIST_PAGES", "7"))
@@ -102,7 +105,7 @@ if _SUB_BATCH_CODEC_RAW not in ("0", "1"):
 _SUB_BATCH_CODEC = int(_SUB_BATCH_CODEC_RAW)   # U2 实弹：明文=2008 杀连，默认 1；m2 值域 fail-fast
 _UNSUB_ENABLED = os.environ.get("KPL_UNSUB_ENABLED", "0").strip().lower() in (
     "1", "true", "on", "yes")
-_KA_MODE = os.environ.get("KPL_KA_MODE", "off").strip().lower()
+_KA_MODE = os.environ.get("KPL_KA_MODE", "none").strip().lower()   # 2026-11-18 定案默认 none
 if _KA_MODE not in ("610", "off", "none"):
     raise RuntimeError(f"KPL_KA_MODE 非法值 {_KA_MODE!r}（仅支持 610|off|none）")
 # KPL_SUB_UNIQUE_ID=1 → per-stock 订阅 ext attr2 用会话内唯一 subId hint（base 0x4000）

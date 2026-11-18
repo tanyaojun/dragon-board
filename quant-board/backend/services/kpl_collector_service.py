@@ -285,11 +285,12 @@ class KplCollectorService:
         # 看杀连时刻落在宽限期内（=setup 打标定时处决）还是宽限期结束时（=循环期发送
         # 触发）。生产经 serve_kpl_socket env KPL_LOOP_SEND_GRACE 传 5；测试传 0。
         loop_send_grace_s: float = 0.0,
-        # 2026-11-10 实弹定性（探针 E1-E4）：0x40 通道订阅帧（daban 族/2203/2013）
-        # 只允许在 setup 订阅窗口内发送；窗口一关闭，任何后续 0x40 帧 → 服务器回
-        # ErrResp 1002 并断连（抓包实锤，WinError 10053/10054 只是 send 撞上关闭）。
+        # 2026-11-10 探针 E1-E4 曾定性「0x40 帧只许 setup 窗口内发送，窗外→1002」——
+        # 2026-11-18 源码定案证伪：E1-E4 队列尾同样带 3101 错通道帧，1002 真凶是它
+        # 而非时间窗（README §3.7）。inline 保留纯因 App qn0.z() 零节流同款且实弹稳定。
         # True = 全部订阅内联回 setup（含 2203/2013 全量），读循环期不再发任何 0x40 帧
-        # （会话内新入池成员等下一会话 6g 重建，与既有合同一致）。
+        # （会话内新入池成员等下一会话 6g 重建；注意：App 实际允许会话中屏 onResume
+        # 随时发订阅，未来重启用 zt/theme/detail 循环期发送需重评估此门禁）。
         setup_inline_subs: bool = False,
         # 交易时段门控（2026-11-11 防患设备风控累积）：非交易时段不建连，_run_loop
         # 进入 idle_offhours 每分钟复查，下一时段自动恢复。夜间 7×24 TTL 重连的
@@ -313,7 +314,7 @@ class KplCollectorService:
         sub_batch_max_items: int = 10,
         sub_batch_ack_timeout_s: float = 10.0,
         unsub_enabled: bool = False,
-        ka_mode: str = "off",
+        ka_mode: str = "none",   # 2026-11-18 定案默认：App 无周期保活（源码 C2）；off=3001 轮转跑步机（根因①）
         sub_unique_id: bool = False,
         sub_staged: bool = False,
         # 2026-11-18 复盘更正：0=不限（生产常态）。cap 旋钮仅为总量卫生实验保留
@@ -344,11 +345,12 @@ class KplCollectorService:
         self._auth_phase_delay = max(0.0, float(auth_phase_delay))
         self._auth_phase_jitter = max(0.0, float(auth_phase_jitter))
         self._loop_send_grace_s = max(0.0, float(loop_send_grace_s))
-        # drain 帧间停顿（实验旋钮：降速到 App 逐股节奏时调大）；保活模式
-        # （P4 A/B 实弹裁决 2026-11-17：610 重发第 5 次→1106 确定性杀连
-        # （3/3，中位寿命 67s）；off 全 tick 3001 轮转 3/3 零错误存活 >120s，
-        # 且 App 每连接仅认证一次——off 更贴 App。默认 off；回退 KPL_KA_MODE=610）
-        self._drain_pause = tuple(drain_pause) if drain_pause else (0.3, 0.15)
+        # drain 帧间停顿（实验旋钮）；保活模式。2026-11-18 源码定案默认 none：
+        # App 无周期保活（610 仅 userAuth 一次、无 Timer，独立审计 C2 实锤）；
+        # off=3001 轮转跑步机（根因①）。历史注：P4「off 更贴 App」是 3 id 小面
+        # 实验，动态面未复验即失效（README §3.7）；610→1106 为小面受控结果。
+        # 2026-11-18 定案默认 100ms（实弹验证档；App 实际零节流连发，0.3s 旧档无源码依据）
+        self._drain_pause = tuple(drain_pause) if drain_pause else (0.1, 0.05)
         self._ka_mode = ka_mode
         self._setup_inline_subs = bool(setup_inline_subs)
         self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
@@ -364,8 +366,9 @@ class KplCollectorService:
         self._death_cause_counts: Dict[str, int] = {}
         self._session_err_code: Optional[int] = None   # 本会话最近 ErrResp code（每会话复位）
         self._session_streaming = False                # 本会话是否进入收流（setup 早退判别）
-        # 分波订阅（2026-11-17 iso1 探针体积阈值定案，KPL_SUB_STAGED 默认关）：
-        # 订阅爆发 rst_10054 是**爆发窗体积阈值**触发（阈值 ∈ ~110-130 帧/窗，
+        # 分波订阅（历史件，KPL_SUB_STAGED 默认关）：iso1「爆发窗体积阈值
+        # ~110-130 帧/窗」模型已证伪（真凶=3101 错通道+3001 跑步机，README §3.7）：
+        # 订阅爆发 rst_10054 曾被归因为**爆发窗体积阈值**触发（阈值 ∈ ~110-130 帧/窗，
         # staged1 三会话收敛；非会话累计——累计 ~300 帧存活 130s）。分波把初始
         # 爆发压到阈值下，wave2/3 漏斗错峰补齐；会话死亡未释放波次随会话作废。
         self._sub_staged = bool(sub_staged)
@@ -803,7 +806,8 @@ class KplCollectorService:
 
     def _sub_batch_active(self) -> bool:
         """211 批量信封是否生效：flag=211 且未熔断且非 inline 模式
-        （setup_inline_subs 的 0x40 窗口合同特殊，始终单帧，方案 §4 P3）。"""
+        （setup_inline_subs 模式始终单帧，方案 §4 P3；「0x40 窗口合同」动机已证伪，
+        README §3.7）。"""
         return (self._sub_batch_mode == "211" and not self._batch_broken
                 and not self._setup_inline_subs)
 
@@ -946,8 +950,8 @@ class KplCollectorService:
             return
         if lane == "detail":
             # 2026-11-11 评审 major-2：setup_inline_subs=True 时详情四通道改 setup
-            # 窗口内内联发送（同 2203/2013 的 zt_reason/theme lane；窗口关闭后发送
-            # 0x40 帧→ErrResp 1002 断连）。OSError 上抛交 _run_loop 重连链。
+            # 内联发送（同 2203/2013 的 zt_reason/theme lane）。「窗口关闭后 0x40→1002」
+            # 动机已证伪（真凶=3101 错通道，README §3.7）。OSError 上抛交 _run_loop 重连链。
             for dl, dcmd in self._detail_lane_cmds.items():
                 with self._detail_locks[dl]:
                     batch = list(self._pending_detail[dl])
@@ -990,18 +994,21 @@ class KplCollectorService:
     def _drain_setup_subs(self, sock: Any, next_seq: Any) -> None:
         """发送待发 setup 订阅帧（daban 家族 21xx/2103/2112/3004/3101，2026-11-10 重排）。
 
-        原 setup 内联串行发完 ~32s 才进读循环，会话在 setup 结束后 ~1s 即被上游
-        RST（last_setup_s=31.9 / last_session_s=32.8），3001 推送窗口≈0.9s → 个股
-        行情全过期。重排后 daban 家族由读循环限流续发（同款 8 帧/tick + 0.3s
-        拟人节奏）；sendall 失败置 _sock_dead（同 2203/2013 门禁），未发帧本会话
-        丢失，下一会话重建。"""
+        历史注：当年「setup 结束后 ~1s 被上游 RST」的误归因已证伪——真凶=队列尾
+        3101 错用 0x40 通道（README §3.7，2026-11-18 源码定案）。重排架构保留：
+        daban 家族由读循环限流续发（8 帧/tick + 拟人停顿）；sendall 失败置
+        _sock_dead（同 2203/2013 门禁），未发帧本会话丢失，下一会话重建。
+        plain 项（3101）必须透传（独立 review blocker-1：丢键=杀连帧型复活）。"""
         if self._sock_dead or self._setup_inline_subs or not self._pending_setup_frames:
-            return   # setup_inline_subs 模式循环期永久静默（0x40 帧窗口外发送=1002 断连）
+            return   # inline 模式循环期静默（「窗外 0x40=1002」已证伪，README §3.7；保留=App 连接后一次性全发同款）
         batch = self._pending_setup_frames[:self._DRAIN_TICK_FRAMES]
         self._pending_setup_frames = self._pending_setup_frames[self._DRAIN_TICK_FRAMES:]
         items = [{"cmd": it["cmd"], "req": it["req"], "ext": it["ext"],
                   "priority": it.get("priority"),
-                  "key": it.get("key"), "lane": it.get("lane")} for it in batch]   # m4：保留 key/lane
+                  "key": it.get("key"), "lane": it.get("lane"),
+                  # 2026-11-18 独立 review blocker-1 修复：plain 必须透传——丢键则
+                  # 3101 在非 inline/staged 路径以 0x40+ext 发出，复活 1002 杀连帧型
+                  "plain": it.get("plain")} for it in batch]   # m4：保留 key/lane
         try:
             self._drain_send(sock, next_seq, items, "setup")
         except OSError as exc:
@@ -1173,7 +1180,8 @@ class KplCollectorService:
         帧（新入池成员的小块同理）→ 服务器静默期触发全量批回。与 _drain_zt_reason_subs
         同款失败门禁：send 失败置 _sock_dead 静默，未发帧下一会话 6g 全量补订自愈。
         setup_inline_subs=True 时本函数永久早退，改由 6h 处 _flush_pending_inline
-        在 setup 窗口内内联发送（0x40 帧窗口外发送=ErrResp 1002 断连，探针 E1-E4）。"""
+        在 setup 内联发送（「窗外 0x40=1002」的 E1-E4 结论已证伪：真凶=3101 错通道，
+        README §3.7）。"""
         if not self._stock_detail_subs or self._sock_dead or self._setup_inline_subs:
             return
         for lane, cmd in self._detail_lane_cmds.items():
@@ -1446,8 +1454,9 @@ class KplCollectorService:
         退避**（§14，App ReconnectManager 对齐）提供实证底座。
 
         判据优先级：异常类型/winerror → 本会话 ErrResp code → drain send 失败门禁 →
-        setup 早退 → 干净 EOF。10054=服务器 RST（爆发指纹主导，§7.1.1）；1106/1002=
-        TTL/610 杀连；2008=明文 211  lethal；eof_clean=无错误码服务器关连（干净轮换）。
+        setup 早退 → 干净 EOF。10054=服务器 RST；1106/1002=ErrResp 杀连；2008=明文
+        211 lethal；eof_clean=无错误码服务器关连（干净轮换）。历史注：「爆发指纹主导」
+        归因已证伪（10054=3001 跑步机超支、1002=3101 错通道，README §3.7）。
         """
         if exc is not None:
             winerr = getattr(exc, "winerror", None)
@@ -1627,6 +1636,9 @@ class KplCollectorService:
             # （rst/errresp/网络）退避语义不变。
             if cause == "eof_clean":
                 self._retry_fail_count = 0
+                # 权衡注（独立 review note-4）：EOF/拒绝交替序列下 sd_count 每次被
+                # EOF 清零，「>3 且从未 auth→+60s」降级永不累积，每次拒绝只拿梯[0]+3s。
+                # 与「计划内轮转非失败」语义自洽（App 亦仅在 ErrResp 置 state=20 增 b）。
                 self._server_disconnect_count = 0
             if healthy:
                 # App u()/j() resetFailCount：健康长会话证明恢复（PC 适配判据）
@@ -1993,14 +2005,15 @@ class KplCollectorService:
                     else:
                         self._pending_setup_frames.append(lhb_frame)
             if self._sub_staged:
-                # wave2（+15s）：非竞价 2103 页 + lhb 帧（staged1：80s 轮换内可达；
-                # S1 55 帧级别稳定，37 帧阈值内）
+                # wave2（+15s）：非竞价 2103 页 + lhb 帧（「37 帧阈值」模型已证伪，
+                # README §3.7；staged1 稳定性观测保留作历史参考）
                 self._staged_waves.append({
                     "release_at": self._staged_t0 + self._STAGED_WAVE2_S,
                     "failsafe_at": self._staged_t0 + self._STAGED_FAILSAFE_S,
                     "kind": "pages", "frames": staged_wave2_frames,
                 })
-            # 6g-pre) 2026-11-10 探针实锤：0x40 帧只许在 setup 窗口内发送，内联模式下
+            # 6g-pre) 内联模式下（「0x40 只许 setup 窗口内」的 E1-E4 结论已证伪，
+            # 真凶=3101 错通道，README §3.7；inline 保留=App 同款）
             # daban 家族先发（池数据+页面优先于语料订阅），再 2203/2013
             if self._setup_inline_subs and self._pending_setup_frames:
                 self._flush_pending_inline(sock, next_seq, "setup")
@@ -2045,9 +2058,9 @@ class KplCollectorService:
             if self._sub_staged:
                 # wave3 漏斗（方案 A，用户裁决 2026-11-17）：per-stock 2203/2013/
                 # detail 池 ids 经持久游标轮转切片，每窗 ≤BATCH ids（~40 帧，
-                # 阈值 ~110-130 帧/窗的 65% 边际），批间隔 ≥35s；全池 ~300 ids
-                # 约 2 会话轮完。staged1 实证：全池一次性释放=自制超阈爆发
-                # （714 ids→354 帧→rst@+48s），且 +90s 波次在 80s 轮换内永不可达。
+                # 「阈值 65% 边际」模型已证伪，README §3.7），批间隔 ≥35s；全池
+                # ~300 ids 约 2 会话轮完。staged1 历史观测：全池一次性释放
+                # （714 ids→354 帧→rst@+48s，当年归因超阈，实为跑步机+3101）。
                 if pool_ids and (self._zt_reason_subs or self._theme_subs
                                  or self._stock_detail_subs):
                     n_pool = len(pool_ids)
@@ -2376,9 +2389,9 @@ class KplCollectorService:
                     self._pending_unsub.append(e.sub_id)
             self._sub_registry.mark_unsub_sent(cands)
 
-    # 分波订阅波次参数（2026-11-17 iso1+staged1 定案；KPL_SUB_STAGED 默认关）
-    # 阈值窗模型：rst_10054 由 ~110-130 帧/爆发窗触发（非会话累计）；服务端
-    # 干净轮换 ~80s → 波次时刻表必须压进会话寿命内。
+    # 分波订阅波次参数（历史件；KPL_SUB_STAGED 默认关）
+    # 阈值窗模型已证伪（真凶=3101 错通道+3001 跑步机，README §3.7）：当年认为
+    # rst_10054 由 ~110-130 帧/爆发窗触发；波次时刻表压进会话寿命内的约束保留。
     _STAGED_WAVE2_S = 15.0          # wave2：非竞价 2103 页 + lhb 帧（~37 帧阈值内）
     _STAGED_WAVE3_S = 45.0          # wave3 漏斗首批（+45s，与 wave2 错开半窗）
     _STAGED_WAVE3_BATCH_IDS = 50    # 每窗 ids（staged2 实测 ~1.5 帧/id → ~75 帧；窗内总量 ≤~135）
@@ -2388,8 +2401,8 @@ class KplCollectorService:
     def _release_staged_waves(self, now: float) -> None:
         """分波订阅到点释放（KPL_SUB_STAGED=1 时读循环每 tick 调用）。
 
-        阈值窗模型（staged1 定案）：rst_10054 由爆发窗体积触发（~110-130 帧/窗），
-        非会话累计。pages 波到点整体释放（~37 帧阈值内）；per-stock 波为漏斗：
+        阈值窗模型已证伪（真凶=3101 错通道+3001 跑步机，README §3.7）：当年认为
+        rst_10054 由爆发窗体积触发（~110-130 帧/窗）。pages 波到点整体释放；per-stock 波为漏斗：
         每窗最多 _STAGED_WAVE3_BATCH_IDS 个 ids 经持久游标 _staged_pool_cursor
         轮转取片（zt/theme/detail 同片同步），批间隔 ≥35s（锚定实际释放时刻，
         防停顿后多批连发并窗超阈），全池轮完即收（staged_cycle_done 事件）。
@@ -2446,7 +2459,8 @@ class KplCollectorService:
 
     def _drain_unsub(self, sock: Any, next_seq: Any) -> None:
         """发送 402/pkg 0x50 UnsubIdReq 退订帧（≤1 帧/tick，防抖 ≥5s）。
-        inline 模式不发（0x50 窗口语义未探针，保守门禁同 0x40）。"""
+        inline 模式不发（保守门禁；「0x40 窗口」动机已证伪，README §3.7，
+        0x50 退订帧 App 随时可发——重启用循环期退订需重评估）。"""
         if (not self._unsub_enabled or self._sock_dead or self._setup_inline_subs
                 or not self._pending_unsub):
             return

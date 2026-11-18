@@ -422,7 +422,8 @@ class TestSetSubscriptions:
         assert svc.subscriber_count() == 0
 
     def test_quote_face_cap_truncates_with_counter(self):
-        """面硬帽（2026-11-18 窗口消融）：cap>0 超限保 priority 头部截断+计数。"""
+        """面硬帽（总量卫生实验旋钮，生产 cap=0）：cap>0 超限保 priority 头部截断+计数。
+        「窗口消融」动机已证伪（真凶=3101 错通道，README §3.7）。"""
         svc2 = KplCollectorService(
             FakeCodec(), device_id="t", user_id="0", token="",
             stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
@@ -738,6 +739,61 @@ class TestRealtimeLHB3004:
         assert int.from_bytes(f3101[7:9], "big") == 3101
         reg_cmds = [e.cmd for e in svc2._sub_registry._entries]
         assert 3004 in reg_cmds and 3101 not in reg_cmds        # 单发不占订阅注册表
+        assert svc2._stats.get("plain_req_sent") == 1
+
+    def test_3101_plain_end_to_end_inline_session(self, monkeypatch):
+        """独立 review minor-3 守卫①：生产路径 6f→_flush_pending_inline 端到端——
+        inline=True + lhb_realtime=True 全 _session()，3101 线上帧必须 pkg=0x30、
+        extlen=0、不入注册表、plain_req_sent=1（把 inline plain 分支改回 0x40 会红）。"""
+        from backend.services import kpl_collector_service as cc
+        monkeypatch.setattr(cc.time, "strftime", lambda fmt: "1035")
+        auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
+        vr_payload = b"\xaa" + proto.pb_varint_field(1, 1793033481) + proto.pb_bytes(7, b"https://x/1.data")
+        responses = [
+            _make_260(),
+            _echo(1, 610, 0x11, auth_resp_payload),
+            _echo(2, 602, 0x01, b"\xaa\x02\x03"),
+            _echo(3, 2301, 0x09, vr_payload),
+            _echo(4, 2303, 0x01, b"\xaa\x08\x00"),
+            _echo(5, 2304, 0x01, b"\xaa\x08\x00"),
+        ]
+        svc2 = KplCollectorService(
+            FakeCodec(), device_id="test-dev", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            daban_subs=False, lhb_realtime=True, lhb_realtime_count=120,
+            daban_list_pages=7, setup_inline_subs=True)
+        fake = FakeSocket(responses)
+        monkeypatch.setattr(svc2, "_tls_connect", lambda: fake)
+        svc2._session()
+        f3101 = [f for f in fake.sent if int.from_bytes(f[7:9], "big") == 3101]
+        assert len(f3101) == 1
+        assert f3101[0][0] == 0x30                       # pkg=0x30 普通通道
+        assert int.from_bytes(f3101[0][10:12], "big") == 0  # extlen=0（无路由头）
+        assert 3101 not in [e.cmd for e in svc2._sub_registry._entries]
+        assert svc2._stats.get("plain_req_sent") == 1
+
+    def test_3101_plain_propagates_through_drain_setup_subs(self, monkeypatch):
+        """独立 review blocker-1 守卫②：非 inline 路径 _drain_setup_subs 必须透传
+        plain（丢键则 3101 以 0x40+ext 复活杀连帧型——staged/回滚旋钮即触雷）。"""
+        from backend.services import kpl_lhb_protocol as lhb
+        import struct as _struct
+        svc2 = KplCollectorService(
+            FakeCodec(), device_id="t", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            daban_subs=False, lhb_realtime=True, daban_list_pages=7)
+        ext = bytes([0x02]) + _struct.pack(">H", 3101)
+        svc2._pending_setup_frames = [
+            {"cmd": 3101, "req": lhb.build_realtime_lhb_req_pb(
+                count=120, start_time=925, end_time=1035), "ext": ext, "plain": True}]
+        fake = FakeSocket([])
+        seq = iter(range(100))
+        svc2._drain_setup_subs(fake, lambda: next(seq))
+        assert len(fake.sent) == 1
+        f = fake.sent[0]
+        assert int.from_bytes(f[7:9], "big") == 3101
+        assert f[0] == 0x30                              # 0x30 而非 0x40
+        assert int.from_bytes(f[10:12], "big") == 0      # 无 ext 路由头
+        assert 3101 not in [e.cmd for e in svc2._sub_registry._entries]
         assert svc2._stats.get("plain_req_sent") == 1
 
     def test_3101_same_parser_registered(self):
@@ -1229,7 +1285,8 @@ class TestThemeHeat2013:
 
 
 class TestStagedSubs:
-    """分波订阅（2026-11-17 iso1 体积阈值定案，KPL_SUB_STAGED 默认关）：
+    """分波订阅（历史件，KPL_SUB_STAGED 默认关；iso1「体积阈值」动机已证伪，
+    真凶=3101 错通道+3001 跑步机，README §3.7）：
     wave1=critical（globals+pid8 页），wave2(+45s)=非竞价页/lhb，
     wave3(+90s)=per-stock 池 ids；+150s failsafe；会话死亡波次作废重建。"""
 
@@ -1255,7 +1312,7 @@ class TestStagedSubs:
 
     def test_wave1_composition_and_wave_contents(self):
         """wave1 仅 globals(7)+pid8 页(7)；非竞价页(35)入 wave2；池 ids 入 wave3；
-        zt/theme 队列起始为空（爆发体积 ~20 帧远低于阈值）。"""
+        zt/theme 队列起始为空（「远低于阈值」为历史措辞，阈值模型已证伪）。"""
         svc = self._svc()
         svc._daban_lists = {1: {0: {"items": [{"stock_id": "000001"},
                                               {"stock_id": "000002"}]}}}
@@ -2084,7 +2141,7 @@ class TestReviewFixes20261111:
                    for e in evs)
         assert svc._detail_snaps["bf"] == {}
 
-    def test_inline_mode_flushes_detail_subs_in_setup_window(self):
+    def test_inline_mode_flushes_detail_subs_in_setup(self):   # 旧名 setup_window：窗口模型已证伪
         """major-2：setup_inline_subs=True + stock_detail_subs=True → 6h 处内联发送
         四通道订阅帧（此前永久静默零订阅）。"""
         sock = self._FlushSock()
@@ -2797,9 +2854,11 @@ class TestUnsub402:
 
 
 class TestKaMode:
-    """P4 保活 A/B flag（2026-11-17 实弹裁决）：610 重发第 5 次→1106 确定性
-    杀连（3/3 中位 67s）；off 全 tick 3001 轮转 3/3 零错误 >120s，且 App 每连接
-    仅认证一次——默认 off；回退 KPL_KA_MODE=610。"""
+    """保活模式。2026-11-18 源码定案默认 none：App 无周期保活（610 仅 userAuth
+    一次、无 Timer/schedule，独立审计 C2 实锤）；off=3001 轮转跑步机（852 面下
+    每 6s 全量重订阅，rst_10054 根因①）。历史注：P4「off 更贴 App」是 3 id 小面
+    实验结论，动态面未复验即失效（README §3.7）；610 重发第 5 次→1106 为 P4
+    小面受控实验结果，保留作回退档语义。"""
 
     def _run_loop_session(self, monkeypatch, **kw):
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
@@ -2846,9 +2905,18 @@ class TestKaMode:
         assert self._cmd_count(fake, 3001) == 1 + 8   # 内联 1 + 轮转 8
         assert svc.status()["ka_mode"] == "610"
 
-    def test_default_off_no_610_resend_all_3001(self, monkeypatch):
+    def test_default_none_pure_read(self, monkeypatch):
+        """2026-11-18 定案：代码默认 none（不依赖 .env.local 单点，独立审计④）。"""
         svc, fake = self._run_loop_session(monkeypatch)
-        assert svc._ka_mode == "off"                  # P4 裁决后默认
+        assert svc._ka_mode == "none"
+        assert self._cmd_count(fake, 610) == 1        # 仅初始认证，零重发
+        assert self._cmd_count(fake, 3001) == 1       # 仅 setup 内联，零轮转
+        assert svc.status()["ka_mode"] == "none"
+
+    def test_explicit_off_keeps_rotation_legacy(self, monkeypatch):
+        """off=历史跑步机档（显式传参才启用）：全 tick 3001 轮转保留覆盖。"""
+        svc, fake = self._run_loop_session(monkeypatch, ka_mode="off")
+        assert svc._ka_mode == "off"
         assert self._cmd_count(fake, 610) == 1        # 仅初始认证，零重发
         assert self._cmd_count(fake, 3001) == 1 + 10  # 全 tick 轮转
         assert svc.status()["ka_mode"] == "off"

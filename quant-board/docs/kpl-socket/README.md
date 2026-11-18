@@ -393,9 +393,10 @@ ErrResp 1002 是同一拒收在不同通道的两种表现：①跑步机持续�
 - `.e((byte)4)` → pkg=0x40 订阅路由帧：3001/3006/2103/2112/3004（SocketPresenter
   `y()` = `f(true).e((byte)4)`）
 - `.e((byte)3)` → pkg=0x30 普通请求帧：**3101 RealtimeLHB 区间查询**
-  （MainIndexQuotationInfoPresenter L288 / RealTimeChartsPresenter L288，带
+  （MainIndexQuotationInfoPresenter **L359** / RealTimeChartsPresenter L288，带
   StartTime/EndTime 一次性拉取，从不订阅）
-- `.e((byte)5)` → cmd 402 退订（pkg=0x30，SocketRepository.n）
+- `.e((byte)5)` → cmd 402 退订（**pkg=0x50**，5<<4=0x50；SocketRepository.n，
+  代码 PKG_UNSUB=0x50 正确——初版误写 0x30，独立审计更正）
 - `.f(true)` = 路由标记（u()），`.b(true)` = t() 响应回调标记
 
 **修复（4f0d403e）**：3101 标 plain=True；`_drain_send`/`_flush_pending_inline`
@@ -435,10 +436,43 @@ test_3101_plain_0x30_3004_sub_0x40 锁 pkg 字节。
    攻克猜想」）**：动手前先问「这本质上是个多大的问题」。读口复刻类任务
    的正解路径只有一步：找到 App 对应调用点 → 照抄它的帧构造合同（pkg/
    ext/req 体）→ 照抄它的生命周期（何时发/何时退）。本案正解只需 ~1 小时
-   （3101 调用点 L288 一行），实际走了三天探针/建模/消融——把「复刻」
+   （3101 调用点 MainIndex L359 / RealTimeCharts L288 一行），实际走了三天探针/建模/消融——把「复刻」
    膨胀成了「逆向服务端判定模型」。复刻不是研究：不建阈值模型、不拟合
    统计分布、不设计消融阶梯；这些只在「源码无对应分支、行为确属服务端
    黑盒」时才启动，且须先向用户陈述问题规模与路线预算。
+
+### 3.8 独立双子代理复审与修复（2026-11-18，用户裁决「不信主 agent 复盘结论」）
+
+两个 fresh-context 只读子代理（retro-audit 复盘审计 + code-review 代码审查）
+独立复核六轮修改。**七项定性方向全部成立、App 源码交叉验证三问全部通过**
+（3101 从不订阅 / App 无周期保活 / 干净 EOF 立即重连，均源码行号实锤），
+但抓出主 agent 复盘漏掉的真问题，全部已修：
+
+1. **blocker：`_drain_setup_subs` 重建 items 丢 `plain` 键**——非 inline/staged
+   路径 3101 仍以 0x40+ext 发出（杀连帧型复活，两代理独立复现）。生产被
+   KPL_SETUP_INLINE_SUBS=1 掩盖，回滚旋钮即触雷。修：items 透传 plain +
+   两条端到端守卫（inline 全 _session() 路径 + drain 路径，锁 pkg/extlen/
+   注册表/plain_req_sent）。
+2. **major：serve 两 env 默认互斥**——KPL_SUB_STAGED 经 _env_flag 缺省"1"
+   与 setup_inline_subs 默认 1 冲突，干净环境 import 即 ValueError。
+   修：staged 显式 default="0"。
+3. **代码默认值对齐定案**（不依赖 .env.local 单点）：ka_mode 默认 off→none、
+   drain_pause 默认 (0.3,0.15)→(0.1,0.05)；旧默认行为测试改显式传参保覆盖。
+4. **约 20 处证伪模型注释/测试 docstring 全量更正**（E1-E4 窗口、110-130
+   阈值、爆发指纹主导、P4 off 更贴 App、setup RST 误归因、0x50 窗口语义等），
+   39931aa5 自称「全量更正」实际只改部分——本轮补齐。
+5. **本文档两处事实错误更正**：402 退订 pkg=0x50（非 0x30）；3101 调用点
+   MainIndexQuotationInfoPresenter L359（非 L288）。
+6. 历史文档证伪注：burst-fingerprint 预登记「主导机制定案/阈值定界」勾选、
+   sub-registry-refactor-plan「爆发指纹风控主导」、probe_kpl_burst_surface
+   阈值假设措辞，均加 11-18 证伪标注。
+7. 设计权衡披露（note 级，非 bug）：eof_clean 归零 sd_count 使「EOF/拒绝
+   交替」序列的 +60s 降级永不累积（与计划内轮转语义自洽，已注释）；
+   sent_cmd_log 对 211 批帧只记外层 cmd（项级归因需交叉 registry batch_seq）。
+
+复审后全套件 516+ passed；生产重启验证。教训并入 §3.7 方法学：**自复盘
+不可自证，重大定案须独立 fresh-context 复审**（本次两代理互不共享结论，
+blocker 由双方独立复现交叉确认）。
 
 ## 四、数据语义与已知限制
 
