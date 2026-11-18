@@ -456,7 +456,13 @@ class KplCollectorService:
             "abn_ok": 0, "abn_fail": 0, "rplate_ok": 0, "rplate_fail": 0,
             # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集落库）
             "bid_series_ok": 0, "bid_series_fail": 0,
+            # 09:15/09:25 集合竞价价格+涨幅存档（2026-11-18 用户裁决：3006 现有流）
+            "auct15_ok": 0, "auct25_ok": 0, "auct_fail": 0,
             "last_error": ""}
+        # 09:15/09:25 快照首帧去重（跨日重置；单写者=本采集线程）
+        self._auct_date: str = ""
+        self._auct15: set = set()
+        self._auct25: set = set()
         # 竞价序列：2026-11-18 窗门控+节流已拆，pid=8 推送即全量落库（§3.9）
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
@@ -657,6 +663,60 @@ class KplCollectorService:
         if get_settings().storage_backend != "mongodb":
             return None
         return get_runtime_mongodb_database()
+
+    def _capture_auction_price(self, quotes: Dict[str, Any]) -> None:
+        """3006 现有流归档 09:15/09:25 价格+涨幅（2026-11-18 用户裁决，零新增订阅）。
+
+        09:15 窗 [09:15,09:25) 首帧=竞价价/涨幅；09:25 窗 [09:25,09:30) 首帧=开盘价/涨幅
+        （真 09:25 撮合终值，掉池股亦有）。price×10000→元、inc_rate×100→%（协议锚）。
+        启动晚于 09:25 → s0915 缺席（fail-visible，不拿 09:25 值冒充 09:15）。"""
+        from datetime import datetime, timedelta, timezone
+        now = time.time()
+        dt = datetime.fromtimestamp(now, timezone(timedelta(hours=8)))
+        hm = dt.hour * 3600 + dt.minute * 60 + dt.second
+        if not (9 * 3600 + 15 * 60 <= hm < 9 * 3600 + 30 * 60):
+            return
+        date = dt.strftime("%Y-%m-%d")
+        if date != self._auct_date:
+            self._auct_date = date
+            self._auct15 = set()
+            self._auct25 = set()
+        new15: Dict[str, dict] = {}
+        new25: Dict[str, dict] = {}
+        for it in (quotes or {}).get("items") or []:
+            code = str(it.get("stock_id") or "")[-6:]
+            if not code:
+                continue
+            try:
+                p = float(it.get("price")) / 10000.0
+                pct = float(it.get("inc_rate")) / 100.0
+            except (TypeError, ValueError):
+                continue
+            rec = {"price": round(p, 4), "pct": round(pct, 4), "ts": now}
+            if hm < 9 * 3600 + 25 * 60:
+                if code not in self._auct15:
+                    self._auct15.add(code)
+                    new15[code] = rec
+            elif code not in self._auct25:
+                self._auct25.add(code)
+                new25[code] = rec
+        if new15 or new25:
+            self._persist_auction_price(date, new15, new25)
+
+    def _persist_auction_price(self, date: str, new15: dict, new25: dict) -> None:
+        try:
+            db = self._corpus_db()
+            if db is None:
+                raise RuntimeError("corpus_db_unavailable")
+            from backend.services.kpl_daban_archiver import archive_auction_price
+            r = archive_auction_price(db, date, s0915=new15, s0925=new25)
+            if not r.get("ok"):
+                raise RuntimeError(str(r.get("reason")))
+            self._corpus_persist_stats["auct15_ok"] += r.get("n15", 0)
+            self._corpus_persist_stats["auct25_ok"] += r.get("n25", 0)
+        except Exception as exc:  # noqa: BLE001 — 落库失败不阻断收流（fail-visible）
+            self._corpus_persist_stats["auct_fail"] += 1
+            self._corpus_persist_stats["last_error"] = f"auction_price:{type(exc).__name__}"
 
     def _persist_corpus(self, lane: str, payload: Dict[str, Any]) -> None:
         """单条推送即时落库（线程内同步写，单写者=本采集线程；失败不阻断收流）。
@@ -2453,6 +2513,7 @@ class KplCollectorService:
             self._emit(KplEvent(type="stock_quotes", ts=time.time(),
                                 source="push" if fr.get("fmt") == "push" else "resp",
                                 **quotes))
+            self._capture_auction_price(quotes)
             return
         if cmd == proto.CMD_HQ_REASONS:
             # 2203 涨停原因推送（试点）：dec/解析 fail-visible，不静默丢弃

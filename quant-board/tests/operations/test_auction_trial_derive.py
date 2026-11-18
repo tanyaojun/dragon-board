@@ -26,15 +26,19 @@ class _Coll:
         import copy
         if self.name == "kpl_morning_bidding_raw":
             return copy.deepcopy(self.owner.mbl) if self.owner.mbl else None
+        if self.name == "kpl_auction_price":
+            return copy.deepcopy(self.owner.auct) if self.owner.auct else None
         return copy.deepcopy(self.owner.doc) if self.owner.doc else None
 
 
 class FakeSeriesDb:
-    """双集合假库：kpl_bidding_series + kpl_morning_bidding_raw（bk_name join）。"""
+    """三集合假库：kpl_bidding_series + kpl_morning_bidding_raw（bk_name join）
+    + kpl_auction_price（09:15/09:25 价格存档，2026-11-18）。"""
 
-    def __init__(self, doc=None, mbl_rows=None):
+    def __init__(self, doc=None, mbl_rows=None, auct=None):
         self.doc = doc
         self.mbl = {"rows": mbl_rows} if mbl_rows is not None else None
+        self.auct = auct
 
     def __getitem__(self, name):
         return _Coll(self, name)
@@ -118,8 +122,8 @@ def test_derive_nan_not_zero():
 
 
 def test_derive_jj_frozen_mbl_primary():
-    """竞价三字段=MBL 09:25 冻结终值优先（2026-11-18 用户反馈涨幅不对定案）；
-    首/峰/末仍序列过程统计，不被冻结值替换。"""
+    """存档缺位时回退链：MBL 冻结值优先（jjSource=mbl_frozen）；
+    存档在则 open0925_archive 权威（见 test_derive_jj_authority_open0925_archive）。"""
     mbl = _mbl_rows()
     mbl["605255"].update({"bidding_pct": 5.5, "bidding_amount": 2e7,
                           "bidding_turnover": 0.2})
@@ -282,3 +286,134 @@ def test_derive_filters_early_ticks():
 
 # test_historical_equivalence_1113 随 §7.17 raw 退役删除（2026-11-18）：
 # 11-13 真值等价性结论已存档 docs §7.9（映射 74/74、入选集合一致）；raw 归档 backups。
+
+
+# ── 09:15/09:25 价格存档权威（2026-11-18 用户裁决：掉池股真 09:25 = 撮合开盘涨幅）──
+
+def test_derive_jj_authority_open0925_archive():
+    """存档在 → jj_percent=09:25 开盘涨幅（掉池股亦有），09:15/09:25 价格涨幅全披露。
+    锚：002652 11-18 真值 09:15=10.00%/09:25=0.00%，旧链给 9.77（早退值）错。"""
+    auct = {"_id": "2026-11-17",
+            "s0915": {"605255": {"price": 4.84, "pct": 10.0, "ts": 1.0}},
+            "s0925": {"605255": {"price": 4.40, "pct": 0.0, "ts": 2.0}}}
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), _mbl_rows(), auct=auct), "2026-11-17")
+    r = rows["605255"]
+    assert r["jj_percent"] == 0.0 and r["jjSource"] == "open0925_archive"
+    assert r["p0915"] == 4.84 and r["pct0915"] == 10.0
+    assert r["p0925"] == 4.40 and r["pct0925"] == 0.0
+    assert state["open0925N"] == 1 and state["open0925MissingN"] == 0
+
+
+def test_derive_open0925_missing_fallback_disclosure():
+    """存档缺 → 回退旧链（MBL→bid→序列末帧），open0925N/MissingN 结构化披露。"""
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
+    assert state["open0925N"] == 0 and state["open0925MissingN"] == 1
+    assert rows["605255"]["jjSource"] != "open0925_archive"
+
+
+def test_collector_capture_auction_price_0915_0925(monkeypatch):
+    """3006 现有流捕获：09:15 窗首帧/09:25 窗首帧各一次；price×10000→元、
+    inc_rate×100→%；各自只首帧不覆盖。"""
+    from backend.services import kpl_collector_service as CS
+    inst = object.__new__(CS.KplCollectorService)
+    inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
+                                  "auct_fail": 0, "last_error": ""}
+    inst._auct_date, inst._auct15, inst._auct25 = "", set(), set()
+    store: dict = {}
+
+    class AuctColl:
+        def update_one(self, q, u, upsert=False):
+            store.setdefault(q["_id"], {}).update(u["$set"])
+
+    class AuctDb:
+        def __getitem__(self, name):
+            return AuctColl()
+
+    inst._corpus_db_factory = lambda: AuctDb()
+    t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
+    t25 = _dt.datetime(2026, 11, 17, 9, 26, tzinfo=_TZ).timestamp()
+    q1 = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 1000},
+                    {"stock_id": "300786", "price": 200000, "inc_rate": 2000}]}
+    monkeypatch.setattr(CS.time, "time", lambda: t15)
+    inst._capture_auction_price(q1)
+    # 09:15 窗第二帧：同股不覆盖（首帧语义）
+    monkeypatch.setattr(CS.time, "time", lambda: t15 + 20)
+    inst._capture_auction_price({"items": [{"stock_id": "002652",
+                                            "price": 44000, "inc_rate": 0}]})
+    monkeypatch.setattr(CS.time, "time", lambda: t25)
+    inst._capture_auction_price({"items": [{"stock_id": "002652",
+                                            "price": 44000, "inc_rate": 0}]})
+    d = store["2026-11-17"]
+    assert d["s0915.002652"]["price"] == 4.84 and d["s0915.002652"]["pct"] == 10.0
+    assert d["s0915.300786"]["price"] == 20.0 and d["s0915.300786"]["pct"] == 20.0
+    assert d["s0925.002652"]["price"] == 4.40 and d["s0925.002652"]["pct"] == 0.0
+    assert inst._corpus_persist_stats["auct15_ok"] == 2
+    assert inst._corpus_persist_stats["auct25_ok"] == 1
+
+
+def test_collector_capture_late_start_no_fake_0915(monkeypatch):
+    """启动晚于 09:25 → s0915 缺席（不拿 09:25 值冒充 09:15，fail-visible）。"""
+    from backend.services import kpl_collector_service as CS
+    inst = object.__new__(CS.KplCollectorService)
+    inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
+                                  "auct_fail": 0, "last_error": ""}
+    inst._auct_date, inst._auct15, inst._auct25 = "", set(), set()
+    store: dict = {}
+
+    class AuctColl:
+        def update_one(self, q, u, upsert=False):
+            store.setdefault(q["_id"], {}).update(u["$set"])
+
+    class AuctDb:
+        def __getitem__(self, name):
+            return AuctColl()
+
+    inst._corpus_db_factory = lambda: AuctDb()
+    t26 = _dt.datetime(2026, 11, 17, 9, 26, tzinfo=_TZ).timestamp()
+    monkeypatch.setattr(CS.time, "time", lambda: t26)
+    inst._capture_auction_price({"items": [{"stock_id": "002652",
+                                            "price": 44000, "inc_rate": 0}]})
+    d = store["2026-11-17"]
+    assert "s0925.002652" in d and not any(k.startswith("s0915.") for k in d)
+
+
+def test_archive_auction_price_field_set_and_load():
+    """字段级 $set 不覆盖他股；load 回读同形。"""
+    from backend.services import kpl_daban_archiver as AR
+    store: dict = {}
+
+    class AuctColl:
+        def update_one(self, q, u, upsert=False):
+            store.setdefault(q["_id"], {}).update(u["$set"])
+
+        def find_one(self, q):
+            flat = store.get(q["_id"]) or {}
+            if not flat:
+                return None
+            doc: dict = {"_id": q["_id"]}
+            for k, v in flat.items():   # 点键还原嵌套（模拟 Mongo $set 语义）
+                cur = doc
+                parts = k.split(".")
+                for p in parts[:-1]:
+                    cur = cur.setdefault(p, {})
+                cur[parts[-1]] = v
+            return doc
+
+    class AuctDb:
+        def __getitem__(self, name):
+            return AuctColl()
+
+    db = AuctDb()
+    r1 = AR.archive_auction_price(db, "2026-11-17",
+                                  s0915={"002652": {"price": 4.84, "pct": 10.0}})
+    r2 = AR.archive_auction_price(db, "2026-11-17",
+                                  s0925={"002652": {"price": 4.40, "pct": 0.0},
+                                         "600000": {"price": 9.0, "pct": 1.0}})
+    assert r1["ok"] and r1["n15"] == 1 and r2["ok"] and r2["n25"] == 2
+    doc = AR.load_auction_price(db, "2026-11-17")
+    assert doc["s0915"]["002652"]["price"] == 4.84
+    assert doc["s0925"]["600000"]["pct"] == 1.0
+    assert AR.archive_auction_price(db, "") == {"ok": False, "reason": "no_date"}
+    assert AR.archive_auction_price(db, "2026-11-17") == {"ok": False, "reason": "empty"}

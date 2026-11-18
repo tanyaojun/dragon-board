@@ -9967,7 +9967,7 @@ function atRender(){
     return sdir * (cmp || String(a.code).localeCompare(String(b.code)));
   });
   const atDerived = (AT.doc || {}).source === 'kpl_bidding_series_derived';
-  const pctTip = atDerived ? '竞价涨幅=09:25 冻结终值（MBL 直采→bid 通道推送）；缺位=序列末帧观测值' : AT_PCT_TIP;
+  const pctTip = atDerived ? '竞价涨幅=09:25 开盘涨幅（权威=3006 存档 kpl_auction_price，掉池股亦有；缺位回退 MBL→bid→序列末帧，详见 jjSource）' : AT_PCT_TIP;
   const amtTip = k => atDerived
     ? (k === 'firstN' ? '首开额=首帧委买额（官方序列观测值，§7.9 派生口径），单位=元'
       : k === 'firstAddN' ? '首加额=首笔观测追加委买增量（tick 分笔计算，2026-11-18 用户裁决；稀疏采样观测口径）'

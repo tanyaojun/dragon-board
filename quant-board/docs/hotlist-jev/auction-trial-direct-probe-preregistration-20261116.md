@@ -535,3 +535,23 @@ drop。昨涨幅归宿裁决=**kpl_bidding_series 加字段**（选项 1）。
 
 **验证**：子集 143 passed；全量 pytest 复跑（见收口）；prev_pct 重落 series 256/256；
 读侧 pre_percent/price 248/248。
+
+## §7.19 增补（2026-11-18 用户裁决）：09:15/09:25 价格+涨幅存档，jj_percent 权威换源
+
+- **缺陷定案（红线9 破译源码，非探针）**：试盘三源（MBL socket / bid socket /
+pid=8 序列）均**成员制**——掉池股无 09:25 终值，保留 last_seen 早退值且被误标
+「冻结09:25」。11-18 实证：试盘宇宙 248 只中 112 只（45%）bid last_seen<09:25；
+002652 扬子新材真 09:25=开 4.40=0.00%（App 同屏），旧链给 9.77%（09:17 早退值）。
+- **App 原始用法**：个股竞价面板「匹配价」09:25 冻结=「开」（行情 3006
+IndexSimpleQuotasResp{price/inc_rate}）；App 集合竞价列表=StockBidYiDong/GetBidYiDong
+（CallAuctionPresenter→ox0.Q/R→j00.C），同为成员制。
+- **裁决**：3006 现有流归档（零新增订阅/端点，频控增量≈0）：09:15 窗 [09:15,09:25)
+首帧=竞价价/涨幅、09:25 窗 [09:25,09:30) 首帧=开盘价/涨幅，各股只首帧不覆盖；
+**两个价格都落库**（用户明令）。晚启不补 09:15（不拿 09:25 冒充，fail-visible）。
+- **落地**：`kpl_auction_price` 日档（单写者=collector，字段级 $set）+
+archive_auction_price/load_auction_price 单一事实源；derive jj_percent 权威=
+s0925.pct（jjSource=open0925_archive），缺位回退 MBL→bid→序列末帧；
+p0915/pct0915/p0925/pct0925 全行披露；state 增 open0925N/open0925MissingN。
+- **缩放**：price×10000→元、inc_rate×100→%（协议锚 125→1.25）。
+- **历史局限**：存档自今日起；历史日无档走回退链（早退股仍错），如需历史修复
+另走 TDX open 回补预登记（live 不可用 TDX：日线盘后才落）。

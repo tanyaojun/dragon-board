@@ -8,9 +8,9 @@
 （冻结委买额）精确一致 → 委买额同语义。
 
 派生口径（仅消费 roster 实读字段，其余不猜不补 0）：
-- jj_percent/jj_amount/jj_turnover = 09:25 冻结终值优先（官方终值，2026-11-18
-  用户反馈竞价涨幅不对→冻结值定案）：MBL 直采 → bid 通道 09:25 匹配推送 →
-  序列末帧观测值（jjSource 逐行披露 mbl_frozen/bid_frozen/series_last）
+- jj_percent = 09:25 存档开盘涨幅权威（3006 现有流归档 kpl_auction_price，
+  2026-11-18 用户裁决：真 09:25=撮合开盘，掉池股亦有；p0915/pct0915/p0925/pct0925
+  全披露）；缺位逐层回退 MBL→bid→序列末帧（jjSource/jjFrozen 逐行披露）
 - first/last/max_amount = 首帧/末帧/峰值帧 zt_buy_amount（委买额时序统计）
 - first_add         = 首笔观测追加委买增量（tick 分笔首正 delta，2026-11-18
   用户裁决：首加额按 tick 分笔计算，非 KPL 推送字段；稀疏采样观测口径，
@@ -130,6 +130,17 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
                     "jj_turnover": _f((i or {}).get("bidding_turnover"))}
     except Exception:  # noqa: BLE001 — bid 读失败不阻断（MBL/序列仍可用）
         bid_frozen = {}
+    # 09:15/09:25 价格+涨幅存档（3006 现有流，2026-11-18 用户裁决）：09:25=真撮合开盘
+    # 涨幅权威（掉池股亦有）；09:15 同存供审计。无档→回退旧链并披露缺席。
+    ap15: dict = {}
+    ap25: dict = {}
+    try:
+        from backend.services.kpl_daban_archiver import load_auction_price
+        ap = load_auction_price(db, date) or {}
+        ap15 = ap.get("s0915") or {}
+        ap25 = ap.get("s0925") or {}
+    except Exception:  # noqa: BLE001 — 读失败不阻断（回退旧链+披露）
+        ap15, ap25 = {}, {}
 
     def _hmss(ts: Any) -> str | None:
         if not isinstance(ts, (int, float)):
@@ -141,6 +152,7 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
     first_add_n = 0
     float_n = 0
     frozen_n = 0
+    open_n = 0
     for code, f in facts.items():
         first, last, mx = f.get("first"), f.get("last"), f.get("max")
         last_amount = _f((last or {}).get("zt_buy_amount"))
@@ -161,10 +173,16 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         # 竞价三字段：09:25 冻结终值优先（MBL→bid；掉池股序列尾帧陈旧≠终值），
         # 缺位逐字段回退末帧观测值
         c6 = str(code)[-6:]
+        a15 = ap15.get(c6) or {}
+        a25 = ap25.get(c6) or {}
         fz = frozen.get(c6) or {}
         bf = bid_frozen.get(c6) or {}
-        jj_pct = fz.get("jj_percent")
-        jj_src = "mbl_frozen" if jj_pct is not None else None
+        # 权威=09:25 存档开盘涨幅；缺位逐层回退 MBL→bid→序列末帧（披露 jjSource）
+        jj_pct = _f(a25.get("pct"))
+        jj_src = "open0925_archive" if jj_pct is not None else None
+        if jj_pct is None:
+            jj_pct = fz.get("jj_percent")
+            jj_src = "mbl_frozen" if jj_pct is not None else None
         if jj_pct is None:
             jj_pct = bf.get("jj_percent")
             jj_src = "bid_frozen" if jj_pct is not None else None
@@ -184,6 +202,8 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         is_frozen = jj_src != "series_last"
         if is_frozen:
             frozen_n += 1
+        if jj_src == "open0925_archive":
+            open_n += 1
         rows[code] = {
             "code": code,
             "bk_name": plate,   # 桥接主链靠它；缺 → 板块归属缺席（fail-visible）
@@ -192,6 +212,8 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
             "jj_turnover": jj_tur,
             "jjSource": jj_src,
             "jjFrozen": is_frozen,
+            "p0915": _f(a15.get("price")), "pct0915": _f(a15.get("pct")),
+            "p0925": _f(a25.get("price")), "pct0925": _f(a25.get("pct")),
             "first_amount": _f(first.get("zt_buy_amount")) if first else None,
             "first_add": first_add,
             "max_amount": _f(mx.get("zt_buy_amount")) if mx else None,
@@ -210,7 +232,8 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
            "earlyTicksFiltered": n_early, "lateTicksFiltered": n_late,
            "plateJoinedN": plate_hit,
            "firstAddN": first_add_n, "floatJoinedN": float_n,
-           "frozenJoinedN": frozen_n}
+           "frozenJoinedN": frozen_n,
+           "open0925N": open_n, "open0925MissingN": len(rows) - open_n}
     if plate_source_error:
         out["plateSourceError"] = plate_source_error
     if not plates:
