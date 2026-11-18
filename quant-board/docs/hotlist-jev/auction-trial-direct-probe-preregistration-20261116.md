@@ -420,3 +420,85 @@
   已消费、自建派生已接线，历史行仅存档。
 - **今日 MBL raw 档无质量标记字段**：97770025 修复前落库，历史档不补（明日起新
   schema 生效），仅存档知悉。
+
+### 7.14 试盘面板读口迁链收口（2026-11-18，用户批准实施）
+
+**问题**：11-17 晚退役裁决（§7.13）只迁了写侧/判据链，【竞价试盘】面板读口
+`GET /api/hotlist-jev/auction-trial` 与 auction-leaders 的 trial 缺档补行漏迁，
+仍纯读 `auction_trial_raw`（退役后停更，最新档 11-17）→ 面板停显 11-17；
+11-18 采集落库事实（kpl_bidding_series 12 ticks 09:15:21–09:26:09 /
+kpl_morning_bidding_raw 111 行 ok）页面不可见。读写漂移，违单一事实源/红线 5
+同步纪律。判据链当日正常（auction_leader_label 源序已序列先行），唯独读口脱节。
+
+**改法**（源序对齐判据链；读口共用单实现 `auction_trial_derive.load_trial_rows`，
+与 auction_leader_label.run 内联源序同序，后者守卫测试不动）：
+- `/auction-trial`：官方序列派生 → raw 历史档回退 → 双缺 fail-visible（trialState
+  留痕）；日期索引 = raw ∪ series；跨日回退向更早有档日双源逐日试（源序不变，
+  dateFallback 透出）；透出 `trialState` + `doc.source`/`savedAt`（派生档龄=序列
+  updated_at）。
+- auction-leaders trial 缺档补行改同 `load_trial_rows`，消除第二套 raw-only 读。
+- 前端来源披露：atStats 「源=官方序列派生(观测值口径)」/「源=历史档Wzs」；列
+  tooltip 按源切换观测值口径（首开=首帧委买额/峰值=峰值帧/最终=末帧）；派生源
+  缺位字段（first_add/start_time/end_time/price/percent/pre_percent/
+  circulated_value）如实 '--' 不补 0。
+- **宇宙裁决收口**：面板接受派生宇宙（委买额可见 ⊇ 试盘页；11-18 实测 248 vs
+  Wzs ~100），与判据链单主链一致，口径页面披露（§7.12 留裁决项至此关闭）。
+- **重叠日口径**：11-17 双源同在 → 面板随主链显派生档；Wzs 真值档（09:41 手动
+  补采 100 行）保留库内仅作对拍参考（scripts/评估脚本仍读），不再作展示源。
+
+**验证**：tests/api/test_auction_leader_route.py 新增 7 读口合同测试（源序遮蔽/
+历史档回退/双缺降级/并集索引取最新/跨日回退/部分字段不连坐/leaders 补行同源序，
+全 FakeDb 零网络零 jev）；全量 pytest 5421 passed 7 skipped；进程内直调生产库：
+无 date → 11-18 派生 248 行（nameMiss 0/boardMiss 58/桥未收录 7 词如实透出），
+11-13 → archive 95 行。relay_page 内联 JS node --check 通过。
+**生效条件**：:8000 uvicorn 无 --reload，需重启后端进程页面才生效（用户执行或授权）。
+
+### 7.15 派生字段补全 + 独立 review 修复收口（2026-11-18，用户裁决 + reviewer subagent）
+
+**背景**：迁链生效后面板派生档多字段缺值（用户截图圈注）；用户裁决：**首加额按
+tick 分笔计算，非 KPL 推送字段**。独立 review verdict：M1 block + m1-m4/n1-n5。
+
+**字段补全口径**（零外呼本地源，观测值口径页面逐列披露）：
+- first_add=首笔观测追加委买增量（连续 tick 首正 delta，缺值帧不配对）；稀疏采样
+  观测口径（与 Wzs 高频自采粒度差结构性存在，11-17 对拍 0/25 命中复核，不冒充）。
+- start/end_time=观测首/末帧 ts（CST HH:MM:SS，≠Wzs 试盘起止语义）。
+- circulated_value=末帧 real_float（bid 口径实际流通；实测 MBL col12==series
+  real_float，≠Wzs 历史口径 0.27-0.88 比值；禁跨源派生比率）。
+- percent=末帧 pct（观测值）；price 初版末帧 price（实测 pid=8 price 列空→§7.16 实时补）。
+- pre_percent 初版 None（无零外呼本地源）→§7.16 落库补齐。
+- state 增 firstAddN/floatJoinedN。
+
+**review 修复**：M1 无 date 也回退最新有行日（§4.0 默认视图不吞历史档）+回归测试；
+m1 竞价成交额 tooltip 按源切换；m2 ok+rows={} 合法空档照服务（legalEmpty）不冒充
+未采集；m3 derive 异常+档案救场 deriveError 留痕不丢；n1 回退穷尽审计锚定请求日
+target_state；n3 HTML 注释迁链残留；n4 leaders 冗余局部 import 删。m4 缺口补测
+（derive 异常救场/raw 读异常/双缺 trialState/跨日回退命中 series 日/M1/legalEmpty）。
+n2（label 内联源序收敛 load_trial_rows）/n5（轮询缓存）登记跟进不阻断。
+
+### 7.16 行情补全 + 竞价冻结终值定案（2026-11-18，用户裁决）
+
+**用户反馈**：现价/昨涨幅仍缺；竞价涨幅数据不对（掉池股序列尾帧陈旧≠09:25 终值）。
+
+**竞价三字段冻结终值定案**：jj_percent/jj_amount/jj_turnover = 09:25 冻结终值优先，
+源序 MBL 直采 → bid 通道 09:25 匹配推送 → 序列末帧观测值；jjSource/jjFrozen 逐行
+披露（mbl_frozen/bid_frozen/series_last），前端冻结股 sub 标「冻结 09:25」替代
+「至 尾帧时点」。11-18 实测 248 行=103 mbl+136 bid+9 series（双官方源外如实回退）。
+roster/判据链同源消费冻结值（选龙口径=官方终值，单一事实源）。
+
+**现价实时**：读侧 hmget 共享 Redis 全市场行情快照（MarketQuotesCache 腾讯源单源，
+零新增外呼，红线 9）；仅补缺位（历史档自有值不覆盖）；quotes.py 加 `<key>:ts` 单源
+ts 透出（读侧 priceFetchedAtMs 披露档龄）；miss 计数 priceMissCount 透出。
+
+**昨涨幅落库**：`stock_prev_day_pct` 日档（_id=日期，rows code→pct/prevClose/
+prevPrevClose/prevDate）；archiver 挂 prevPct 通道每轮限量懒取（单写者=:8000）；
+TDX 日线（tdx_daily_bars，python-bridge 同款协议）(昨收/前昨收−1)×100，未复权披露。
+**频控预算（§1.2-9）**：≤30 只/轮、offset=15 单档、max_probe=3、日尝试上限 600
+（attempts_n 落库）、连续全失败指数退避跳轮上限 8（backoff_rounds 落库跨重启）、
+进程缓存+日档 rows 双重去重；宇宙=当日序列∪MBL，无宇宙零外呼 skip；
+KPL_PREV_PCT_ENABLED 开关；conftest 测试进程强制 0（零外呼纪律，单测 monkeypatch）。
+11-18 首跑 256/256 落库 55.7s、0 失败。
+
+**验证**：pytest 5443 passed 7 skipped（含 conftest 门控后 archiver/schedule 全绿；
+schedule 既有 market_cycle 子进程 600s 超时为用户既有 WIP 的测试外呼泄漏，非本轮
+引入，登记跟进）；进程内直调：prevPct/price 248/248、miss 0、frozen≠官方源 0；
+node --check 通过。**生效条件**：:8000 重启（读侧）+ :8001 重启（ts 键写侧）。

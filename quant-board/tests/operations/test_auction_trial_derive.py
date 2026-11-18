@@ -117,6 +117,90 @@ def test_derive_nan_not_zero():
     assert rows["605255"]["jj_percent"] == 4.78
 
 
+def test_derive_jj_frozen_mbl_primary():
+    """竞价三字段=MBL 09:25 冻结终值优先（2026-11-18 用户反馈涨幅不对定案）；
+    首/峰/末仍序列过程统计，不被冻结值替换。"""
+    mbl = _mbl_rows()
+    mbl["605255"].update({"bidding_pct": 5.5, "bidding_amount": 2e7,
+                          "bidding_turnover": 0.2})
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), mbl), "2026-11-17")
+    r = rows["605255"]
+    assert r["jj_percent"] == 5.5 and r["jj_amount"] == 2e7
+    assert r["jj_turnover"] == 0.2
+    assert r["jjSource"] == "mbl_frozen" and r["jjFrozen"] is True
+    assert state["frozenJoinedN"] == 1
+    assert r["last_amount"] == 8.98e6
+
+
+def test_derive_jj_bid_frozen_for_mbl_absent():
+    """MBL 榜外掉池股 → bid 通道 09:25 匹配推送冻结值兑底（jjSource=bid_frozen）。"""
+    class DbWithBid(FakeSeriesDb):
+        def __getitem__(self, name):
+            if name == "kpl_daban_pool":
+                class C:
+                    def find_one(self, q, projection=None):
+                        return {"bid_items": [{"stock_id": "605255",
+                                "bidding_pct": 6.6, "bidding_amount": 3e7,
+                                "bidding_turnover": 0.3}]}
+                return C()
+            return super().__getitem__(name)
+    rows, state = M.derive_trial_rows_from_series(
+        DbWithBid(_doc(), _mbl_rows()), "2026-11-17")
+    r = rows["605255"]
+    assert r["jj_percent"] == 6.6 and r["jj_amount"] == 3e7
+    assert r["jjSource"] == "bid_frozen" and r["jjFrozen"] is True
+
+
+def test_derive_jj_frozen_partial_fallback():
+    """冻结值逐字段回退：pct 在/amount 缺 → amount 取末帧，不连坐。"""
+    mbl = _mbl_rows()
+    mbl["605255"]["bidding_pct"] = 5.5
+    rows, _ = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), mbl), "2026-11-17")
+    r = rows["605255"]
+    assert r["jj_percent"] == 5.5
+    assert r["jj_amount"] == 1.3979616e7
+    assert r["jjSource"] == "mbl_frozen"
+
+
+def test_derive_first_add_tick_delta():
+    """首加额=首笔观测追加委买增量（tick 分笔，2026-11-18 用户裁决）；
+    起止=观测首末帧时点；现价/涨幅/流通值=末帧观测值；昨涨幅无源=None。"""
+    doc = _doc()  # 7e6 → 9e6 → 8.98e6：首正 delta=2e6
+    doc["ticks"][-1]["it"][0].update({"price": 12.3, "pct": 4.78, "real_float": 6e9})
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(doc, _mbl_rows()), "2026-11-17")
+    r = rows["605255"]
+    assert r["first_add"] == 2.0e6
+    assert r["start_time"] == "09:16:00" and r["end_time"] == "09:16:20"
+    assert r["price"] == 12.3 and r["percent"] == 4.78
+    assert r["circulated_value"] == 6e9
+    assert r["pre_percent"] is None
+    assert state["firstAddN"] == 1 and state["floatJoinedN"] == 1
+
+
+def test_derive_first_add_none_when_monotone_decrease():
+    """全撤减无追加 → first_add=None（不补 0）。"""
+    doc = {"_id": "d", "ticks": [
+        _tick(_BASE + 0, [{"s": "605255", "zt_buy_amount": 9e6}]),
+        _tick(_BASE + 10, [{"s": "605255", "zt_buy_amount": 8e6}]),
+        _tick(_BASE + 20, [{"s": "605255", "zt_buy_amount": 7e6}])]}
+    rows, state = M.derive_trial_rows_from_series(FakeSeriesDb(doc), "2026-11-17")
+    assert rows["605255"]["first_add"] is None
+    assert state["firstAddN"] == 0
+
+
+def test_derive_first_add_skips_missing_frames():
+    """缺值帧不配对（不猜）：7e6→None→9e6 不产生跨帧 delta。"""
+    doc = {"_id": "d", "ticks": [
+        _tick(_BASE + 0, [{"s": "605255", "zt_buy_amount": 7e6}]),
+        _tick(_BASE + 10, [{"s": "605255", "zt_buy_amount": None}]),
+        _tick(_BASE + 20, [{"s": "605255", "zt_buy_amount": 9e6}])]}
+    rows, _ = M.derive_trial_rows_from_series(FakeSeriesDb(doc), "2026-11-17")
+    assert rows["605255"]["first_add"] is None
+
+
 def test_label_wiring_series_primary():
     """主链接线守卫（2026-11-17 正名）：主链=官方 socket 序列试盘行（先行），
     raw 日档回读为次；WzsLinker 退役出链（判据链零第三方代理依赖）。"""

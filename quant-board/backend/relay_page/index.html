@@ -776,7 +776,7 @@
   <!-- 竞价试盘（2026-11-14 用户需求）：页面布局=【个股行情】同款（左板块列表右个股列表联动）；
        分组键=韭研板块名（涨停打标分组 ∪ 产业树一级节点并入，2026-11-14 用户裁决：未入
        打标分组不单独成组；产业树未收录→「未分板块」，非 KPL bk_name 题材概念）；
-       数据=/api/hotlist-jev/auction-trial（纯读 auction_trial_raw 日档，零上游外呼） -->
+       数据=/api/hotlist-jev/auction-trial（纯读零上游外呼；§7.14 源序=官方序列派生→raw 历史档） -->
   <section id="tab-kpltrial" style="display:none">
     <div class="ph-line" style="margin-bottom:14px"></div>
     <div class="card">
@@ -2608,10 +2608,13 @@ let _nodesSeq = 0;
 const CYCLE_EV_MARK = { spaceBreakthrough: '↑突破', spaceCompress: '↓压缩',
                         highCollapse: '✗崩塌', highTolerance: '✓宽容' };
 function cycleAnchorCell(a){
-  // 龙一命运徽章只看自身 leaderSealedToday（封/断）；缺档显—（fail-visible 不伪造）
+  // 龙一命运徽章只看自身状态（封/断/停/?）；缺档显—（fail-visible 不伪造）。
+  // 2026-11-18 天普案：三态 None 不得静默缺徽章（停牌/数据洞显式披露）。
   if (!a || !a.code) return '<span style="color:var(--muted2)">—</span>';
   const st = a.leaderSealedToday === true ? ' <span class="badge b-green">封</span>'
-    : a.leaderSealedToday === false ? ' <span class="badge b-red">断</span>' : '';
+    : a.leaderSealedToday === false ? ' <span class="badge b-red">断</span>'
+    : a.dayStatus === 'suspended' ? ' <span class="badge b-gray" title="今日停牌（不算断板）">停</span>'
+    : a.dayStatus === 'unknown' ? ' <span class="badge b-amber" title="今日续断不可考（日线数据洞）">?</span>' : '';
   return esc(a.name || a.code) + st;
 }
 let _cycleSeq = 0;
@@ -2753,17 +2756,18 @@ function renderNodes(){
       + (ld.streak != null ? ' ' + ld.streak + '板'
         : ldUnsealed
           ? (ld.boards != null
-            ? ` <span title="区间高度（韭研 num，截至最近封板日 ${esc(ld.poolDay || '?')}）；今日未封板，真连板不可考">`
+            ? ` <span title="区间高度（韭研 num，截至最近封板日 ${esc(ld.poolDay || '?')}）；${ld.dayStatus === 'suspended' ? '今日停牌（不算断板）' : ld.dayStatus === 'unknown' ? '今日续断不可考（日线数据洞）' : (!ld.dayStatus && ld.leaderSealedToday === false) ? '续断不可考（旧档无 dayStatus）' : '今日未封板'}，真连板不可考">`
               + (ld.days != null ? ld.days + '天' + ld.boards + '板' : ld.boards + '板') + '</span>'
-            : ' <span style="color:var(--muted2)" title="今日未封板且区间高度缺档（韭研 num 不可解析），不伪造板数">高度不可考</span>')
+            : ` <span style="color:var(--muted2)" title="${(!ld.dayStatus && ld.leaderSealedToday === false) ? '续断不可考（旧档无 dayStatus）' : '今日未封板'}且区间高度缺档（韭研 num 不可解析），不伪造板数">高度不可考</span>`)
           : ' 板数?') : '—';
     // 续/断徽章只看**今日龙一自身**状态（2026-11-12 用户修复）：leaderState 是
     // 「昨日龙一今日状态」（节点判据口径），v5 空间龙一下今/昨龙一常不同股，
     // 贴在今日龙一名旁会误标（日出东方 4 板封板被贴昨龙一断板徽章）。
-    // dayStatus=day_status_of 单源（停牌不算断板）；旧档无 dayStatus 回落
-    // leaderSealedToday/streak 推导（fail-visible：unknown 显 ? 不猜）。
-    const ldState = ld ? (ld.dayStatus || (ld.leaderSealedToday === false ? 'broken'
-      : (ld.leaderSealedToday === true || ld.streak != null) ? 'sealed' : null)) : null;
+    // dayStatus=day_status_of 单源（停牌不算断板）；旧档无 dayStatus 回落：仅
+    // sealed 可推（true/streak 在场），其余一律 unknown（? 徽章）——2026-11-18
+    // 天普案：不得从 leaderSealedToday=false 推 'broken'（旧档分辨不了停牌/数据洞
+    // 与断板，回退会复活裁决废弃口径）。
+    const ldState = ld ? (ld.dayStatus || ((ld.leaderSealedToday === true || ld.streak != null) ? 'sealed' : 'unknown')) : null;
     const ls = ldState === 'broken'
       ? ' <span class="badge b-red" title="该龙一今日未封板（断板反包候选）；区间高度见左侧高度位">断板</span>'
       : ldState === 'sealed'
@@ -3148,7 +3152,11 @@ function tlRowHtml(r, f){
     + '<td class="num"' + (r.leaderSealedToday === false
         ? ' title="当日未封板（断板反包候选）：真连板数不可考，留空。龙一排序规则：有 2 板以上候选时优先高度、同高度取 10 日涨幅最高；全是首板时按当日首封时间最早。断板反包候选须此前连板高度≥2 且当日未跌停，仍按 10 日涨幅参与排序；10日涨幅 '
           + (r.gain10 != null ? esc(r.gain10) + '%' : '不可考') + '"'
-        : '') + '>' + (r.leaderSealedToday === false
+        : r.dayStatus === 'suspended'
+          ? ' title="今日停牌（无交易）：真连板数不适用，留空；区间高度见题材梯队表"'
+          : r.dayStatus === 'unknown'
+            ? ' title="今日续断不可考（日线数据洞）：真连板数不可考，留空"'
+            : '') + '>' + ((r.leaderSealedToday === false || r.dayStatus === 'suspended' || r.dayStatus === 'unknown')
         ? '' : (r.streak == null ? '-' : esc(String(r.streak)))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
     + '<td class="num">' + (r.boardN == null ? '-' : esc(String(r.boardN))) + '</td>'
@@ -9621,8 +9629,9 @@ async function kplFetchBreadthHist(date){
 }
 
 // ══════════ KPL 行情 · 竞价试盘（2026-11-14，勘察 auction-trial-source-survey-20261114 §6）══════════
-// 数据：GET /api/hotlist-jev/auction-trial（纯读 auction_trial_raw 日档，零上游外呼——
-//   WzsLinker 频控预算只归打标链采集路径，本页 60s 轮询不触发任何外呼，红线 9）
+// 数据：GET /api/hotlist-jev/auction-trial（纯读零上游外呼——§7.14 迁链：
+//   源序=官方序列派生（kpl_bidding_series）→ auction_trial_raw 历史档回退；
+//   本页 60s 轮询不触发任何外呼，红线 9；来源/口径在 atStats 与列 tooltip 披露）
 //   + GET /api/hotlist-jev/jiuyan-action（韭研打标链涨停分组，同日回退口径与连板行情一致）。
 // 页面布局=【个股行情】同款（左板块列表右个股列表，点选联动；再点已选分组=取消回「全部」）。
 // **分组键=韭研板块名（用户裁决 2026-11-14 二次澄清：未入涨停打标分组的试盘股并入
@@ -9641,6 +9650,7 @@ async function kplFetchBreadthHist(date){
 //   circulated_value 流通值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生；
 //   first/first_add/max/last 金额语义待 App 同屏核对（勘察 §6.4），列名只用中性词。
 const AT = {doc: null, dates: [], nameMiss: 0, boardMiss: 0, boardMeta: null, unmapped: [], rootMeta: null,
+            prevPctMiss: 0, priceMiss: 0,
             loading: false, error: null, fb: null, seq: 0, pollTimer: null,
             sel: '', boardSort: {key: 'n', dir: -1}, stockSort: {key: 'jjPctN', dir: -1},
             codeBoards: {}, jy: {doc: null, error: null, fb: null}};
@@ -9857,6 +9867,8 @@ async function atLoad(){
   AT.boardMeta = (r && r.boardMeta) || null;
   AT.unmapped = (r && r.bridgeUnmapped) || [];
   AT.rootMeta = (r && r.rootMeta) || null;
+  AT.prevPctMiss = (r && r.prevPctMissCount) || 0;
+  AT.priceMiss = (r && r.priceMissCount) || 0;
   AT.fb = (r && r.dateFallback) || null;
   AT.error = (r && (r.ok === false || r.degraded)) ? (r.reason || r.error || '读口降级') : null;
   AT.jy.doc = (jy && jy.doc) || null;
@@ -9954,7 +9966,14 @@ function atRender(){
     const cmp = (typeof va === 'string' || typeof vb === 'string') ? String(va).localeCompare(String(vb), 'zh') : (va > vb ? 1 : va < vb ? -1 : 0);
     return sdir * (cmp || String(a.code).localeCompare(String(b.code)));
   });
-  const amtTip = k => k === 'firstN' ? '首开额=first_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
+  const atDerived = (AT.doc || {}).source === 'kpl_bidding_series_derived';
+  const pctTip = atDerived ? '竞价涨幅=09:25 冻结终值（MBL 直采→bid 通道推送）；缺位=序列末帧观测值' : AT_PCT_TIP;
+  const amtTip = k => atDerived
+    ? (k === 'firstN' ? '首开额=首帧委买额（官方序列观测值，§7.9 派生口径），单位=元'
+      : k === 'firstAddN' ? '首加额=首笔观测追加委买增量（tick 分笔计算，2026-11-18 用户裁决；稀疏采样观测口径）'
+      : k === 'maxN' ? '峰值额=峰值帧委买额（官方序列观测值），单位=元'
+      : '最终额=末帧委买额（官方序列观测值），单位=元')
+    : k === 'firstN' ? '首开额=first_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
     : k === 'firstAddN' ? '首加额=first_add：语义待 App 同屏核对（勘察 §6.4），单位=元'
     : k === 'maxN' ? '峰值额=max_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
     : '最终额=last_amount：语义待 App 同屏核对（勘察 §6.4），单位=元';
@@ -9980,19 +9999,19 @@ function atRender(){
       : '名称不可考：stock_names 字典 miss 且未入韭研板块（不猜名）';
     html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
       + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
-      + `<td class="kpl-uni ${kcls(r.jjPctN)}" title="${esc(AT_PCT_TIP)}">${atPct(r.jjPctN)}${r.end_time ? '<div class=\"kpl-sub\">至 ' + esc(String(r.end_time)) + '</div>' : ''}</td>`
-      + `<td class="kpl-uni" title="竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）">${atPct(r.jjTurN)}</td>`
-      + `<td class="kpl-uni" title="竞价成交额=jj_amount（元，rank 原值）">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
-      + `<td class="kpl-uni">${esc(String(r.start_time || '--'))}</td>`
-      + `<td class="kpl-uni">${esc(String(r.end_time || '--'))}</td>`
+      + `<td class="kpl-uni ${kcls(r.jjPctN)}" title="${esc(pctTip)}">${atPct(r.jjPctN)}${r.jjFrozen ? '<div class=\"kpl-sub\">冻结 09:25</div>' : r.end_time ? '<div class=\"kpl-sub\">至 ' + esc(String(r.end_time)) + '</div>' : ''}</td>`
+      + `<td class="kpl-uni" title="${atDerived ? '竞价换手=09:25 冻结 bidding_turnover（MBL→bid）优先，缺位=序列末帧观测值' : '竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）'}">${atPct(r.jjTurN)}</td>`
+      + `<td class="kpl-uni" title="${atDerived ? '竞价成交额=09:25 冻结 bidding_amount（MBL→bid）优先，缺位=末帧观测值（board_amt Σ口径），单位=元' : '竞价成交额=jj_amount（元，rank 原值）'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
+      + `<td class="kpl-uni"${atDerived ? ' title="观测首帧时点（官方序列，≠Wzs 试盘开始语义）"' : ''}>${esc(String(r.start_time || '--'))}</td>`
+      + `<td class="kpl-uni"${atDerived ? ' title="观测末帧时点（官方序列，≠Wzs 试盘结束语义）"' : ''}>${esc(String(r.end_time || '--'))}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('firstN'))}">${r.firstN != null ? kfmtAmt(r.firstN) : '--'}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('firstAddN'))}">${r.firstAddN != null ? kfmtAmt(r.firstAddN) : '--'}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('maxN'))}">${r.maxN != null ? kfmtAmt(r.maxN) : '--'}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('lastN'))}">${r.lastN != null ? kfmtAmt(r.lastN) : '--'}</td>`
-      + `<td class="kpl-uni">${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
-      + `<td class="kpl-uni ${kcls(r.pctN)}" title="percent 当日涨幅（收盘口径以行情源为准）">${atPct(r.pctN)}</td>`
-      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）">${atPct(r.prePctN)}</td>`
-      + `<td class="kpl-uni" title="circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
+      + `<td class="kpl-uni"${atDerived ? ' title="现价=腾讯全市场实时快照（共享 Redis，写侧≥60s 刷新；缺位如实--）"' : ''}>${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
+      + `<td class="kpl-uni ${kcls(r.pctN)}" title="${atDerived ? '涨幅=末帧 pct（官方序列观测值）' : 'percent 当日涨幅（收盘口径以行情源为准）'}">${atPct(r.pctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（stock_prev_day_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
+      + `<td class="kpl-uni" title="${atDerived ? '流通值=末帧 real_float（bid 口径实际流通，≠Wzs 历史口径，禁止跨源派生比率）' : 'circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）'}">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
       + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
   }
   $('atStockTable').innerHTML = decorated.length ? html + '</tbody>'
@@ -10005,6 +10024,10 @@ function atRender(){
   $('atStats').textContent = AT.error && !AT.doc ? '竞价试盘 · 读口降级'
     : `竞价试盘 · ${d.tradingDate || '--'} · ${d.nRows != null ? d.nRows : atRows().length} 只`
       + (d.savedAt ? ' · 档龄 ' + esc(String(d.savedAt)) : '')
+      + (d.source === 'kpl_bidding_series_derived' ? ' · 源=官方序列派生(观测值口径)'
+        : d.source ? ' · 源=历史档Wzs' : '')
+      + (AT.prevPctMiss ? ` · 昨涨幅缺 ${AT.prevPctMiss}` : '')
+      + (AT.priceMiss ? ` · 现价缺 ${AT.priceMiss}` : '')
       + (AT.nameMiss ? ` · 名称缺失 ${AT.nameMiss} 只` : '')
       + (model.unboarded.length ? ` · 未分板块 ${model.unboarded.length} 只` : '') + fb;
   // 2026-11-14 用户裁决：页头长段「数据源：…」描述删除；fail-visible 收敛到

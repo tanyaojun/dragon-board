@@ -41,6 +41,11 @@ class FakeRedis:
         self.values[key] = str(value)
         self.expires[key] = int(ttl_seconds)
 
+    def set(self, key: str, value: str) -> None:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        self.values[key] = str(value)
+
     def expire(self, key: str, ttl_seconds: int) -> None:
         if self.fail:
             raise RuntimeError("redis unavailable")
@@ -59,6 +64,10 @@ class _FakeRedisPipeline:
         self.ops.append(("hset", key, field, value))
         return self
 
+    def set(self, key: str, value: str):
+        self.ops.append(("set", key, value))
+        return self
+
     def expire(self, key: str, ttl_seconds: int):
         self.ops.append(("expire", key, ttl_seconds))
         return self
@@ -67,6 +76,8 @@ class _FakeRedisPipeline:
         for op in self.ops:
             if op[0] == "hset":
                 self.redis.hset(op[1], op[2], op[3])
+            elif op[0] == "set":
+                self.redis.set(op[1], op[2])
             elif op[0] == "expire":
                 self.redis.expire(op[1], op[2])
         self.ops = []
@@ -316,6 +327,9 @@ async def test_quotes_cache_refresh_writes_redis_with_ttl() -> None:
     assert redis.expires[key] == 300
     assert "600519" in redis.hashes[key]
     assert "000001" in redis.hashes[key]
+    # 2026-11-18 快照 ts 单源透出（试盘现价读侧披露档龄）
+    assert redis.expires[key + ":ts"] == 300
+    assert redis.values[key + ":ts"] == "1000"
 
 
 def test_quotes_cache_serves_redis_rows_when_memory_cold() -> None:

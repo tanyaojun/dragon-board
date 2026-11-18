@@ -29,6 +29,11 @@ os.environ["JEV_CF_TOKEN"] = ""
 os.environ.pop("JEV_TYPESAFE_PROXY", None)
 os.environ.pop("JEV_CF_ACCOUNT", None)
 
+# 2026-11-18 试盘昨涨幅采集通道隔离：pytest 禁真 TDX 日线外呼（archiver 挂载的
+# prevPct 通道在宇宙非空时会真 fetch_daily_bars；collect_prev_day_pct 由单测
+# monkeypatch 覆盖，红线 §1.2.7 同款零外呼纪律）。
+os.environ["KPL_PREV_PCT_ENABLED"] = "0"
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

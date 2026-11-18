@@ -278,6 +278,9 @@ class MarketQuotesCache:
             for code, row in rows.items():
                 pipe.hset(key, code, json.dumps(row, ensure_ascii=False))
             pipe.expire(key, self._ttl_seconds)
+            # 快照 ts 单源透出（2026-11-18 试盘现价补全读侧披露档龄）
+            pipe.set(key + ":ts", str(self._now_ms()))
+            pipe.expire(key + ":ts", self._ttl_seconds)
             pipe.execute()
         except Exception:
             return
