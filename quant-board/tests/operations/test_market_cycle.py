@@ -86,6 +86,10 @@ def test_compute_anchor_histstreak_newest_seal_day(monkeypatch):
     monkeypatch.setattr(omc, "jiuyan_streak_map", lambda db, d, ds=None: streaks.get(d, {}))
     monkeypatch.setattr(omc, "_final_stocks", lambda db, d: stocks.get(d, []))
     monkeypatch.setattr(omc, "_jiuyan_days_boards", lambda st: (12, 8))
+    # 锚三态单源 day_status_of 需 bars（零外呼：monkeypatch 覆盖式日线）
+    monkeypatch.setattr(omc, "bars_covering", lambda c, d: {
+        P_NEW: {"close": 10.0, "amount": 1e8},
+        T: {"close": 9.5, "amount": 1e8}})
     anchors, meta = omc.compute_anchor(
         FakeDb(), T, pool_dates=[P_OLD, P_MID, P_NEW],
         gain_fetcher=lambda codes, d: {},
@@ -423,3 +427,32 @@ def test_recompress_and_replay_from_stored_ceiling():
     d3 = db[omc.COLLECTION].find_one({"_id": "d3:MARKET_CYCLE"})
     assert d3["state"] == "ice" and d3["version"] == "v3"
     assert any(e["type"] == "spaceCompress" for e in d3["events"])
+
+
+def test_compute_anchor_suspension_three_state(monkeypatch):
+    """2026-11-18 天普案同源：市场锚三态 day_status_of（停牌≠未封板）。"""
+    pseudo = {Y: {"close": 73.82, "high": 73.82, "amount": 1.79e8},
+              T: {"close": 73.82, "high": 73.82, "amount": 5.877e-39}}
+    monkeypatch.setattr(omc, "sealed_and_info",
+                        lambda db, d, ds=None: (({"605255"}, {}, {}) if d == Y
+                                                else (set(), {}, {"thsPoolFound": True})))
+    monkeypatch.setattr(omc, "_final_stocks",
+                        lambda db, d: ([{"code": "605255", "name": "天普股份",
+                                         "days": 4, "boards": 4}] if d == Y else []))
+    monkeypatch.setattr(omc, "jiuyan_streak_map",
+                        lambda db, d, ds=None: ({"605255": 4} if d == Y else {}))
+    monkeypatch.setattr(omc, "_jiuyan_days_boards", lambda st: (4, 4))
+    monkeypatch.setattr(omc, "trading_dates_before", lambda db, d, n, ds=None: [Y])
+    monkeypatch.setattr(omc, "bars_covering", lambda c, d: pseudo)
+    anchors, _meta = omc.compute_anchor(None, T, gain_fetcher=lambda cs, d: {},
+                                        day_change_fetcher=lambda cs, d: {})
+    a = anchors["main"]
+    assert a["dayStatus"] == "suspended" and a["leaderSealedToday"] is None
+    assert a["streak"] is None and a["poolDay"] == Y and a["boards"] == 4
+    real = {Y: {"close": 73.82, "amount": 1.79e8},
+            T: {"close": 70.0, "amount": 2e8}}
+    monkeypatch.setattr(omc, "bars_covering", lambda c, d: real)
+    anchors2, _m2 = omc.compute_anchor(None, T, gain_fetcher=lambda cs, d: {},
+                                       day_change_fetcher=lambda cs, d: {})
+    assert anchors2["main"]["dayStatus"] == "broken"
+    assert anchors2["main"]["leaderSealedToday"] is False

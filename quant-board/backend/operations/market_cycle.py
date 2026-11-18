@@ -22,8 +22,10 @@ from backend.analysis.hotlist import market_cycle as mc
 from backend.analysis.hotlist.theme_leader_ammo import segment_of
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.operations.jev_label_jiuyan import (_jiuyan_days_boards,
+                                                 day_status_of,
                                                  jiuyan_streak_map,
                                                  trading_dates_before)
+from backend.operations.tdx_daily_bars import bars_covering
 from backend.operations.jev_relay_index import _close_pct, _pool_of, _status_map
 from backend.operations.leader_wzs import (covering_day_change_fetcher,
                                            covering_gain_fetcher)
@@ -45,6 +47,13 @@ def _final_stocks(db: Any, date: str) -> list[dict]:
                 seen.add(c6)
                 out.append(st)
     return out
+
+
+def _bars_list_of(b: dict[str, dict] | None) -> list[dict] | None:
+    """覆盖式日线 dict{date:bar} → day_status_of 所需升序 list（date 键注入）。"""
+    if not b:
+        return None
+    return [{**v, "date": d} for d, v in sorted(b.items())]
 
 
 def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
@@ -117,14 +126,22 @@ def compute_anchor(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID, *,
 
     anchors: dict[str, dict] = {}
     for seg, ld in leaders.items():
-        sealed_today = ld["code"] in today_sealed
+        # 2026-11-18 天普案同源：锚三态单源 day_status_of（停牌≠未封板）；仅 ≤2 只
+        # 锚股取 bars（节制），adj=None 零外呼（池权威日 sealed 分支权威）。
+        st = day_status_of(ld["code"], date, sealed=today_sealed,
+                           touch=set(_info or {}),
+                           bars=_bars_list_of(bars_covering(ld["code"], date)),
+                           adj=None)
+        sealed_today = st == "sealed"
         anchors[seg] = {
             "code": ld["code"], "name": ld.get("name"), "segment": seg,
             "streak": ld.get("streak") if sealed_today else None,
             "time": ld.get("time") if sealed_today else None,
             "gain10": ld.get("gain10"), "height": ld.get("height"),
             "days": ld.get("days"), "boards": ld.get("boards"),
-            "poolDay": ld.get("poolDay"), "leaderSealedToday": sealed_today,
+            "poolDay": ld.get("poolDay"),
+            "leaderSealedToday": {"sealed": True, "broken": False}.get(st),
+            "dayStatus": st,
         }
     return anchors, meta
 

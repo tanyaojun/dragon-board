@@ -497,6 +497,20 @@ def run_theme_leader_label_once(today: str | None = None, *,
     return out
 
 
+def _theme_settle_days(db: Any, col: Any, today: str, lookback: int,
+                       trading_dates_fn: Any) -> list[str]:
+    """结算目标日＝近 lookback 交易日 ∪ 停牌 pending 日（v19，2026-11-18 用户裁决 A）。
+
+    长停牌复牌锚可能超出 lookback（复牌日＝个股轴 T+1）；不并入则停牌 pending
+    档永失自愈机会。上限 60 约束 subprocess 批量；零模型调用（只读日轴+distinct）。
+    """
+    days = [d for d in trading_dates_fn(db, "2000-01-01", today) if d < today][-lookback:]
+    susp = col.distinct("tradingDate", {
+        "status": "ok", "code": {"$ne": None}, "outcomeSealedNextDay": None,
+        "structure.dayStatus": "suspended", "tradingDate": {"$lt": today}})
+    return sorted(set(days) | {d for d in susp if d and d < today})[-max(lookback, 60):]
+
+
 def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict[str, Any]]:
     """回填近 `lookback` 个交易日里**仍未封**（`outcomeSealedNextDay` 缺失/None）的结局。
 
@@ -508,8 +522,8 @@ def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict
     try:
         db = repository_factory.get_runtime_mongodb_database()
         from backend.operations.theme_leader_baseline import trading_dates
-        days = [d for d in trading_dates(db, "2000-01-01", today) if d < today][-lookback:]
         col = db["hotlist_jev_theme_leader_labels"]
+        days = _theme_settle_days(db, col, today, lookback, trading_dates)
         for day in days:
             pending = col.count_documents({"tradingDate": day,
                                            "status": "ok",

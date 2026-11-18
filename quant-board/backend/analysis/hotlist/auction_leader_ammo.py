@@ -28,8 +28,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     _questions_hash,
 )
 
-QUESTION_SET_VERSION_AUCTION_LEADER = "vA5"   # 2026-11-18 用户裁决「修复 A+B 两大类」：A1 封板 high 一字板变体+②点名竞昨比/涨停委买额；A2 形态①序列观测代理分支+hard_oneword 竞价行共证+证据清单点名过程事实行；A3 身位②一字零值读法；A4 封板②背离句去重（归形态③）；B3 基因接背景佐证；B5 硬度证据清单收窄。硬度①继承题材 v18 驱动归因（valence 中性），⑤方向解耦沿 vA3 裁决保留（两维正交）。前版 vA4 = cd5639a7407f（跨代不可比）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-18b"   # 共享题材证据块 B9 原料层修复随题材 2026-11-18b 同批生效（S3 候选级门+unverifiable 披露注入+首通道 tag-aware+切词分隔符）；题面 vA5 hash 不变。前版 2026-11-18a = 删盘面事实行+热度排名接线+共享渲染精简+注入 bug 修复；再前 2026-11-15e = 第三源三档+公共门禁
+QUESTION_SET_VERSION_AUCTION_LEADER = "vA6"   # 2026-11-18 投喂文本红线清洁（用户裁决）：共享题源（题材深度/延续/硬度 instructions）随题材 v19 清洁被动变更→换代 vA6（vA5 未首烧零代际成本）；判据语义零变动。前版 vA5 = fb671c8f0223（含 B4 接线 + review 清洁度修；再前 vA4 = cd5639a7407f，跨代不可比）
+AMMO_VERSION_AUCTION_LEADER = "2026-11-18c"   # jj_percent 权威换源：3006 现有流归档 kpl_auction_price 09:25 开盘涨幅（掉池股亦有；掉池股旧链给早退值=错，002652 真值 0% vs 旧 9.77）；09:15 价格涨幅同存审计；前版 2026-11-18b = 共享题材证据块 B9 原料层修复；再前 2026-11-18a = 删盘面事实行+热度排名接线+注入 bug 修复
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")

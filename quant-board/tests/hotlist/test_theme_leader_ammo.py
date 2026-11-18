@@ -90,9 +90,9 @@ def test_question_set_frozen_hash_and_versions():
     「首板被板」→「首板炸板」错字修复；b（开火前修订，用户裁决海洋新闻真实命中）：
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v18"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18b"   # B9 原料层修复（S3 门/切词/首通道 tag-aware）；题面 v18 hash 不变；前版 2026-11-18a = 语料精简续批（B 类）
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "8f7f97a4680a"   # v18（2026-11-18 用户裁决修复 A+B + review 清洁度修）；前代 eb9cfae4139e = v17 术语对齐代（跨代不可比，预登记 theme-leader-v18-questionset-corpus-fix-20261118）
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v19"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18d"   # 投喂文本红线清洁：题面/判据版本号与开发标签全删+叙事口径注改事实日期；前版 2026-11-18c = 天普停牌案三态叙事
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "96949f5a00fd"   # v19（2026-11-18 用户裁决 A 停牌分支＋投喂文本红线清洁）；前代 8f7f97a4680a = v18（跨代不可比，预登记 theme-leader-v19-suspension-branch-preregistration-20261118）
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
                                    "leader_nextday_continue", "leader_headroom",
@@ -175,12 +175,13 @@ def test_question_set_frozen_hash_and_versions():
     assert "板块结构不可考且三层证据" in seat["criteria"]["insufficient"], "窄门延续"
     # ── 板块级两题一字不改（v17 纪律，v12 断言原样保留）──
     tcont = A.QUESTIONS_THEME_LEADER["theme_continuation"]["instructions"]
-    assert "引用义务（v12 修订）" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"
+    assert "引用义务：" in tcont and "至少 2 个判据信号" in tcont, "ending 引用义务"
+    assert "（v12 修订）" not in tcont, "投喂文本禁版本号（2026-11-18 红线裁决）"
     assert "结构再点火信号" in tcont and "二选一" in tcont, "strong_extend 引用源扩源"
     assert "家数扩张或家数序列不可考时不得判 ending" in tcont, "ending 方向约束"
     assert "贫料环境（语料陈旧/稀疏）不是否定结构再点火的理由" in tcont, "贫料≠断流"
     assert "个股层面缺同构历史锚应保守" in tcont, "断板反包保守条款（v12 板块级表述）"
-    assert "本题不得判 ending" in tcont and "跨题一致性（v12）" in tcont, "跨题一致性"
+    assert "本题不得判 ending" in tcont and "跨题一致性：" in tcont, "跨题一致性"
     tdep = A.QUESTIONS_THEME_LEADER["theme_speculation_depth"]["instructions"]
     assert "贫料 ≠ 断流" in tdep and "igniting 优先" in tdep, "深度题贫料定向"
 

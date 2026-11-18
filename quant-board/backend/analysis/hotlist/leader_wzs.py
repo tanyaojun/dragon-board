@@ -62,6 +62,7 @@ def build_leader_wzs(
     leader_rows: list[dict] | None,
     bars_by_code: dict[str, dict[str, dict] | None],
     segment_fn: Callable[[Any], str | None],
+    member_states: dict[str, str] | None = None,
 ) -> tuple[list[dict], list[dict], dict]:
     """观察池 + 形式①/②事件流（盘后口径）。
 
@@ -135,10 +136,27 @@ def build_leader_wzs(
                     continue
                 sealed_now = code6 in today_sealed
                 ld = leader_by_code.get(code6)
+                # 2026-11-18 天普案遗留：成员三态单源 day_status_of（ops 层取齐）——
+                # 停牌/数据洞≠未封板（None 不伪装断板反包）；无 member_states（旧调用/
+                # 池缺失日）保持旧二分口径。
                 if height is None or (isinstance(height, int) and height < 2):
                     # 裁决 5：首板断板（高度<2/不可考）=跟风口径不入池；披露
                     low_height.append(
                         f"{code6} {name or ''}(高度{height if height is not None else '不可考'})")
+                    continue
+                mstate = (member_states or {}).get(code6)
+                if mstate in ("suspended", "unknown"):
+                    pool_by_code[code6] = {
+                        "code": code6, "name": name, "board": board,
+                        "segment": (ld or {}).get("segment") or seg,
+                        "poolDay": s, "windowK": None, "height": height,
+                        "streak": None, "gain10": (ld or {}).get("gain10"),
+                        "isLeader": code6 in leader_by_code,
+                        "leaderSealedToday": None,
+                        "dayStatus": mstate,
+                        "reboundState": "none",
+                        "windowChanges": [],
+                    }
                     continue
                 if sealed_now:
                     if s == pool_days[-1]:
@@ -153,6 +171,7 @@ def build_leader_wzs(
                         "gain10": (ld or {}).get("gain10"),
                         "isLeader": was_leader,
                         "leaderSealedToday": True,
+                        **({"dayStatus": mstate} if mstate else {}),
                         "reboundState": ("leader" if was_leader else "follower"),
                         "windowChanges": _window_changes(code6, s),
                     }
@@ -164,6 +183,7 @@ def build_leader_wzs(
                         "streak": None, "gain10": (ld or {}).get("gain10"),
                         "isLeader": code6 in leader_by_code,
                         "leaderSealedToday": False,
+                        **({"dayStatus": mstate} if mstate else {}),
                         "reboundState": "none",
                         "windowChanges": _window_changes(code6, s),
                     }
@@ -173,22 +193,26 @@ def build_leader_wzs(
         code6 = str(r["code"])
         if code6 in pool_by_code:
             continue
-        sealed_now = bool(r.get("leaderSealedToday"))
+        # 2026-11-18：保留三态（suspended/unknown=None 不 coerce 成 False 伪装断板）
+        sealed_now = r.get("leaderSealedToday")
         pd_ = r.get("poolDay")
+        # review M1（2026-11-18）：反包窗只对**确判断板**（is False）开——停牌/数据洞
+        # （None）无交易不算断板，与成员分支「停牌不开反包窗」同口径；旧档 bool 行为不变。
         row = {
             "code": code6, "name": r.get("name"), "board": r.get("board"),
             "segment": r.get("segment"),
             "poolDay": pd_,
-            "windowK": (_k_of(pd_) if (not sealed_now and pd_ in pool_days) else None),
+            "windowK": (_k_of(pd_) if (sealed_now is False and pd_ in pool_days) else None),
             "height": (r.get("streak") if sealed_now
                        else (streaks_by_day.get(pd_ or "") or {}).get(code6)),
             "streak": (r.get("streak") if sealed_now else None),
             "gain10": r.get("gain10"),
             "isLeader": True,
             "leaderSealedToday": sealed_now,
+            "dayStatus": r.get("dayStatus"),
             "reboundState": "none",
             "windowChanges": (_window_changes(code6, pd_)
-                              if (not sealed_now and pd_) else []),
+                              if (sealed_now is False and pd_) else []),
         }
         pool_by_code[code6] = row
 

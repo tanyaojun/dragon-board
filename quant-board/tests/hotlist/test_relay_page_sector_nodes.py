@@ -51,7 +51,9 @@ def test_nodes_leader_state_badge_own_status_not_prev_leader():
     assert "const ls = r.leaderState" not in fn, \
         "续/断徽章不得消费昨日龙一状态（今/昨龙一常不同股）"
     assert "ld.dayStatus" in fn, "优先台账今日龙一自身状态（day_status_of 单源）"
-    assert "leaderSealedToday === false ? 'broken'" in fn, "旧档回落推导"
+    assert "leaderSealedToday === false ? 'broken'" not in fn, \
+        "2026-11-18 天普案：旧档回退不得从 false 推 broken（分辨不了停牌/数据洞，复活废弃口径）"
+    assert "'sealed' : 'unknown'" in fn, "旧档无 dayStatus 仅 sealed 可推，其余 unknown（? 徽章 fail-visible）"
     assert "ld.streak >= 2" in fn, "封板且真连板≥2 才贴续（首板不贴）"
     assert "停牌不算断板" in fn, "suspended 显停不显断板（v4 裁决）"
 
@@ -60,3 +62,12 @@ def test_nodes_detail_card_keeps_prev_leader_state_disclosure():
     fn = _fn(HTML, "renderNodes")
     assert "昨日龙一今日状态" in fn, "判据口径在展开卡显式披露（主语明确）"
     assert "r.leaderState ?" in fn, "leaderState 披露不删（节点判据可审计）"
+
+
+def test_cycle_anchor_and_limitup_column_three_state_disclosure():
+    """2026-11-18 天普案：三态 None 不得静默缺徽章/误标断板（显示层 fail-visible）。"""
+    fn = _fn(HTML, "cycleAnchorCell")
+    assert "a.dayStatus === 'suspended'" in fn and ">停</span>" in fn
+    assert "a.dayStatus === 'unknown'" in fn and ">?</span>" in fn
+    assert "r.dayStatus === 'suspended'" in HTML, "涨停表连板列停牌披露留空"
+    assert "旧档无 dayStatus" in HTML, "梯队表旧档中性口径（不得误标今日未封板）"

@@ -275,6 +275,8 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 "time": (d.get("structure") or {}).get("time"),
                 # 2026-10-27 空间龙一规则：断板反包候选标记 + 10 日涨幅（排序依据）
                 "leaderSealedToday": (d.get("structure") or {}).get("leaderSealedToday"),
+                # 2026-11-18 天普案：三态 dayStatus 透传（停牌/数据洞显示层不得推断板）
+                "dayStatus": (d.get("structure") or {}).get("dayStatus"),
                 "gain10": (d.get("structure") or {}).get("gain10"),
                 "boardN": (d.get("structure") or {}).get("boardN"),
                 "ladderFollowers": (d.get("structure") or {}).get("ladderFollowers"),

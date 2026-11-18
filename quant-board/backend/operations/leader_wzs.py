@@ -105,10 +105,28 @@ def collect_materials(db: Any, date: str, dataset_id: str,
         leader_meta.setdefault("dataGaps", [])
         leader_meta["dataGaps"] = list(leader_meta["dataGaps"]) + gaps
     bars_by_code = {c: bar_fn(c, date) for c in sorted(codes)}
+    # 2026-11-18 天普案遗留：成员三态单源 day_status_of（停牌≠未封板）。仅池权威
+    # 在场日计算：sealed 分支权威，bars 只辨停牌/断板/数据洞，无需除权参考
+    # （adj=None 零外呼）；池缺失日保持旧二分＋degraded 留痕（fail-visible）。
+    member_states: dict[str, str] | None = None
+    if today_sealed is not None:
+        from backend.operations.jev_label_jiuyan import day_status_of
+
+        def _bars_list(c: str) -> list[dict] | None:
+            b = bars_by_code.get(c)
+            if not b:
+                return None
+            return [{**v, "date": d} for d, v in sorted(b.items())]
+
+        member_states = {
+            c: day_status_of(c, date, sealed=today_sealed, touch=set(_info or {}),
+                             bars=_bars_list(c), adj=None)
+            for c in sorted(codes)}
     return {"pool_days": pool_days, "pool_members": pool_members,
             "streaks_by_day": streaks_by_day, "streaks_today": streaks_today,
             "today_sealed": today_sealed, "leader_rows": leader_rows,
-            "leader_meta": leader_meta, "bars_by_code": bars_by_code}
+            "leader_meta": leader_meta, "bars_by_code": bars_by_code,
+            "member_states": member_states}
 
 
 def build_and_save_leader_wzs(db: Any, date: str,
@@ -129,7 +147,8 @@ def build_and_save_leader_wzs(db: Any, date: str,
         date, pool_days=mat["pool_days"], today_sealed=mat["today_sealed"],
         pool_members=mat["pool_members"], streaks_by_day=mat["streaks_by_day"],
         streaks_today=mat["streaks_today"], leader_rows=mat["leader_rows"],
-        bars_by_code=mat["bars_by_code"], segment_fn=segment_of)
+        bars_by_code=mat["bars_by_code"], segment_fn=segment_of,
+        member_states=mat.get("member_states"))
     if meta.get("status") != "degraded" and mat.get("leader_meta"):
         meta["leaderMeta"] = mat["leader_meta"]
     doc = {"_id": date, "tradingDate": date, "status": meta.get("status"),

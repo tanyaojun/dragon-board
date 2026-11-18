@@ -600,6 +600,14 @@ def _bar_verdict(code: str, date: str, bars: list[dict],
         return "unknown"
     if idx == 0:
         return "unknown"          # 无前棒，判不出涨停
+    # 2026-11-18 天普案（605255 停牌 11-16~11-19）：线上补尾对停牌日注入**伪棒**
+    # （平收=前收、成交额为 ≈0 垃圾值如 5.9e-39、volume 缺）——非交易日，按无棒判
+    # 停牌，不得见「有棒未封」误判 broken（停牌不算断板 v4 裁决）。成交额不足 1 元
+    # ＝无连续竞价交易（A 股真实成交額恒 ≥ 千元级）；amount 缺（None）不在此列，
+    # 维持旧口径宁缺毋猜。
+    amt = bars[idx].get("amount")
+    if isinstance(amt, (int, float)) and amt < 1.0:
+        return "suspended"
     prev = adj.get(date) or bars[idx - 1]["close"]
     return "sealed" if ammo.closed_at_limit(code, bars[idx]["close"], prev) else "broken"
 

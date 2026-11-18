@@ -60,7 +60,9 @@ def _row(**over):
 @pytest.mark.parametrize("status,sealed_today,streak", [
     ("sealed", True, 2),
     ("broken", False, None),
-    ("suspended", False, None),
+    # 2026-11-18 天普案：停牌/数据洞三态 None（不伪装断板 False）
+    ("suspended", None, None),
+    ("unknown", None, None),
 ])
 def test_settle_injects_leader_own_day_status(monkeypatch, status, sealed_today, streak):
     """settle 落库 leader.dayStatus=今日龙一自身状态；区间高度 days/boards 同档透传。"""
@@ -96,6 +98,7 @@ def test_settle_injects_leader_own_day_status(monkeypatch, status, sealed_today,
     ops.settle_day({ops.COLLECTION: _Coll()}, D0, "ds")
     r = _Coll.saved["rows"][0]
     assert r["leader"]["dayStatus"] == status
+    assert r["leader"].get("leaderSealedToday") is sealed_today, "续断三态单源 dayStatus 映射"
     assert r["leaderState"] == status, "昨龙一=同股时判据口径与自身状态一致"
     if sealed_today:
         assert r["leader"]["days"] == 8 and r["leader"]["boards"] == 5

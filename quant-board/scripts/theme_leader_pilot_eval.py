@@ -69,6 +69,22 @@ def next_trading_date(db, date: str) -> str | None:
     return later[0] if later else None
 
 
+def _resume_anchor_date(db, date: str, resume: str | None) -> str | None:
+    """v19 停牌分支（2026-11-18 用户裁决 A）：复牌锚日=resumeDate 起（含）首个
+    交易日且 > date（个股轴）；复牌日不可考/不在交易日轴（未到或 final 未采）→ None
+    （outcome pending，自愈回填，fail-visible 不猜市场轴）。"""
+    if not resume:
+        return None
+    # review M3（2026-11-18）：上游日期串原样透传（_date_or_none 仅滤 0000-00-00），
+    # 非 ISO 形态不得击穿整日结算——按不可考 pending（fail-visible 自愈）。
+    try:
+        end = (datetime.strptime(resume, "%Y-%m-%d") + timedelta(days=30)).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return None
+    later = [d for d in trading_dates(db, resume, end) if d >= resume and d > date]
+    return later[0] if later else None
+
+
 def baseline_rate_lookup(rows: list[dict], min_combo_n: int = 5):
     """同桶基准率查询（逐级回退顺序与 baseline_line 完全一致）+ 总体率。"""
     combos = combo_rates(rows, min_combo_n)
@@ -177,26 +193,51 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
 
     rows: list[dict] = []
     skipped: list[str] = []
+    # v19 停牌分支：续板题锚=复牌日（个股轴）——停牌股市场 T+1 无交易，按市场轴
+    # 结算必误判未封。锚日缓存避免重复读池；非停牌档锚=市场次日（口径不变）。
+    _anchor_cache: dict[str, tuple] = {}
+    if nxt:
+        _anchor_cache[nxt] = (sealed_next, info_meta)
     for doc in labels:
         code = str(doc.get("code") or "")
-        if sealed_next is None:
+        structure = doc.get("structure")
+        structure = structure if isinstance(structure, dict) else {}
+        anchor, anchor_kind, resume = nxt, "market_next", None
+        if structure.get("dayStatus") == "suspended":
+            anchor_kind, resume = "resume", structure.get("resumeDate")
+            anchor = _resume_anchor_date(db, date, resume)
+        if anchor and anchor not in _anchor_cache:
+            s_a, _i_a, m_a = sealed_and_info(db, anchor)
+            _anchor_cache[anchor] = (s_a, m_a)
+        sealed_a, meta_a = _anchor_cache.get(anchor, (None, None))
+        if sealed_a is None:
             outcome = None
-            reason = f"次日 {nxt} 不可判定（THS 池缺失或次日文档未采）" if nxt else "无次日交易日数据"
+            if anchor_kind == "resume":
+                reason = ("停牌复牌日不可考（resumeDate 缺），续板结局 pending"
+                          if not resume else
+                          f"复牌锚日 {anchor or resume} 不可判定（未到/THS 池缺失），pending")
+            else:
+                reason = f"次日 {nxt} 不可判定（THS 池缺失或次日文档未采）" if nxt else "无次日交易日数据"
         else:
-            outcome = code in sealed_next
+            outcome = code in sealed_a
             reason = ""
         if outcome is None:
             skipped.append(f"{code}{doc.get('name') or ''}: {reason}")
         if write_outcome:
-            board_n_next = _next_day_board_n(db, doc.get("board"), nxt)
+            board_n_next = _next_day_board_n(db, doc.get("board"), anchor)
             col.update_one({"_id": doc["_id"]}, {"$set": {
                 "outcomeSealedNextDay": outcome,
                 "outcomeBoardNNextDay": board_n_next,
                 "outcomeMeta": {
-                    "nextDate": nxt,
-                    "source": f"jiuyan_action:{nxt}:final → sealed_and_info",
-                    "thsPoolFound": bool(sealed_next is not None
-                                            and (info_meta or {}).get("thsPoolFound")),
+                    "nextDate": anchor,
+                    # v19：锚口径留痕（resume=复牌日个股轴 / market_next=市场次日），
+                    # 审计与跨锚分段评估用；结构化字段不进叙事（§1.2-8）
+                    "anchorKind": anchor_kind,
+                    "resumeDate": resume,
+                    "source": (f"jiuyan_action:{anchor}:final → sealed_and_info"
+                               if anchor else "resume_anchor_pending"),
+                    "thsPoolFound": bool(sealed_a is not None
+                                            and (meta_a or {}).get("thsPoolFound")),
                     "computedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
                 },
             }})
@@ -390,10 +431,14 @@ def settle_day2(db, date: str, fetcher=None) -> dict:
         return {"ok": True, "date": date, "settled": 0, "skipped": 0, "note": "no_docs"}
     nxt = next_trading_date(db, date)
     day2 = next_trading_date(db, nxt) if nxt else None
-    if not nxt or not day2:
+    if not nxt:
         return {"ok": True, "date": date, "nextDate": nxt, "day2Date": None,
                 "settled": 0, "skipped": 0, "pending": len(docs),
-                "note": "T+1/T+2 不在交易日轴（未到或 final 未采），自愈等后续挂链"}
+                "note": "T+1 不在交易日轴（未到或 final 未采），自愈等后续挂链"}
+    # v19：停牌复牌锚（outcomeMeta.nextDate=复牌日）可能晚于市场轴 T+1，day2 按
+    # 逐档锚推导；市场轴 day2 缺失不再整日阻断（停牌档按复牌轴独立结算）。
+    _d2_cache: dict[str, str | None] = {}
+    pending_n = 0
     fetcher = fetcher or fetch_daily_bars
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     settled = skipped = 0
@@ -404,9 +449,16 @@ def settle_day2(db, date: str, fetcher=None) -> dict:
             continue
         if isinstance(doc.get("outcomeDay2"), dict) and doc["outcomeDay2"].get("date"):
             continue   # 已结算，幂等
+        anchor = (doc.get("outcomeMeta") or {}).get("nextDate") or nxt
+        if anchor not in _d2_cache:
+            _d2_cache[anchor] = next_trading_date(db, anchor)
+        d2 = _d2_cache[anchor]
+        if not d2:
+            pending_n += 1
+            continue   # 锚轴 T+2 未到/未采，自愈等后续挂链
         if doc.get("outcomeSealedNextDay") is False:
             col.update_one({"_id": doc["_id"]}, {"$set": {
-                "outcomeDay2": {"date": day2, "skipped": "next_day_not_sealed",
+                "outcomeDay2": {"date": d2, "skipped": "next_day_not_sealed",
                                 "computedAt": now}}})
             skipped += 1
             continue
@@ -418,16 +470,16 @@ def settle_day2(db, date: str, fetcher=None) -> dict:
             if not bars:
                 errors.append(f"{code}{doc.get('name') or ''}: TDX 日线不可用")
                 continue
-            d1, d2 = bars.get(nxt), bars.get(day2)
-            if not d1 or not d2 or not d1.get("close"):
-                errors.append(f"{code}{doc.get('name') or ''}: T+1/T+2 日线缺（{nxt}/{day2}）")
+            d1, d2b = bars.get(anchor), bars.get(d2)
+            if not d1 or not d2b or not d1.get("close"):
+                errors.append(f"{code}{doc.get('name') or ''}: T+1/T+2 日线缺（{anchor}/{d2}）")
                 continue
             base = float(d1["close"])
             col.update_one({"_id": doc["_id"]}, {"$set": {
                 "outcomeDay2": {
-                    "date": day2,
-                    "openPct": round((float(d2["open"]) - base) / base * 100, 2),
-                    "closePct": round((float(d2["close"]) - base) / base * 100, 2),
+                    "date": d2,
+                    "openPct": round((float(d2b["open"]) - base) / base * 100, 2),
+                    "closePct": round((float(d2b["close"]) - base) / base * 100, 2),
                     "src": "tdx_daily_bars",
                     "computedAt": now,
                 }}})
@@ -435,7 +487,10 @@ def settle_day2(db, date: str, fetcher=None) -> dict:
         except Exception as exc:
             errors.append(f"{code}{doc.get('name') or ''}: {type(exc).__name__}: {exc}")
     return {"ok": True, "date": date, "nextDate": nxt, "day2Date": day2,
-            "settled": settled, "skipped": skipped, "errors": errors}
+            "settled": settled, "skipped": skipped, "pending": pending_n,
+            "errors": errors,
+            **({"note": "锚轴 T+2 不在交易日轴（未到或 final 未采），自愈等后续挂链"}
+               if pending_n and not settled and not skipped else {})}
 
 
 def _sample_row(doc: dict, outcome: bool | None, lookup) -> dict:

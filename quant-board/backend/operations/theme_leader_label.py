@@ -741,6 +741,8 @@ def seal_quality_entries_for_leaders(rows: list[dict],
                         "item": hit.get("item"),
                         "frameAt": hit.get("frameAt"),
                         "unsealed": row.get("leaderSealedToday") is False,
+                        # 2026-11-18 天普案：停牌/数据洞三态透传（叙事分支用）
+                        "dayStatus": row.get("dayStatus"),
                         "poolMissing": None if hit else degraded})
     return entries
 
@@ -956,6 +958,21 @@ def fetch_regulatory_corpus(db: Any, date: str) -> dict:
             "states": corpus.get("states") or {}}
 
 
+def _resume_date_from_regulatory(recent: list[dict] | None, date: str) -> str | None:
+    """停牌复牌日单源=监管语料 recent 组（2026-11-18 天普案；review M2 修复）。
+
+    上游 List_His 原序无排序保证（kpl_regulatory_risk 按原序构建）：按
+    abnormal_date 最大（≤date）选取最近一次停牌记录的 resume_date，不依赖
+    列表顺序——多次停牌股不得取陈旧复牌日；缺则 None（不可考，不伪造）。
+    """
+    cands = [x for x in recent or []
+             if isinstance(x, dict) and x.get("suspended_flag") and x.get("resume_date")
+             and (x.get("abnormal_date") or "") <= date]
+    if not cands:
+        return None
+    return max(cands, key=lambda x: x.get("abnormal_date") or "").get("resume_date")
+
+
 def regulatory_entries_for_codes(codes: list[str], roles: dict[str, str],
                                  corpus: dict) -> list[dict]:
     """相关个股集合 → 监管风险行 entries（身位标签 + reg_by_code 索引项；无命中缺席）。"""
@@ -1129,7 +1146,13 @@ def leaders_for(db: Any, date: str,
             continue
         node_leaders[str(r.get("board"))] = {
             "code": str(lead["code"]), "name": lead.get("name"),
-            "streak": lead.get("streak"), "time": lead.get("time")}
+            "streak": lead.get("streak"), "time": lead.get("time"),
+            # 2026-11-18 天普案：续断三态/区间高度单源=节点档（day_status_of），
+            # 旧档无 dayStatus 键→不覆盖（历史口径不变，fail-visible）
+            "dayStatus": lead.get("dayStatus"),
+            "leaderSealedToday": lead.get("leaderSealedToday"),
+            "poolDay": lead.get("poolDay"), "days": lead.get("days"),
+            "boards": lead.get("boards")}
     prev_dates = trading_dates_before(db, date, 3, dataset_id)
     rows, meta = day_leader_rows(db, date, dataset_id,
                                  prev_date=prev_dates[-1] if prev_dates else None,
@@ -1147,6 +1170,12 @@ def leaders_for(db: Any, date: str,
             dropped.append(f"{b}:{r.get('code')}")
             continue
         if str(r.get("code")) == lead["code"]:
+            # 2026-11-18：节点档带 dayStatus（新代）→ 续断/区间高度以节点单源覆盖
+            # day_leader_rows 池二分 bool（停牌被伪装断板反包候选事故）；
+            # leaderSealedToday 三态 None 也覆盖（suspended/unknown 不伪装 False）。
+            if lead.get("dayStatus") is not None:
+                for _k in ("dayStatus", "leaderSealedToday", "poolDay", "days", "boards"):
+                    r[_k] = lead.get(_k)
             out.append(r)
             matched.add(b)
         else:
@@ -1556,7 +1585,9 @@ def _label_one(db, col, date: str, built: dict,
             "prevBoardN", "prevTotal", "prevStill", "zhabanN", "prevZhabanN", "ladderShape",
             "secondStreak",
             # 2026-10-27 空间龙一规则：10日涨幅 + 未封板标记（断板反包候选）
-            "gain10", "leaderSealedToday")},
+            "gain10", "leaderSealedToday",
+            # 2026-11-18 天普案：续断三态/区间高度/复牌日留结构化载荷（审计/前端）
+            "dayStatus", "poolDay", "days", "boards", "resumeDate")},
         "baselineBucket": json.dumps(
             {k: (built.get("rows") or [built["row"]])[0].get(k)
              for k in ("streak", "boardN", "time")},
@@ -1752,6 +1783,12 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     detail_corpus = fetch_stock_detail_corpus(db, date)
     # 监管风险语料（2026-11-15 预登记）：一次取全日共用（个股+板块两级叙事行）
     reg_corpus = fetch_regulatory_corpus(db, date)
+    # 2026-11-18 天普案：停牌复牌日单源=监管语料（与监管风险行同源），仅
+    # dayStatus=suspended 行携带，供叙事「预计复牌 X」（缺则不可考，不伪造）。
+    for _r in rows or []:
+        if _r.get("dayStatus") == "suspended":
+            _recent = ((reg_corpus.get("byCode") or {}).get(str(_r.get("code"))) or {}).get("recent") or []
+            _r["resumeDate"] = _resume_date_from_regulatory(_recent, date)
     # v17：续板基础率锚先验底（滚动直算，窗 2026-10-23~当日之前，防 look-ahead；
     # 无已结算行=None → 锚行整行缺席，fail-visible）
     base_rate_stats = live_base_rate(db, before=date)

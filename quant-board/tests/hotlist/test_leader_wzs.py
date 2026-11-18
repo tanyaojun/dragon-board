@@ -275,3 +275,19 @@ def test_benchmark_note_absent_when_benchmark_exists():
     """有昨日真连板≥3 的封板股 → 不出无标杆注记。"""
     _r, _e, meta = _call(streaks_today={"600111": 4})   # 昨日 3 板 → 有标杆
     assert not any("无可考标杆" in n for n in meta.get("notes") or [])
+
+
+def test_member_suspension_three_state_not_rewrap():
+    """2026-11-18 天普案遗留：观察池成员三态（停牌/数据洞≠未封板反包）。"""
+    pool, events, _meta = _call(member_states={"600222": "suspended", "600999": "unknown"})
+    r222 = next(r for r in pool if r["code"] == "600222")
+    assert r222["leaderSealedToday"] is None and r222["dayStatus"] == "suspended"
+    assert r222["windowChanges"] == [] and r222["windowK"] is None, "停牌无交易不开反包窗"
+    assert r222["height"] == 3 and r222["streak"] is None, "区间高度保留/当日连板不适用"
+    r999 = next(r for r in pool if r["code"] == "600999")
+    assert r999["leaderSealedToday"] is None and r999["dayStatus"] == "unknown"
+    assert not any(e.get("code") in ("600222", "600999") for e in events)
+    pool2, _e2, _m2 = _call(member_states={"600222": "broken"})
+    assert next(r for r in pool2 if r["code"] == "600222")["leaderSealedToday"] is False
+    pool3, _e3, _m3 = _call()   # 旧调用无 member_states → 旧二分口径不变
+    assert next(r for r in pool3 if r["code"] == "600222")["leaderSealedToday"] is False

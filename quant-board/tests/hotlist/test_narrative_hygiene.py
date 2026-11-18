@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -64,7 +65,19 @@ FORBIDDEN = (
     "层2",
     "拉取失败",
     "KPL直播播报",
+    # 2026-11-18 用户红线裁决：开发语义/版本号/源口径注禁入投喂文本
+    "停牌分支",
+    "语料源",
+    "新增监管",
+    "零新增",
+    "日线数据洞",
+    "停牌前口径",
+    "截至最近可用日线",
 )
+
+# 版本号形态：题面代际标签（v12）/（v13 修订）与 AMMO 日期版本 2026-11-18c
+# 一律禁入叙事（纯日期 2026-11-19 是数据事实，不在禁列）。
+_VERSION_RE = re.compile(r"（v\d+[^）]*）|\d{4}-\d{2}-\d{2}[a-z]")
 
 
 def _assert_clean(text: str | None, ctx: str) -> None:
@@ -72,7 +85,8 @@ def _assert_clean(text: str | None, ctx: str) -> None:
         return   # 缺数据 → 整行缺席，同样合规（AGENTS §1.2-8）
     assert isinstance(text, str) and text, f"{ctx}: 出行必须非空"
     hits = [w for w in FORBIDDEN if w in text]
-    assert not hits, f"{ctx}: 语料叙事含开发注释 {hits}\n---\n{text}\n---"
+    hits += _VERSION_RE.findall(text)
+    assert not hits, f"{ctx}: 语料叙事含开发注释/版本号 {hits}\n---\n{text}\n---"
 
 
 def _assert_absent(text: str | None, ctx: str) -> None:

@@ -110,7 +110,7 @@ from backend.services.kpl_socket_protocol import RPLATE_INC_IS_PERCENT, bdo_item
 # outcomeSealedNextDay/outcomeDay2/supersededBy 零新结算；④人气题一字不改；⑤板块级
 # 两题一字不改。配套 AMMO 2026-11-12a：板块判定行（板块 doc 判答注入个股叙事，纯 join）
 # + 续板基础率锚行（seal_stats 滚动直算）+ GENE_CN「首板被板」错字修复。
-QUESTION_SET_VERSION_THEME_LEADER = "v18"   # 2026-11-18 用户裁决「修复 A+B 两大类」：A1 空间①启动期/发酵期改 space_1 起判（③优先）；A2 硬度①驱动归因（valence 中性：是否驱动事实；澄清/否认/静态主业描述不计硬催化）；A3 续板①删写死「即≥45%」；A4 分轨元规则三处压缩；A5 基因行接为续板佐证。前版 v17 = eb9cfae4139e（跨代不可比）
+QUESTION_SET_VERSION_THEME_LEADER = "v19"   # 2026-11-18 用户裁决 A（天普停牌案题面层）：停牌分支——续板题锚改复牌日（个股轴）+硬度/空间/身位/人气按停牌前口径起判+板块延续题停牌≠断板条款；结算锚同步复牌日（pilot_eval outcomeMeta.anchorKind=resume）；options 零改动。前版 v18 = 8f7f97a4680a（跨代不可比，预登记 theme-leader-v19-suspension-branch-preregistration-20261118）
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -247,7 +247,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v18"   # 2026-11-18 用户裁决「修复 A
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-18b"   # B9 原料层修复（用户裁决「采纳全部建议」）：题材证据块 S3 候选级迭代门+unverifiable 披露式注入（成分未核验标注）+首通道同档 tie-break tag-aware+切词分隔符补 ；;。：:（广百「大消费-酒」错配案）。题面 v18 hash 不变（原料层非判据层）；前一版 2026-11-18a = 语料精简续批（B 类）；再前 2026-11-17b = 桶键中文化
+AMMO_VERSION_THEME_LEADER = "2026-11-18d"   # 投喂文本红线清洁（用户裁决）：题面/判据版本号与开发标签全删（v19 未首烧零代际成本）+叙事口径注改事实日期（gain10 截至 poolDay/续断不可考不带数据洞注）。前一版 2026-11-18c = 天普停牌案续断三态叙事分支+复牌日单源监管语料；再前 2026-11-18b = B9 原料层修复；再前 2026-11-18a = 语料精简续批（B 类）；再前 2026-11-17b = 桶键中文化
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -502,9 +502,9 @@ QUESTIONS_THEME_LEADER = {
                         "**炒作深度/所处阶段**。只判题材层面阶段，不预测个股。判据要点："
                         "事件与新闻的新增密度（热度序列是否断流/见顶）、板块梯队形态"
                         "（首板潮/中军成形/高标分化）、龙头高度与板块家数变化。"
-                        "证据不足的判定边界（v6 收紧）：仅当语料未采集，或产业树未映射 + "
+                        "证据不足的判定边界：仅当语料未采集，或产业树未映射 + "
                         "题材事件/新闻近 5 日均无痕迹 + 板内解析亦不可用**三层同时成立**"
-                        "才判 insufficient。特别地（v12 修订「贫料 ≠ 断流」）："
+                        "才判 insufficient。特别地（贫料 ≠ 断流）："
                         "事件/新闻零痕迹而板块当日仍有涨停 = 「无新增催化的纯资金/情绪驱动」"
                         "信号，**不是证据缺失**，也不得直接等同退潮——产业树正文陈旧、"
                         "新闻供给稀疏属**贫料环境**，此时必须按板块结构定向：板块家数扩张"
@@ -532,13 +532,13 @@ QUESTIONS_THEME_LEADER = {
                         "题材层面（板块整体，不是单指龙头）还能否继续炒作？判据要点："
                         "未来 1-3 日既定事件是否排队（前瞻日历）、题材事件/新闻是否仍在新增、"
                         "催化是否被其他题材分流稀释、板块梯队是否完整。"
-                        "证据不足的判定边界（v6 收窄）：与程序门同口径——产业树未映射 + "
+                        "证据不足的判定边界：与程序门同口径——产业树未映射 + "
                         "事件/新闻无痕 + 板内解析不可用三层同时成立才判 insufficient。"
                         "无新增催化但板块仍活跃 = 存量惯性 → weak_extend；"
                         "分化/退潮信号明确 → ending——零痕迹不是 insufficient 的理由。"
                         "本题判**板块整体**；叙事若为双龙一并列（主板/双创分轨），"
                         "两列均为该板块结构事实。"
-                        "引用义务（v12 修订）：判 ending 须在理由中点名至少 2 个判据信号"
+                        "引用义务：判 ending 须在理由中点名至少 2 个判据信号"
                         "（新闻断流/家数萎缩/龙头分歧）在叙事中的对应事实，且**板块家数"
                         "扩张或家数序列不可考时不得判 ending**——只有单一信号时按存量"
                         "惯性归 weak_extend 并降低置信，不得凭单一信号判结束；"
@@ -549,9 +549,12 @@ QUESTIONS_THEME_LEADER = {
                         "涨停原因行可作引用源）——贫料环境（语料陈旧/稀疏）不是否定结构"
                         "再点火的理由；叙事中龙一今日未封板（断板反包候选）时，个股层面"
                         "缺同构历史锚应保守，但板块层面结构再点火信号仍可按②引用。"
-                        "跨题一致性（v12）：同一叙事的「题材炒作深度」若判 igniting/"
+                        "跨题一致性：同一叙事的「题材炒作深度」若判 igniting/"
                         "fermenting，本题不得判 ending，除非点名基线/锚行具体数字并给出"
-                        "锚外新证据。",
+                        "锚外新证据。"
+                        "个股停牌非板块断板事实：叙事标注龙一今日停牌时，"
+                        "不得将该股计为断板/反包信号或龙头分歧证据（停牌无交易，"
+                        "停牌不算断板）。",
         "criteria": {
             "strong_extend": "强延续：有未落地的既定事件排队、题材事件/新闻持续新增，"
                              "或出现结构再点火（首板潮/家数扩张/断板反包带动板内上板），"
@@ -598,7 +601,16 @@ QUESTIONS_THEME_LEADER = {
                         "（含任一出率桶）、承接行、梯队行、题材证据任一在场必须按①给档，"
                         "锚缺失仅要求降低置信（confidence ≤0.6），不得以「无同构历史锚」"
                         "判 insufficient；叙事标注分轨（主板/双创）时，待判龙头为其轨内"
-                        "龙一，身位以轨内为准，另一轨龙一仅作板块结构事实。",
+                        "龙一，身位以轨内为准，另一轨龙一仅作板块结构事实。"
+                        "⑤叙事标注待判龙头**今日停牌**时：本题=**复牌日**"
+                        "重新上板概率（复牌日以叙事「预计复牌 X」披露为准；市场轴次一"
+                        "交易日该股无交易，不得作判答锚）：封板质量/封板时间/竞价判据不"
+                        "适用（停牌日无交易），改按停牌前事实（10 日涨幅截至日披露/截至"
+                        "最近封板日的连板高度）、板内炸板面/昨日仍封数、板块判定行与题材"
+                        "证据判断；复牌日不可考时按停牌前事实+复牌不确定性判并降低置信"
+                        "（confidence ≤0.6）；结构基线行（含任一出率桶）、承接行、梯队行、"
+                        "题材证据任一在场必须按①给档，锚缺失仅要求降低置信，不得以「无"
+                        "同构历史锚」判 insufficient。",
         "criteria": {
             "high_ge65": "高概率≥65%：结构强（高度领先，或竞价放量高开+昨日承接强）且催化"
                          "硬而新鲜（涨停原因/打标交叉=新催化≤2 日，或当日新增题材事件/新闻，"
@@ -611,8 +623,7 @@ QUESTIONS_THEME_LEADER = {
             "verylow_lt25": "很低<25%：结构示警（家数少+封板晚+无梯队）且题材退潮（板块判定"
                             "=退潮期/临近结束，或家数萎缩+炸板面扩大）",
             "insufficient": "证据不足：三层证据（产业树/题材事件·新闻/板内解析）同时缺失或"
-                            "板块结构不可考；未封板场景：结构基线行有任一出率桶时不得选本档"
-                            "（v13）",
+                            "板块结构不可考；未封板场景：结构基线行有任一出率桶时不得选本档",
         },
     },
     "leader_headroom": {
@@ -642,7 +653,12 @@ QUESTIONS_THEME_LEADER = {
                         "④叙事标注分轨（主板/双创）时，空间判断以轨内身位为准（双创 20cm 与主板"
                         "10cm 生态不同，另一轨龙一仅作板块结构"
                         "事实）；⑤三层证据（产业树/题材事件·新闻/板内解析）同时缺失判 "
-                        "insufficient；叙事含空间锚行（有率值）时不得选本档（v13）。",
+                        "insufficient；叙事含空间锚行（有率值）时不得选本档。"
+                        "⑥叙事标注今日停牌时：空间判断以**停牌前高度**"
+                        "（截至最近封板日的连板高度）为起判高度，锚行读数按①映射（停牌"
+                        "不改变历史同结构出率）；复牌不确定性作降档佐证（可引用监管风险"
+                        "行/复牌日披露），不得仅因停牌判 peak，也不得仅凭停牌前连板高度"
+                        "判 space_2plus。",
         "criteria": {
             "space_2plus": "仍有≥2 板空间：锚≥2板率两成及以上或锚外强新证据，且板块判定"
                            "发酵期/强延续、身位 core_seat、催化硬而新鲜，梯队与催化双支撑",
@@ -651,7 +667,7 @@ QUESTIONS_THEME_LEADER = {
             "peak": "空间已尽：锚再走≥1板率不足三成，或板块判定退潮期/临近结束，或身位被"
                     "替代/催化断流，当前高度大概率就是顶部",
             "insufficient": "证据不足：仅当语料未采集或三层证据（产业树/事件·新闻/板内解析）"
-                            "同时无痕迹；叙事含空间锚行（有率值）时不得选本档（v13）",
+                            "同时无痕迹；叙事含空间锚行（有率值）时不得选本档",
         },
     },
     # ── v17 两新题（预登记 v17 §2.3，用户裁决「两个问题有点少」）：题材深度/广度的
@@ -673,7 +689,10 @@ QUESTIONS_THEME_LEADER = {
                         "此类内容按软证据计；③打标交叉行的驱动类别/催化深度/新鲜度是另一条"
                         "打标链的判定，只作交叉参考，不替代本题证据判读；④三层证据（产业树/"
                         "题材事件·新闻/板内解析）同时缺失且涨停原因行亦缺席才判 insufficient；"
-                        "证据部分缺位按在场证据判档并降低置信。",
+                        "证据部分缺位按在场证据判档并降低置信。"
+                        "⑤叙事标注今日停牌时：本题判**最近一次涨停"
+                        "（停牌前）**驱动事实的催化硬度，证据窗以叙事披露的截至日"
+                        "为准，不得因当日无涨停判 insufficient。",
         "criteria": {
             "hard_fact": "公司级硬催化：公告/投资者关系记录/机构研报/订单交付/并购并表/"
                          "新业务放量等可证实事实，可点名日期与来源，且为涨停驱动事实"
@@ -696,7 +715,10 @@ QUESTIONS_THEME_LEADER = {
                         "默认 relay_seat，除非高度显著领先（领先差≥1 板）或热度排名 Top3；"
                         "③板块判定=退潮期/临近结束时默认不得判 core_seat；④板块结构不可考"
                         "且三层证据（产业树/题材事件·新闻/板内解析）同时缺失才判 insufficient；"
-                        "证据部分缺位按在场证据判档并降低置信。",
+                        "证据部分缺位按在场证据判档并降低置信。"
+                        "⑤叙事标注今日停牌时：身位按停牌前梯队/热度事实"
+                        "（截至最近封板日的梯队领先差/热度排名）判；停牌本身既非身位被"
+                        "替代事实也非核心位巩固事实，复牌不确定性可作被挑战佐证。",
         "criteria": {
             "core_seat": "身位稳固：高度领先（领先差≥1 板）或热度/催化无可替代，梯队有真"
                          "连板跟风支撑，板块判定活跃",
@@ -723,7 +745,11 @@ QUESTIONS_THEME_LEADER = {
                         "并给锚外新证据；④关键证据缺失判 insufficient：仅当窗内逐日"
                         "表现缺失**且**板块结构不可考两者同时成立；证据部分缺位（如无"
                         "跟随数/无周期背景）不是 insufficient 理由，按在场证据判档并"
-                        "降低置信；⑤叙事标注分轨（主板/双创）时判档以轨内身位为准。",
+                        "降低置信；⑤叙事标注分轨（主板/双创）时判档以轨内身位为准。"
+                        "⑥叙事标注今日停牌时：本题=**复牌日**反包的人气"
+                        "聚合成色（复牌日收盘封板确认；窗内逐日表现按停牌前事实），不得"
+                        "以停牌日（无交易）的封板事实判 dragon_confirm/one_day_pop；复牌"
+                        "日不可考时降低置信（confidence ≤0.6）。",
         "criteria": {
             "dragon_confirm": "新龙确立：人气聚合——板内跟随在场（当日板内上板≥2 家，"
                               "含龙头自身）或窗内表现稳住高位（反包前未深度溃散），"
@@ -985,6 +1011,21 @@ def _leader_brief(leader: dict, seg: str | None = None) -> str:
     gain = leader.get("gain10")
     gain_txt = (f"，10 日涨幅 {gain:+.1f}%" if isinstance(gain, (int, float))
                 else "，10 日涨幅不可考")
+    # 2026-11-18 天普案：停牌/日线数据洞三态分支（停牌不算断板 v4）——
+    # 不进入「断板反包候选」措辞（题面规则⑤键控该短语，停牌股今日无交易）；
+    # gain10 为停牌前陈旧值，加截至口径披露（不伪造当日涨幅）。
+    ds = leader.get("dayStatus")
+    if ds in ("suspended", "unknown"):
+        if isinstance(gain, (int, float)):
+            # 截至披露=数据事实日期（poolDay=最近封板日），不写口径注（§1.2-8）
+            asof = leader.get("poolDay")
+            gain_txt += f"（截至 {asof}）" if asof else ""
+        if ds == "suspended":
+            res = leader.get("resumeDate")
+            state_txt = "今日停牌" + (f"（预计复牌 {res}）" if res else "（复牌日不可考）")
+        else:
+            state_txt = "今日续断不可考"
+        return (f"{seg_cn} {leader.get('name')}（{leader.get('code')}）{state_txt}{gain_txt}")
     if leader.get("leaderSealedToday") is False:
         return (f"{seg_cn} {leader.get('name')}（{leader.get('code')}）今日未封板"
                 f"（断板反包候选{gain_txt}）")
@@ -1222,7 +1263,22 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     10 日涨幅身位（排序依据）；模型按 v10 题面⑤分情形判「重新上板概率」。
     """
     unsealed = leader_sealed_today is False
-    if unsealed:
+    # 2026-11-18 天普案：停牌/数据洞三态分支（同 _leader_brief 口径，单源 dayStatus）
+    ds = leader.get("dayStatus")
+    if ds == "suspended":
+        res = leader.get("resumeDate")
+        leader_txt = (f"待判龙一 {leader.get('name')}（{leader.get('code')}）今日停牌"
+                      + (f"（预计复牌 {res}）" if res else "（复牌日不可考）"))
+        if gain10 is not None:
+            asof = leader.get("poolDay")
+            leader_txt += f"，10 日涨幅 {gain10:+.1f}%" + (f"（截至 {asof}）" if asof else "")
+    elif ds == "unknown":
+        leader_txt = (f"待判龙一 {leader.get('name')}（{leader.get('code')}）"
+                      "今日续断不可考")
+        if gain10 is not None:
+            asof = leader.get("poolDay")
+            leader_txt += f"，10 日涨幅 {gain10:+.1f}%" + (f"（截至 {asof}）" if asof else "")
+    elif unsealed:
         leader_txt = f"待判龙一 {leader.get('name')}（{leader.get('code')}）今日未封板（断板反包候选"
         if gain10 is not None:
             leader_txt += f"，10 日涨幅 {gain10:+.1f}%"
@@ -2020,11 +2076,24 @@ def seal_quality_line(entries: list[dict]) -> str | None:
         frame = str(entry.get("frameAt") or "").strip()
         # poolMissing（缺档/不在池归因）只随结构化落库载荷透出，不进叙事（AGENTS §1.2-8）
         if not isinstance(item, dict):
-            if unsealed:
+            # 2026-11-18 天普案：停牌/数据洞三态分支（停牌无交易≠未封板）
+            if entry.get("dayStatus") == "suspended":
+                parts.append(f"{label}=今日停牌（无交易）")
+            elif entry.get("dayStatus") == "unknown":
+                parts.append(f"{label}=今日续断不可考（无当日封单）")
+            elif unsealed:
                 # 今日未封板是判读事实（题面续板⑤），保留；缺档/不在池 → 整段缺席
                 parts.append(f"{label}=今日未封板（无当日封单）")
             continue
         broken = str(item.get("pool_state") or "").strip() == "broken"
+        # 2026-11-18 天普案：停牌/数据洞 vs 池档在场＝跨源矛盾，显式披露（fail-visible，
+        # 评审 P2 冲突分支同款）；停牌日无交易，池档封单无判读意义，不渲染质量明细。
+        if entry.get("dayStatus") in ("suspended", "unknown"):
+            ps = str(item.get("pool_state") or "").strip() or "不可考"
+            state_txt = ("今日停牌（无交易" if entry.get("dayStatus") == "suspended"
+                         else "今日续断不可考（无当日封单")
+            parts.append(f"{label}={state_txt}；池档仍标 {ps}）")
+            continue
         if unsealed and not broken:
             # 评审 P2：推导侧（leaderSealedToday=False）与池档 sealed 矛盾时显式披露，不静默吞
             conflict = str(item.get("pool_state") or "").strip() == "sealed"
@@ -2532,7 +2601,12 @@ def structure_facts_line(row: dict, cycle: dict | None = None) -> str | None:
     if st_cn:
         parts.append("周期状态=" + str(st_cn))
     sealed = row.get("leaderSealedToday")
-    if sealed is False:
+    ds = row.get("dayStatus")
+    if ds == "suspended":
+        parts.append("今日已封板=停牌（无交易）")
+    elif ds == "unknown":
+        parts.append("今日已封板=不可考")
+    elif sealed is False:
         parts.append("今日已封板=否（断板反包候选）")
     elif sealed is None:
         parts.append("今日封板状态=不可考")

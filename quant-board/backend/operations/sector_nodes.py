@@ -332,7 +332,7 @@ def reanchor_dragons(dragons: dict[str, list[dict[str, Any]]],
         code_l = str(lead.get("code") or "")[-6:]
         rest = [r for r in rows if (r.get("code") or "") != code_l]
         same = next((r for r in rows if (r.get("code") or "") == code_l), None)
-        if same is not None and lead.get("leaderSealedToday") is False                 and not same.get("boards"):
+        if same is not None and lead.get("leaderSealedToday") is not True                 and not same.get("boards"):
             # 节点档断板反包龙一在 final 异动名单内命中但无区间高度：与合成行同款披露，
             # 不伪装「首板」（P2-5 评审）
             same = dict(same)
@@ -437,6 +437,10 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
         st = today_status.get(str(r.get("board") or ""))
         if st is not None:
             r["dayStatus"] = st
+            # 2026-11-18 天普案：续断三态单源=dayStatus（sealed/broken 二值映射，
+            # suspended/unknown=None 不伪装断板）——旧口径池二分 bool 把停牌股
+            # 标成断板反包候选，与 v4「停牌不算断板」裁决漂移。
+            r["leaderSealedToday"] = {"sealed": True, "broken": False}.get(st)
 
     prom = _promotion_by_board(db, prev_date, date, dataset_id)
     leader_status = _leader_states(db, date, prev_rows, dataset_id)

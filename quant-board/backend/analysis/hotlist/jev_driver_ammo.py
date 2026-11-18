@@ -32,7 +32,10 @@ THS_KEYS = ("one", "two", "three", "four", "high")
 # 2026-10-22（题集 v3.2/v3.3，用户裁决）：catalyst_freshness 判据增补 none/unclear 分界、
 # catalyst_depth 判据增补联动行情判层（叙事/原料零改动，AMMO_VERSION 不变；
 # questionSetHash 随判据文本自动变，换代首日承接率归零为预期行为），见下方题集注释。
-AMMO_VERSION = "2026-10-22b"
+# 2026-11-18（阳光照明案，用户裁决）：末封=末次封板事件棒（末段封住 run 起始棒）+
+# 首触/末封「棒」字自明口径（5 分钟棒末时刻标记）→ 叙事变，代际顺延；判据零改动
+# （QUESTION_SET_VERSION_DRIVER 维持 v4.0），questionSetHash 不变。
+AMMO_VERSION = "2026-11-18a"
 DEFAULT_DATASET_ID = "dragonboard_live"
 
 # ── 题目集（原文平移，判据改动须走改门） ──
@@ -404,8 +407,11 @@ def board_shape_line_from_bars(date: str, code: str, name: str | None,
         if sealed_flags[k - 1] and not sealed_flags[k]:
             waves += 1
     sealed_to_close = bool(sealed_flags[-1])
+    # 2026-11-18 阳光照明案（600261）：末封=**末次封板事件棒**（末段连续封住 run
+    # 的起始棒），非「末根收盘封住棒」——旧口径封板至收盘时恒 15:00，与同行
+    # 「炸板 0 次」自相矛盾且误导尾盘封板弱读法；waves≥1 时同样丢失回封时点。
     last_seal = next((bars[k]["hm"] for k in range(len(bars) - 1, -1, -1)
-                      if sealed_flags[k]), "--")
+                      if sealed_flags[k] and (k == 0 or not sealed_flags[k - 1])), "--")
     one_word = bars[0]["open"] >= lp - tol and all(sealed_flags)
     if one_word:
         shape = "一字板"
@@ -417,5 +423,8 @@ def board_shape_line_from_bars(date: str, code: str, name: str | None,
         shape = "炸板回封（当日弱转强）"
     else:
         shape = "烂板（炸板≥2 次回封）"
-    return (f"当日板型：首触 {first_touch} · 炸板 {waves} 次 · 末封 {last_seal}"
+    # 2026-11-18：首触/末封加「棒」字自明口径（TDX 5 分钟棒**末时刻标记**，当日首棒
+    # 09:35 实证）——与 THS/KPL 事件时间（如 10:38:19）表观差 ≤5 分钟属粒度约定非数据错；
+    # 「棒」是数据事实非开发注（§1.2-8）。
+    return (f"当日板型：首触棒 {first_touch} · 炸板 {waves} 次 · 末封棒 {last_seal}"
             f" · {'封板至收盘' if sealed_to_close else '收盘未封'} · 板型={shape}")
