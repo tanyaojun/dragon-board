@@ -874,19 +874,18 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                          f"{_heat_line(heat)}")
         else:
             lines.append(f"题材热度序列：近 {HEAT_WINDOW_DAYS} 日无该题材的新闻/事件痕迹")
-    if state.get("ok"):
-        if not ev_hits:
-            lines.append("当日题材事件：无匹配")
-        else:
-            lines.append("当日题材事件：")
-            for ev in ev_hits:
-                src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
-                hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
-                # 语料卫生红线：匹配方式/弱匹配标注不进叙事（AGENTS §1.2-8），
-                # 匹配质量只留结构化字段（matchHow/titleHit）
-                parens = (src + hot).lstrip("，")
-                lines.append(f"- {ev.get('day')} {ev.get('title')}"
-                             + (f"（{parens}）" if parens else ""))
+    # 2026-11-18 用户裁决：「无匹配」占位行整行缺席（2026-11-10 保留例外收窄）；
+    # 缺席状态只进结构化字段（events 空列表 + state.ok / doc.evidenceEventTitles）。
+    if state.get("ok") and ev_hits:
+        lines.append("当日题材事件：")
+        for ev in ev_hits:
+            src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
+            hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
+            # 语料卫生红线：匹配方式/弱匹配标注不进叙事（AGENTS §1.2-8），
+            # 匹配质量只留结构化字段（matchHow/titleHit）
+            parens = (src + hot).lstrip("，")
+            lines.append(f"- {ev.get('day')} {ev.get('title')}"
+                         + (f"（{parens}）" if parens else ""))
 
     # 早报节（2026-11-14 晨间例外，include_morning=True 才渲染；只供 09:26 竞价链）。
     # 与 KPL 池独立读（corpus_state ok 与否不影响早报档披露，§4.0 部分异常不阻断）；
@@ -959,42 +958,30 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
                 lines.append(f"- {when} {_clip(it.get('title'), content_chars)}")
 
     # 近两日题材新闻（开盘啦 ThemeNews）+ 前瞻日历（开盘啦 Type=3）。
-    # 2026-10-24a：两节均无匹配时合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话，
-    # 纯 token 冗余）；单边有命中维持分列，语义不变。
-    news_section = include_l2 and state.get("ok")
-    cal_section = state.get("ok")
-    news_no_match = news_section and not news_hits
-    cal_no_match = cal_section and not cal_hits
-    if news_no_match and cal_no_match:
-        lines.append("题材新闻/前瞻日历：均无匹配")
-    else:
-        if news_section:
-            if news_no_match:
-                lines.append("近两日题材新闻：无匹配")
-            else:
-                lines.append("近两日题材新闻：")
-                for it in news_hits:
-                    stocks = it.get("stocks") or []
-                    top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
-                    # KPL Rate 本身就是百分数值（-1.74 = 当日 -1.74%），不再 ×100
-                    st_txt = "关联股 " + "、".join(
-                        f"{s.get('name')}{s.get('rate'):+.2f}%"
-                        if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
-                        for s in top) if top else ""
-                    # 语料卫生红线：匹配方式/弱匹配标注不进叙事（AGENTS §1.2-8）
-                    parens = f"（{st_txt}）" if st_txt else ""
-                    lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
-                                 f"{parens}")
-        if cal_section:
-            if cal_no_match:
-                lines.append(f"未来 {window_days} 日既定事件：无匹配")
-            else:
-                lines.append(f"未来 {window_days} 日既定事件：")
-                for ev in cal_hits:
-                    fd = _days_between(date, ev.get("date"))
-                    when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
-                    tag = f" [{ev.get('tagName')}]" if ev.get("tagName") else ""
-                    lines.append(f"- {when}{tag} {ev.get('brief')}")
+    # 2026-11-18 用户裁决：「无匹配」占位行整行缺席（含双空合并行/单边空行，
+    # 2026-10-24a 合并行与 2026-11-10 保留例外同批收窄）；只渲染命中节，
+    # 缺席状态只进结构化字段（news/calendar 空列表 + state.ok / doc 镜像标题）。
+    if include_l2 and state.get("ok") and news_hits:
+        lines.append("近两日题材新闻：")
+        for it in news_hits:
+            stocks = it.get("stocks") or []
+            top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
+            # KPL Rate 本身就是百分数值（-1.74 = 当日 -1.74%），不再 ×100
+            st_txt = "关联股 " + "、".join(
+                f"{s.get('name')}{s.get('rate'):+.2f}%"
+                if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
+                for s in top) if top else ""
+            # 语料卫生红线：匹配方式/弱匹配标注不进叙事（AGENTS §1.2-8）
+            parens = f"（{st_txt}）" if st_txt else ""
+            lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
+                         f"{parens}")
+    if state.get("ok") and cal_hits:
+        lines.append(f"未来 {window_days} 日既定事件：")
+        for ev in cal_hits:
+            fd = _days_between(date, ev.get("date"))
+            when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
+            tag = f" [{ev.get('tagName')}]" if ev.get("tagName") else ""
+            lines.append(f"- {when}{tag} {ev.get('brief')}")
 
     # ── L2 板内解析（韭研异动库：板块分组 + 逐股 expound；v3 起纳入证据）──
     # include_l2=False（relay 兼容形状）：整节不渲染。
@@ -1061,7 +1048,10 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             missing_reason = "board_unmapped"
         elif not has_content and not ev_hits and not cal_hits:
             missing_reason = "no_content_no_event"
-    return {"text": "\n".join(lines), "industry": node if match.get("matched") else None,
+    # review R1（2026-11-18）：占位行撤出后无任何内容行→整块缺席（含头），
+    # 不留裸【题材证据】头占行（同「无匹配」裁决口径）；结构化字段照常返回。
+    text = "\n".join(lines) if len(lines) > 1 else ""
+    return {"text": text, "industry": node if match.get("matched") else None,
             "events": ev_hits, "news": news_hits, "calendar": cal_hits, "state": state,
             "boardMapped": bool(match.get("matched")), "hasContent": has_content,
             "eventCount": len(ev_hits),

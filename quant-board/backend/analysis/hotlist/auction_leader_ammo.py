@@ -29,7 +29,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA6"   # 2026-11-18 投喂文本红线清洁（用户裁决）：共享题源（题材深度/延续/硬度 instructions）随题材 v19 清洁被动变更→换代 vA6（vA5 未首烧零代际成本）；判据语义零变动。前版 vA5 = fb671c8f0223（含 B4 接线 + review 清洁度修；再前 vA4 = cd5639a7407f，跨代不可比）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-18c"   # jj_percent 权威换源：3006 现有流归档 kpl_auction_price 09:25 开盘涨幅（掉池股亦有；掉池股旧链给早退值=错，002652 真值 0% vs 旧 9.77）；09:15 价格涨幅同存审计；前版 2026-11-18b = 共享题材证据块 B9 原料层修复；再前 2026-11-18a = 删盘面事实行+热度排名接线+注入 bug 修复
+AMMO_VERSION_AUCTION_LEADER = "2026-11-18d"   # 共享题材证据块「无匹配」占位行整行缺席（随题材 2026-11-18e 同批，用户裁决）；题面 vA6 hash 不变。前版 2026-11-18c = jj_percent 权威换源（3006 存档 09:25 开盘涨幅）；再前 2026-11-18b = 共享 B9 原料层修复；再前 2026-11-18a = 删盘面事实行+热度排名接线+注入 bug 修复
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -558,7 +558,8 @@ def build_auction_leader_narrative(*, date: str, prev_date: str,
                popularity_rank_line, notice_count_line, regulatory_line, lhb_facts_line):
         if ln:
             lines.append(ln)
-    lines.append(evidence_block)
+    if evidence_block:   # review R1：空块（无内容行）不出裸头/空行
+        lines.append(evidence_block)
     return "\n".join(lines)
 
 
@@ -580,5 +581,6 @@ def build_auction_sector_narrative(*, date: str, prev_date: str, market_line: st
                regulatory_line, lhb_facts_line):
         if ln:
             lines.append(ln)
-    lines.append(evidence_block)
+    if evidence_block:   # review R1：空块（无内容行）不出裸头/空行
+        lines.append(evidence_block)
     return "\n".join(lines)

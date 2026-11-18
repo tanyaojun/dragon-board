@@ -253,14 +253,18 @@ def test_block_fail_visible_paths():
     assert "无催化正文" in out3["text"]
     assert out3["evidenceMissingReason"] == "no_content_no_event"
 
-    # 4) 无匹配事件 ≠ 无催化（产业树正文在 → 有可用证据）
+    # 4) 无匹配事件 ≠ 无催化（产业树正文在 → 有可用证据）；
+    # 2026-11-18 用户裁决：「无匹配」占位行整行缺席，缺席只进结构化字段
     out4 = D.build_theme_evidence_block(_db(topic=[], news=[], calendar=[]),
                                         board_name="机器人", date="2026-10-22")
-    assert "当日题材事件：无匹配" in out4["text"]
-    # 2026-10-24a：新闻与日历双空合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话）
-    assert "题材新闻/前瞻日历：均无匹配" in out4["text"]  # 2026-10-30d 精简：重复解释括号删
-    assert "近两日题材新闻：无匹配" not in out4["text"]
-    assert "未来 3 日既定事件：无匹配" not in out4["text"]
+    assert "当日题材事件" not in out4["text"], "无命中整行缺席，不留占位"
+    assert "题材新闻/前瞻日历" not in out4["text"]
+    assert "近两日题材新闻" not in out4["text"]
+    assert "未来 3 日既定事件" not in out4["text"]
+    assert "无匹配" not in out4["text"]
+    assert out4["events"] == [] and out4["news"] == [] and out4["calendar"] == [], \
+        "缺席状态结构化在场（空列表 + state.ok）"
+    assert out4["state"]["ok"] is True
     assert out4["evidenceMissing"] is False, "产业树正文在 → 有可用证据，不判缺失"
 
 
@@ -378,21 +382,35 @@ def test_generic_anchor_blocks_false_event_association():
     assert len(out2["events"]) == 1 and "包含" in out2["events"][0]["matchHow"]
 
 
-def test_news_calendar_merge_only_when_both_empty():
-    """双空合并（2026-10-24a）：单边有命中必须维持分列（语义分层不损失）。"""
-    # 新闻有命中（俄乌重建 Kword）、日历空 → 新闻节出命中行，日历节出独立无匹配行
+def test_news_calendar_no_match_lines_absent():
+    """2026-11-18 用户裁决：无命中节整行缺席（含单边空），命中节正常渲染。"""
+    # 新闻有命中（俄乌重建 Kword）、日历空 → 只出新闻命中行，日历节零字
     db = _db(calendar=[])
     db.cols["jiuyan_action"] = FakeCol(RUSSIA_ACTION)
     out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
                                        leader_code="001360")
     assert "近两日题材新闻：" in out["text"]
-    assert "未来 3 日既定事件：无匹配" in out["text"]
-    assert "题材新闻/前瞻日历：均无匹配" not in out["text"]
-    # relay 兼容形状（无新闻节）：日历空仍出独立无匹配行，不得被合并逻辑吞掉
+    assert "未来 3 日既定事件" not in out["text"], "日历无命中整行缺席"
+    assert "无匹配" not in out["text"]
+    # relay 兼容形状（无新闻节）：日历空同样零字
     out2 = D.build_theme_evidence_block(_db(news=[], calendar=[]), board_name="机器人",
                                         date="2026-10-22", include_l2=False)
-    assert "未来 3 日既定事件：无匹配" in out2["text"]
+    assert "未来 3 日既定事件" not in out2["text"]
     assert "题材新闻/前瞻日历" not in out2["text"]
+    assert "无匹配" not in out2["text"]
+
+
+def test_empty_block_absent_including_header():
+    """review R1：占位行撤出后无任何内容行→整块缺席（含头），不留裸头占行；
+    结构化字段照常返回；叙事构建方跳过空块不出空行。"""
+    out = D.build_theme_evidence_block(_db(topic=[], news=[], calendar=[]),
+                                       board_name="", date="2026-10-22", include_l2=False)
+    assert out["text"] == "", "无内容行不得留裸【题材证据】头"
+    assert out["state"]["ok"] is True and out["events"] == [] and out["calendar"] == []
+    from backend.analysis.hotlist.theme_leader_ammo import build_leader_narrative
+    n = build_leader_narrative(date="2026-10-22", structure="结构行", baseline="基线行",
+                               evidence_block=out["text"], leader_name="X", leader_code="1")
+    assert "【题材证据】" not in n and "\n\n" not in n and not n.endswith("\n")
 
 
 # ── S3（2026-10-24b）：驱动标签第二匹配通道 ──────────────────────────────

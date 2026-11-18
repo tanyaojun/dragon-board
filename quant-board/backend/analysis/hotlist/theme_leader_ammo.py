@@ -247,7 +247,7 @@ QUESTION_SET_VERSION_THEME_LEADER = "v19"   # 2026-11-18 用户裁决 A（天普
 # 初判「误命中」推翻、O1 匹配锚扩展立项撤销（匹配层正确）。题面新闻核实改按
 # 业务/产业链关联（标题未点名公司≠无关），硬度题 sector_story 同口径。v17 零
 # 已标答 doc，开火前修订不跨代污染；hash 随题面自动重算。
-AMMO_VERSION_THEME_LEADER = "2026-11-18d"   # 投喂文本红线清洁（用户裁决）：题面/判据版本号与开发标签全删（v19 未首烧零代际成本）+叙事口径注改事实日期（gain10 截至 poolDay/续断不可考不带数据洞注）。前一版 2026-11-18c = 天普停牌案续断三态叙事分支+复牌日单源监管语料；再前 2026-11-18b = B9 原料层修复；再前 2026-11-18a = 语料精简续批（B 类）；再前 2026-11-17b = 桶键中文化
+AMMO_VERSION_THEME_LEADER = "2026-11-18e"   # 「无匹配」占位行整行缺席（用户裁决，2026-11-10 保留例外收窄）：当日题材事件/题材新闻/前瞻日历无命中不再出占位行，缺席只进结构化字段（补 evidenceCalendarTitles 镜像）。题面 v19 hash 不变。前一版 2026-11-18d = 投喂文本红线清洁；再前 2026-11-18c = 天普停牌案续断三态叙事分支；再前 2026-11-18b = B9 原料层修复；再前 2026-11-18a = 语料精简续批（B 类）；再前 2026-11-17b = 桶键中文化
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -2837,7 +2837,8 @@ def build_leader_narrative(*, date: str, market_line: str | None = None,
         # v14（P3 工作流 B）：人气证据链行组，事件股专属；仅事件日出行，
         # 与本题判答条件（事件门）同源。None（非事件日）不出行，旧行为不变
         lines.append(rebound_line)
-    lines.append(evidence_block)
+    if evidence_block:   # review R1：空块（无内容行）不出裸头/空行
+        lines.append(evidence_block)
     return "\n".join(lines)
 
 
@@ -2909,5 +2910,6 @@ def build_sector_narrative(*, date: str, market_line: str, structure: str, basel
     if realtime_lhb_line:
         # 2026-11-11 ③：实时龙虎榜行
         lines.append(realtime_lhb_line)
-    lines.append(evidence_block)
+    if evidence_block:   # review R1：空块（无内容行）不出裸头/空行
+        lines.append(evidence_block)
     return "\n".join(lines)

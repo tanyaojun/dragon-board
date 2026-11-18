@@ -91,7 +91,7 @@ def test_question_set_frozen_hash_and_versions():
     新闻核实改按业务/产业链关联 + sector_story 同口径。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v19"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18d"   # 投喂文本红线清洁：题面/判据版本号与开发标签全删+叙事口径注改事实日期；前版 2026-11-18c = 天普停牌案三态叙事
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-11-18e"   # 「无匹配」占位行整行缺席（用户裁决，2026-11-10 例外收窄）；题面 v19 hash 不变；前版 2026-11-18d = 投喂文本红线清洁
     assert A.QUESTION_SET_HASH_THEME_LEADER == "96949f5a00fd"   # v19（2026-11-18 用户裁决 A 停牌分支＋投喂文本红线清洁）；前代 8f7f97a4680a = v18（跨代不可比，预登记 theme-leader-v19-suspension-branch-preregistration-20261118）
     # v17：个股级四题（续板/空间/催化硬度/身位稳固度）+ 板块级两题 + 事件题
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",

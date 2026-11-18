@@ -554,6 +554,8 @@ def _label_one(db, col, date: str, built: dict, *,
         "evidenceMissingReason": (built.get("evidence") or {}).get("evidenceMissingReason"),
         "evidenceEventTitles": [e.get("title") for e in built["evidence"].get("events") or []],
         "evidenceNewsTitles": [n.get("title") for n in built["evidence"].get("news") or []],
+        # 2026-11-18：日历命中镜像（「无匹配」占位行撤出叙事，随题材同批）
+        "evidenceCalendarTitles": [e.get("brief") for e in built["evidence"].get("calendar") or []],
         # 事件列证据三徽章（复刻题材龙头 tlRowHtml evid；读口透传，旧档缺→fail-visible）
         "evidenceIndustry": (built["evidence"].get("industry") or {}).get("name"),
         "evidenceBoardResolved": bool(built["evidence"].get("boardResolved")),

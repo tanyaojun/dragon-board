@@ -145,7 +145,7 @@ def test_auction_leader_vA5_dedicated_stamps():
     from backend.analysis.hotlist import auction_leader_ammo as al
     from backend.operations import auction_leader_label as ops
     assert al.QUESTION_SET_VERSION_AUCTION_LEADER == "vA6"
-    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-18c"   # jj_percent 权威=3006 存档 09:25 开盘涨幅（掉池股亦有）；前版 2026-11-18b = 共享 B9 原料层修复
+    assert al.AMMO_VERSION_AUCTION_LEADER == "2026-11-18d"   # 共享证据块「无匹配」占位行撤出（随题材 2026-11-18e 同批）；前版 2026-11-18c = jj_percent 权威换源（3006 存档 09:25）
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == "f945412269fd"   # vA6（共享题源随题材 v19 投喂文本红线清洁，未首烧零代际成本）；前代 fb671c8f0223 = vA5 / cd5639a7407f = vA4（跨代不可比）
     assert al.QUESTION_SET_HASH_AUCTION_LEADER == al._questions_hash(al.QUESTIONS_AUCTION_LEADER)
     # vA3 题目结构：个股 4 题（资金并入形态题判据，裁决①）

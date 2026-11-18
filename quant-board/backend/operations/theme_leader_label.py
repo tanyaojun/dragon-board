@@ -1607,6 +1607,9 @@ def _label_one(db, col, date: str, built: dict,
         # （KPL 研讨会新闻含亚玛顿关联股，evidenceEventTitles=[]/kwordTags=[] 看似「没关联」）
         # ——镜像题材新闻命中标题（含 Kword 空、标题锚命中的条目），与事件徽章同口径
         "evidenceNewsTitles": [n.get("title") for n in built["evidence"].get("news") or []],
+        # 2026-11-18：日历命中镜像（「无匹配」占位行撤出叙事后，日历缺席/命中
+        # 只靠结构化层可见，与事件/新闻徽章同口径）
+        "evidenceCalendarTitles": [e.get("brief") for e in built["evidence"].get("calendar") or []],
         # v3/v4：L2 板内解析可用性 + Kword 题材标签（开盘啦新闻流），前端分层展示用
         "evidenceBoardResolved": bool(built["evidence"].get("boardResolved")),
         "evidenceKwordTags": list(built["evidence"].get("kwordTags") or []),
