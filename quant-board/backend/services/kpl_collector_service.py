@@ -428,7 +428,7 @@ class KplCollectorService:
         # （App w30 同款，多股共享 subId）；开启后会话内单调递增 unique hint。
         self._sub_unique_id = bool(sub_unique_id)
         self._sub_id_hint_next = self._SUB_ID_HINT_BASE   # _session 复位
-        self._pending_unsub: List[int] = []   # 待退订 subId（防抖 ≥5s，≤1 帧/tick）
+        self._pending_unsub: List[int] = []   # 待退订 subId（2026-11-18 防抖已拆：整队分块一次发）
         # 402 已发帧 seq→subIds（2026-11-17 P3' 实弹：kind5 ack payload=28B 不透明
         # 状态块非 UnsubIdReq 回声，App qn0.d/q 同款按 seq 从原请求取 subIds）
         self._unsub_seq_ids: Dict[int, List[int]] = {}
@@ -474,7 +474,7 @@ class KplCollectorService:
             # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集落库）
             "bid_series_ok": 0, "bid_series_fail": 0,
             "last_error": ""}
-        # 竞价序列 tick 节流（采集线程内时间戳；窗内每 ≥5s 落一个合并快照 tick）
+        # 竞价序列：2026-11-18 窗门控+节流已拆，pid=8 推送即全量落库（§3.9）
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
         self._lhb_forecast_snap: Optional[Dict[str, Any]] = None
