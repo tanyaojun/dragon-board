@@ -316,6 +316,15 @@ class KplCollectorService:
         ka_mode: str = "off",
         sub_unique_id: bool = False,
         sub_staged: bool = False,
+        # 2026-11-18 消融定案：0x40 订阅窗口 ≈20s（inline 33 帧×0.3s 停顿=22.6s
+        # 照样 1002@23.2s；App 每连接 ~10 帧秒级发完）。动态行情面硬帽=把面压回
+        # App 量级使 setup 在窗口内发完；0=不限（旧行为）。溢出截断 fail-visible
+        # 计数（quote_face_dropped_n）。
+        quote_face_cap: int = 0,
+        # 2026-11-18 窗口定案：0x40 订阅窗口按时间 ~20s 关闭（与体积无关；
+        # 33 帧×0.3s=18.8s 贴沿照样 1002@19s）。drain_pause 覆盖旋钮：把 setup
+        # 压进窗口（App 每连接 ~10 帧也是亚秒级连发；0.3s 停顿是过保守旧档）。
+        drain_pause: Optional[tuple] = None,
     ):
         if ka_mode not in ("610", "off", "none"):
             raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off|none）")
@@ -340,7 +349,7 @@ class KplCollectorService:
         # （P4 A/B 实弹裁决 2026-11-17：610 重发第 5 次→1106 确定性杀连
         # （3/3，中位寿命 67s）；off 全 tick 3001 轮转 3/3 零错误存活 >120s，
         # 且 App 每连接仅认证一次——off 更贴 App。默认 off；回退 KPL_KA_MODE=610）
-        self._drain_pause = (0.3, 0.15)
+        self._drain_pause = tuple(drain_pause) if drain_pause else (0.3, 0.15)
         self._ka_mode = ka_mode
         self._setup_inline_subs = bool(setup_inline_subs)
         self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
@@ -481,6 +490,10 @@ class KplCollectorService:
         # ——浏览器 relay 页板块树 merge 717 板块+31 股后永不衰减，852 id×2cmd/会话
         # 全量重发 vs App 离屏即清；ws 全断开时回落默认面，修 SubSource 透出）
         self._sub_source = "default"
+        self._quote_face_cap = max(0, int(quote_face_cap))
+        self._quote_face_dropped_n = 0
+        # 末帧归因环（2026-11-18）：1002/杀连时看最后发的是哪类帧
+        self._sent_cmd_log: List[Dict[str, Any]] = []
         self._sub_prio_all: List[str] = []   # 优先块成员（分块轮询见 _resplit）
         self._sub_prio: List[List[str]] = []
         self._sub_rest: List[List[str]] = []
@@ -1193,6 +1206,25 @@ class KplCollectorService:
         for i in range(0, len(lst), size):
             yield lst[i:i + size]
 
+    def _apply_face_cap(self) -> None:
+        """行情面硬帽（2026-11-18 窗口消融）：cap>0 且超限时保 priority 头部截断。
+
+        App 量级参照：单屏 ~10-50 id；0x40 窗口 ~20s 内 setup 必须发完——面体积
+        直接决定帧数×拟人停顿总时长。溢出截断计数 fail-visible（status 透出）。
+        """
+        cap = self._quote_face_cap
+        if cap <= 0 or len(self._stock_ids) <= cap:
+            return
+        prio = [i for i in self._stock_ids if i in set(self._sub_prio_all)][:cap]
+        rest = [i for i in self._stock_ids if i not in set(prio)]
+        kept = list(dict.fromkeys(prio + rest))[:cap]
+        dropped = len(self._stock_ids) - len(kept)
+        if dropped > 0:
+            self._quote_face_dropped_n += dropped
+            self._stock_ids = kept
+            kept_set = set(kept)
+            self._sub_prio_all = [i for i in self._sub_prio_all if i in kept_set]
+
     def _resplit(self) -> None:
         """按优先块/普通块切分订阅清单（订阅帧与保活轮询都按块发）。"""
         prio_set = set(self._sub_prio_all)
@@ -1225,9 +1257,10 @@ class KplCollectorService:
             prio = old_prio + [p for p in prio if p not in old_prio_set]
         self._stock_ids = ids
         self._sub_prio_all = prio
+        self._apply_face_cap()
         self._resplit()
         self._sub_source = "dynamic"
-        return {"ok": True, "count": len(ids),
+        return {"ok": True, "count": len(self._stock_ids),
                 "chunks": len(self._sub_prio) + len(self._sub_rest),
                 "running": self.is_running()}
 
@@ -1279,6 +1312,8 @@ class KplCollectorService:
             "subscriptions": {
                 "count": len(self._stock_ids),
                 "source": self._sub_source,
+                "cap": self._quote_face_cap,
+                "dropped_n": self._quote_face_dropped_n,
                 "priority": len(self._sub_prio_all),
                 "hy": sum(1 for i in self._stock_ids if len(i) == 6 and i.startswith("881")),
                 "sectors": sum(1 for i in self._stock_ids
@@ -1305,6 +1340,8 @@ class KplCollectorService:
             "last_death_cause": self._last_death_cause,
             "death_cause_counts": dict(self._death_cause_counts),
             "last_session_err_code": self._session_err_code,
+            "last_err_resp": self._stats.get("last_err_resp"),
+            "sent_cmd_log": list(self._sent_cmd_log[-12:]),
             # 交易时段门控观测（2026-11-11）：当前是否在交易窗口 + 是否启用门控
             "trading_session": (self._in_trading_session()
                                 if self._enforce_trading_hours else True),
@@ -1349,6 +1386,7 @@ class KplCollectorService:
             before = {"count": len(self._stock_ids), "prio": len(self._sub_prio_all)}
             self._stock_ids = list(self._default_stock_ids)
             self._sub_prio_all = []
+            self._apply_face_cap()
             self._resplit()
             self._sub_source = "default"
             after = {"count": len(self._stock_ids), "prio": 0}
@@ -1602,6 +1640,12 @@ class KplCollectorService:
         self._status = "stopped"
 
     def _dbg(self, direction: str, data: bytes) -> None:
+        if direction == "C" and len(data) >= 9:
+            # 末帧归因环（2026-11-18）：帧头=[pkg 1][len 4][seq 2][cmd 2]，cmd 在 [7:9]
+            cmd = int.from_bytes(data[7:9], "big")
+            self._sent_cmd_log.append({"cmd": cmd, "ts": time.time()})
+            if len(self._sent_cmd_log) > 40:
+                del self._sent_cmd_log[:-40]
         if not os.environ.get("KPL_DEBUG"):
             return
         with open(os.environ["KPL_DEBUG"], "a") as f:
@@ -2426,6 +2470,9 @@ class KplCollectorService:
         if cmd == proto.CMD_ERROR:
             err = proto.parse_err_resp(payload)
             self._session_err_code = err.get("code")   # 死因观测（纯记录，不改路由）
+            # 2026-11-18 根因定位：ErrResp msg 全文透出 status.last_err_resp
+            # （独立字段：close 消息会覆盖 last_error）
+            self._stats["last_err_resp"] = f"code={err.get('code')} msg={err.get('msg')!r}"
             self._err(f"server error: {err}")
             self._emit(KplEvent(type="error", ts=time.time(), server=err))
             # 211 熔断：未决批期间收 ErrResp → 本会话回退单帧（保守归因，

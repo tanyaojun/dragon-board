@@ -143,6 +143,15 @@ _service = KplCollectorService(
     zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS,
     stock_detail_subs=_STOCK_DETAIL_SUBS,
     stock_detail_max_stocks=int(os.environ.get("KPL_DETAIL_MAX_STOCKS", "15") or 15),
+    # 2026-11-18 消融定案：1002 时间线=setup 内联 13.5s → 读循环 5s 宽限 → daban
+    # drain 至 ~24s → 0x40 窗口已关（E1-E4 合同）→ ErrResp 1002。inline=全部订阅
+    # 压进 setup 窗口发完，读循环零 0x40 发送。KPL_SETUP_INLINE_SUBS=1 启用。
+    setup_inline_subs=_env_flag("KPL_SETUP_INLINE_SUBS"),
+    quote_face_cap=int(os.environ.get("KPL_QUOTE_FACE_CAP", "0") or 0),
+    # KPL_DRAIN_PAUSE_MS=100 → (0.1, 0.05)：压进 ~20s 0x40 窗口（默认 0.3 旧档）
+    **({"drain_pause": (float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 1000,
+                        float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 2000)}
+        if os.environ.get("KPL_DRAIN_PAUSE_MS") else {}),
     auth_phase_delay=_AUTH_PHASE_DELAY,
     loop_send_grace_s=float(os.environ.get("KPL_LOOP_SEND_GRACE", "5")),
     # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；

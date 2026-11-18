@@ -421,6 +421,28 @@ class TestSetSubscriptions:
         svc.unsubscribe(q2)
         assert svc.subscriber_count() == 0
 
+    def test_quote_face_cap_truncates_with_counter(self):
+        """面硬帽（2026-11-18 窗口消融）：cap>0 超限保 priority 头部截断+计数。"""
+        svc2 = KplCollectorService(
+            FakeCodec(), device_id="t", user_id="0", token="",
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
+            quote_face_cap=3)
+        svc2.set_subscriptions(["801001", "600000"], priority_ids=["801001"])
+        svc2.set_subscriptions(["881001", "881002", "881003", "600519"], merge=True)
+        assert len(svc2._stock_ids) == 3                 # 硬帽生效
+        assert svc2._stock_ids[0] == "801001"            # priority 头部保留
+        st = svc2.status()["subscriptions"]
+        assert st["cap"] == 3 and st["dropped_n"] == 3   # 6→3，溢出 3 只
+        # 回落默认面（3 id ≤ cap）不再截断
+        r = svc2.reset_subscriptions_to_default()
+        assert r["after"]["count"] == 1 and svc2._stock_ids == ["801044"]
+
+    def test_quote_face_cap_zero_is_unlimited(self, svc):
+        """cap=0（默认）旧行为不截断。"""
+        svc.set_subscriptions(["801001", "600000", "881001"])
+        assert len(svc._stock_ids) == 3
+        assert svc.status()["subscriptions"]["cap"] == 0
+
     def test_reset_noop_reports_same_counts(self, svc):
         """默认面直接 reset：结构化返回 before/after 同值，不报错不假写。"""
         r = svc.reset_subscriptions_to_default()
