@@ -9951,6 +9951,7 @@ function atRender(){
   const decorated = rightRows.map(r => {
     return {...r, jjPctN: atNum(r.jj_percent), jjTurN: atNum(r.jj_turnover),
             jjAmtN: atNum(r.jj_amount), priceN: atNum(r.price), pctN: atNum(r.percent),
+            openPctN: atNum(r.pct0925), openPrN: atNum(r.p0925),
             prePctN: atNum(r.pre_percent), floatN: atNum(r.circulated_value),
             firstN: atNum(r.first_amount), firstAddN: atNum(r.first_add),
             maxN: atNum(r.max_amount), lastN: atNum(r.last_amount)};
@@ -9979,6 +9980,7 @@ function atRender(){
     : '最终额=last_amount：语义待 App 同屏核对（勘察 §6.4），单位=元';
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + lbThSort('竞价涨幅', 'jjPctN', AT.stockSort, 'atStockSortBy')
+    + lbThSort('开盘涨幅', 'openPctN', AT.stockSort, 'atStockSortBy')
     + lbThSort('竞价换手', 'jjTurN', AT.stockSort, 'atStockSortBy')
     + lbThSort('竞价成交额', 'jjAmtN', AT.stockSort, 'atStockSortBy')
     + lbThSort('试盘开始', 'start', AT.stockSort, 'atStockSortBy')
@@ -9999,7 +10001,8 @@ function atRender(){
       : '名称不可考：stock_names 字典 miss 且未入韭研板块（不猜名）';
     html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
       + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
-      + `<td class="kpl-uni ${kcls(r.jjPctN)}" title="${esc(pctTip)}">${atPct(r.jjPctN)}${r.jjFrozen ? '<div class=\"kpl-sub\">冻结 09:25</div>' : r.end_time ? '<div class=\"kpl-sub\">至 ' + esc(String(r.end_time)) + '</div>' : ''}</td>`
+      + `<td class="kpl-uni ${kcls(r.jjPctN)}" title="${esc(pctTip)}">${atPct(r.jjPctN)}${r.jjSource === 'open0925_archive' ? '<div class=\"kpl-sub\">开盘 09:25</div>' : r.jjFrozen ? '<div class=\"kpl-sub\">冻结 09:25</div>' : r.end_time ? '<div class=\"kpl-sub\">至 ' + esc(String(r.end_time)) + '</div>' : ''}</td>`
+      + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅=09:25 撮合开盘涨幅（kpl_auction_price 存档；历史日=TDX 开盘回补 src=tdx_lday）${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价换手=09:25 冻结 bidding_turnover（MBL→bid）优先，缺位=序列末帧观测值' : '竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）'}">${atPct(r.jjTurN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价成交额=09:25 冻结 bidding_amount（MBL→bid）优先，缺位=末帧观测值（board_amt Σ口径），单位=元' : '竞价成交额=jj_amount（元，rank 原值）'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
       + `<td class="kpl-uni"${atDerived ? ' title="观测首帧时点（官方序列，≠Wzs 试盘开始语义）"' : ''}>${esc(String(r.start_time || '--'))}</td>`
