@@ -1492,7 +1492,7 @@ def _run_industry_alias_bridge_step(today: str, dry_run: bool = False) -> dict[s
     """jiuyan↔KPL 板块名称桥日终重建（advisory 步，2026-11-14 用户裁决实施治理闭环）。
 
     - 子进程=industry_alias --rebuild-daban：themes 名录 ∪ 打板页题材词表
-      （auction_trial_raw 全日档 bk_name）幂等重建 auto 映射（manual 行不动，
+      （MBL 直采全日档 plate）幂等重建 auto 映射（manual 行不动，
       纯本地零上游零模型调用）；unmapped 清单 stdout 披露（人工裁决候选）；
     - 门控=交易日（非交易日跳过，零成本）；
     - **advisory 语义**：失败/跳过不翻转 after_market 整体 ok、不参与 stopped_at

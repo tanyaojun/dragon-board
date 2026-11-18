@@ -162,9 +162,10 @@ def kpl_theme_names(db: Any) -> list[str]:
 
 
 def daban_theme_names(db: Any) -> list[str]:
-    """打板页题材词表（2026-11-14 竞价试盘页治理闭环新增）：auction_trial_raw 全日档
-    rows 的 bk_name 归一去重（去尾部计数括号「半导体(3)」→「半导体」+ _normalize
-    去 概念/板块 后缀），排除事件桶停用词（EXCLUDE_WORDS）与治理层非题材。
+    """打板页题材词表（2026-11-14 竞价试盘页治理闭环新增；2026-11-18 raw 退役改
+    MBL 直采 plate 源，与 derive bk_name 同源）：kpl_morning_bidding_raw 全日档
+    rows 的 plate 顿号拆分归一去重（去尾部计数括号「半导体(3)」→「半导体」+
+    _normalize 去 概念/板块 后缀），排除事件桶停用词（EXCLUDE_WORDS）与治理层非题材。
 
     背景：themes 名录（252）不覆盖打板页题材词表——P4 桥初建时 48 只未分组股的
     bk_name 仅命中 2（勘察 §6.3 排查结论）。本词表让 rebuild 把打板侧新题材纳入
@@ -174,17 +175,19 @@ def daban_theme_names(db: Any) -> list[str]:
 
     gov = load_governance(db)
     out: set[str] = set()
-    # rows 是 code→row 动态 map，dotted projection（rows.bk_name）对 map 键不生效，
-    # 整 rows 取回后提取（60 日 × ~百行 × 15 列，量级可控）
-    for doc in db["auction_trial_raw"].find({}, {"rows": 1}):
+    # rows 是 code→row 动态 map，dotted projection 对 map 键不生效，整 rows 取回
+    # 后提取（MBL 日档 × ~百行，量级可控）；plate=KPL 概念标签串（顿号双值）逐 token
+    for doc in db["kpl_morning_bidding_raw"].find({}, {"rows": 1}):
         for row in (doc.get("rows") or {}).values():
-            bk = str((row or {}).get("bk_name") or "").strip()
-            if not bk:
-                continue
-            bk = re.sub(r"（[^（]*）$|\([^)]*\)$", "", bk).strip()
-            name = _normalize(bk)
-            if name and name not in EXCLUDE_WORDS and name not in gov.exclude_names:
-                out.add(name)
+            plate = str((row or {}).get("plate") or "").strip()
+            for bk in re.split(r"[、，,/]", plate):
+                bk = bk.strip()
+                if not bk:
+                    continue
+                bk = re.sub(r"（[^（]*）$|\([^)]*\)$", "", bk).strip()
+                name = _normalize(bk)
+                if name and name not in EXCLUDE_WORDS and name not in gov.exclude_names:
+                    out.add(name)
     return sorted(out)
 
 
@@ -197,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rebuild", action="store_true",
                     help="对 themes 全名录重建 auto 映射（manual 不动）")
     ap.add_argument("--rebuild-daban", dest="rebuild_daban", action="store_true",
-                    help="themes 名录 ∪ 打板页题材词表（auction_trial_raw bk_name）重建 auto 映射（manual 不动）")
+                    help="themes 名录 ∪ 打板页题材词表（MBL 直采 plate）重建 auto 映射（manual 不动）")
     ap.add_argument("--set", dest="manual", default=None,
                     help="人工固化：题材名=产业名1,产业名2（空值=删除回 auto）")
     ap.add_argument("--list", action="store_true", help="打印当前映射全表")

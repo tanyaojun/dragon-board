@@ -206,10 +206,11 @@ def test_label_wiring_series_primary():
     raw 日档回读为次；WzsLinker 退役出链（判据链零第三方代理依赖）。"""
     from backend.operations import auction_leader_label as L
     src = open(L.__file__, encoding="utf-8").read()
-    i_series = src.find("derived_rows, derived_state = derive_trial_rows_from_series")
-    i_archive = src.find('db[COLLECTION_TRIAL_RAW].find_one')
-    assert 0 < i_series < i_archive, "官方序列主链必须先于 raw 日档回读"
-    assert "fetch_auction_trial" not in src and "TRIAL_HOST" not in src,         "WzsLinker 已退役出链（endpoint/采集函数不在判据链；注释提及不受限）"
+    assert "derive_trial_rows_from_series" in src, "官方序列主链必须在判据链"
+    assert "COLLECTION_TRIAL_RAW" not in src and "auction_trial_fetch" not in src, \
+        "§7.17 raw 整集合退役：判据链零代码引用（注释提及不受限）"
+    assert "fetch_auction_trial" not in src and "TRIAL_HOST" not in src, \
+        "WzsLinker 已退役出链（endpoint/采集函数不在判据链）"
     assert "kpl_bidding_series_derived" in open(
         "backend/operations/auction_trial_derive.py", encoding="utf-8").read()
 
@@ -221,17 +222,17 @@ def test_derive_equivalence_ratio_math():
     wzs = {"code": "605255", "jj_percent": 4.78, "pre_percent": 10.0,
            "first_amount": 7560000.0, "last_amount": 8980000.0,
            "max_amount": 9610000.0, "jj_amount": 13979616.0}
-    wzs.update(AS.bre.row_basis("605255", wzs))
+    wzs.update(AS.row_basis("605255", wzs))
     # 派生形态（pre_percent=None）
     drv = {"code": "605255", "jj_percent": 4.78, "pre_percent": None,
            "first_amount": 7560000.0, "last_amount": 8980000.0,
            "max_amount": 9610000.0, "jj_amount": 13979616.0}
-    drv.update(AS.bre.row_basis("605255", drv))
+    drv.update(AS.row_basis("605255", drv))
     assert wzs["preseal"] is True and drv["preseal"] is False
     # 分母同为 limit（preseal 行 pre_percent=limit；非 preseal 行取 limit）
     assert AS.jj_ratio(4.78, wzs["pre_percent"], wzs["limit"], True) ==            AS.jj_ratio(4.78, drv["pre_percent"], drv["limit"], False)
     # posture 一致（11-13 真值 605255：末额 8.98M > 首开 7.56M → maintain）
-    assert AS.bre.posture(wzs) == AS.bre.posture(drv) == "maintain"
+    assert AS.posture(wzs) == AS.posture(drv) == "maintain"
 
 
 def test_derive_filters_late_ticks():
@@ -279,36 +280,5 @@ def test_derive_filters_early_ticks():
     assert r["first_amount"] == 7.0e6, "首帧必须是 09:16:00 竞价帧，非 09:11 盘前陈旧帧"
 
 
-def test_historical_equivalence_1113():
-    """历史验证（11-13 WzsLinker 真值 95 只）：派生形态（pre_percent=None + bk_name
-    保留）走完整 roster，与真值形态入选集合/映射/板块归属完全等价。
-
-    真实库只读（dragon_board_quant，零写零外呼零模型）；无 trial raw 档则跳过。"""
-    import copy
-    from backend.data.repositories import repository_factory
-    from backend.analysis.hotlist import auction_strength as AS
-    db = repository_factory.get_runtime_mongodb_database()
-    trial = (db["auction_trial_raw"].find_one({"_id": "2026-11-13"}) or {}).get("rows") or {}
-    if len(trial) < 50:
-        import pytest
-        pytest.skip("11-13 trial raw 档缺席，历史等价性验证不可跑")
-    out_wzs, st_wzs = AS.trial_strength_roster(db, "2026-11-13", copy.deepcopy(trial))
-    drv = {}
-    for c, r in trial.items():
-        drv[c] = {"code": str(c)[-6:], "bk_name": r.get("bk_name"),
-                  "jj_percent": r.get("jj_percent"),
-                  "first_amount": r.get("first_amount"),
-                  "last_amount": r.get("last_amount"),
-                  "max_amount": r.get("max_amount"),
-                  "jj_amount": r.get("jj_amount"),
-                  "jj_turnover": r.get("jj_turnover")}
-    out_drv, st_drv = AS.trial_strength_roster(db, "2026-11-13", drv)
-    assert st_drv["mappedN"] == st_wzs["mappedN"], "映射数必须一致（bk_name 桥接主链）"
-    assert {r["code"] for r in out_drv} == {r["code"] for r in out_wzs}, "入选集合必须一致"
-    wr = {r["code"]: r["trialStrength"] for r in out_wzs}
-    dr = {r["code"]: r["trialStrength"] for r in out_drv}
-    for c in wr:
-        # 板块量/档/姿态/排名一致；jjRatio 允许 preseal 分母微差（≤1%）
-        assert dr[c]["boardAmt"] == wr[c]["boardAmt"]
-        assert dr[c]["posture"] == wr[c]["posture"] and dr[c]["rank"] == wr[c]["rank"]
-        assert abs(dr[c]["jjRatio"] - wr[c]["jjRatio"]) <= 1.0
+# test_historical_equivalence_1113 随 §7.17 raw 退役删除（2026-11-18）：
+# 11-13 真值等价性结论已存档 docs §7.9（映射 74/74、入选集合一致）；raw 归档 backups。

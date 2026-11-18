@@ -3,7 +3,7 @@
 
 覆盖（预登记 auction-leader-trial-strength-source-preregistration-20261115）：
 - 纯函数：board_amt 求和（缺值按 0）、board_tier 五档边界、jj_ratio 分母、fnum；
-- bre.row_basis 单源（limit/ST 探测/preseal）与 posture/tier_jj 边界；
+- row_basis 单源（下沉）（limit/ST 探测/preseal）与 posture/tier_jj 边界；
 - trial_strength_roster：root 映射全链（direct>bridge>hist）→ 严格筛
   （中热 2-5亿 × mid50_95 × 撤减）→ 每板 jj_ratio 降序前三；
 - 软上限截断记账；fail-visible（trial 缺→整源缺席不阻断、未映射排除、无合格→0）。
@@ -137,27 +137,27 @@ def test_fnum():
 # ── bre 单源：row_basis / tier_jj / posture ───────────────────────────────
 
 def test_row_basis_st_probe_and_preseal():
-    b = AS.bre.row_basis("600100", {"pre_percent": 10.0})
+    b = AS.row_basis("600100", {"pre_percent": 10.0})
     assert b["limit"] == 10.0 and b["preseal"] is True
-    b = AS.bre.row_basis("600100", {"pre_percent": 5.0})   # ST 探测（昨涨停 5% 板）
+    b = AS.row_basis("600100", {"pre_percent": 5.0})   # ST 探测（昨涨停 5% 板）
     assert b["limit"] == 5.0 and b["preseal"] is True
-    b = AS.bre.row_basis("300100", {})
+    b = AS.row_basis("300100", {})
     assert b["limit"] == 20.0 and b["preseal"] is False
-    b = AS.bre.row_basis("600100", {"pre_percent": 3.0})
+    b = AS.row_basis("600100", {"pre_percent": 3.0})
     assert b["limit"] == 10.0 and b["preseal"] is False
 
 
 def test_tier_jj_and_posture_boundaries():
     base = {"limit": 10.0, "preseal": False}
-    assert AS.bre.tier_jj({**base, "jj_percent": 9.5}) == "top95"
-    assert AS.bre.tier_jj({**base, "jj_percent": 5.0}) == "mid50_95"
-    assert AS.bre.tier_jj({**base, "jj_percent": 4.99}) == "low_lt50"
-    assert AS.bre.tier_jj({**base}) == "no_ratio"
-    assert AS.bre.posture({"first_amount": 1e7, "last_amount": 5e6}) == "decrease"
-    assert AS.bre.posture({"first_amount": 5e6, "last_amount": 1e7}) == "maintain"
-    assert AS.bre.posture({"first_amount": 5e6, "last_amount": 5e6}) == "maintain"
-    assert AS.bre.posture({"first_amount": 5e6}) == "no_data"
-    assert AS.bre.posture({}) == "no_data"
+    assert AS.tier_jj({**base, "jj_percent": 9.5}) == "top95"
+    assert AS.tier_jj({**base, "jj_percent": 5.0}) == "mid50_95"
+    assert AS.tier_jj({**base, "jj_percent": 4.99}) == "low_lt50"
+    assert AS.tier_jj({**base}) == "no_ratio"
+    assert AS.posture({"first_amount": 1e7, "last_amount": 5e6}) == "decrease"
+    assert AS.posture({"first_amount": 5e6, "last_amount": 1e7}) == "maintain"
+    assert AS.posture({"first_amount": 5e6, "last_amount": 5e6}) == "maintain"
+    assert AS.posture({"first_amount": 5e6}) == "no_data"
+    assert AS.posture({}) == "no_data"
 
 
 # ── roster：严格筛 + 前三（direct 映射）──────────────────────────────────
@@ -331,11 +331,11 @@ def test_fnum_non_finite_to_none():
 def test_posture_nan_no_data():
     """NaN/非数字 first/last → no_data（不得判 decrease 误纳入）。"""
     nan = float("nan")
-    assert AS.bre.posture({"first_amount": nan, "last_amount": 5e6}) == "no_data"
-    assert AS.bre.posture({"first_amount": 1e7, "last_amount": nan}) == "no_data"
-    assert AS.bre.posture({"first_amount": "abc", "last_amount": 5e6}) == "no_data"
-    assert AS.bre.posture({"first_amount": 1e7, "last_amount": 5e6}) == "decrease"
-    assert AS.bre.posture({"first_amount": 1e7, "last_amount": 1e7}) == "maintain"
+    assert AS.posture({"first_amount": nan, "last_amount": 5e6}) == "no_data"
+    assert AS.posture({"first_amount": 1e7, "last_amount": nan}) == "no_data"
+    assert AS.posture({"first_amount": "abc", "last_amount": 5e6}) == "no_data"
+    assert AS.posture({"first_amount": 1e7, "last_amount": 5e6}) == "decrease"
+    assert AS.posture({"first_amount": 1e7, "last_amount": 1e7}) == "maintain"
 
 
 def test_board_amt_nan_not_poison():

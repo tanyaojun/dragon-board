@@ -4,11 +4,11 @@
 - **现价**：读 MarketQuotesCache 全市场行情共享 Redis 快照（腾讯源，跨进程单源，
   读侧零新增外呼，红线 9）；刷新频率归写侧（≥60s），ts 经 `<key>:ts` 透出披露。
 - **昨涨幅**：采集路径 TDX 日线（tdx_daily_bars，与 python-bridge 同款 TDX 协议）
-  算 (昨收/前昨收−1)×100，**落库 auction_trial_raw 加字段**（2026-11-18 用户裁决：
-  不建新集合，单一集合；prev_pct=code→行 map，prev_pct_state=采集审计 meta；
-  字段级 $set 单写者=:8000 archiver，绝不触碰 rows/历史 envelope）。
-  未复权口径（除权除息罕见失真，披露）。原 stock_prev_day_pct 集合已 mongodump
-  归档 data/backups/stock_prev_day_pct_retire_20261118 后单集合 drop（红线 4）。
+  算 (昨收/前昨收−1)×100，**落库 kpl_bidding_series 加字段**（2026-11-18 用户裁决：
+  不建新集合；prev_pct=code→行 map，prev_pct_state=采集审计 meta；字段级 $set
+  单写者=:8000 archiver，collector 写 ticks 各写各字段，绝不触碰 ticks）。
+  未复权口径（除权除息罕见失真，披露）。stock_prev_day_pct 与 auction_trial_raw
+  均已 mongodump 归档 data/backups/ 后单集合 drop（红线 4，用户裁决退役）。
 
 频控预算（§1.2-9，会话型 TDX + 轮询型 archiver 双形态登记）：
 - TDX 日线 ≤ KPL_PREV_PCT_ROUND_LIMIT(30) 只/轮，单档 offset=15、max_probe=3
@@ -23,8 +23,6 @@ from __future__ import annotations
 import os
 import time
 from typing import Any
-
-from backend.operations.auction_trial_fetch import COLLECTION_TRIAL_RAW
 
 COLLECTION_SERIES = "kpl_bidding_series"
 COLLECTION_MBL_RAW = "kpl_morning_bidding_raw"
@@ -53,11 +51,11 @@ def trial_universe_codes(db: Any, date: str) -> list[str]:
 
 
 def collect_prev_day_pct(db: Any, date: str, *, limit: int | None = None) -> dict:
-    """昨涨幅限量懒取 → auction_trial_raw.prev_pct 加字段（archiver 单写者；
-    失败留痕不抛，§4.0；字段级 $set 不覆盖 rows/历史 envelope）。"""
+    """昨涨幅限量懒取 → kpl_bidding_series.prev_pct 加字段（archiver 单写者；
+    失败留痕不抛，§4.0；字段级 $set 不覆盖 ticks）。"""
     if os.environ.get("KPL_PREV_PCT_ENABLED", "1") == "0":
         return {"state": "disabled"}
-    col = db[COLLECTION_TRIAL_RAW]
+    col = db[COLLECTION_SERIES]
     doc = col.find_one({"_id": date}, {"prev_pct": 1, "prev_pct_state": 1}) or {}
     rows = dict(doc.get("prev_pct") or {})
     meta = dict(doc.get("prev_pct_state") or {})

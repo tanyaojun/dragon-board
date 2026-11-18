@@ -9630,7 +9630,7 @@ async function kplFetchBreadthHist(date){
 
 // ══════════ KPL 行情 · 竞价试盘（2026-11-14，勘察 auction-trial-source-survey-20261114 §6）══════════
 // 数据：GET /api/hotlist-jev/auction-trial（纯读零上游外呼——§7.14 迁链：
-//   源序=官方序列派生（kpl_bidding_series）→ auction_trial_raw 历史档回退；
+//   源=官方序列派生单主链（kpl_bidding_series，§7.17 raw 退役）；
 //   本页 60s 轮询不触发任何外呼，红线 9；来源/口径在 atStats 与列 tooltip 披露）
 //   + GET /api/hotlist-jev/jiuyan-action（韭研打标链涨停分组，同日回退口径与连板行情一致）。
 // 页面布局=【个股行情】同款（左板块列表右个股列表，点选联动；再点已选分组=取消回「全部」）。
@@ -10010,7 +10010,7 @@ function atRender(){
       + `<td class="kpl-uni" title="${esc(amtTip('lastN'))}">${r.lastN != null ? kfmtAmt(r.lastN) : '--'}</td>`
       + `<td class="kpl-uni"${atDerived ? ' title="现价=腾讯全市场实时快照（共享 Redis，写侧≥60s 刷新；缺位如实--）"' : ''}>${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
       + `<td class="kpl-uni ${kcls(r.pctN)}" title="${atDerived ? '涨幅=末帧 pct（官方序列观测值）' : 'percent 当日涨幅（收盘口径以行情源为准）'}">${atPct(r.pctN)}</td>`
-      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（auction_trial_raw.prev_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（kpl_bidding_series.prev_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '流通值=末帧 real_float（bid 口径实际流通，≠Wzs 历史口径，禁止跨源派生比率）' : 'circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）'}">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
       + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
   }
@@ -10024,8 +10024,7 @@ function atRender(){
   $('atStats').textContent = AT.error && !AT.doc ? '竞价试盘 · 读口降级'
     : `竞价试盘 · ${d.tradingDate || '--'} · ${d.nRows != null ? d.nRows : atRows().length} 只`
       + (d.savedAt ? ' · 档龄 ' + esc(String(d.savedAt)) : '')
-      + (d.source === 'kpl_bidding_series_derived' ? ' · 源=官方序列派生(观测值口径)'
-        : d.source ? ' · 源=历史档Wzs' : '')
+      + (d.source === 'kpl_bidding_series_derived' ? ' · 源=官方序列派生(观测值口径)' : '')
       + (AT.prevPctMiss ? ` · 昨涨幅缺 ${AT.prevPctMiss}` : '')
       + (AT.priceMiss ? ` · 现价缺 ${AT.priceMiss}` : '')
       + (AT.nameMiss ? ` · 名称缺失 ${AT.nameMiss} 只` : '')

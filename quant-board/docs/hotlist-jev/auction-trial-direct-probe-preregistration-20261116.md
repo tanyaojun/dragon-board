@@ -489,10 +489,10 @@ roster/判据链同源消费冻结值（选龙口径=官方终值，单一事实
 零新增外呼，红线 9）；仅补缺位（历史档自有值不覆盖）；quotes.py 加 `<key>:ts` 单源
 ts 透出（读侧 priceFetchedAtMs 披露档龄）；miss 计数 priceMissCount 透出。
 
-**昨涨幅落库（用户裁决归并）**：`auction_trial_raw` **加字段**——`prev_pct`
-（code→pct/prevClose/prevPrevClose/prevDate）+ `prev_pct_state`（attempts/退避/
-failed/pending 审计 meta）；字段级 $set、单写者=:8000 archiver prevPct 通道，
-绝不触碰 rows/历史 envelope；不建新集合（红线 1 单一事实源）。原
+**昨涨幅落库（用户裁决归并→§7.17 再归并）**：初版归并 `auction_trial_raw` 加字段；
+用户随后裁决 raw 本身系退役历史数据集应整集合 drop（§7.17），prev_pct/prev_pct_state
+最终落 **`kpl_bidding_series` 加字段**（字段级 $set、单写者=:8000 archiver prevPct
+通道，collector 写 ticks 各写各字段）。不建新集合（红线 1）。原
 `stock_prev_day_pct` 已 mongodump 归档 `data/backups/stock_prev_day_pct_retire_20261118`
 后单集合 drop（红线 4，用户明确授权）。TDX 日线（tdx_daily_bars，python-bridge
 同款协议）(昨收/前昨收−1)×100，未复权披露。
@@ -506,3 +506,32 @@ KPL_PREV_PCT_ENABLED 开关；conftest 测试进程强制 0（零外呼纪律，
 schedule 既有 market_cycle 子进程 600s 超时为用户既有 WIP 的测试外呼泄漏，非本轮
 引入，登记跟进）；进程内直调：prevPct/price 248/248、miss 0、frozen≠官方源 0；
 node --check 通过。**生效条件**：:8000 重启（读侧）+ :8001 重启（ts 键写侧）。
+
+### 7.17 auction_trial_raw 整集合退役 sweep（2026-11-18，用户裁决）
+
+**裁决**：raw 系历史竞价试盘数据（Wzs 二手），已退役，不应被加字段复活；整集合
+drop。昨涨幅归宿裁决=**kpl_bidding_series 加字段**（选项 1）。
+
+**数据**：raw 103 文档 mongodump 归档 `data/backups/auction_trial_raw_retire_20261118/`
+后单集合 drop（红线 4）；≤11-16 历史对拍数据可 mongorestore 回放。面板历史视图
+收敛至序列有档日（11-17 起）。
+
+**代码删除/下沉（红线 1 旧代随淘汰删除，回退靠 git）**：
+- 删 `backend/operations/auction_trial_fetch.py` + 其测试；`normalize_trial_time`
+  下沉 `auction_trial_derive`（ammo 改引 derive）。
+- 删脚本 `backfill_auction_trial_raw` / `auction_trial_raw_normalize_times` /
+  `auction_trial_base_rate_eval` / `auction_trial_premium_eval` /
+  `auction_trial_contract_probe` + premium_eval 测试；base_rate 共享纯函数
+  （limit_pct/row_basis/st_name_fix/tier_jj/posture）**下沉 auction_strength 单源**
+  （生产 roster 原 importlib 复用，先沉后删）；11-13 历史等价性测试删除（结论存档 §7.9）。
+- label/derive.load_trial_rows/routes 去 raw 回退→序列单主链；label 派生异常
+  derive_failed 留痕不丢（无回退后唯一审计面）；routes 日期索引=series、去
+  legalEmpty/archive envelope 分支；prev_pct join 改读 series。
+- industry_alias 打板词表源 raw bk_name → MBL 直采 plate（顿号拆分，与 derive
+  bk_name 同源）；schedule/ammo/strength 注释措辞同步。
+- 测试重work：raw 种子改系列种子（_seed_trial_day/_series_doc）；archive_fallback/
+  legalEmpty/archiveReadError 用例退役；bid 冻结 join 与 roster 交互用例 bid_items
+  值对齐系列（防夹具口径污染）；守卫测试改「零代码引用」。
+
+**验证**：子集 143 passed；全量 pytest 复跑（见收口）；prev_pct 重落 series 256/256；
+读侧 pre_percent/price 248/248。

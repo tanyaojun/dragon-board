@@ -42,7 +42,6 @@ from typing import Any
 COLLECTION_SERIES = "kpl_bidding_series"
 COLLECTION_MBL_RAW = "kpl_morning_bidding_raw"
 
-from backend.operations.auction_trial_fetch import COLLECTION_TRIAL_RAW  # noqa: E402
 
 
 def _f(v: Any) -> float | None:
@@ -57,7 +56,7 @@ def _f(v: Any) -> float | None:
 def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], dict]:
     """序列档 → 试盘语义行（纯库读零外呼零写）。
 
-    返回 (rows, state)：rows = dict[code→字段]（与 auction_trial_raw 同形，可直接
+    返回 (rows, state)：rows = dict[code→字段]（与历史试盘行同形，可直接
     进 trial_strength_roster）；state 结构化透出缺席/降级原因（§4.0）。
     """
     state: dict[str, Any] = {"state": "absent", "source": "kpl_bidding_series_derived"}
@@ -219,32 +218,26 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
     return rows, out
 
 
-def load_trial_rows(db: Any, date: str) -> tuple[dict[str, dict], dict]:
-    """试盘行源序单实现（读口共用，2026-11-18 迁链补记 docs §7.14）。
+def normalize_trial_time(val: object) -> object | None:
+    """时间归一化（原 auction_trial_fetch 单源，2026-11-18 raw 退役下沉）：
+    HHMMSS→hh:mm:ss；已带冒号原样；不可判原样返回（fail-visible 不猜不丢）。"""
+    s = str(val or "").strip()
+    if not s:
+        return None
+    if ":" in s:
+        return s
+    digits = s.replace(".", "")
+    if digits.isdigit() and len(digits) in (5, 6):
+        digits = digits.zfill(6)
+        return f"{digits[:2]}:{digits[2:4]}:{digits[4:6]}"
+    return s
 
-    与 auction_leader_label.run 主链同序（§7.13 裁决）：官方序列派生 →
-    auction_trial_raw 日档回读（自家历史档）→ 缺席 fail-visible（state 留痕，
-    不伪装 0/空成功）。派生/回读异常均结构化留痕不抛（红线 9/§4.0）。
-    """
+
+def load_trial_rows(db: Any, date: str) -> tuple[dict[str, dict], dict]:
+    """试盘行单实现（读口/leaders 共用）：官方序列派生单主链（2026-11-18
+    auction_trial_raw 整集合退役，docs §7.17；无历史档回退）。异常结构化留痕不抛。"""
     try:
-        rows, state = derive_trial_rows_from_series(db, date)
-    except Exception as exc:  # noqa: BLE001 — 派生失败不阻断回退
-        rows, state = {}, {"state": f"derive_failed:{type(exc).__name__}",
-                           "source": "kpl_bidding_series_derived"}
-    if rows:
-        return rows, state
-    try:
-        raw = db[COLLECTION_TRIAL_RAW].find_one(
-            {"_id": date}, {"rows": 1, "savedAt": 1, "nRows": 1, "state": 1}) or {}
-        if raw.get("rows") or (raw and raw.get("state") == "ok"):
-            # 空 rows+ok=「当日全市场无试盘个股」合法事实（persist 合同），legalEmpty 透出
-            st = {"state": "ok", "source": "archive",
-                  "saved_at": raw.get("savedAt"), "n_rows": raw.get("nRows") or 0}
-            if not raw.get("rows"):
-                st["legalEmpty"] = True
-            if str(state.get("state") or "").startswith("derive_failed"):
-                st["deriveError"] = state["state"]   # 派生异常+档案救场 留痕不丢
-            return raw.get("rows") or {}, st
-    except Exception as exc:  # noqa: BLE001 — 日档读失败不阻断（缺席留痕）
-        state = {**state, "archiveReadError": f"{type(exc).__name__}: {exc}"}
-    return {}, state
+        return derive_trial_rows_from_series(db, date)
+    except Exception as exc:  # noqa: BLE001 — 派生失败不阻断（fail-visible）
+        return {}, {"state": f"derive_failed:{type(exc).__name__}",
+                    "source": "kpl_bidding_series_derived"}

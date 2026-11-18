@@ -8,11 +8,10 @@
   宽松 = 中热（个股档/姿态不限）。每 root 板按 jj_ratio 降序取前 max_per_board=3。
   生产默认 tier=strict（暂不切中等）；run() 与读口共用单一实现。
 
-单一事实源（AGENTS §1.2-1）：
-- 档位/姿态/limit-preseal 口径复用 scripts/auction_trial_base_rate_eval.py（bre，
-  importlib 单源，与评估脚本同模式）；
-- board_tier/BOARD_TIERS/jj_ratio/board_amt/fnum 由本模块承载，评估脚本
-  scripts/auction_trial_premium_eval.py import 复用（禁第二套）；
+单一事实源（AGENTS §1.2-1；2026-11-18 raw 退役 sweep：原 bre 评估脚本共享纯函数
+limit_pct/row_basis/st_name_fix/tier_jj/posture 下沉本模块单源，脚本随退役删除，
+历史口径存档 docs auction-leader-vA3-base-rate-60d-evaluation-20261114.md）：
+- board_tier/BOARD_TIERS/jj_ratio/board_amt/fnum + 下沉五函数由本模块承载（禁第二套）；
 - root 映射全链 = jiuyan_board.board_index > 板块名称桥 > 近 60 日打标分组兜底
   （assign_root_boards，与线上读口 get_auction_trial / 评估脚本同口径）；
   桥接 helpers 单源在 services/jev/jiuyan_board（2026-11-15 自 api 下沉）。
@@ -26,19 +25,66 @@ fail-visible：trial_rows 缺/空 → 整源缺席 + reason（双源不受影响
 """
 from __future__ import annotations
 
-import importlib.util
 import math
 from collections import Counter
-from pathlib import Path
 from typing import Any
 
 from backend.services.jev import jiuyan_board, jiuyan_industry_root
 
-_QB = Path(__file__).resolve().parents[3]
-_spec = importlib.util.spec_from_file_location(
-    "auction_trial_base_rate_eval", _QB / "scripts" / "auction_trial_base_rate_eval.py")
-bre = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(bre)
+
+def limit_pct(code: str) -> float:
+    """涨跌幅限制（按代码前缀；900=沪 B 10%，北交所 43/83/87/92→30，30/68→20，其余 10）。
+    原 bre 评估脚本单源，2026-11-18 退役下沉。"""
+    if code[:2] in ("43", "83", "87", "92"):
+        return 30.0
+    if code[:2] in ("30", "68"):
+        return 20.0
+    return 10.0
+
+
+def row_basis(code: str, r: dict) -> dict:
+    """limit/preseal 口径单源：ST 探测 pre_percent∈[4.9,5.1]→limit 5；
+    preseal = pre_percent ≥ limit×0.99（昨涨停）。"""
+    lim = limit_pct(code)
+    if 4.9 <= (r.get("pre_percent") or -1) <= 5.1:
+        lim = 5.0
+    return {"limit": lim, "preseal": (r.get("pre_percent") or 0) >= lim * 0.99}
+
+
+def st_name_fix(rows: list[dict], names: dict[str, str]) -> int:
+    """ST 名称补正：stock_names 名含 ST 且 limit≠5 → limit=5 + 重算 preseal/sealed。"""
+    n = 0
+    for r in rows:
+        if "ST" in str(names.get(r["code"], "")).upper() and r["limit"] != 5.0:
+            r["limit"] = 5.0
+            r["preseal"] = (r.get("pre_percent") or 0) >= 5.0 * 0.99
+            if "sealed" in r:
+                r["sealed"] = (None if r.get("percent") is None
+                               else r["percent"] >= 5.0 * 0.99)
+            n += 1
+    return n
+
+
+def tier_jj(r: dict) -> str:
+    """强度档：分母 PRESEAL 用 pre_percent 否则限价；top95/mid50_95/low_lt50/no_ratio。"""
+    jp = r.get("jj_percent")
+    denom = r.get("pre_percent") if r["preseal"] else r.get("limit")
+    if jp is None or not denom:
+        return "no_ratio"
+    x = jp / denom * 100
+    return "top95" if x >= 95 else ("mid50_95" if x >= 50 else "low_lt50")
+
+
+def posture(r: dict) -> str:
+    """姿态：末帧委买≥首帧=maintain 否则 decrease；缺值/NaN→no_data（不伪装）。"""
+    f, l = r.get("first_amount"), r.get("last_amount")
+    try:
+        f, l = float(f), float(l)
+    except (TypeError, ValueError):
+        return "no_data"
+    if not (math.isfinite(f) and math.isfinite(l)):
+        return "no_data"
+    return "maintain" if l >= f else "decrease"
 
 # ── 板块竞价强度规则档（日 Σjj_amount，元；左闭右开）──
 BOARD_TIERS = [("冷 <5000万", 5e7), ("温 5000万-2亿", 2e8), ("中热 2-5亿", 5e8),
@@ -143,7 +189,7 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
 
     公共前置门禁：板块竞价涨幅均值（jj_percent 均值）>0，三档共用；全缺→不满足。
 
-    trial_rows = dict[code→试盘行具名字段]（run() 窗内采集 / auction_trial_raw 日档）。
+    trial_rows = dict[code→试盘行具名字段]（run() 窗内采集 / kpl_bidding_series 派生日档）。
     返回 (rows, state)：rows = [{code, name, board, trialStrength:{boardAmt, btier,
     jjRatio, jjtier, posture, rank, boardTrialN}}]（板名升序→板内 rank 升序）；
     state = {state, date, mappedN, unmappedN, hotBoards:[{board,amt,n}], selectedN,
@@ -164,7 +210,7 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
     for code, raw in trial_rows.items():
         c6 = str(code)[-6:]
         r = {"code": c6, **(raw or {})}
-        r.update(bre.row_basis(c6, r))   # limit/preseal 单源（含 ST 探测）
+        r.update(row_basis(c6, r))   # limit/preseal 单源（含 ST 探测）
         rows.append(r)
     assign_root_boards(rows, db)
     bridge = jiuyan_board._bridge_maps(db)
@@ -175,7 +221,7 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
         state["bridgeDegraded"] = dict(bridge["sourceErrors"])
     # ST 名称修正（与评估脚本 main 同口径单源：非昨涨停 ST 行 pre_percent 探测
     # 不覆盖，靠 stock_names 名称补正 limit=5，防比值污染）
-    bre.st_name_fix(rows, names)
+    st_name_fix(rows, names)
     mapped = [r for r in rows if r.get("board")]
     state["mappedN"] = len(mapped)
     state["unmappedN"] = len(rows) - len(mapped)
@@ -202,8 +248,8 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
         m = board_mean.get(b)
         if m is None or m <= 0:   # 公共前置门禁：板块竞价涨幅均值>0
             continue
-        jt = bre.tier_jj(r)
-        po = bre.posture(r)
+        jt = tier_jj(r)
+        po = posture(r)
         if tier == TRIAL_TIER_STRICT and not (jt == "mid50_95" and po == "decrease"):
             continue
         if tier == TRIAL_TIER_MEDIUM and jt != "mid50_95":
@@ -218,7 +264,7 @@ def trial_strength_roster(db: Any, date: str, trial_rows: dict | None, *,
             out.append({"code": r["code"], "name": names.get(r["code"]), "board": b,
                         "trialStrength": {"boardAmt": amts[b], "btier": TIER_MID_HOT,
                                           "jjRatio": round(ratio, 2),
-                                          "jjtier": bre.tier_jj(r), "posture": bre.posture(r),
+                                          "jjtier": tier_jj(r), "posture": posture(r),
                                           "rank": rank, "boardTrialN": board_n[b]}})
     if max_total is not None and len(out) > max_total:
         out.sort(key=lambda r: (-r["trialStrength"]["jjRatio"], r["board"], r["code"]))

@@ -18,7 +18,7 @@ import re
 
 from typing import Any
 
-from backend.operations.auction_trial_fetch import normalize_trial_time
+from backend.operations.auction_trial_derive import normalize_trial_time
 
 _TIME_PAT = re.compile(r"^\d{2}:\d{2}(:\d{2})?$")   # 规范 hh:mm(:ss)（finding-2 防御）
 from backend.analysis.hotlist.theme_leader_ammo import (

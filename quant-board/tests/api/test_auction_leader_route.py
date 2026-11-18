@@ -356,7 +356,8 @@ def test_roster_row_contract_alignment(client):
 
 # ── 第三源：竞价试盘强度 roster 行源（2026-11-15 预登记）──────────────────
 
-def _seed_trial_raw(db, date=DATE):
+def _seed_trial_day(db, date=DATE):
+    """§7.17 raw 退役：试盘日种子=官方序列档（4 股两帧撤减，与原 raw 同值形态）。"""
     from backend.services.jev import jiuyan_board, jiuyan_industry_root
     jiuyan_board.reset_jiuyan_board_cache()
     jiuyan_industry_root.reset_jiuyan_industry_root_cache()
@@ -365,20 +366,13 @@ def _seed_trial_raw(db, date=DATE):
         "stocks": [{"code": c} for c in ("600100", "600101", "600102", "600103")]}
     db["stock_names"].docs["600100"] = {"code": "600100", "name": "甲"}
     db["stock_names"].docs["600102"] = {"code": "600102", "name": "丙"}
-    rows = {}
-    for c, jp in (("600100", 7.0), ("600101", 8.0), ("600102", 9.0), ("600103", 6.5)):
-        rows[c] = {"jj_percent": jp, "jj_amount": 6e7,
-                   "first_amount": 1e7, "last_amount": 5e6,
-                   "start_time": "09:15:00", "end_time": "09:20:11"}
-    db["auction_trial_raw"].docs[date] = {
-        "_id": date, "tradingDate": date, "nRows": 4,
-        "savedAt": f"{date}T09:26:01", "rows": rows}
+    _seed_trial_series(db, date)
 
 
 def test_get_trial_roster_labelmissing(client):
     """行源 ∪ trial roster：未打标强度候选出 labelMissing 行 + 源/trialStrength 透传。"""
     c, db = client
-    _seed_trial_raw(db)
+    _seed_trial_day(db)
     try:
         doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
         assert doc["ok"]
@@ -403,7 +397,7 @@ def test_get_trial_roster_failure_fail_visible(client, monkeypatch):
     """trial roster 计算失败 → trialRosterError 留痕，labels/推送 roster 不受阻。"""
     c, db = client
     from backend.analysis.hotlist import auction_strength as AS
-    _seed_trial_raw(db)
+    _seed_trial_day(db)
 
     def boom(*a, **k):
         raise RuntimeError("trial roster boom")
@@ -444,12 +438,14 @@ def test_trial_merge_into_push_missing_row(client):
     db["jiuyan_industry_stocks"].docs["node:大消费"] = {
         "_id": "node:大消费", "name": "大消费", "stockN": 3, "batchDate": "2026-10-25",
         "stocks": [{"code": c} for c in ("600327", "600400", "600401")]}
-    rows = {}
-    for code, jp in (("600327", 7.0), ("600400", 8.0), ("600401", 9.0)):
-        rows[code] = {"jj_percent": jp, "jj_amount": 8e7,
-                      "first_amount": 1e7, "last_amount": 5e6}
-    db["auction_trial_raw"].docs[DATE] = {
-        "_id": DATE, "tradingDate": DATE, "nRows": 3, "rows": rows}
+    pcts = {"600327": 7.0, "600400": 8.0, "600401": 9.0}
+    ticks = []
+    for hm, zb in (("09:16:00", 1e7), ("09:24:00", 5e6)):
+        ticks.append({"ts": _cst_ts(DATE, hm), "it": [
+            {"s": c, "bidding_pct": jp, "bidding_amount": 8e7,
+             "bidding_turnover": 1.0, "zt_buy_amount": zb} for c, jp in pcts.items()]})
+    db["kpl_bidding_series"].docs[DATE] = {
+        "_id": DATE, "ticks": ticks, "updated_at": f"{DATE}T09:26:09+08:00"}
     try:
         doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
         rows_out = {x["code"]: x for x in doc["leaders"]}
@@ -463,9 +459,8 @@ def test_trial_merge_into_push_missing_row(client):
         jiuyan_industry_root.reset_jiuyan_industry_root_cache()
 
 
-# ── 竞价试盘日档读口迁链（2026-11-18，docs §7.14：源序=官方序列派生→raw 历史档）──
-# 背景：11-17 WzsLinker 退役出链后 auction_trial_raw 停更，读口漏迁致面板停 11-17。
-# 三态 + 源序 + 日期索引并集 + 回退，全 FakeDb 零网络零 jev。
+# ── 竞价试盘日档读口（§7.14 迁链；2026-11-18 §7.17 raw 整集合退役→单主链）──
+# 单主链三态 + 日期索引 + 回退 + 行情补全，全 FakeDb 零网络零 jev。
 
 def _cst_ts(date: str, hm: str) -> float:
     from datetime import datetime, timedelta, timezone
@@ -474,14 +469,8 @@ def _cst_ts(date: str, hm: str) -> float:
         hour=h, minute=m, second=s, tzinfo=timezone(timedelta(hours=8))).timestamp()
 
 
-def _seed_trial_series(db, date=DATE, codes=None, extra_raw=None):
-    """官方序列档：两帧（首帧委买 1e7 → 末帧 5e6 撤减），与 _seed_trial_raw 同形态。
-    codes 默认 4 股；extra_raw 注入 raw 独有股（证源序时 raw 应被遮蔽）。"""
-    _seed_trial_raw(db, date)
-    if extra_raw:
-        raw = db["auction_trial_raw"].docs[date]
-        raw["rows"].update(extra_raw)
-        raw["nRows"] = len(raw["rows"])
+def _seed_trial_series(db, date=DATE, codes=None):
+    """官方序列档：两帧（首帧委买 1e7 → 末帧 5e6 撤减）。codes 默认 4 股。"""
     pcts = {"600100": 7.0, "600101": 8.0, "600102": 9.0, "600103": 6.5}
     use = codes or list(pcts)
     ticks = []
@@ -495,18 +484,16 @@ def _seed_trial_series(db, date=DATE, codes=None, extra_raw=None):
         "updated_at": f"{date}T09:26:09+08:00", "window": ["09:15:00", "09:27:00"]}
 
 
-def test_auction_trial_series_primary_over_raw(client):
-    """双源同在 → 官方序列派生主链（raw 独有股被遮蔽，不双轨混显）。"""
+def test_auction_trial_derived_single_main_chain(client):
+    """§7.17 raw 退役 → 官方序列派生单主链（无历史档回退）。"""
     c, db = client
-    _seed_trial_series(db, extra_raw={"600999": {
-        "jj_percent": 9.9, "jj_amount": 6e7, "first_amount": 1e7, "last_amount": 5e6}})
+    _seed_trial_series(db)
     try:
         doc = c.get("/api/hotlist-jev/auction-trial", params={"date": DATE}).json()
         assert doc["ok"] and not doc.get("degraded")
         d = doc["doc"]
         assert d["source"] == "kpl_bidding_series_derived"
         assert set(d["rows"]) == {"600100", "600101", "600102", "600103"}
-        assert "600999" not in d["rows"]
         assert d["nRows"] == 4
         assert d["savedAt"] == f"{DATE}T09:26:09+08:00"
         assert doc["trialState"]["state"] == "ok"
@@ -524,22 +511,6 @@ def test_auction_trial_series_primary_over_raw(client):
         jiuyan_industry_root.reset_jiuyan_industry_root_cache()
 
 
-def test_auction_trial_archive_fallback(client):
-    """序列缺席 → raw 历史档回退（历史日回放不丢）。"""
-    c, db = client
-    _seed_trial_raw(db)
-    try:
-        doc = c.get("/api/hotlist-jev/auction-trial", params={"date": DATE}).json()
-        assert doc["ok"] and not doc.get("degraded")
-        assert doc["trialState"]["source"] == "archive"
-        assert set(doc["doc"]["rows"]) == {"600100", "600101", "600102", "600103"}
-        assert doc["doc"]["savedAt"] == f"{DATE}T09:26:01"
-    finally:
-        from backend.services.jev import jiuyan_board, jiuyan_industry_root
-        jiuyan_board.reset_jiuyan_board_cache()
-        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
-
-
 def test_auction_trial_both_absent_degraded(client):
     """全源无档 → 结构化降级（不伪装成功/不伪造 0）。"""
     c, _db = client
@@ -548,10 +519,10 @@ def test_auction_trial_both_absent_degraded(client):
     assert doc["dates"] == []
 
 
-def test_auction_trial_latest_union_index(client):
-    """日期索引=raw∪series；无 date 取最新有档日（series 新日不被 raw 停更遮蔽）。"""
+def test_auction_trial_latest_series_index(client):
+    """日期索引=series；无 date 取最新有档日。"""
     c, db = client
-    _seed_trial_raw(db, DATE)
+    _seed_trial_day(db, DATE)
     _seed_trial_series(db, "2026-11-18", codes=["600102"])
     try:
         doc = c.get("/api/hotlist-jev/auction-trial").json()
@@ -568,7 +539,7 @@ def test_auction_trial_latest_union_index(client):
 def test_auction_trial_date_fallback_earlier(client):
     """请求日双源皆缺 → 向更早有用日回退并 dateFallback 透出（不冒充当日）。"""
     c, db = client
-    _seed_trial_raw(db, DATE)
+    _seed_trial_day(db, DATE)
     try:
         doc = c.get("/api/hotlist-jev/auction-trial",
                     params={"date": "2026-11-18"}).json()
@@ -601,7 +572,7 @@ def test_auction_trial_partial_fields_not_zeroed(client):
 def test_auction_trial_no_date_fallback_when_today_empty(client):
     """评审 M1：最新日序列档零可用行（委买全 0）→ 无 date 也回退历史档，不吞数据。"""
     c, db = client
-    _seed_trial_raw(db, DATE)
+    _seed_trial_day(db, DATE)
     db["kpl_bidding_series"].docs["2026-11-18"] = {
         "_id": "2026-11-18", "ticks": [{"ts": _cst_ts("2026-11-18", "09:16:00"),
         "it": [{"s": "600102", "zt_buy_amount": 0}]}],
@@ -611,45 +582,25 @@ def test_auction_trial_no_date_fallback_when_today_empty(client):
         assert doc["ok"] and not doc.get("degraded")
         assert doc["dateFallback"] == {"requested": "2026-11-18", "served": DATE}
         assert doc["doc"]["tradingDate"] == DATE
-        assert doc["trialState"]["source"] == "archive"
+        assert doc["trialState"]["source"] == "kpl_bidding_series_derived"
     finally:
         from backend.services.jev import jiuyan_board, jiuyan_industry_root
         jiuyan_board.reset_jiuyan_board_cache()
         jiuyan_industry_root.reset_jiuyan_industry_root_cache()
 
 
-def test_auction_trial_derive_exception_archive_rescue(client, monkeypatch):
-    """评审 m3：derive 抛异常 → raw 救场且 deriveError 留痕不丢。"""
+def test_auction_trial_derive_exception_degraded(client, monkeypatch):
+    """§7.17 无回退：derive 抛异常 → 结构化降级 derive_failed 留痕，不伪装。"""
     c, db = client
-    _seed_trial_raw(db)
+    _seed_trial_day(db)
     from backend.operations import auction_trial_derive as D
 
     def boom(*a, **k):
         raise RuntimeError("derive boom")
     monkeypatch.setattr(D, "derive_trial_rows_from_series", boom)
-    try:
-        doc = c.get("/api/hotlist-jev/auction-trial", params={"date": DATE}).json()
-        assert doc["ok"] and doc["doc"]["tradingDate"] == DATE
-        assert doc["trialState"]["source"] == "archive"
-        assert doc["trialState"]["deriveError"] == "derive_failed:RuntimeError"
-    finally:
-        from backend.services.jev import jiuyan_board, jiuyan_industry_root
-        jiuyan_board.reset_jiuyan_board_cache()
-        jiuyan_industry_root.reset_jiuyan_industry_root_cache()
-
-
-def test_auction_trial_archive_read_error_trace(client, monkeypatch):
-    """评审 m4：raw 读抛异常 → archiveReadError 留痕，降级不伪装。"""
-    c, db = client
-    _seed_trial_raw(db)
-
-    def boom(*a, **k):
-        raise RuntimeError("mongo down")
-    monkeypatch.setattr(db["auction_trial_raw"], "find_one", boom)
     doc = c.get("/api/hotlist-jev/auction-trial", params={"date": DATE}).json()
     assert doc["degraded"] and doc["doc"] is None
-    assert "archiveReadError" in doc["trialState"]
-    assert "mongo down" in doc["trialState"]["archiveReadError"]
+    assert doc["trialState"]["state"] == "derive_failed:RuntimeError"
 
 
 def test_auction_trial_both_absent_trialstate(client):
@@ -665,7 +616,7 @@ def test_auction_trial_both_absent_trialstate(client):
 def test_auction_trial_fallback_to_series_day(client):
     """评审 m4：跨日回退命中更早日为 series 派生（源序不变）。"""
     c, db = client
-    _seed_trial_raw(db, DATE)
+    _seed_trial_day(db, DATE)
     _seed_trial_series(db, "2026-11-17", codes=["600102"])
     try:
         doc = c.get("/api/hotlist-jev/auction-trial",
@@ -679,18 +630,6 @@ def test_auction_trial_fallback_to_series_day(client):
         jiuyan_industry_root.reset_jiuyan_industry_root_cache()
 
 
-def test_auction_trial_legal_empty_archive(client):
-    """评审 m2：ok+rows={} 合法空档照服务（全市场无试盘事实），不冒充未采集。"""
-    c, db = client
-    db["auction_trial_raw"].docs[DATE] = {
-        "_id": DATE, "tradingDate": DATE, "state": "ok", "nRows": 0,
-        "savedAt": f"{DATE}T09:26:01", "rows": {}}
-    doc = c.get("/api/hotlist-jev/auction-trial", params={"date": DATE}).json()
-    assert doc["ok"] and not doc.get("degraded")
-    assert doc["doc"]["rows"] == {} and doc["doc"]["nRows"] == 0
-    assert doc["trialState"]["legalEmpty"] is True
-
-
 def test_auction_trial_quote_supplement_join(client, monkeypatch):
     """昨涨幅=落库独立源 join；现价=实时快照 join；仅补缺位+miss 计数透出。"""
     c, db = client
@@ -698,7 +637,7 @@ def test_auction_trial_quote_supplement_join(client, monkeypatch):
     for t in db["kpl_bidding_series"].docs[DATE]["ticks"]:
         for it in t["it"]:
             it.pop("price", None)   # 实测 pid=8 price 列空 → 派生 price=None
-    db["auction_trial_raw"].docs[DATE]["prev_pct"] = {
+    db["kpl_bidding_series"].docs[DATE]["prev_pct"] = {
         "600102": {"pct": 5.5}, "600100": {"pct": -1.2}}
     monkeypatch.setattr(R, "read_realtime_prices",
                         lambda codes: ({"600102": {"price": 12.5}}, 1794965169000))
@@ -737,18 +676,13 @@ def test_auction_trial_quote_supplement_error_trace(client, monkeypatch):
 
 
 def test_auction_leaders_trial_supplement_series_primary(client):
-    """auction-leaders trial 缺档补行同源序：series 在 → raw 独有股不补行。"""
+    """auction-leaders trial 缺档补行同源序：官方序列派生单主链（§7.17）。"""
     c, db = client
     from backend.services.jev import jiuyan_board, jiuyan_industry_root
-    _seed_trial_series(db, extra_raw={"600999": {
-        "jj_percent": 9.9, "jj_amount": 6e7, "first_amount": 1e7, "last_amount": 5e6}})
-    node = db["jiuyan_industry_stocks"].docs["node:机器人"]
-    node["stocks"].append({"code": "600999"})
-    node["stockN"] = 5
+    _seed_trial_day(db)
     try:
         doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
         rows = {x["code"]: x for x in doc["leaders"]}
-        assert "600999" not in rows                 # raw 被序列主链遮蔽
         assert rows["600102"]["trialStrength"]["rank"] == 1
         assert rows["600102"]["selectionSources"] == ["auction_trial_strength"]
     finally:

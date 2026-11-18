@@ -250,8 +250,8 @@ def get_auction_leaders(date: str | None = None, start: str | None = None,
     missing_by_key = {(r["tradingDate"], r["code"]): r for r in rows
                       if r.get("labelMissing")}
     # 竞价强度 roster 缺档行（第三源 2026-11-15 预登记：同一 trial_strength_roster
-    # 实现按需计算；trial_rows 源序=官方序列派生→raw 历史档（load_trial_rows 单实现，
-    # §7.14 迁链，与打标链/试盘读口同序，禁第二套 raw-only 读）；失败留痕不阻断）
+    # 实现按需计算；trial_rows=官方序列派生单主链（load_trial_rows 单实现，§7.17
+    # raw 退役，与打标链/试盘读口同序，禁第二套）；失败留痕不阻断）
     trial_roster_error = None
     try:
         from backend.analysis.hotlist.auction_strength import trial_strength_roster
@@ -358,16 +358,16 @@ def post_auction_leader_rerun(payload: AuctionLeaderRerunPayload) -> dict[str, A
                     "computedAt": doc.get("computedAt")}}
 
 
-# ══════════ 竞价试盘日档读口（2026-11-14，勘察 auction-trial-source-survey-20261114 §6；
-# 2026-11-18 §7.14 迁链：源序=官方序列派生→raw 历史档，与打标链主链同序）══════════
-# 数据源=本地 MongoDB kpl_bidding_series（collector 单写者推送即落库）派生主链 →
-# auction_trial_raw 历史档回退（11-17 WzsLinker 退役后停更，仅作历史回放/对拍参考）。
+# ══════════ 竞价试盘日档读口（2026-11-14 勘察 §6；§7.14 迁链；2026-11-18 §7.17
+# auction_trial_raw 整集合退役→官方序列派生单主链，无历史档回退）══════════
+# 数据源=本地 MongoDB kpl_bidding_series（collector 单写者推送即落库）派生单主链；
+# 昨涨幅=同档 prev_pct 加字段（archiver 单写者 TDX 日线懒取）；历史视图收敛至
+# 序列有档日（≤11-16 Wzs 历史对拍数据已 mongodump 归档 data/backups/，红线 4）。
 # 本读口**纯读零上游外呼**（红线 9：页面刷新不触发任何外呼）。
 # rows 键=6 位代码（KPL param.code），无名称列——名称 join stock_names 全 A 字典、
 # board join 韭研产业树一级节点（jiuyan_board 单一事实源，未收录置 None 前端「未分板块」），
 # miss 不伪装：None 透出，前端标注。跨日回退只向更早
 # 有档日回退并 dateFallback 透出（不冒充当日，天普 11-12 池漏档同级教训）。
-TRIAL_RAW_COLLECTION = "auction_trial_raw"
 
 
 def _root_event_buckets() -> list[str]:
@@ -392,34 +392,31 @@ from backend.services.market.trial_quote_supplement import (  # noqa: E402
 
 @router.get("/auction-trial")
 def get_auction_trial(date: str | None = None) -> dict[str, Any]:
-    """竞价试盘日档读口（纯读）：源序=官方序列派生→raw 历史档（§7.14）；
-    无 date → 最新有档日（raw∪series 日期索引）+ 全部日期索引。"""
+    """竞价试盘日档读口（纯读）：官方序列派生单主链（§7.17 raw 退役）；
+    无 date → 最新有档日（series 日期索引）+ 全部日期索引。"""
     try:
         db = repository_factory.get_runtime_mongodb_database()
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
     try:
-        raw_dates = {str(d["_id"]) for d in db[TRIAL_RAW_COLLECTION].find({}, {"_id": 1})}
-        series_dates = {str(d["_id"]) for d in db[COLLECTION_SERIES].find({}, {"_id": 1})}
+        dates = sorted(str(d["_id"]) for d in db[COLLECTION_SERIES].find({}, {"_id": 1}))
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"auction_trial_read_failed: {exc}"}
-    dates = sorted(raw_dates | series_dates)
     target = (date or "").strip() or (dates[-1] if dates else "")
     date_fallback = None
     rows, trial_state = load_trial_rows(db, target)
     target_state = trial_state   # 审计锚定请求日（回退穷尽时不被末日 state 错位）
     served = target
-    # 跨日回退只向更早有档/有行日（双源逐日试，源序不变；不冒充当日）。
-    # 无 date 同样回退（评审 M1：最新日序列档零可用行不得吞掉可用历史档，§4.0）；
-    # legalEmpty（当日全市场无试盘个股合法事实）视为可服务，不回退。
-    if not rows and not trial_state.get("legalEmpty"):
+    # 跨日回退只向更早有行日（不冒充当日）；无 date 同样回退（评审 M1：
+    # 最新日序列档零可用行不得吞掉可用历史档，§4.0）。
+    if not rows:
         for earlier in reversed([d for d in dates if d < target]):
             rows, trial_state = load_trial_rows(db, earlier)
-            if rows or trial_state.get("legalEmpty"):
+            if rows:
                 served = earlier
                 date_fallback = {"requested": target, "served": earlier}
                 break
-    if not rows and not trial_state.get("legalEmpty"):
+    if not rows:
         return {"ok": True, "dates": dates, "doc": None, "degraded": True,
                 "reason": f"{target} 无可用试盘行（{target_state.get('reason') or target_state.get('state') or '未采集或非交易日'}）",
                 "trialState": target_state}
@@ -502,7 +499,7 @@ def get_auction_trial(date: str | None = None) -> dict[str, Any]:
         n_prev_miss = n_price_miss = 0
         price_ts = None
         try:
-            prev_rows = (db[TRIAL_RAW_COLLECTION].find_one(
+            prev_rows = (db[COLLECTION_SERIES].find_one(
                 {"_id": served}, {"prev_pct": 1}) or {}).get("prev_pct") or {}
             prices, price_ts = read_realtime_prices(list(named_rows))
             for c, r in named_rows.items():
@@ -520,15 +517,11 @@ def get_auction_trial(date: str | None = None) -> dict[str, Any]:
                     n_price_miss += 1
         except Exception as exc:  # noqa: BLE001 — 补全失败不阻断主读口（fail-visible）
             quote_err = f"{type(exc).__name__}: {exc}"
-        # 档元数据按源构造：历史档直读原 envelope；派生档用序列 updated_at 作档龄
-        if trial_state.get("source") == "archive":
-            raw_doc = db[TRIAL_RAW_COLLECTION].find_one({"_id": served}) or {}
-            doc = {k: v for k, v in raw_doc.items() if k != "_id"}
-        else:
-            sdoc = db[COLLECTION_SERIES].find_one({"_id": served}, {"ticks": 0}) or {}
-            doc = {"tradingDate": served, "source": "kpl_bidding_series_derived",
-                   "state": "ok", "savedAt": sdoc.get("updated_at"),
-                   "nRows": len(rows)}
+        # 档元数据：序列 updated_at 作档龄（单主链，无历史 envelope）
+        sdoc = db[COLLECTION_SERIES].find_one({"_id": served}, {"ticks": 0}) or {}
+        doc = {"tradingDate": served, "source": "kpl_bidding_series_derived",
+               "state": "ok", "savedAt": sdoc.get("updated_at"),
+               "nRows": len(rows)}
         doc["rows"] = named_rows
         result: dict[str, Any] = {"ok": True, "dates": dates, "doc": doc,
                                   "trialState": trial_state,

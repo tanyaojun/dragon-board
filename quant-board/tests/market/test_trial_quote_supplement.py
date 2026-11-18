@@ -60,12 +60,12 @@ def test_collect_computes_prev_pct_and_filters_today(monkeypatch):
     monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: _bars(c))
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "ok" and r["ok_n"] == 2
-    raw = db[S.COLLECTION_TRIAL_RAW].docs[DATE]
-    rows = raw["prev_pct"]
+    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    rows = ser["prev_pct"]
     assert rows["600102"]["pct"] == 10.0          # (11/10-1)*100，非当日棒
     assert rows["600102"]["prevDate"] == "2026-11-17"
-    assert raw["prev_pct_state"]["attempts_n"] == 2
-    assert "rows" not in raw   # 字段级加字段，不造 rows/envelope
+    assert ser["prev_pct_state"]["attempts_n"] == 2
+    assert ser.get("ticks")   # 字段级加字段，ticks 不被触碰
 
 
 def test_collect_limit_respected(monkeypatch):
@@ -80,8 +80,8 @@ def test_collect_limit_respected(monkeypatch):
 def test_collect_daily_cap_no_fetch(monkeypatch):
     db = FakeDb()
     _seed_universe(db)
-    db[S.COLLECTION_TRIAL_RAW].docs[DATE] = {
-        "_id": DATE, "prev_pct_state": {"attempts_n": 10**6}}
+    db[S.COLLECTION_SERIES].docs[DATE].update(
+        {"prev_pct_state": {"attempts_n": 10**6}})
     from backend.operations import tdx_daily_bars as T
 
     def boom(*a, **k):
@@ -99,7 +99,7 @@ def test_collect_one_close_not_zero(monkeypatch):
                         lambda c, **k: {"2026-11-17": {"close": 11.0}})
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "all_failed" and r["backoff_rounds"] == 1
-    doc = db[S.COLLECTION_TRIAL_RAW].docs[DATE]
+    doc = db[S.COLLECTION_SERIES].docs[DATE]
     assert doc["prev_pct"] == {}
     assert doc["prev_pct_state"]["failed"]["600102"] == "no_two_closes"
 
@@ -107,7 +107,7 @@ def test_collect_one_close_not_zero(monkeypatch):
 def test_collect_backoff_skip_decrements(monkeypatch):
     db = FakeDb()
     _seed_universe(db)
-    db[S.COLLECTION_TRIAL_RAW].docs[DATE] = {
+    db[S.COLLECTION_SERIES].docs[DATE] = {
         "_id": DATE, "prev_pct_state": {"backoff_rounds": 2}}
     from backend.operations import tdx_daily_bars as T
 
@@ -116,7 +116,7 @@ def test_collect_backoff_skip_decrements(monkeypatch):
     monkeypatch.setattr(T, "fetch_daily_bars", boom)
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "backoff" and r["remaining"] == 1
-    assert db[S.COLLECTION_TRIAL_RAW].docs[DATE]["prev_pct_state"]["backoff_rounds"] == 1
+    assert db[S.COLLECTION_SERIES].docs[DATE]["prev_pct_state"]["backoff_rounds"] == 1
 
 
 def test_collect_no_universe_zero_fetch(monkeypatch):

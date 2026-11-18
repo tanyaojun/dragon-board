@@ -173,7 +173,7 @@ def test_fire_writes_docs_and_idempotent(env):
     sector = col.docs[f"{DATE}:board:机器人"]
     assert leader["docKind"] == "leader" and leader["status"] == "ok"
     assert leader["auctionSealToday"] == "mid_45_65"
-    assert leader["questionSetVersion"] == "vA5"
+    assert leader["questionSetVersion"] == "vA6"
     assert leader["outcomeSealedToday"] is None
     assert "竞价看龙头推送（09:15 试盘价）：" in leader["narrative"]
     assert sector["docKind"] == "sector"
@@ -649,23 +649,21 @@ def test_trial_state_contract_pending_and_renderer_wiring(env, monkeypatch):
 
 
 def test_run_wires_trial_in_window(env, monkeypatch):
-    """raw 日档试盘行 → 叙事出试盘行 + trialState=ok/archive（Wzs 出链后读路径）。"""
+    """官方序列试盘行 → 叙事出试盘行 + trialState=ok/derived（§7.17 单主链）。"""
     db, calls = env
     monkeypatch.setattr(L, "_in_auction_window", lambda: True)
-    db["auction_trial_raw"].docs[DATE] = {
-        "_id": DATE, "tradingDate": DATE, "savedAt": "2026-11-16T09:25:30+08:00",
-        "nRows": 95,
-        "rows": {"603135": {"start_time": "09:15:00", "end_time": "09:20:11",
-                             "first_amount": 2_116_000.0, "max_amount": 2_116_000.0,
-                             "jj_percent": -2.36, "jj_amount": 3_310_000.0}}}
+    db["kpl_bidding_series"].docs[DATE] = _series_doc(DATE, {
+        "603135": {"start_time": "09:15:00", "end_time": "09:20:11",
+                   "first_amount": 2_116_000.0, "last_amount": 2_116_000.0,
+                   "jj_percent": -2.36, "jj_amount": 3_310_000.0}})
     res = L.run(DATE, confirm_budget=True)
     assert res["ok"]
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
     assert "竞价试盘（09:15:00–09:20:11）：首开 211.6万" in doc["narrative"]
     assert "试盘涨幅 -2.36%（09:20:11 时点）" in doc["narrative"]
     ts = doc["corpusState"]["trialState"]
-    assert ts["state"] == "ok" and ts["source"] == "archive"
-    assert ts["saved_at"] == "2026-11-16T09:25:30+08:00" and ts["n_rows"] == 95
+    assert ts["state"] == "ok" and ts["source"] == "kpl_bidding_series_derived"
+    assert ts["n_rows"] == 1
 
 
 def test_run_out_of_window_trial_skipped(env, monkeypatch):
@@ -756,11 +754,8 @@ def _trial_strength_setup(monkeypatch, db, rows, boards):
     # qt.gtimg.cn（红线 9 频控预算）；离线确定性返回，补源缺席不阻断选龙
     monkeypatch.setattr(L, "get_auction_snapshot_tencent",
                         lambda codes: {"ok": False, "items": {}, "missing": list(codes)})
-    # WzsLinker 已退役出链（2026-11-17 用户裁决）：试盘行走 raw 日档读路径
-    # （auction_trial_raw = 历史 raw 档；主链 = socket 官方序列）
-    db["auction_trial_raw"].docs[DATE] = {
-        "_id": DATE, "tradingDate": DATE,
-        "savedAt": f"{DATE}T09:25:30+08:00", "nRows": len(rows), "rows": rows}
+    # §7.17 raw 整集合退役：试盘行种子=官方序列档（单主链）
+    db["kpl_bidding_series"].docs[DATE] = _series_doc(DATE, rows)
     yield
     jiuyan_board.reset_jiuyan_board_cache()
     jiuyan_industry_root.reset_jiuyan_industry_root_cache()
@@ -770,6 +765,28 @@ def _srow(jj_percent=7.0, jj_amount=6e7, first=1e7, last=5e6):
     return {"jj_percent": jj_percent, "jj_amount": jj_amount,
             "first_amount": first, "last_amount": last,
             "start_time": "09:15:00", "end_time": "09:20:11"}
+
+
+def _series_doc(date, rows):
+    """§7.17 raw 退役：试盘行种子→官方序列档（每股首/末两帧，start/end 时点）。"""
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=8))
+
+    def ts(hm):
+        h, m, s = (int(x) for x in str(hm).split(":"))
+        return datetime.strptime(date, "%Y-%m-%d").replace(
+            hour=h, minute=m, second=s, tzinfo=tz).timestamp()
+    frames = {}
+    for c, r in rows.items():
+        for hm, zkey in ((r.get("start_time") or "09:15:00", "first_amount"),
+                         (r.get("end_time") or "09:20:11", "last_amount")):
+            frames.setdefault(hm, []).append(
+                {"s": c, "zt_buy_amount": r.get(zkey),
+                 "bidding_pct": r.get("jj_percent"),
+                 "bidding_amount": r.get("jj_amount")})
+    return {"_id": date, "ticks": [{"ts": ts(hm), "it": its}
+                                   for hm, its in sorted(frames.items())],
+            "updated_at": f"{date}T09:25:30+08:00"}
 
 
 def test_trial_strength_third_source_new_leader(env, monkeypatch):
@@ -860,11 +877,11 @@ def test_trial_strength_peers_isolated_by_board_source(env, monkeypatch):
             db["stock_names"].docs[c] = {"code": c, "name": n}
         db["kpl_daban_pool"].docs[DATE] = {
             "_id": DATE, "bid_date": DATE,
-            "bid_items": [{"stock_id": c, "name": n, "bidding_pct": 5.0,
-                           "bidding_amount": 1e7}
-                          for c, n in (("600100", "甲"), ("600101", "乙"),
-                                       ("600102", "丙"), ("600103", "丁"),
-                                       ("603135", "中重科技"))]}
+            "bid_items": [{"stock_id": c, "name": n, "bidding_pct": jp,
+                           "bidding_amount": 6e7}
+                          for c, n, jp in (("600100", "甲", 7.0), ("600101", "乙", 8.0),
+                                           ("600102", "丙", 9.0), ("600103", "丁", 6.5),
+                                           ("603135", "中重科技", 7.0))]}
         L.run(DATE, confirm_budget=True)
         col = db[L.COLLECTION]
         n_trial = col.docs[f"{DATE}:600100"]["narrative"]
@@ -880,8 +897,8 @@ def test_trial_strength_peers_isolated_by_board_source(env, monkeypatch):
             pass
 
 
-def test_trial_strength_dry_run_reads_archive(env, monkeypatch):
-    """历史日 dry-run：窗采集缺席 → auction_trial_raw 日档回读（纯库读零外呼），
+def test_trial_strength_dry_run_reads_series(env, monkeypatch):
+    """历史日 dry-run：窗采集缺席 → 序列档派生（纯库读零外呼），
     第三源候选出现；零 jev 零写。"""
     db, calls = env
     from backend.services.jev import jiuyan_board, jiuyan_industry_root
@@ -890,11 +907,10 @@ def test_trial_strength_dry_run_reads_archive(env, monkeypatch):
     db["jiuyan_industry_stocks"].docs["node:机器人"] = {
         "_id": "node:机器人", "name": "机器人", "stockN": 4, "batchDate": "2026-10-25",
         "stocks": [{"code": c} for c in ("600100", "600101", "600102", "600103")]}
-    db["auction_trial_raw"].docs[DATE] = {
-        "_id": DATE, "tradingDate": DATE, "nRows": 4, "savedAt": f"{DATE}T09:26:01",
-        "rows": {"600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
-                 "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}}
-    # Wzs 已出链：dry-run 天然零外呼
+    db["kpl_bidding_series"].docs[DATE] = _series_doc(DATE, {
+        "600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
+        "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)})
+    # 单主链纯库读：dry-run 天然零外呼
     try:
         res = L.run(DATE, dry_run=True)
         assert res["ok"] and res["dryRun"]
@@ -1115,18 +1131,18 @@ def test_trial_strength_roster_failure_dual_continues(env, monkeypatch):
     assert len(calls) == 2                          # 双源照常：1 板块 + 1 个股
 
 
-def test_trial_strength_archive_read_error_fail_visible(env, monkeypatch):
-    """日档回读失败 → corpusState.trialState.archiveReadError 留痕，双源不阻断。"""
+def test_trial_strength_derive_error_fail_visible(env, monkeypatch):
+    """§7.17 无回退：派生异常 → trialState derive_failed 留痕，双源不阻断。"""
     db, calls = env
 
     def boom(*a, **k):
-        raise RuntimeError("archive read boom")
+        raise RuntimeError("derive boom")
 
-    monkeypatch.setattr(db["auction_trial_raw"], "find_one", boom)
+    monkeypatch.setattr(L, "derive_trial_rows_from_series", boom)
     res = L.run(DATE, confirm_budget=True)
     assert res["ok"]
     assert res["trialStrengthState"]["state"] == "absent"
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
     ts = doc["corpusState"]["trialState"]
-    assert "archive read boom" in ts["archiveReadError"]
+    assert ts["state"] == "derive_failed:RuntimeError"
     assert len(calls) == 2

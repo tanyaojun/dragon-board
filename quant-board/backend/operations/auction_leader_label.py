@@ -75,8 +75,6 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 from backend.operations.auction_bidding_direct import (
     collect_auction_bidding_direct)
 from backend.operations.auction_trial_derive import derive_trial_rows_from_series
-from backend.operations.auction_trial_fetch import (
-    COLLECTION_TRIAL_RAW)
 from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
                                                       trading_dates)
 from backend.operations.jev_label_jiuyan import jiuyan_streak_map
@@ -720,7 +718,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     # 试盘源（2026-11-17 正名，用户裁决）：**主链 = KPL socket 官方推送序列**
     # （pid=8 竞价池实时页，下方 trial_rows_from_series 即官方序列的试盘行加工层，
     # 主链一环）。WzsLinker（第三方非官方代理，11-16 实证故障）**已退役出链**：
-    # 判据链零依赖，历史 raw 日档（auction_trial_raw）保留作对拍参考。
+    # 判据链零依赖；auction_trial_raw 已于 2026-11-18 整集合退役（§7.17，归档 backups）。
     # 竞价列表真源头直采（2026-11-16 MITM 定案合同：kaipanla.com MorningBiddingList
     # Type=4 PidType=0；与试盘 fetch 同窗一次，冻结态全量快照落 kpl_morning_bidding_raw）
     mbl_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
@@ -741,20 +739,10 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if derived_rows:
         trial_rows = derived_rows
         trial_state = derived_state
-    # 第三源日档回读（2026-11-15 预登记）：live 窗采集缺席（dry-run/窗外/历史日）时
-    # 读 auction_trial_raw 日档（纯库读零外呼零写），强度选龙与试盘语料可回放；
-    # 日档亦缺 → 第三源整源缺席（fail-visible，双源不受影响，不兑底选龙）
-    if not trial_rows:
-        try:
-            raw_doc = db[COLLECTION_TRIAL_RAW].find_one(
-                {"_id": date}, {"rows": 1, "savedAt": 1, "nRows": 1}) or {}
-            if raw_doc.get("rows"):
-                trial_rows = raw_doc["rows"]
-                trial_state = {"state": "ok", "source": "archive",
-                               "saved_at": raw_doc.get("savedAt"),
-                               "n_rows": raw_doc.get("nRows")}
-        except Exception as exc:   # noqa: BLE001 — 日档读失败不阻断（第三源缺席留痕）
-            trial_state = {**trial_state, "archiveReadError": f"{type(exc).__name__}: {exc}"}
+    elif str(derived_state.get("state") or "").startswith("derive_failed"):
+        trial_state = derived_state   # 派生异常留痕不丢（无回退后唯一审计面）
+    # 2026-11-18 raw 退役（§7.17）：无历史档回退；序列缺席 → 第三源整源缺席
+    # （fail-visible，双源不受影响，不兑底选龙）
     # 第三源选龙（严格档 + 每板前三；与读口共用 trial_strength_roster 单一实现）：
     # 中热 2-5亿 × mid50_95 × 撤减，root 粗桶；软上限 ≤6 只/日（超限截断记账）
     try:
