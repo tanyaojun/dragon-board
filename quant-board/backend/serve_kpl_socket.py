@@ -103,8 +103,8 @@ _SUB_BATCH_CODEC = int(_SUB_BATCH_CODEC_RAW)   # U2 实弹：明文=2008 杀连�
 _UNSUB_ENABLED = os.environ.get("KPL_UNSUB_ENABLED", "0").strip().lower() in (
     "1", "true", "on", "yes")
 _KA_MODE = os.environ.get("KPL_KA_MODE", "off").strip().lower()
-if _KA_MODE not in ("610", "off"):
-    raise RuntimeError(f"KPL_KA_MODE 非法值 {_KA_MODE!r}（仅支持 610|off）")
+if _KA_MODE not in ("610", "off", "none"):
+    raise RuntimeError(f"KPL_KA_MODE 非法值 {_KA_MODE!r}（仅支持 610|off|none）")
 # KPL_SUB_UNIQUE_ID=1 → per-stock 订阅 ext attr2 用会话内唯一 subId hint（base 0x4000）
 #   而非 cmd，使服务端授予每股独立 subId → 402 精准退单股（方案 §12，探针裁决后启用）。
 _SUB_UNIQUE_ID = os.environ.get("KPL_SUB_UNIQUE_ID", "0").strip().lower() in (
