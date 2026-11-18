@@ -317,8 +317,8 @@ class KplCollectorService:
         sub_unique_id: bool = False,
         sub_staged: bool = False,
     ):
-        if ka_mode not in ("610", "off"):
-            raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off）")
+        if ka_mode not in ("610", "off", "none"):
+            raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off|none）")
         if sub_staged and setup_inline_subs:
             raise ValueError("sub_staged 与 setup_inline_subs 不兼容（分波依赖读循环 drain 架构）")
         self._codec = codec
@@ -2034,9 +2034,16 @@ class KplCollectorService:
                         continue
                     self._dispatch(fr, sender=sock.sendall, next_seq=next_seq)
                     continue
-                if now - last_keepalive > 1:
+                if self._ka_mode != "none" and now - last_keepalive > 1:
                     # 保活交替: 每 8 tick 一次 610 AuthReq 原样重发（签名绑定初始
                     # challenge/curTime）/ 其余 tick 3001 分块轮询（下一块）
+                    # ka_mode=none（2026-11-18 用户裁决，rst_10054 根因二）：纯读不发——
+                    # 3001 轮转保活在 3 id 小面上无雷（P4 A/B 口径），但动态面长到
+                    # 852 id 后每 6s 全量重订阅一轮（1s/chunk×6），21s 会话内 3000+
+                    # 订阅单元，构成 rst_10054 主超支。App 从不用重订阅当心跳；
+                    # none=会话由服务端 TTL 轮转+重连兜底（App 同款）。
+                    # 注：none 下 last_keepalive 不更新（首个 tick 后本分支短路，
+                    # 零发送零开销）
                     hb_flip[0] += 1
                     if hb_flip[0] % 8 == 1 and self._ka_mode == "610":
                         if hb_flip[0] == 1:

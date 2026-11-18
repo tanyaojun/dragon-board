@@ -2738,6 +2738,16 @@ class TestKaMode:
         assert self._cmd_count(fake, 3001) == 1 + 10  # 全 tick 轮转
         assert svc.status()["ka_mode"] == "off"
 
+    def test_none_mode_pure_read_zero_resend(self, monkeypatch):
+        """ka_mode=none（2026-11-18 rst_10054 根因二）：收流期纯读零发送——
+        3001 轮转保活在 852 id 动态面上=每 6s 全量重订阅（App 无此行为）；
+        none=会话由服务端 TTL 轮转兜底（App 同款）。"""
+        svc, fake = self._run_loop_session(monkeypatch, ka_mode="none")
+        assert svc._ka_mode == "none"
+        assert self._cmd_count(fake, 610) == 1        # 仅初始认证
+        assert self._cmd_count(fake, 3001) == 1       # 仅 setup 内联 1 帧，零轮转
+        assert svc.status()["ka_mode"] == "none"
+
     def test_invalid_ka_mode_raises(self):
         with pytest.raises(ValueError):
             _mk_svc(ka_mode="bogus")
