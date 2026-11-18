@@ -255,12 +255,6 @@ class KplCollectorService:
         history: int = 200,
         human_delay: bool = True,
         # auth 相位延迟（2026-11-09 会话抖动根因修复）：§3.4 实证会话时长与 auth 阶段
-        # 耗时单调相关——<1s → ~6s 即断（机器人检测）；~1-2s 拟人档 → 15-25s；
-        # adb 链路（signsvc 经模拟器逐帧往返）auth 5-8s → 75-160s。pc codec 太快，
-        # 原固定 1.2s 停在拟人档（实测 ~23s 会话），2203/2013 订阅爆发未完成即被断。
-        # 默认 5.0+U(0,3.0) 对齐 adb 档；env KPL_AUTH_PHASE_DELAY 可覆盖（0=关闭延迟）。
-        auth_phase_delay: float = 5.0,
-        auth_phase_jitter: float = 3.0,
         daban_subs: bool = True,
         daban_market_type: int = 1,
         daban_list_pids: Optional[Tuple[int, ...]] = (8, 0, 6, 1, 2, 3),
@@ -295,9 +289,6 @@ class KplCollectorService:
         # 进入 idle_offhours 每分钟复查，下一时段自动恢复。夜间 7×24 TTL 重连的
         # 纯空转连接是风控打标的累积来源，砍掉后日常连接数降一个数量级。
         enforce_trading_hours: bool = True,
-        # 详情四通道每 lane 订阅面限量（2026-11-11 探针定案：块发后静默才触发
-        # 服务器 flush，块长必须压缩到会话寿命内；env KPL_DETAIL_MAX_STOCKS）
-        stock_detail_max_stocks: int = 15,
         # 订阅注册表化 + 211 批量增强（2026-11-17 P0-P3，方案唯一来源
         # docs/kpl-socket/sub-registry-refactor-plan.md）：
         # sub_registry_enabled：220 选择性重发开关（False=全量重发旧行为；
@@ -316,10 +307,6 @@ class KplCollectorService:
         ka_mode: str = "none",   # 2026-11-18 定案默认：App 无周期保活（源码 C2）；off=3001 轮转跑步机（根因①）
         sub_unique_id: bool = False,
         sub_staged: bool = False,
-        # 2026-11-18 复盘更正：0=不限（生产常态）。cap 旋钮仅为总量卫生实验保留
-        # （App 活跃面 ≤~30 帧），生产禁用——截断会致 relay 页板块行情缺推
-        # （消融期误启 100 已复盘移除；「0x40 时间窗」动机已证伪，真凶=3101 错通道）。
-        quote_face_cap: int = 0,
         # 2026-11-18 复盘更正：停顿覆盖旋钮。生产 100ms=实弹验证保守档；App 实际
         # 零节流连发（qn0.z()），0.3s 旧档无源码依据。当初「贴沿 20s 窗口」动机
         # 已证伪（真凶=3101 错通道），留值纯因实弹稳定。
@@ -341,8 +328,6 @@ class KplCollectorService:
         self._api_version = api_version
         # 拟人延迟开关（服务器对 <1s 完成认证的连接 ~6s 即断连；pytest 置 False）
         self._human_delay = human_delay
-        self._auth_phase_delay = max(0.0, float(auth_phase_delay))
-        self._auth_phase_jitter = max(0.0, float(auth_phase_jitter))
         # drain 帧间停顿（实验旋钮）；保活模式。2026-11-18 源码定案默认 none：
         # App 无周期保活（610 仅 userAuth 一次、无 Timer，独立审计 C2 实锤）；
         # off=3001 轮转跑步机（根因①）。历史注：P4「off 更贴 App」是 3 id 小面
@@ -351,8 +336,6 @@ class KplCollectorService:
         self._drain_pause = tuple(drain_pause) if drain_pause else (0.1, 0.05)
         self._ka_mode = ka_mode
         self._setup_inline_subs = bool(setup_inline_subs)
-        self._stock_detail_max_stocks = max(1, int(stock_detail_max_stocks))
-        self._DETAIL_BLOCK_MAX_STOCKS = self._stock_detail_max_stocks
         self._retry_fail_count = 0        # App ReconnectManager.c：重连失败计数（退避梯索引）
         # App 忠实移植（§15）：服务端主动断连计数（SocketRepository.b）+ 上次时刻
         # （>10min 衰减）；健康长会话归零（App u()/j()，PC 适配判据 >=60s）。
@@ -487,8 +470,6 @@ class KplCollectorService:
         # ——浏览器 relay 页板块树 merge 717 板块+31 股后永不衰减，852 id×2cmd/会话
         # 全量重发 vs App 离屏即清；ws 全断开时回落默认面，修 SubSource 透出）
         self._sub_source = "default"
-        self._quote_face_cap = max(0, int(quote_face_cap))
-        self._quote_face_dropped_n = 0
         # 末帧归因环（2026-11-18）：1002/杀连时看最后发的是哪类帧
         self._sent_cmd_log: List[Dict[str, Any]] = []
         self._sub_prio_all: List[str] = []   # 优先块成员（分块轮询见 _resplit）
@@ -1063,9 +1044,8 @@ class KplCollectorService:
     def _queue_detail_new(self, stock_ids: List[str]) -> int:
         """四通道新入池成员入队订阅（去重；会话线程 drain 块发）。开关关 → 零动作。
 
-        每 lane 限量 _DETAIL_BLOCK_MAX_STOCKS（2026-11-11 探针定案：块长必须压缩
-        到会话寿命内，且块后静默才能触发服务器 flush）：超限成员不入队（
-        _detail_subscribed 也不占用名额位，下一会话按池序重选）。"""
+        2026-11-18 用户裁决删每 lane 硬帽：全量新成员入队（超限永不采集=
+        数据拒绝，§4.0）；块发后静默 flush 合同不变。"""
         if not self._stock_detail_subs:
             return 0
         queued = 0
@@ -1076,8 +1056,6 @@ class KplCollectorService:
                     sid = str(sid or "").strip()
                     if not sid or sid in self._detail_subscribed[lane]:
                         continue
-                    if len(self._detail_subscribed[lane]) >= self._DETAIL_BLOCK_MAX_STOCKS:
-                        break
                     self._detail_subscribed[lane].add(sid)
                     self._pending_detail[lane].append(sid)
                     new_ids.append(sid)
@@ -1137,12 +1115,9 @@ class KplCollectorService:
     # 详情四通道发送语义（2026-11-11 探针 K1/K3/I1 定案）：服务器对 detail 订阅的
     # 响应是「静默期 flush」——订阅帧连续发送期间零响应，发送停止后 <1s 内全量
     # 批回（K1：10 帧块停发后 0.3s 即回 19 帧；K3：124 帧连发 50s 后 0.1s 内
-    # 批回 142 帧；I1/生产 drain 每 tick 4 帧细水长流，tick 间 ~7-9s 间隙不足以
-    # 触发 flush → 会话全程零响应）。因此：① drain 改整队列块发（一次调用发完
-    # pending，随后读循环自然静默 → flush）；② 订阅面限量 _DETAIL_BLOCK_MAX_STOCKS
-    # （默认 15 只/lane，60 帧×0.375s≈22s 块长，50s 短命会话内也能完成 flush；
-    # env KPL_DETAIL_MAX_STOCKS 可调，未订阅成员下一会话重建时按池序重选）。
-    _DETAIL_BLOCK_MAX_STOCKS = 15   # 类属性默认；实例覆盖见 __init__（env 可调）
+    # 批回 142 帧）。因此 drain 整队列块发（一次调用发完 pending，随后读循环
+    # 自然静默 → flush）。2026-11-18 用户裁决删每 lane 15 只硬帽：超限成员
+    # 永不采集=数据拒绝（§4.0）；全量入队，块长由池深决定（跨会话续发自愈）。
 
     @staticmethod
     def _detail_req_for(cmd: int, sid: str) -> bytes:
@@ -1208,23 +1183,6 @@ class KplCollectorService:
         for i in range(0, len(lst), size):
             yield lst[i:i + size]
 
-    def _apply_face_cap(self) -> None:
-        """行情面硬帽（总量卫生实验旋钮，生产 cap=0 不启用）：cap>0 且超限时保
-        priority 头部截断。溢出截断计数 fail-visible（status 透出）。
-        复盘注：窗口动机已证伪（真凶=3101 错通道，README §3.7）。"""
-        cap = self._quote_face_cap
-        if cap <= 0 or len(self._stock_ids) <= cap:
-            return
-        prio = [i for i in self._stock_ids if i in set(self._sub_prio_all)][:cap]
-        rest = [i for i in self._stock_ids if i not in set(prio)]
-        kept = list(dict.fromkeys(prio + rest))[:cap]
-        dropped = len(self._stock_ids) - len(kept)
-        if dropped > 0:
-            self._quote_face_dropped_n += dropped
-            self._stock_ids = kept
-            kept_set = set(kept)
-            self._sub_prio_all = [i for i in self._sub_prio_all if i in kept_set]
-
     def _resplit(self) -> None:
         """按优先块/普通块切分订阅清单（订阅帧与保活轮询都按块发）。"""
         prio_set = set(self._sub_prio_all)
@@ -1257,7 +1215,6 @@ class KplCollectorService:
             prio = old_prio + [p for p in prio if p not in old_prio_set]
         self._stock_ids = ids
         self._sub_prio_all = prio
-        self._apply_face_cap()
         self._resplit()
         self._sub_source = "dynamic"
         return {"ok": True, "count": len(self._stock_ids),
@@ -1285,7 +1242,6 @@ class KplCollectorService:
                                         for lane in self._detail_lane_cmds},
             "stock_detail_snaps": {lane: len(self._detail_snaps[lane])
                                    for lane in self._detail_snaps},
-            "stock_detail_cap": self._DETAIL_BLOCK_MAX_STOCKS,
             # 订阅注册表/211 批量/402 退订观测（2026-11-17 P0-P3，fail-visible）
             "sub_registry": self._sub_registry.stats(),
             "sub_registry_enabled": self._sub_registry_enabled,
@@ -1312,8 +1268,6 @@ class KplCollectorService:
             "subscriptions": {
                 "count": len(self._stock_ids),
                 "source": self._sub_source,
-                "cap": self._quote_face_cap,
-                "dropped_n": self._quote_face_dropped_n,
                 "priority": len(self._sub_prio_all),
                 "hy": sum(1 for i in self._stock_ids if len(i) == 6 and i.startswith("881")),
                 "sectors": sum(1 for i in self._stock_ids
@@ -1328,7 +1282,6 @@ class KplCollectorService:
             # session=单会话存活时长；§3.4 时长档对照（拟人档 15-25s / adb 档 75-160s）
             "last_setup_s": self._stats.get("last_setup_s", 0.0),
             "last_session_s": self._stats.get("last_session_s", 0.0),
-            "auth_phase_delay": self._auth_phase_delay,
             # 重连螺旋防线观测（2026-11-10）：连续短命会话退避秒数 + 当前连击数
             "reconnect_backoff_s": self._stats.get("reconnect_backoff_s"),
             "retry_fail_count": self._retry_fail_count,
@@ -1385,7 +1338,6 @@ class KplCollectorService:
             before = {"count": len(self._stock_ids), "prio": len(self._sub_prio_all)}
             self._stock_ids = list(self._default_stock_ids)
             self._sub_prio_all = []
-            self._apply_face_cap()
             self._resplit()
             self._sub_source = "default"
             after = {"count": len(self._stock_ids), "prio": 0}
@@ -1739,11 +1691,9 @@ class KplCollectorService:
                 self._err("ENC failed for AuthReq")
                 return
             auth_frame = proto.build_frame(proto.CMD_AUTH, next_seq(), enc_body, d=2, encrypted=True)
-            # 拟人延迟（2026-11-09 会话抖动根因修复）：§3.4 实证 auth 阶段耗时与会话
-            # 时长单调相关（<1s→~6s 断；~1-2s 拟人档→15-25s；adb 链路 5-8s→75-160s）。
-            # pc codec 太快，原固定 1.2s 停在拟人档（实测 ~23s 会话，2203/2013 订阅
-            # 爆发未完成即被断）；默认 5.0+U(0,3.0) 对齐 adb 档。
-            self._human_pause(self._auth_phase_delay, self._auth_phase_jitter)
+            # 2026-11-18 用户裁决拆 auth_phase_delay：App qn0:375 收 260 challenge
+            # 即调 userAuth 零延迟（源码实锤）；旧「auth 耗时与会话时长单调相关」
+            # 是证伪建模时代产物（会话死因真凶=3101 错通道+3001 跑步机，§3.7）。
             self._dbg("C", auth_frame)
             sock.sendall(auth_frame)
             # 3) 610 ack（加密 AuthResp）

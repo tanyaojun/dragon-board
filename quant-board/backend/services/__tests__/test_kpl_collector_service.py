@@ -411,28 +411,14 @@ class TestSetSubscriptions:
         svc.unsubscribe(q2)
         assert svc.subscriber_count() == 0
 
-    def test_quote_face_cap_truncates_with_counter(self):
-        """面硬帽（总量卫生实验旋钮，生产 cap=0）：cap>0 超限保 priority 头部截断+计数。
-        「窗口消融」动机已证伪（真凶=3101 错通道，README §3.7）。"""
-        svc2 = KplCollectorService(
-            FakeCodec(), device_id="t", user_id="0", token="",
-            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=False,
-            quote_face_cap=3)
-        svc2.set_subscriptions(["801001", "600000"], priority_ids=["801001"])
-        svc2.set_subscriptions(["881001", "881002", "881003", "600519"], merge=True)
-        assert len(svc2._stock_ids) == 3                 # 硬帽生效
-        assert svc2._stock_ids[0] == "801001"            # priority 头部保留
-        st = svc2.status()["subscriptions"]
-        assert st["cap"] == 3 and st["dropped_n"] == 3   # 6→3，溢出 3 只
-        # 回落默认面（3 id ≤ cap）不再截断
-        r = svc2.reset_subscriptions_to_default()
-        assert r["after"]["count"] == 1 and svc2._stock_ids == ["801044"]
-
-    def test_quote_face_cap_zero_is_unlimited(self, svc):
-        """cap=0（默认）旧行为不截断。"""
-        svc.set_subscriptions(["801001", "600000", "881001"])
-        assert len(svc._stock_ids) == 3
-        assert svc.status()["subscriptions"]["cap"] == 0
+    def test_subscription_face_never_truncated(self, svc):
+        """2026-11-18 用户裁决删 face_cap：订阅面全量保留，merge 不截断
+        （截断=relay 页板块行情缺推，数据拒绝）。"""
+        svc.set_subscriptions(["801001", "600000"], priority_ids=["801001"])
+        svc.set_subscriptions(["881001", "881002", "881003", "600519"], merge=True)
+        assert len(svc._stock_ids) == 6                  # 全量保留
+        assert svc._stock_ids[0] == "801001"             # priority 头部序不变
+        assert "cap" not in svc.status()["subscriptions"]
 
     def test_reset_noop_reports_same_counts(self, svc):
         """默认面直接 reset：结构化返回 before/after 同值，不报错不假写。"""
@@ -1810,12 +1796,13 @@ class TestTradingHoursGate:
                    for e in svc._history)
 
 
-class TestAuthPhaseDelay:
-    """2026-11-09 会话抖动根因修复：auth 相位延迟对齐 adb 档（§3.4 单调实证）。"""
+class TestHumanPausePacing:
+    """帧间拟人停顿机制（_human_pause）。2026-11-18 用户裁决拆 auth_phase_delay：
+    App qn0:375 收 260 即 userAuth 零延迟；旧「auth 耗时单调相关」属证伪建模
+    时代产物（§3.7）。本类保留通用停顿机制守卫 + auth 零延迟回归守卫。"""
 
     def test_human_pause_jitter_range(self):
-        svc = KplCollectorService(FakeCodec(), device_id="d", human_delay=True,
-                                  auth_phase_delay=5.0, auth_phase_jitter=3.0)
+        svc = KplCollectorService(FakeCodec(), device_id="d", human_delay=True)
         seen: list[float] = []
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr("backend.services.kpl_collector_service.time.sleep",
@@ -1845,12 +1832,13 @@ class TestAuthPhaseDelay:
             monkeypatch.undo()
         assert seen == []   # pytest 零停顿（既有合同不变）
 
-    def test_auth_phase_uses_configured_delay(self, monkeypatch):
-        """_session 在发 610 前按 auth_phase_delay+jitter 停顿（替 _human_pause 观测）。"""
+    def test_auth_no_phase_delay(self, monkeypatch):
+        """2026-11-18 拆除守卫：发 610 前零 auth 相位延迟（App 同款）——
+        首个 _human_pause 必须是订阅帧 pacing（0.3/0.6/0.8 基数），不得出现
+        5.0 基数（auth_phase_delay 复活即红）。"""
         svc = KplCollectorService(
             FakeCodec(), device_id="d", user_id="0", token="",
-            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=True,
-            auth_phase_delay=5.0, auth_phase_jitter=3.0)
+            stock_ids=["801044"], host="127.0.0.1", port=1, human_delay=True)
         pauses: list[float] = []
         monkeypatch.setattr(svc, "_human_pause", lambda b, s=0.0: pauses.append((b, s)))
         auth_resp_payload = b"\xaa" + proto.pb_bytes(1, b"10.0.0.1:1234")
@@ -1865,16 +1853,14 @@ class TestAuthPhaseDelay:
         fake = FakeSocket(responses)
         monkeypatch.setattr(svc, "_tls_connect", lambda: fake)
         svc._session()
-        assert pauses[0] == (5.0, 3.0)                     # auth 相位=adb 档基数
-        sub_bases = [p for p in pauses[1:] if p[0] in (0.3, 0.6, 0.8)]
-        assert sub_bases, "订阅帧仍应保留拟人停顿（仅加抖动）"
+        assert all(p[0] != 5.0 for p in pauses), "auth 相位延迟已拆，不得复活"
+        assert pauses and pauses[0][0] in (0.3, 0.6, 0.8), "首停顿=订阅帧 pacing"
 
     def test_status_exposes_session_observability(self, svc):
         svc._stats["last_setup_s"] = 7.3
         svc._stats["last_session_s"] = 92.4
         st = svc.status()
         assert st["last_setup_s"] == 7.3 and st["last_session_s"] == 92.4
-        assert st["auth_phase_delay"] == 5.0               # 便于线上核对生效配置
 
     def test_run_loop_records_session_duration(self, svc, monkeypatch):
         """单会话异常（如 10054 ConnectionResetError）后仍透出会话时长（fail-visible 观测）。"""
@@ -2147,8 +2133,8 @@ class TestDetailBlockSend20261111:
     证据链（.tmp_review/kpl_probe_*_20261111）：服务器对 detail 订阅帧零 ErrResp
     静默，响应在「发送停止后 <1s」全量批回（K1 10 帧块→0.3s 回 19 帧；K3 124 帧
     连发 50s→0.1s 回 142 帧）；drain 每 tick 4 帧细水长流（I1/生产）永不 flush。
-    修复：① drain 整队列块发（块后读循环自然静默）；② 每 lane 限量
-    _DETAIL_BLOCK_MAX_STOCKS（块长压缩到会话寿命内）。
+    修复：drain 整队列块发（块后读循环自然静默）。2026-11-18 用户裁决删
+    每 lane 15 只硬帽（超限永不采集=数据拒绝，§4.0）：全量入队。
     """
 
     def test_drain_sends_whole_queue_in_one_call(self):
@@ -2172,45 +2158,26 @@ class TestDetailBlockSend20261111:
         svc._drain_detail_subs(sock, iter(range(1, 10 ** 6)).__next__)
         assert sock.sent == []
 
-    def test_queue_cap_limits_subscription_face(self):
-        """限量语义：每 lane 只入队前 _DETAIL_BLOCK_MAX_STOCKS 只，超限跳过。"""
-        cap = KplCollectorService._DETAIL_BLOCK_MAX_STOCKS
-        svc = KplCollectorService(FakeCodec(), human_delay=False,
-                                  stock_detail_max_stocks=cap)
+    def test_queue_all_members_no_cap(self):
+        """2026-11-18 用户裁决删 detail cap：全量池成员入队（旧 15/lane 硬帽
+        致第 16+ 名永不采集=数据拒绝，§4.0）。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False)
         svc._stock_detail_subs = True
-        pool = ["60%04d" % i for i in range(cap + 10)]
+        pool = ["60%04d" % i for i in range(25)]
         n = svc._queue_detail_new(pool)
-        assert n == cap * len(svc._detail_lane_cmds), "每 lane 只入队 cap 只"
+        assert n == 25 * len(svc._detail_lane_cmds), "全量入队，无硬帽"
         for lane in svc._detail_lane_cmds:
-            assert len(svc._detail_subscribed[lane]) == cap
-            assert svc._pending_detail[lane] == pool[:cap], "按池序取前 cap 只"
+            assert svc._pending_detail[lane] == pool
 
-    def test_queue_cap_override_via_constructor(self):
-        """env 旋钮：stock_detail_max_stocks 覆盖默认 cap；非法值兜底 >=1。"""
-        svc = KplCollectorService(FakeCodec(), human_delay=False,
-                                  stock_detail_max_stocks=3)
-        svc._stock_detail_subs = True
-        n = svc._queue_detail_new(["60%04d" % i for i in range(10)])
-        assert n == 3 * len(svc._detail_lane_cmds)
-        assert svc._DETAIL_BLOCK_MAX_STOCKS == 3
-        svc2 = KplCollectorService(FakeCodec(), human_delay=False,
-                                   stock_detail_max_stocks=0)
-        assert svc2._DETAIL_BLOCK_MAX_STOCKS == 1, "非法 0 兜底 >=1"
-
-    def test_mid_session_new_member_beyond_cap_skipped(self):
-        """会话中盘新成员超 cap → 跳过（不破坏已发块后的静默）。"""
-        svc = KplCollectorService(FakeCodec(), human_delay=False,
-                                  stock_detail_max_stocks=2)
+    def test_mid_session_new_member_also_queued(self):
+        """2026-11-18 删 cap：会话中盘新成员照常入队（旧「超 cap 跳过」判据
+        作废——跳过=该成员详情数据永不采集）。去重仍生效。"""
+        svc = KplCollectorService(FakeCodec(), human_delay=False)
         svc._stock_detail_subs = True
         svc._queue_detail_new(["600001", "600002"])
         n = svc._queue_detail_new(["600003", "600004"])
-        assert n == 0, "已满 cap → 新成员不入队（下一会话按池序重选）"
-
-    def test_status_exposes_detail_cap(self):
-        """status 透出 stock_detail_cap（覆盖度观测）。"""
-        svc = KplCollectorService(FakeCodec(), human_delay=False,
-                                  stock_detail_max_stocks=7)
-        assert svc.status()["stock_detail_cap"] == 7
+        assert n == 2 * len(svc._detail_lane_cmds), "新成员全量入队"
+        assert svc._queue_detail_new(["600003"]) == 0, "去重仍生效"
 
 
 class TestDabanIndexesJson20261111:

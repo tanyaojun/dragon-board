@@ -134,7 +134,6 @@ else:
 # （<1s→~6s 断；~1-2s→15-25s 拟人档；adb 5-8s→75-160s）。默认 5.0 对齐 adb 档
 # （实际 5.0+U(0,3.0)s）；置 0 = 回退旧拟人档（auth 相位仅剩 U(0,3)s 抖动）。
 # 切换需重启进程。
-_AUTH_PHASE_DELAY = float(os.environ.get("KPL_AUTH_PHASE_DELAY", "5.0"))
 
 # 构造无副作用，饿汉单例避免懒初始化竞态
 _service_lock = asyncio.Lock()
@@ -145,17 +144,13 @@ _service = KplCollectorService(
     lhb_realtime_count=_LHB_REALTIME_COUNT,
     zt_reason_subs=_ZT_REASON_SUBS, theme_subs=_THEME_SUBS,
     stock_detail_subs=_STOCK_DETAIL_SUBS,
-    stock_detail_max_stocks=int(os.environ.get("KPL_DETAIL_MAX_STOCKS", "15") or 15),
     # 2026-11-18：订阅 setup 内联连发（App qn0.z() 同款）。历史注：「0x40 时间窗」
     # 动机已证伪（真凶=3101 错用 0x40 通道，README §3.7），inline 保留纯因 App 同款。
     setup_inline_subs=_env_flag("KPL_SETUP_INLINE_SUBS"),
-    # 行情面硬帽：生产禁用（0=不限）——截断致 relay 页板块行情缺推；总量卫生实验旋钮
-    quote_face_cap=int(os.environ.get("KPL_QUOTE_FACE_CAP", "0") or 0),
     # KPL_DRAIN_PAUSE_MS=100 → (0.1, 0.05)：实弹验证保守档（App 实际零节流连发）
     **({"drain_pause": (float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 1000,
                         float(os.environ["KPL_DRAIN_PAUSE_MS"]) / 2000)}
         if os.environ.get("KPL_DRAIN_PAUSE_MS") else {}),
-    auth_phase_delay=_AUTH_PHASE_DELAY,
     # 交易时段门控（2026-11-11）：非交易时段不建连（防风控打标累积），默认开；
     # 显式关闭 KPL_ENFORCE_TRADING_HOURS=0（切换需重启进程）
     enforce_trading_hours=_env_flag("KPL_ENFORCE_TRADING_HOURS"),

@@ -79,8 +79,6 @@ class ProbeSurfaceCollector(KplCollectorService):
         kw.setdefault("lhb_realtime", False)
         kw.setdefault("stock_detail_subs", False)
         kw.setdefault("human_delay", True)
-        kw.setdefault("auth_phase_delay", 5.0)
-        kw.setdefault("auth_phase_jitter", 3.0)
         kw.setdefault("enforce_trading_hours", False)
         super().__init__(codec, daban_list_pages=7, **surface, **kw)
         self._variant = variant
