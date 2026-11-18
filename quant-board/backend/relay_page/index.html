@@ -5106,7 +5106,8 @@ function toggleSidebar(){ $('app').classList.toggle('collapsed'); }
 // 数据：GET /api/hotlist-jev/jiuyan-action（复用现有读口，纯读零写入）；前端仅内存态
 // 动态更新（60s 轮询），不落库、服务端不缓存。行情列=KPL socket 3006 个股实时价：
 //   price ×10000 缩放（113000=11.30 元，README §四独立源核实）；
-//   inc_rate ×100 换算为涨幅%（协议测试锚 125→1.25），越界护栏 |pct|>21 → '--'（口径异常不猜数）；
+//   inc_rate 为 proto float 百分数直用不缩放（App DataStyleHelper.b 直显 "#0.00"+"%"，
+//   2026-11-18 源码核实推翻早期 ×100 错锚），越界护栏 |pct|>21 → '--'（口径异常不猜数）；
 //   3006 未到流时现价兑底韭研盘口快照价（title 标注），涨幅如实 '--'。
 // 订阅复用 kplSyncStockSubscription 共享签名缓存（与板块行情/直播页同一份记账，页间切换自动重对账）。
 const LB = { doc: null, dates: [], loading: false, error: null, selected: null, nodesRows: {}, seq: 0,
@@ -5674,7 +5675,7 @@ function lbRenderStocks(){
     const price = gv(KQ.PRICE) != null ? gv(KQ.PRICE)
       : (hq && hq.price != null ? hq.price / 10000 : s.price);
     const rateRaw = gv(KQ.PCT) != null ? gv(KQ.PCT)
-      : (hq && hq.inc_rate != null ? hq.inc_rate / 100 : null);
+      : (hq && hq.inc_rate != null ? hq.inc_rate : null);   // 3006 incRate=float 百分数，不缩放
     const pct = (rateRaw != null && Math.abs(rateRaw) <= 21) ? rateRaw : null;   // 越界=口径异常 → '--'
     // 连板列：韭研打标口径优先（本页核心名单），缺则回 KPL meta board_status；
     // num 实测为「X天X板」字符串（2026-10-29 修「X天X板板」）——纯数字才拼「板」，其余原样
@@ -5721,7 +5722,7 @@ function lbRenderStocks(){
     html += `<tr data-code="${code}"><td class="kpl-uni">${esc(code || '--')}</td><td>${esc(s.name || '--')}</td>`
       + `<td><span class="badge b-purple">${esc(rank || dash)}</span></td>`
       + `<td class="kpl-uni"${liveMark}>${kfmtNum(price)}</td>`
-      + `<td class="kpl-uni ${kcls(pct)}" title="${pct == null ? '等待个股行情（3001 quotas / 3006 inc_rate ×100，越界护栏 21%）' : 'KPL 实时涨幅'}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
+      + `<td class="kpl-uni ${kcls(pct)}" title="${pct == null ? '等待个股行情（3001 quotas / 3006 incRate 百分数直用，越界护栏 21%）' : 'KPL 实时涨幅'}">${kfmtNum(pct) + (pct == null ? '' : '%')}</td>`
       + `<td class="kpl-uni">${turn != null ? kfmtNum(turn, 1) : dash}</td>`
       + `<td class="kpl-uni">${esc(lbTxt)}</td>`
       + `<td class="kpl-uni ${kcls(d.mainNet)}">${kfmtAmt(d.mainNet)}</td>`

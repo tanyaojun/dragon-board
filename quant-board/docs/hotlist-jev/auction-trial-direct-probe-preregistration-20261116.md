@@ -552,6 +552,9 @@ IndexSimpleQuotasResp{price/inc_rate}）；App 集合竞价列表=StockBidYiDong
 archive_auction_price/load_auction_price 单一事实源；derive jj_percent 权威=
 s0925.pct（jjSource=open0925_archive），缺位回退 MBL→bid→序列末帧；
 p0915/pct0915/p0925/pct0925 全行披露；state 增 open0925N/open0925MissingN。
-- **缩放**：price×10000→元、inc_rate×100→%（协议锚 125→1.25）。
+- **缩放**：price×10000→元（App `DataStyleHelper.S0=i/10000.0f`）；incRate 为 proto
+  **float 百分数直用不缩放**（Hq.java descriptor `incRate=5 float` + App `b()` 直显
+  "#0.00"+"%"；2026-11-18 复核**推翻早期 ×100 错锚**——live 未开跑前修正，存量
+  档全为 TDX 回补零污染；relay 页行情列同锚同步修）。
 - **历史局限**：存档自今日起；历史日无档走回退链（早退股仍错），如需历史修复
 另走 TDX open 回补预登记（live 不可用 TDX：日线盘后才落）。

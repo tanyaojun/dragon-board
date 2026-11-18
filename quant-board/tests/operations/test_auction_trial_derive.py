@@ -331,7 +331,8 @@ def test_derive_open0925_missing_fallback_disclosure():
 
 def test_collector_capture_auction_price_0915_0925(monkeypatch):
     """3006 现有流捕获：09:15 窗首帧/09:25 窗首帧各一次；price×10000→元、
-    inc_rate×100→%；各自只首帧不覆盖。"""
+    incRate=float 百分数直用不缩放（App DataStyleHelper.b 直显，2026-11-18
+    源码核实，推翻早期 ×100 错锚）；各自只首帧不覆盖。"""
     from backend.services import kpl_collector_service as CS
     inst = object.__new__(CS.KplCollectorService)
     inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
@@ -350,8 +351,8 @@ def test_collector_capture_auction_price_0915_0925(monkeypatch):
     inst._corpus_db_factory = lambda: AuctDb()
     t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
     t25 = _dt.datetime(2026, 11, 17, 9, 26, tzinfo=_TZ).timestamp()
-    q1 = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 1000},
-                    {"stock_id": "300786", "price": 200000, "inc_rate": 2000}]}
+    q1 = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 10.0},
+                    {"stock_id": "300786", "price": 200000, "inc_rate": 20.0}]}
     monkeypatch.setattr(CS.time, "time", lambda: t15)
     inst._capture_auction_price(q1)
     # 09:15 窗第二帧：同股不覆盖（首帧语义）

@@ -668,7 +668,10 @@ class KplCollectorService:
         """3006 现有流归档 09:15/09:25 价格+涨幅（2026-11-18 用户裁决，零新增订阅）。
 
         09:15 窗 [09:15,09:25) 首帧=竞价价/涨幅；09:25 窗 [09:25,09:30) 首帧=开盘价/涨幅
-        （真 09:25 撮合终值，掉池股亦有）。price×10000→元、inc_rate×100→%（协议锚）。
+        （真 09:25 撮合终值，掉池股亦有）。缩放协议锚（反编译 Hq.java descriptor +
+        DataStyleHelper 核实）：price uint32 ×10000→元（App S0=i/10000.0f）；
+        incRate proto **float**，本身即百分数（App b() 直显 "#0.00"+"%"，不缩放——
+        2026-11-18 复核推翻早期 ×100 错锚，未 live 前修正，零污染）。
         启动晚于 09:25 → s0915 缺席（fail-visible，不拿 09:25 值冒充 09:15）。"""
         from datetime import datetime, timedelta, timezone
         now = time.time()
@@ -687,12 +690,20 @@ class KplCollectorService:
             code = str(it.get("stock_id") or "")[-6:]
             if not code:
                 continue
+            rec: Dict[str, Any] = {"ts": now}
             try:
-                p = float(it.get("price")) / 10000.0
-                pct = float(it.get("inc_rate")) / 100.0
+                p = float(it.get("price"))
+                if p > 0:
+                    rec["price"] = round(p / 10000.0, 4)
             except (TypeError, ValueError):
-                continue
-            rec = {"price": round(p, 4), "pct": round(pct, 4), "ts": now}
+                pass
+            try:
+                pct = float(it.get("inc_rate"))   # float 原值即百分数，不缩放
+                rec["pct"] = round(pct, 4)
+            except (TypeError, ValueError):
+                pass
+            if not ({"price", "pct"} & rec.keys()):
+                continue   # price/inc_rate 全缺帧不占首帧名额（fail-visible 不伪存）
             if hm < 9 * 3600 + 25 * 60:
                 if code not in self._auct15:
                     self._auct15.add(code)

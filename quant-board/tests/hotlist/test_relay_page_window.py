@@ -1696,7 +1696,7 @@ def test_lianban_kpl_socket_subscription_and_guards(js: str):
     assert "lbCode(s.code)" in stocks, "hq 查找键必须用归一化 6 位码"
     assert "KPL.hq.get" in stocks, "行情列应读 3006 KPL.hq 实时覆盖"
     assert "hq.price / 10000" in stocks, "price ×10000 缩放合同（113000=11.30 元）"
-    assert "hq.inc_rate / 100" in stocks, "inc_rate ×100 换算合同（125→1.25%）"
+    assert "hq.inc_rate != null ? hq.inc_rate : null" in stocks, "3006 incRate=float 百分数直用不缩放（App b() 直显，2026-11-18 源码核实，推翻 ×100 错锚）"
     assert "21" in stocks, "涨幅越界护栏（|pct|>21 → '--'，口径异常不猜数）"
     assert "韭研盘口快照价" in stocks, "行情未到流应兑底韭研快照价并标注"
     # 连板列：韭研 num 实测为「X天X板」字符串，纯数字才拼「板」（修「X天X板板」重复后缀）
