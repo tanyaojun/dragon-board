@@ -3,13 +3,14 @@
 
 - 叙事结构（§3 设计 + 2026-10-11 StepB 炸板面段 + 2026-10-16 v4 高位股多日轨迹段
   + 2026-10-19 v6 板块接力链/龙头结构段 + 2026-10-20 v7 全语料盘点
-  + 2026-11-17 v10 精简，预注册 relay-v10-corpus-slim-preregistration-20261117.md）：
+  + 2026-11-17 v10 精简，预注册 relay-v10-corpus-slim-preregistration-20261117.md
+  + 2026-11-17 v11 匹配度修复，预注册 relay-v11-match-fix-preregistration-20261117.md）：
   总账（不含 THS 交叉分布）→ 大盘指数 → 今日炸板面 → 反包修复 → 弱转强参照（仅昨日分区+结构预检）
   → 晋级断板（含钱效 20 日分位）→ 梯队量化（含昨日分层）→ 三日链 → 题材演化
   → 题材事件（仅命中，v10）→ 板块接力链（三日；主线结论/同桶基线 v10 撤出，struct 保留）
   → 高位股多日轨迹 → 题材梯队表（仅龙一，v10）→ 龙头结构（含标签）→ 龙头档案（位置/板序/板型）
   → 近10日轨迹（无摆动锚，v10）→ 近20日参照锚（含分位刻度）→ 市场情绪周期 → 昨日相位
-- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v10）
+- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v11）
 - 存储：hotlist_jev_relay_index，_id={date}:RELAY；幂等跳过 status=ok
 - 通道：_dispatch_jev 分流（官方直连优先，CF 回退）
 - 口径：涨停/晋级 = 触板 − THS 炸板池（方案A 二分，_sealed_codes）；THS 缺失日回退触板口径并注记
@@ -149,7 +150,7 @@ _PRIMARY_ANCHOR_GAPS: tuple[_MARKER, ...] = (
 # 108 天里 67 天非空、其中 45 天只命中「断板钱效」（早期 TDX 60 棒窗够不到钱效样本）——
 # 主锚其实齐备，徽标却漫天飞，例外标记退化成背景噪声。
 _DERIVED_ANCHOR_GAPS: tuple[_MARKER, ...] = (
-    ("炸板面个股级", "今日炸板面", ("反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算",)),
+    ("炸板面个股级", "今日炸板面", ("反复开板/昨日池股炸板/炸板股大面/代表股/归因打标 不可算",)),
     ("炸板面对比", "今日炸板面", ("较昨日：不可算",)),
     ("断板钱效", None, ("样本不足（TDX 覆盖", "今日表现不可算",
      "较昨日断板：不可算", "隔日溢价不可算")),
@@ -386,8 +387,11 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     if broken:
         if cur_stats_ok:
             dt_txt = f"、收盘跌停 {cur_stats['dt']} 只" if cur_stats.get("dt") else ""
+            # v11 M4：大面占断板比预算好（money strong/losing、phase relay_heat/collapse 四处判据
+            # 消费占比阈值，与「数据已算好勿自行心算」指令一致；反复开板占比同款口径）
+            big_share = round(cur_stats["big"] / len(broken) * 100)
             broken_txt = (f"断板 {len(broken)} 只：今日收盘中位 {cur_stats['median']:+}%，"
-                          f"大面(≤-5%) {cur_stats['big']} 只{dt_txt}"
+                          f"大面(≤-5%) {cur_stats['big']} 只（占断板 {big_share}%）{dt_txt}"
                           f"（TDX 覆盖 {cur_stats['covered']}/{len(broken)}）")
         elif cur_stats:
             broken_txt = _sample_short_txt("断板", len(broken), cur_stats["covered"])
@@ -694,7 +698,7 @@ def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
     streak_txt = "；".join(streaks)
     hist_txt = f"\n近5日题材榜：{' ； '.join(history)}" if history else ""
     return (f"题材演化：今日 top3 [{' / '.join(rows)}]；与昨日 top3 重合 {overlap}/3；连续性：{streak_txt}"
-            f"（{'主线延续' if overlap >= 2 else '轮动换线' if overlap == 1 else '全面换血'}）{hist_txt}")
+            f"（{'top3 延续' if overlap >= 2 else '轮动换线' if overlap == 1 else '全面换血'}）{hist_txt}")
 
 
 # ── 段 2b'：题材证据块（v7 D5，韭研产业树+投资日历确定性拼装）─────────────────
@@ -1510,14 +1514,6 @@ def _ths_pool_items(db: Any, date: str, dataset_id: str, key: str) -> tuple[list
     return list(pool.get("items") or []), True
 
 
-def _seal_quality(db: Any, date: str, dataset_id: str) -> dict:
-    """帧 limitSummary.sealQuality（一字板/硬板/烂板家数+share+均封板成功率）；缺失 → {}。"""
-    f = db["snapshot_frames"].find_one(
-        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
-        {"limitSummary.sealQuality": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
-    return ((f or {}).get("limitSummary") or {}).get("sealQuality") or {}
-
-
 def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
     """旧采集 schema（仅家数）日的炸板面降级行（F1，2026-10-17 预注册 §2.1）。
 
@@ -1529,6 +1525,10 @@ def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
     对比口径（预注册 D1）：新旧 schema 的炸板**家数**同义（`poolCounts.failed` ≙
     `len(pools.failed.items)`），允许家数级对比但必须带标注；个股级子项绝不跨 schema 编造。
     禁用 `snapshot_records.payload.limitSummary.zhaban.count`（前端口径）冒充 THS failed。
+
+    v11 O3 只删主行冲刺尾段（与盘面事实行重复）；旧 schema 日盘面事实行不渲染冲刺段
+    （rushingCount 需 ths_ok 且 rush_pool.ok，旧帧无 items → None），本行是冲刺家数唯一
+    披露点，保留（评审 P2-2，AGENTS §4.0 不得静默丢同帧已有数据）。
     """
     counts, found = _ths_pool_counts(db, date, dataset_id)
     if not found or not isinstance(counts, dict):
@@ -1538,6 +1538,7 @@ def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
     d = counts.get("drawdown")
     mx, av = counts.get("maxDrawdown"), counts.get("avgDrawdown")
     zb_txt = f"炸板 {n} 家" if isinstance(n, (int, float)) else "炸板家数不可算"
+    # 冲刺段保留：旧 schema 日唯一披露点（评审 P2-2，见 docstring）
     rush_txt = f"冲刺未封 {r} 家" if isinstance(r, (int, float)) else "冲刺未封不可算"
     if isinstance(d, (int, float)):
         dd = (f"（最大回撤 {mx:+.2f}%、均值 {av:+.2f}%）"
@@ -1559,7 +1560,7 @@ def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
         else:
             cmp_txt = "不可算（昨日 THS 炸板池家数缺失）"
     return (f"今日炸板面：{zb_txt}；{rush_txt}；{dd_txt}；较昨日：{cmp_txt}；"
-            f"反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算；分位 不可算")
+            f"反复开板/昨日池股炸板/炸板股大面/代表股/归因打标 不可算；分位 不可算")
 
 
 def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
@@ -1569,9 +1570,12 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     预登记：docs/hotlist-jev/jev-relay-zhaban-preregistration.md（StepB，用户 2026-10-11 裁决）。
     炸板 0 家是合法强信号（正常呈现）；帧缺失/降级才写「不可算」。
 
-    2026-10-16 补两段（审计问题 #6）：**冲刺未封**（THS 冲刺池=盘中冲板未封，与炸板池并列
-    第三池，采集层一直有但 relay 从不消费）与**烂板**（涨停池里开板≥2 次又回封的，帧
-    sealQuality 现成）——「炸板面」只覆盖曾封后开板，漏掉触板未封与封板质量另一半。
+    v11（2026-11-17 匹配度审计，用户裁决全部修复）：主行冲刺未封尾段删（与盘面事实行
+    逐字重复，O3；F1 降级行保留——旧 schema 日盘面事实行不渲染冲刺段，该处是唯一
+    披露点，评审 P2-2）；烂板段删（判据零消费孤儿，sealQuality 结构化仍在帧，O4）；
+    炸板股收盘涨幅中位删（判据零消费，保留大面——instructions 显式消费，O4）；
+    较昨日行补高位分歧家数+占炸板比对照（divergence「高位分歧炸占比较昨日升高」
+    原无昨日归因可比数，M2+评审 P2-1，单源同集合昨日档）。
     """
     items, found = _ths_failed_items(db, date, dataset_id)
     items = list(items.values())
@@ -1616,24 +1620,44 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             names = "、".join(f"{p.get('name') or c}({_range_num_txt(p)})" for c, p in hi_layer[:3])
             layer_txt = (f"昨日池股今日炸 {len(hit)} 家（其中昨日2板以上 {len(hi_layer)} 家"
                          + (f"：{names}" if names else "") + "）")
-    # 炸板股收盘表现
+    # 炸板股大面（v11 O4：收盘涨幅中位判据零消费删；大面保留——instructions 显式消费「炸板股大面」）
     rates = [i.get("change_rate") for i in by_code.values()
              if isinstance(i.get("change_rate"), (int, float))]
     if rates:
         big = sum(1 for r in rates if r <= -5)
-        rate_txt = f"炸板股收盘涨幅中位 {_median(rates):+.1f}%、大面(≤-5%) {big} 家"
+        rate_txt = f"炸板股大面(≤-5%) {big} 家"
     else:
-        rate_txt = "炸板股收盘表现不可算"
+        rate_txt = "炸板股大面不可算"
     # 代表股（开板次数降序前 3）
     reps = sorted(by_code.values(), key=lambda i: (i.get("open_num") or 0), reverse=True)[:3]
     rep_txt = "、".join(
         f"{i.get('name')}({i.get('open_num')}次,{i.get('change_rate'):+.1f}%)"
         if isinstance(i.get("change_rate"), (int, float)) else f"{i.get('name')}({i.get('open_num')}次)"
         for i in reps if i.get("name"))
+    # 炸板归因打标分布（StepA：hotlist_jev_zhaban_labels 当日聚合；覆盖不足如实注记）
+    labeled = list(db["hotlist_jev_zhaban_labels"].find(
+        {"tradingDate": date, "status": "ok"}, {"zhabanCause": 1, "name": 1}))
+    hd_n = 0
+    if labeled:
+        from collections import Counter
+        dist = Counter(l.get("zhabanCause") or "unknown" for l in labeled)
+        hd = [l for l in labeled if l.get("zhabanCause") == "high_divergence"]
+        hd_n = len(hd)
+        # v10 C3：开板次数单源=反复开板代表行，归因分布只留股名不重复次数
+        hd_names = "、".join(str(l.get("name")) for l in hd[:3] if l.get("name"))
+        dist_txt = (f"炸板归因打标（覆盖 {len(labeled)}/{n}）：高位分歧 {dist.get('high_divergence', 0)} 家"
+                    + (f"（{hd_names}）" if hd_names else "")
+                    + f"、板块退潮 {dist.get('sector_collapse', 0)} 家、追高被砸 {dist.get('chase_fail', 0)} 家、"
+                    f"大盘拖累 {dist.get('broad_market', 0)} 家")
+    else:
+        dist_txt = f"炸板归因打标：未覆盖（0/{n}）"
     # 较昨日增减（relay_momentum 主锚之二，2026-10-15 诊断补供）：criteria 判「炸板面收敛/
     # 恶化（炸板与反复开板较昨日减少/增多）」需昨日可比数，而分位/均值只给绝对位置——
     # 全库叙事此前从未组装昨日炸板家数，模型无从判方向，是 insufficient_evidence 逃生的
     # 结构性口子（10-15 P0/09-21 P62 两日均缺此锚）。昨日帧数据现成（分位回溯同源）。
+    # v11 M2：补高位分歧家数对照——divergence「高位分歧炸占比较昨日升高」原无昨日归因
+    # 可比数；单源同集合昨日档（hotlist_jev_zhaban_labels），零重算。今日未覆盖时不出
+    # 数值对照（防伪 0：3→0 会被读成真实零分歧）。
     if not prev_dates:
         cmp_txt = "较昨日：不可算"
     else:
@@ -1644,6 +1668,7 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             prev_counts, prev_cfound = _ths_pool_counts(db, prev_dates[-1], dataset_id)
             prev_n2 = (prev_counts or {}).get("failed") if prev_cfound else None
             cmp_txt = (f"较昨日：炸板 {prev_n2}→{n} 家（{n - prev_n2:+d}）· 反复开板 不可算"
+                       " · 高位分歧较昨日不可算"
                        if isinstance(prev_n2, int) and isinstance(n, int) else
                        "较昨日：不可算")
         else:
@@ -1651,40 +1676,21 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             p_n = len(prev_by)
             p_hi = sum(1 for i in prev_by.values()
                        if isinstance(i.get("open_num"), (int, float)) and i.get("open_num") >= 2)
+            p_labeled = list(db["hotlist_jev_zhaban_labels"].find(
+                {"tradingDate": prev_dates[-1], "status": "ok"}, {"zhabanCause": 1}))
+            if p_labeled and labeled:
+                p_hd = sum(1 for l in p_labeled if l.get("zhabanCause") == "high_divergence")
+                hd_cmp = f"· 高位分歧 {p_hd}→{hd_n} 家"
+                # 评审 P2-1：判据消费占比方向，只给家数在分母变动时会读反——占比直给
+                # （同帧分母 p_n/n，零新原料，与 M4「勿心算」同款）
+                if p_n > 0 and n > 0:
+                    hd_cmp += f"（占炸板 {round(p_hd / p_n * 100)}%→{round(hd_n / n * 100)}%）"
+            else:
+                hd_cmp = "· 高位分歧较昨日不可算"
             cmp_txt = (f"较昨日：炸板 {p_n}→{n} 家（{n - p_n:+d}）· "
-                       f"反复开板 {p_hi}→{len(hi)} 家（{len(hi) - p_hi:+d}）")
-    # 炸板归因打标分布（StepA：hotlist_jev_zhaban_labels 当日聚合；覆盖不足如实注记）
-    labeled = list(db["hotlist_jev_zhaban_labels"].find(
-        {"tradingDate": date, "status": "ok"}, {"zhabanCause": 1, "name": 1}))
-    if labeled:
-        from collections import Counter
-        dist = Counter(l.get("zhabanCause") or "unknown" for l in labeled)
-        hd = [l for l in labeled if l.get("zhabanCause") == "high_divergence"]
-        # v10 C3：开板次数单源=反复开板代表行，归因分布只留股名不重复次数
-        hd_names = "、".join(str(l.get("name")) for l in hd[:3] if l.get("name"))
-        dist_txt = (f"炸板归因打标（覆盖 {len(labeled)}/{n}）：高位分歧 {dist.get('high_divergence', 0)} 家"
-                    + (f"（{hd_names}）" if hd_names else "")
-                    + f"、板块退潮 {dist.get('sector_collapse', 0)} 家、追高被砸 {dist.get('chase_fail', 0)} 家、"
-                    f"大盘拖累 {dist.get('broad_market', 0)} 家")
-    else:
-        dist_txt = f"炸板归因打标：未覆盖（0/{n}）"
-    # 冲刺未封（2026-10-16 补供）：THS 冲刺池=盘中冲板未封；v10 D3 代表股删
-    # （判据消费家数不消费股名，明细在 THS 帧结构化字段）
-    rush_items, rush_found = _ths_pool_items(db, date, dataset_id, "rushing")
-    rush_txt = f"冲刺未封 {len(rush_items)} 家" if rush_found else "冲刺未封 不可算"
-    # 烂板（涨停池里开板≥2 次又回封）：帧 sealQuality 现成，语料此前不消费。
-    # rottenShare 在 quality_n==0（info_items 空）时由上游置 None，而 rottenCount 仍给 0——
-    # 不判型就 round(None*100) 会 TypeError 炸掉整个 relay 日（fail-visible 变崩溃）
-    sq = _seal_quality(db, date, dataset_id)
-    rotten, share = sq.get("rottenCount"), sq.get("rottenShare")
-    if isinstance(rotten, int) and isinstance(share, (int, float)) and not isinstance(share, bool):
-        rotten_txt = f"涨停池烂板（开板≥2次回封）{rotten} 家（占 {round(share * 100)}%）"
-    elif isinstance(rotten, int):
-        rotten_txt = f"涨停池烂板（开板≥2次回封）{rotten} 家（占比不可算）"
-    else:
-        rotten_txt = "涨停池烂板 不可算"
+                       f"反复开板 {p_hi}→{len(hi)} 家（{len(hi) - p_hi:+d}）{hd_cmp}")
     return (f"今日炸板面：炸板 {n} 家{pct_txt}；{hi_txt}；{layer_txt}；{rate_txt}；"
-            f"反复开板代表：{rep_txt or '无'}；{dist_txt}；{cmp_txt}；{rush_txt}；{rotten_txt}")
+            f"反复开板代表：{rep_txt or '无'}；{dist_txt}；{cmp_txt}")
 
 
 # ── 段 0a-2：反包修复行（2026-10-21 立项，jev-rewrap-factor-preregistration.md R1）───

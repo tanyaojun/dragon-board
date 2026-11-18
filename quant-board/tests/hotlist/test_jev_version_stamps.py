@@ -22,7 +22,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     assert jev_state.QUESTION_SET_VERSION == "v2.6"                    # 热榜情绪（日级判据删减）
     assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"                   # 个股打标+合并相位（v3.2 freshness 分界/v3.3 depth 联动判层/v4.0 驱动+买盘兑底选项，均 2026-10-22）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
-    assert relay.QUESTION_SET_VERSION_RELAY == "v10"                   # 连板指数（v10 语料精简 + 删 cycle_intensity；题集 8→7）
+    assert relay.QUESTION_SET_VERSION_RELAY == "v11"                   # 连板指数（v11 匹配度修复：判据措辞三处+原料补供；阈值零变动）
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
     assert daily.QUESTION_SET_VERSION_DAILY_LINE == "v1"               # 日线一句话（复盘修复起戳）
 
@@ -196,3 +196,26 @@ def test_auction_leader_vA5_dedicated_stamps():
     assert "QUESTION_SET_VERSION_AUCTION_LEADER" in src
     assert "QUESTION_SET_VERSION_THEME_LEADER" not in src
     assert al.QUESTIONS_AUCTION_LEADER["theme_continuation"] is tl.QUESTIONS_THEME_LEADER["theme_continuation"]
+
+
+def test_v11_criteria_wording_matches_corpus_supply():
+    """v11（2026-11-17 匹配度审计）：判据措辞与语料供给对齐——阈值零变动，只改引用。
+
+    M1a：梯队无独立分位刻度 → balanced/sparse/fracture 改锚涨停家数分位+昨日梯队；
+    O2：最高板「参照中位」→ 分位表述（语料给分位不给中位）；
+    O1：money instructions 删模型读不到的外部文档指针；
+    M2/M4：divergence 占比对照较昨日、money 大面占比预算好（叙事侧同步补供）。
+    """
+    from backend.analysis.hotlist import jev_relay_ammo as relay
+    q = relay.QUESTIONS_RELAY
+    lad = q["ladder_health"]["criteria"]
+    assert "参照正常带" not in lad["balanced"] and "涨停家数分位" in lad["balanced"]
+    assert "参照低位" not in lad["sparse"] and "分位≤P20" in lad["sparse"]
+    assert "较昨日腰斩" in lad["fracture"] and "/参照腰斩" not in lad["fracture"]
+    assert "梯队无独立分位刻度" in q["ladder_health"]["instructions"]
+    ph = q["relay_phase"]["criteria"]
+    assert "参照中位" not in ph["launch"] and "最高板分位≤P50" in ph["launch"]
+    assert "最高板分位≥P50" in ph["divergence"]
+    assert "高位分歧炸占比较昨日升高" in ph["divergence"]
+    assert "见预注册" not in q["money_effect"]["instructions"]
+    assert "占断板比" in q["money_effect"]["instructions"]

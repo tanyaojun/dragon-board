@@ -875,7 +875,7 @@ def market_metrics(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict 
     streaks = jiuyan_streak_map(db, date, dataset_id)
     max_streak = max((v for v in streaks.values() if isinstance(v, int)), default=None)
     # 冲刺池（盘中冲板未封，与炸板池并列第三池）+ 封板质量（烂板等）——2026-10-16 补投影，
-    # relay 炸板面双口径与烂板段消费。池级 ok 且 items 空 = 当日无冲刺股，合法 0；
+    # 盘面事实行冲刺披露与封板质量结构化消费（relay 烂板叙事段 v11 O4 已删）。池级 ok 且 items 空 = 当日无冲刺股，合法 0；
     # 池未拉取（非 EOD 槽）/自身上游失败 → None（「取不到」≠「真的 0」，AGENTS §4.0）
     rush_pool = pools.get("rushing") or {}
     rush_count = (len(rush_pool.get("items") or [])

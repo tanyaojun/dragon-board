@@ -336,6 +336,7 @@ def test_relay_flow_line_broken_yesterday_comparison(monkeypatch):
     line = relay_flow_line(db, _D0)
     # 今日断板 = 600004 + 4 填充（均 -10%）→ 中位 -10.0%、大面 5
     assert "断板 5 只：今日收盘中位 -10.0%，大面(≤-5%) 5 只" in line
+    assert "大面(≤-5%) 5 只（占断板 100%）" in line  # v11 M4：占比预算好（判据消费阈值，勿心算）
     # 昨日断板 = 600002 + 600003 + 3 填充 → 中位 -5.0%、大面 4
     assert "较昨日断板：中位 -5.0%→-10.0%、大面 4→5 只" in line
 
@@ -418,9 +419,10 @@ def _frame_full(date, failed=None, rushing=None, seal_quality=None):
 
 
 def test_zhaban_face_rushing_and_rotten_segments():
-    """2026-10-16 补供（审计问题 #6）：冲刺池 6 家、烂板 15 家进语料。
+    """v11 O3/O4（2026-11-17 匹配度审计）：冲刺未封/烂板/收盘涨幅中位撤出炸板面行。
 
-    旧语料「炸板面」只覆盖曾封后开板（failed 池），冲刺池与帧 sealQuality 采集了从不消费。
+    冲刺未封与盘面事实行逐字重复（共享行保留披露）；烂板与中位 7 题判据零消费
+    （孤儿证据）；大面保留（instructions 显式消费）。结构化明细仍在 THS 帧。
     """
     db = FakeDb({
         "snapshot_frames": FakeCol([_frame_full(_D0,
@@ -431,31 +433,28 @@ def test_zhaban_face_rushing_and_rotten_segments():
         "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
     })
     line = zhaban_face_line(db, _D0)
-    # v10 D3：冲刺代表股删（判据消费家数不消费股名，明细在 THS 帧结构化）
-    assert "冲刺未封 6 家" in line
-    assert "冲688265" not in line and "南模生物" not in line
-    assert "涨停池烂板（开板≥2次回封）15 家（占 42%）" in line
+    assert "冲刺未封" not in line and "烂板" not in line
+    assert "收盘涨幅中位" not in line
+    assert "炸板股大面" in line
 
 
 def test_zhaban_face_rushing_pool_missing_no_fake_zero():
-    """THS 冲刺池缺失/降级 → 该段写不可算，不伪 0 家（fail-visible）。"""
+    """v11 O3：冲刺段整段撤出（含不可算分支）——披露由盘面事实共享行承载。"""
     db = FakeDb({
         "snapshot_frames": _frames([_D0], failed_by_date={_D0: ["600001"]}),  # 无 rushing 池
         "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
     })
     line = zhaban_face_line(db, _D0)
-    assert "冲刺未封 不可算" in line, "2026-10-30g+：括号删"
-    assert "冲刺未封 0 家" not in line  # 伪 0 红线
+    assert "冲刺未封" not in line
 
 
 def test_zhaban_face_rotten_missing_no_fake_zero():
-    """帧无 sealQuality → 烂板段写不可算，不伪 0 家。"""
+    """v11 O4：烂板段整段撤出（帧无 sealQuality 亦不渲染，不伪 0）。"""
     frame = _frame_full(_D0, failed=["600001"], seal_quality={})
     db = FakeDb({"snapshot_frames": FakeCol([frame]),
                  "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])])})
     line = zhaban_face_line(db, _D0)
-    assert "涨停池烂板 不可算" in line, "2026-10-30g+：括号删"
-    assert "烂板（开板≥2次回封）0 家" not in line
+    assert "烂板" not in line
 
 
 def test_zhaban_face_reopen_percentile():
@@ -583,7 +582,7 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v10"
+    assert doc["questionSetVersion"] == "v11"
     # v8 市场周期融合题答案抽取 + 缺语料标记（本夹具无 market_cycle 档→True）；v10 删 cycleIntensity
     assert doc["turnQuality"] == "pending"
     assert doc["riskAhead"] == "none" and doc["cycleCorpusMissing"] is True
@@ -780,7 +779,7 @@ def test_zhaban_face_rotten_share_none_does_not_crash():
     db = FakeDb({"snapshot_frames": FakeCol([_frame_full(_D0, failed=["600001"], seal_quality=sq)]),
                  "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])])})
     line = zhaban_face_line(db, _D0)
-    assert "涨停池烂板（开板≥2次回封）0 家（占比不可算）" in line, "2026-10-30g+：括号删"
+    assert "烂板" not in line  # v11 O4：整段撤出，rottenShare=None 不再触及（原崩溃回归点）
 
 
 def test_relay_flow_unlayered_streaks_disclosed():
@@ -980,13 +979,14 @@ def test_zhaban_face_old_schema_count_fallback():
     """F1：旧 schema 日只出同源可算部分（家数/冲刺/回撤），个股级子项标不可算。
 
     旧实现整段写「不可算」，把同帧已有的 failed/rushing/drawdown 一并丢弃（AGENTS §4.0）。
+    v11 O3 只删主行冲刺尾段；降级行保留冲刺（旧 schema 日唯一披露点，评审 P2-2）。
     """
     db = FakeDb({"snapshot_frames": FakeCol([_old_schema_frame(_D0)])})
     line = zhaban_face_line(db, _D0)
     assert "今日炸板面：炸板 17 家" in line, "2026-10-30g+：schema 注删"
     assert "炸板 17 家" in line and "冲刺未封 14 家" in line and "涨停股回撤榜 9 家" in line
     assert "最大回撤 -15.59%" in line and "均值 -11.41%" in line
-    assert "反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算" in line
+    assert "反复开板/昨日池股炸板/炸板股大面/代表股/归因打标 不可算" in line
     assert "较昨日：不可算" in line and "分位 不可算" in line, "2026-10-30g+：照渲染文本"
     pass
 
@@ -1061,7 +1061,7 @@ def test_relay_flow_drops_pseudo_precision_median(monkeypatch):
 @pytest.mark.parametrize("text,expected", [
     ("", []),
     ("今日炸板面：不可算", ["炸板面"]),
-    ("今日炸板面：炸板 17 家；较昨日：不可算；反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算；分位 不可算",
+    ("今日炸板面：炸板 17 家；较昨日：不可算；反复开板/昨日池股炸板/炸板股大面/代表股/归因打标 不可算；分位 不可算",
      []),                                  # 家数级降级：主锚在（家数可算）→ 不进主锚清单
     ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", []),
     ("梯队结构量化：梯队数据缺失", ["梯队"]),
@@ -1077,7 +1077,7 @@ def test_anchor_gaps_marks_only_whole_anchor_loss(text, expected):
 @pytest.mark.parametrize("text,expected", [
     ("", []),
     ("今日炸板面：不可算", []),      # 整段缺 → 归主锚
-    ("今日炸板面：炸板 17 家；较昨日：不可算；反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算；分位 不可算",
+    ("今日炸板面：炸板 17 家；较昨日：不可算；反复开板/昨日池股炸板/炸板股大面/代表股/归因打标 不可算；分位 不可算",
      ["炸板面个股级", "炸板面对比"]),
     ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", ["断板钱效"]),
     ("断板 24 只：今日表现不可算", ["断板钱效"]),
@@ -1671,7 +1671,7 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     assert "主线板块：" not in narrative
     assert "同桶隔日连板基线" not in narrative
     assert struct["mainline"].get("sustain") is not None   # 桶键结构化事实源仍在
-    assert doc["questionSetVersion"] == "v10"
+    assert doc["questionSetVersion"] == "v11"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2006,9 +2006,9 @@ def test_questions_v7_criteria_revisions():
     assert "≤-2%" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "近20日分位" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
     assert "分位刻度" in QUESTIONS_RELAY["relay_index"]["instructions"]
-    # 版本与题数：v10 语料精简 + 删 cycle_intensity（2026-11-17 用户裁决），题集 8→7
+    # 版本与题数：v10 精简+删 cycle_intensity；v11 匹配度修复（2026-11-17 用户裁决），题集 7
     from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
-    assert QUESTION_SET_VERSION_RELAY == "v10"
+    assert QUESTION_SET_VERSION_RELAY == "v11"
     assert len(QUESTIONS_RELAY) == 7
 
 
@@ -2112,3 +2112,77 @@ def test_v10_ladder_anchor_fallback_notes(monkeypatch):
     text = "\n".join(theme_ladder_lines(db, _D0))
     assert "·龙一档缺该板块" in text
     assert "龙序回退区间高度口径" not in text and "·龙一档缺失" not in text
+
+
+# ── v11 匹配度修复专项（2026-11-17 审计裁决，预注册 relay-v11-match-fix-preregistration-20261117.md）──
+
+def test_v11_hd_comparison_from_yesterday_labels():
+    """v11 M2：较昨日行补高位分歧家数对照——divergence「高位分歧炸占比较昨日升高」
+    原无昨日归因可比数；单源同集合昨日档（hotlist_jev_zhaban_labels），零重算。"""
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_frame_failed(_D1, [{"code": "600002", "name": "B", "open_num": 3},
+                                                        {"code": "600003", "name": "C", "open_num": 1}]),
+                                    _frame_failed(_D0, [{"code": "600001", "name": "A", "open_num": 1}])]),
+        "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
+        "hotlist_jev_zhaban_labels": FakeCol([
+            {"tradingDate": _D1, "status": "ok", "zhabanCause": "high_divergence", "name": "B"},
+            {"tradingDate": _D1, "status": "ok", "zhabanCause": "chase_fail", "name": "C"},
+            {"tradingDate": _D0, "status": "ok", "zhabanCause": "chase_fail", "name": "A"},
+        ]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "高位分歧 1→0 家（占炸板 50%→0%）" in line  # 今日已覆盖，真零直给；占比直给（评审 P2-1）
+    assert "炸板归因打标（覆盖 1/1）" in line
+
+
+def test_v11_hd_comparison_missing_no_fake():
+    """v11 M2 fail-visible：昨日档缺/今日未覆盖 → 对照写不可算，不出伪 0 数值对照。"""
+    frames = FakeCol([_frame_failed(_D1, [{"code": "600002", "name": "B", "open_num": 3}]),
+                      _frame_failed(_D0, [{"code": "600001", "name": "A", "open_num": 1}])])
+    finals = FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])])
+    # 昨日 labels 缺
+    db = FakeDb({"snapshot_frames": frames, "jiuyan_action": finals,
+                 "hotlist_jev_zhaban_labels": FakeCol([
+                     {"tradingDate": _D0, "status": "ok", "zhabanCause": "high_divergence", "name": "A"}])})
+    assert "高位分歧较昨日不可算" in zhaban_face_line(db, _D0)
+    # 今日未覆盖（昨日有档）→ 不出 1→0 伪对照
+    db2 = FakeDb({"snapshot_frames": frames, "jiuyan_action": finals,
+                  "hotlist_jev_zhaban_labels": FakeCol([
+                      {"tradingDate": _D1, "status": "ok", "zhabanCause": "high_divergence", "name": "B"}])})
+    line2 = zhaban_face_line(db2, _D0)
+    assert "高位分歧较昨日不可算" in line2
+    assert "高位分歧 1→0" not in line2
+
+
+def test_v11_mainline_wording_single_source():
+    """v11 M3：题材演化重合标签改「top3 延续」——「主线」唯一权威 = relay_structure.mainline，
+    旧措辞按 top3 重合判「主线延续」会与板块接力链主线指向不同板块（11-17 实档现形）。
+
+    评审 P1-1：夹具必须两日 ≥2 个共同 top 板块（overlap≥2）才走到被改名分支；
+    旧夹具 _STOCKS 无 board 键全合并成单板块（overlap=1 轮动换线），是空锁。
+    """
+    b1 = {"甲": [{"code": "600001", "name": "A", "num": "2天2板"}],
+          "乙": [{"code": "600002", "name": "B"}]}
+    b0 = {"甲": [{"code": "600001", "name": "A", "num": "3天3板"}],
+          "乙": [{"code": "600002", "name": "B", "num": "2天2板"}],
+          "丙": [{"code": "600003", "name": "C"}]}
+    db = FakeDb({"snapshot_frames": _frames([_D1, _D0]),
+                 "jiuyan_action": FakeCol([_final_multi(_D1, b1), _final_multi(_D0, b0)])})
+    line = relay.theme_evolution_line(db, _D0)
+    assert "重合 2/3" in line                 # 甲/乙两日都在 → overlap=2 命中被改名分支
+    assert "top3 延续" in line
+    assert "主线延续" not in line
+
+
+def test_v11_hd_comparison_f1_yesterday_old_schema():
+    """评审 P2-3：今日新 schema + 昨日旧 schema（主函数 F1 分支）→ 高位分歧对照
+    硬编码不可算（打标链对无 items 日整日跳过，昨日旧 schema 必无 labels，不构成丢数据）。"""
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_old_schema_frame(_D1),
+                                    _frame_failed(_D0, [{"code": "600001", "name": "A", "open_num": 1}])]),
+        "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "较昨日：炸板 17→1 家（-16）" in line
+    assert "· 高位分歧较昨日不可算" in line
+    assert "高位分歧 0→" not in line  # 防伪 0
