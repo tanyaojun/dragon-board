@@ -149,8 +149,47 @@ async def daban_list(pid_type: int = 8) -> JSONResponse:
     6=风向标 / 1=涨停池 / 2=炸板池 / 3=跌停池。
 
     数据源=socket 2103 订阅推送的最近快照（collector 缓存），非历史回看——历史走 /daban-list-history。
+    pid_type=8 返回后合并竞价三字段投影（auction_bidding_facts，2026-11-19 用户裁决：
+    净额/成交额/换手状态门，掉池股未公布不烘 0）；其余 pid 不碰。投影纯库读，
+    入线程池不阻塞事件循环；失败降级留痕不阻断快照透传（§4.0）。
     """
-    return await _proxy_get(f"/api/kpl/daban-list?pid_type={pid_type}")
+    try:
+        r = await _get_client().get(_UPSTREAM_HTTP + f"/api/kpl/daban-list?pid_type={pid_type}",
+                                    timeout=10)
+        payload = r.json()
+        if pid_type == 8 and isinstance(payload, dict) and payload.get("ok"):
+            import time as _time
+            date = str(payload.get("date") or _time.strftime("%Y-%m-%d"))
+            payload = await asyncio.to_thread(_merge_trio_into_payload, payload, date)
+        return JSONResponse(content=payload, status_code=r.status_code)
+    except Exception as exc:
+        return JSONResponse(
+            content={"ok": False, "degraded": True, "reason": f"kpl_upstream_unavailable: {exc}"},
+            status_code=502,
+        )
+
+
+def _merge_trio_into_payload(payload: dict, date: str) -> dict:
+    """pid8 载荷三字段投影合并（纯库读零外呼；原地覆写 items 三字段 + src/state，
+    附 trioCensus/trioState）。非三字段不碰；读失败/存储降级 → 留痕不阻断（§4.0）。"""
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return payload
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return payload
+    if get_settings().storage_backend != "mongodb":
+        payload["trioState"] = {"state": "skipped", "reason": "storage_backend_disabled"}
+        return payload
+    try:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+        from backend.operations.auction_bidding_facts import apply_trio, resolve_bidding_trio
+        trio = resolve_bidding_trio(get_runtime_mongodb_database(), date)
+        apply_trio(items, trio["facts"])
+        payload["trioCensus"] = trio["census"]
+        payload["trioState"] = trio["state"]
+    except Exception as exc:  # noqa: BLE001 — 投影失败不阻断快照（fail-visible）
+        payload["trioState"] = {"state": f"trio_failed:{type(exc).__name__}"}
+    return payload
 
 
 def _load_daban_lane_day(date: str, *, lane: str) -> JSONResponse:
@@ -165,7 +204,12 @@ def _load_daban_lane_day(date: str, *, lane: str) -> JSONResponse:
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     from backend.services.kpl_daban_archiver import load_day
 
-    return JSONResponse(content=load_day(get_runtime_mongodb_database(), date, lane=lane))
+    payload = load_day(get_runtime_mongodb_database(), date, lane=lane)
+    if lane == "bid":
+        # 竞价页历史模式实际读本口（kplDabanArchiveHistory，非 /daban-list-history）：
+        # 同款投影合并，历史日走 no_mbl_series_day 回退态（计划 §4.6 历史同款披露）
+        payload = _merge_trio_into_payload(payload, str(payload.get("date") or date))
+    return JSONResponse(content=payload)
 
 
 @router.get("/daban-pool")
@@ -440,8 +484,12 @@ async def daban_list_history(date: str = "", pid_type: int = 8) -> JSONResponse:
             content={"ok": False, "degraded": True, "reason": "invalid_pid_type"},
             status_code=400)
     try:
-        return JSONResponse(
-            content=kpl_ranking_service.get_daban_list_history(date, pid_type))
+        def _work():
+            payload = kpl_ranking_service.get_daban_list_history(date, pid_type)
+            if pid_type == 8:
+                payload = _merge_trio_into_payload(payload, date)
+            return payload
+        return JSONResponse(content=await asyncio.to_thread(_work))
     except KplRankingError as exc:
         return JSONResponse(content=exc.to_payload(), status_code=502)
 

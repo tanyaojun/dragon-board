@@ -173,3 +173,40 @@ def test_degraded_banner_throttled(js: str):
     assert "dabanBannerAt: {}" in js
     banner = _fn(js, "kplDabanBanner")
     assert "KPL.dabanBannerAt[key]" in banner and "60000" in banner
+
+# ══════ 竞价三字段投影页面守卫（2026-11-19 用户裁决彻底版）══════
+
+def test_bid_trio_tooltip_state_src_caliber(js: str):
+    """右表三列 tooltip：src/state/时点/派生口径只进 tooltip（红线 8）。"""
+    body = _fn(js, "kplBidRender")
+    for field in ("net", "tur", "amt"):
+        assert f"kplBidTrioTip(r, '{field}')" in body
+    tip = _fn(js, "kplBidTrioTip")
+    assert "未公布" in tip and "不烘0" in tip
+    assert "真0保留" in tip
+    assert "派生=额/流通市值×100" in js
+    assert "掉池前观测" in js and "amount_ts" in tip
+
+
+def test_bid_agg_coverage_tooltip(js: str):
+    """左板块聚合 + 全部行：覆盖率 sumN/n 披露，缺位不烘 0（评审 P2-4 延续）。"""
+    body = _fn(js, "kplBidRender")
+    assert "allCovTip" in body
+    assert "不计入合计" in body
+    assert "sumN.bidding_net || 0}/${a.n}" in body.replace("${a.sumN.bidding_net || 0}/${a.n}", "sumN.bidding_net || 0}/${a.n}") or "覆盖 ${a.sumN.bidding_net || 0}/${a.n}" in body
+
+
+def test_bid_header_census(js: str):
+    """页头 census：撮合公布/虚拟/掉池前观测/净额缺位（trioCensus 消费）。"""
+    body = _fn(js, "kplBidRender")
+    assert "trioCensus" in body
+    assert "撮合公布" in body and "净额缺位" in body and "掉池前观测" in body
+
+
+def test_bid_ratio_missing_amount_guard(js: str):
+    """竞昨比：amount 缺（null）→ ratio null → '--'（不烘 0.00%）。"""
+    body = _fn(js, "kplDabanEnrichBidRatio")
+    assert "r.ratio_prev_vol = null" in body
+    assert "Number.isFinite(amt)" in body
+    render = _fn(js, "kplBidRender")
+    assert "kfmtNum(r.ratio_prev_vol)" in render

@@ -784,3 +784,24 @@ def test_hygiene_auction_bidding_series_line():
     _assert_clean(line, "bidding_series_line(facts)")
     assert bidding_series_line(None) is None
     assert bidding_series_line({"first": {"ts": 1, "bidding_pct": None}}) is None
+
+
+def test_hygiene_auction_bid_line_state_gate_20261119():
+    """竞价三字段投影层叙事卫生（2026-11-19 用户裁决）：掉池股缺位净额整段
+    缺席（src/口径不进叙事）；留池真 0 照出；黑名单不变。"""
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    dropped = [{"label": "华胜天成", "item": {
+        "bidding_pct": 9.99, "bidding_amount": 124381050.0,
+        "bidding_turnover": 0.6132, "bidding_net": None,
+        "zt_buy_amount": 124802850.0, "trio_state": "dropped_pre_match",
+        "bidding_amount_src": "mbl_col10_preexit", "bidding_net_state": "missing"}}]
+    ln = AL.auction_bid_line(dropped)
+    _assert_clean(ln, "auction_bid_line(掉池缺位)")
+    assert "竞价净额" not in ln
+    assert "mbl_col10" not in ln and "派生" not in ln and "掉池" not in ln, \
+        "src/口径/状态注只进结构化与 tooltip，不进叙事（红线 8）"
+    true0 = [{"label": "天目药业", "item": {
+        "bidding_pct": 10.03, "bidding_amount": 0.0, "bidding_turnover": 0.0,
+        "bidding_net": 0.0, "zt_buy_amount": 5e6, "trio_state": "in_pool_matched"}}]
+    _assert_clean(AL.auction_bid_line(true0), "auction_bid_line(留池真0)")
+    assert "竞价净额 0.0万" in AL.auction_bid_line(true0)

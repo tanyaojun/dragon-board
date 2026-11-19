@@ -1974,7 +1974,10 @@ def _seal_time_seg(item: dict) -> str:
 def _fmt_amount_yuan(val: float) -> str:
     """亿元串；<0.01 亿退化万单位（两位小数会把 50 万渲染成 0.00亿，非零显 0 是误导）。
     绝对值判门（review 2026-11-13f finding-3）：负额（竞价净额/大单净流出）同样退化/升级，
-    避免同一行内正额 X.XX亿、负额 -NNNNN.N万 量级呈现不一致。"""
+    避免同一行内正额 X.XX亿、负额 -NNNNN.N万 量级呈现不一致。
+    缺位复核（2026-11-19 竞价三字段投影层，计划 §4.5）：本函数只接受数值，
+    None 缺位由消费方状态门拦截（auction_bid_line 净额 is not None 门控 → 缺位
+    整段缺席，不会触发负额退化/升级误判）；禁止在此补 0/占位串（红线 8）。"""
     if abs(val) >= 1e6:
         return _fmt_yi(val)
     return f"{val / 1e4:.1f}万"

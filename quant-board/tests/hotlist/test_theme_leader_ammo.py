@@ -2037,3 +2037,17 @@ def test_baseline_ladder_cap_bucket_renders_plus():
     line = A.baseline_line(rows, row, min_combo_n=5)
     assert "按跟风梯队[3家+]" in line and "按跟风梯队[3家]" not in line
     assert A.ladder_bucket(9) == "3"
+
+
+def test_fmt_amount_yuan_negative_gate_and_none_recheck_20261119():
+    """负额判门复核（计划 §4.5）：绝对值判门负额同样退化/升级；缺位 None
+    由消费方状态门拦截（auction_bid_line is not None 门），不进本函数、
+    不触发负额退化/升级误判、不补 0/占位串（红线 8）。"""
+    from backend.analysis.hotlist.theme_leader_ammo import _fmt_amount_yuan
+    from backend.analysis.hotlist import auction_leader_ammo as AL
+    assert _fmt_amount_yuan(-500000.0) == "-50.0万"     # 负额退化万单位
+    assert _fmt_amount_yuan(-1.2e8) == "-1.20亿"        # 负额升级亿单位
+    assert _fmt_amount_yuan(500000.0) == "50.0万"
+    ln = AL.auction_bid_line([{"label": "X", "item": {
+        "bidding_pct": 5.0, "bidding_net": None, "bidding_amount": 1e7}}])
+    assert "竞价净额" not in ln and "竞价成交额 0.10亿" in ln

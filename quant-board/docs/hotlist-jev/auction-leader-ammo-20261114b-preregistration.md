@@ -61,3 +61,15 @@ P6（「当日题材事件」节名事实化，牵动题材链 ammo 换代）、
 2. P3：gene/notice/reason 补拉键集解耦（入选股 roster），晨间新增 ≤3×roster 次既有端点。
 3. P6/P7：digest 节名事实化 + 市场行口径标注（牵动题材链 ammo 换代）。
 4. vA3（题目层）：一字板判据分支、硬度×方向解耦、判据引用对齐、三层门质量化。
+## 6. 六件套门控重裁注记（2026-11-19 竞价三字段投影层）
+
+`auction_bid_line` 信息量门槛「六字段任一非 0」经投影层重裁（计划
+auction-bidding-zero-trio-fix-plan-20261119.md §4.4，已实施）：
+- 净额改**状态门**：投影 None（掉池/未公布）→ 净额段整段缺席（无占位符）；
+  留池撮合后真 0（买卖平衡/一字无对手盘）是事实照出——「竞价净额 0」仅当
+  in_pool_matched 真 0。原 `is not None` 门控自然生效，函数零代码改动。
+- 掉池股行经 col10 虚拟观测额可读后自然出行（竞价涨幅/成交额/换手/涨停委买额），
+  不再被零额门吞掉；peers 对比段 amount 同用投影值（同板对比不被零拉偏）。
+- src/时点/派生口径只进结构化字段（item.*_src/*_state、doc.bidLine/bidLineState、
+  corpusState.bidTrio）与页面 tooltip，不进叙事（红线 8，test_narrative_hygiene
+  掉池缺位/留池真 0 双例守卫）。AMMO 换代 2026-11-19a（题集 vA6 不变）。

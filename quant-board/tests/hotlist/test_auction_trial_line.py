@@ -178,3 +178,34 @@ def test_trial_line_noncanonical_end_no_semantic_note():
         assert "竞价全程匹配" not in ln and end not in ln
         assert "试盘涨幅" not in ln          # 时点不可锚 → 快照组不出
         assert "最终 898.0万" in ln          # 量价累计段是真实事实，保留
+
+
+# ══════ 六件套行状态门（2026-11-19 竞价三字段投影层裁决）══════
+
+def test_bid_line_dropped_stock_net_absent_amount_present():
+    """掉池股：额=col10 掉池前观测、换手=派生照出；净额未公布 → 整段缺席
+    （无占位符，红线 8）；信息量门槛经额可读自然通过。"""
+    item = {"bidding_pct": 9.99, "bidding_net": None, "bidding_turnover": 0.6132,
+            "bidding_amount": 124381050.0, "zt_buy_amount": 124802850.0,
+            "trio_state": "dropped_pre_match", "bidding_net_state": "missing"}
+    ln = AL.auction_bid_line([{"label": "华胜天成", "item": item}])
+    assert ln == ("竞价（09:25 匹配价）：华胜天成 竞价涨幅 +9.99% 竞价换手 0.6132% "
+                  "竞价成交额 1.24亿 涨停委买额 1.25亿")
+    assert "竞价净额" not in ln and "不可考" not in ln
+
+
+def test_bid_line_true_zero_net_emitted():
+    """留池撮合后真 0（一字无对手盘）是事实照出——状态门而非值门。"""
+    item = {"bidding_pct": 10.03, "bidding_net": 0.0, "bidding_turnover": 0.0,
+            "bidding_amount": 0.0, "zt_buy_amount": 5e6,
+            "trio_state": "in_pool_matched", "bidding_net_state": "published"}
+    ln = AL.auction_bid_line([{"label": "天目药业", "item": item}])
+    assert "竞价净额 0.0万" in ln and "竞价成交额 0.0万" in ln
+
+
+def test_bid_line_all_missing_row_absent():
+    """榜外股投影三 None + 其余字段缺 → 整行缺席（不伪造）。"""
+    item = {"bidding_pct": None, "bidding_net": None, "bidding_turnover": None,
+            "bidding_amount": None, "zt_buy_amount": None,
+            "trio_state": "not_in_auction_pool"}
+    assert AL.auction_bid_line([{"label": "榜外股", "item": item}]) is None

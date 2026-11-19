@@ -812,3 +812,118 @@ def test_regulatory_route_explicit_and_invalid_and_missing(client, monkeypatch):
     monkeypatch.setattr(rf, "get_runtime_mongodb_database", lambda: _RegRouteDb())
     r3 = client.get("/api/kpl/regulatory")
     assert r3.json()["ok"] is False and r3.json()["reason"] == "no_archive"
+
+
+# ══════ 竞价三字段投影合并（2026-11-19 用户裁决；mock 投影零真实连接）══════
+
+def _trio_mocks(monkeypatch, facts=None, census=None, raise_exc=None):
+    from backend.operations import auction_bidding_facts as ABF
+    from backend.data.repositories import repository_factory as RF
+    facts = facts if facts is not None else {
+        "600410": {"bidding_amount": 124381050.0, "bidding_amount_src": "mbl_col10_preexit",
+                   "bidding_turnover": 0.6132, "bidding_turnover_src": "derived_cap",
+                   "bidding_net": None, "bidding_net_state": "missing",
+                   "trio_state": "dropped_pre_match", "amount_ts": "09:23:23",
+                   "float_cap": 20285151636.0, "reasons": []}}
+    census = census if census is not None else {"total_n": 1, "net_missing_n": 1}
+
+    def _resolve(db, date, codes=None):
+        if raise_exc:
+            raise raise_exc
+        return {"facts": facts, "census": census, "state": {"state": "ok"}}
+
+    monkeypatch.setattr(ABF, "resolve_bidding_trio", _resolve)
+    monkeypatch.setattr(RF, "get_runtime_mongodb_database", lambda: object())
+    monkeypatch.setattr(kpl_proxy_routes, "get_settings",
+                        lambda: type("S", (), {"storage_backend": "mongodb"})())
+
+
+def test_daban_list_pid8_merges_trio(client, monkeypatch):
+    """pid8 live 读口：proxy 返回后合并投影（净额缺位 None + src/state + census）。"""
+    _trio_mocks(monkeypatch)
+    _FakeAsyncClient.responses = [_FakeResponse({
+        "ok": True, "pid_type": 8, "date": "2026-11-19",
+        "items": [{"stock_id": "600410", "name": "华胜天成", "bidding_pct": 9.99,
+                   "bidding_net": 0.0, "bidding_amount": 0.0, "bidding_turnover": 0.0,
+                   "zt_buy_amount": 1.25e8, "pct": 9.99}]})]
+    r = client.get("/api/kpl/daban-list", params={"pid_type": 8})
+    assert r.status_code == 200
+    body = r.json()
+    it = body["items"][0]
+    assert it["bidding_net"] is None and it["bidding_net_state"] == "missing"
+    assert it["bidding_amount"] == 124381050.0
+    assert it["bidding_amount_src"] == "mbl_col10_preexit"
+    assert it["trio_state"] == "dropped_pre_match"
+    assert it["zt_buy_amount"] == 1.25e8 and it["pct"] == 9.99   # 非三字段不碰
+    assert body["trioCensus"]["net_missing_n"] == 1
+    assert body["trioState"]["state"] == "ok"
+
+
+def test_daban_list_non_pid8_untouched(client, monkeypatch):
+    """非 pid8 不碰投影（涨停池/炸板池等字段体系不同）。"""
+    _trio_mocks(monkeypatch)
+    _FakeAsyncClient.responses = [_FakeResponse({
+        "ok": True, "pid_type": 1, "items": [{"stock_id": "600410", "main_net": 0.0}]})]
+    r = client.get("/api/kpl/daban-list", params={"pid_type": 1})
+    body = r.json()
+    assert "trioCensus" not in body and "trioState" not in body
+    assert body["items"][0]["main_net"] == 0.0
+
+
+def test_daban_list_history_pid8_merges_trio(client, monkeypatch):
+    """历史读口（HisDaBanList）pid8 同构合并。"""
+    _trio_mocks(monkeypatch)
+    monkeypatch.setattr(kpl_proxy_routes.kpl_ranking_service, "get_daban_list_history",
+                        lambda date, pid_type: {"ok": True, "date": date, "pid_type": pid_type,
+                                                "items": [{"stock_id": "600410", "bidding_net": 0.0}]})
+    r = client.get("/api/kpl/daban-list-history", params={"date": "2026-11-19", "pid_type": 8})
+    body = r.json()
+    assert body["items"][0]["bidding_net"] is None
+    assert body["trioCensus"]["net_missing_n"] == 1
+
+
+def test_daban_bidding_archive_merges_trio(client, monkeypatch):
+    """竞价页历史模式实际读口 /daban-bidding：同款投影合并（历史回退态）。"""
+    from backend.services import kpl_daban_archiver as ARCH
+    _trio_mocks(monkeypatch)
+    monkeypatch.setattr(ARCH, "load_day", lambda db, date, lane: {
+        "ok": True, "lane": lane, "date": date,
+        "items": [{"stock_id": "600410", "bidding_net": 0.0, "bidding_amount": 0.0}]})
+    r = client.get("/api/kpl/daban-bidding", params={"date": "2026-11-19"})
+    body = r.json()
+    assert body["items"][0]["bidding_net"] is None
+    assert body["items"][0]["bidding_amount"] == 124381050.0
+    assert body["trioCensus"]["net_missing_n"] == 1
+
+
+def test_daban_bidding_non_bid_lane_untouched(client, monkeypatch):
+    """涨停池读口 /daban-pool 不接投影（lane≠bid）。"""
+    from backend.services import kpl_daban_archiver as ARCH
+    _trio_mocks(monkeypatch)
+    monkeypatch.setattr(ARCH, "load_day", lambda db, date, lane: {
+        "ok": True, "lane": lane, "date": date, "items": [{"stock_id": "600410"}]})
+    r = client.get("/api/kpl/daban-pool", params={"date": "2026-11-19"})
+    assert "trioCensus" not in r.json()
+
+
+def test_merge_storage_backend_disabled_skips(client, monkeypatch):
+    """存储非 mongodb → 投影跳过留痕，快照原样透传（不阻断）。"""
+    _trio_mocks(monkeypatch)
+    monkeypatch.setattr(kpl_proxy_routes, "get_settings",
+                        lambda: type("S", (), {"storage_backend": "sqlite"})())
+    _FakeAsyncClient.responses = [_FakeResponse({
+        "ok": True, "pid_type": 8, "items": [{"stock_id": "600410", "bidding_net": 0.0}]})]
+    body = client.get("/api/kpl/daban-list", params={"pid_type": 8}).json()
+    assert body["trioState"]["reason"] == "storage_backend_disabled"
+    assert body["items"][0]["bidding_net"] == 0.0   # 未投影原样
+
+
+def test_merge_projection_failure_degrades_not_blocks(client, monkeypatch):
+    """投影异常 → trioState 留痕，快照照常透传（§4.0 fail-visible）。"""
+    _trio_mocks(monkeypatch, raise_exc=RuntimeError("db_down"))
+    _FakeAsyncClient.responses = [_FakeResponse({
+        "ok": True, "pid_type": 8, "items": [{"stock_id": "600410", "bidding_net": 0.0}]})]
+    body = client.get("/api/kpl/daban-list", params={"pid_type": 8}).json()
+    assert body["ok"] is True
+    assert body["trioState"]["state"] == "trio_failed:RuntimeError"
+    assert body["items"][0]["bidding_net"] == 0.0

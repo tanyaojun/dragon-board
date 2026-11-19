@@ -29,7 +29,7 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 
 QUESTION_SET_VERSION_AUCTION_LEADER = "vA6"   # 2026-11-18 投喂文本红线清洁（用户裁决）：共享题源（题材深度/延续/硬度 instructions）随题材 v19 清洁被动变更→换代 vA6（vA5 未首烧零代际成本）；判据语义零变动。前版 vA5 = fb671c8f0223（含 B4 接线 + review 清洁度修；再前 vA4 = cd5639a7407f，跨代不可比）
-AMMO_VERSION_AUCTION_LEADER = "2026-11-18d"   # 共享题材证据块「无匹配」占位行整行缺席（随题材 2026-11-18e 同批，用户裁决）；题面 vA6 hash 不变。前版 2026-11-18c = jj_percent 权威换源（3006 存档 09:25 开盘涨幅）；再前 2026-11-18b = 共享 B9 原料层修复；再前 2026-11-18a = 删盘面事实行+热度排名接线+注入 bug 修复
+AMMO_VERSION_AUCTION_LEADER = "2026-11-19a"   # 竞价三字段单一投影层（用户裁决彻底版）：净额状态门缺位整段缺席（掉池股未公布不烘 0）、额=col10 掉池前虚拟观测、换手派生；留池真 0 照出；bidLine/bidLineState 结构化字段供外科重建。题面 vA6 hash 不变。前版 2026-11-18d = 共享题材证据块「无匹配」占位行整行缺席；再前 2026-11-18c = jj_percent 权威换源（3006 存档 09:25 开盘涨幅）
 
 # 板块级子集（原文复用 v17，一字不改）
 AUCTION_SECTOR_QUESTIONS = ("theme_speculation_depth", "theme_continuation")
@@ -214,6 +214,11 @@ def auction_bid_line(entries: list[dict] | None) -> str | None:
     bidding_net/bidding_turnover/bidding_amount/zt_buy_amount）+ 派生
     ratio_prev_vol（竞昨比，runner 经 get_daban_prev_day_basis 原料派生）；
     peers = 同板其他入选股 [{name, pct, amount}]（对比事实，缺省不出对比段）。
+    三字段状态门（2026-11-19 投影层裁决）：item 经 apply_trio 合并后，净额 None=
+    未公布缺位 → 净额段整段缺席（无占位符）；**留池撮合后真 0 是事实照出**
+    （「竞价净额 0」仅当 in_pool_matched 真 0）；额=公布值或 col10 掉池前虚拟
+    观测、换手=公布值或派生，缺位同规则缺席。src/时点/口径只进结构化字段与
+    页面 tooltip，不进叙事（红线 8）。
     信息量门槛：六字段任一可读且非 0 才出该股段；全缺 → None（整行缺席）。
     单字段缺位 = 缺位字段不出现（无占位符；2026-11-13 用户裁决：叙事禁「不可考」噪声）。
     覆盖边界与补源：bid 通道 = KPL 竞价榜 top N（max_size 百余只）；榜外入选股由
