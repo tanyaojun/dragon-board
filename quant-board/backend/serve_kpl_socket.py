@@ -112,6 +112,13 @@ if _KA_MODE not in ("610", "off", "none"):
 #   而非 cmd，使服务端授予每股独立 subId → 402 精准退单股（方案 §12，探针裁决后启用）。
 _SUB_UNIQUE_ID = os.environ.get("KPL_SUB_UNIQUE_ID", "0").strip().lower() in (
     "1", "true", "on", "yes")
+# KPL_PID8_REFRESH=1 → App 同款 pid8 3s 重请求 lane（2026-11-19 密度根因修复，
+# auction-trial-density-storage-fix-plan §3；源码：BaseTimerTaskFragment 3000ms
+# 定时重发 2103 pid=8 各页请求）。频控预算（红线 10）：7 页×1 帧/3s≈2.33 帧/s，
+# 窗 [09:15,09:30) ≈2100 帧/日（预登记验收预算 ≤2500 帧/单窗）。实施轮默认 off，
+# 次日窗预登记开火验收通过后翻默认 on；异常（1002/rst 升级）env 关+重启即回退。
+_PID8_REFRESH = os.environ.get("KPL_PID8_REFRESH", "0").strip().lower() in (
+    "1", "true", "on", "yes")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）
 _LHB_REALTIME_COUNT = int(os.environ.get("KPL_LHB_REALTIME_COUNT", "120"))
@@ -160,7 +167,8 @@ _service = KplCollectorService(
     ka_mode=_KA_MODE,
     sub_unique_id=_SUB_UNIQUE_ID,
     sub_staged=_SUB_STAGED,
-    daban_list_pages=_DABAN_LIST_PAGES)
+    daban_list_pages=_DABAN_LIST_PAGES,
+    pid8_refresh=_PID8_REFRESH)
 
 
 def _get_service() -> KplCollectorService:

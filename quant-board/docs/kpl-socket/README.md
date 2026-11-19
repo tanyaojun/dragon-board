@@ -534,6 +534,65 @@ App 源码依据或用户裁决；无依据的「防爆」门控稀释数据密�
   节流丢弃同瞬 burst 的 3/4 页（75% 数据损失）=WZS 对拍失真根因。
 - 4 处 stale 注释（防抖/节流/孤儿 drain/读口窗）已同轮清理。
 
+### 3.11 竞价试盘密度根因源码定案 + 存储重构 + pid8 3s 重请求 lane（2026-11-19）
+
+方案唯一来源：`docs/hotlist-jev/auction-trial-density-storage-fix-plan-20261119.md`
+（触发：603324 盛剑科技 11-19 早盘工作台试盘页 vs WzsLinker 对拍差异复盘）。
+
+**密度根因（接收层，源码定案，红线 9）**：collector 仅在 setup 发一次 2103
+pid=8 请求，服务端按「请求-快照」回整页 burst，会话内无周期更新；会话 ~39s
+被杀（eof_clean）→ 观测密度=每会话 1 burst（~36-37s），窗内仅 16 个观测事件
+（5s 理论 ~120），首帧 09:15:26 晚 25s → 首开额/首加额/起止时点全部采样失真。
+**App 靠 3s 定时重请求取密度，不是靠服务端周期推送**，源码链（本轮逐行核对）：
+
+- `.tmp_review/jadx_out_signsvc/.../stareplate/plate/ui/fragment/BiddingZTQuotaFragment.java:49`
+  继承 `MVPTimerTaskFragment`；`:495-497` 定时回调 `Xf(666)→Pg()`；`:440-450`
+  `Pg()→p.j0(firstVisible,count)`；`:100-104` 滚动 `fg(666)` 暂停/静止 `Zf(666)` 恢复。
+- `.tmp_review/c2_src/.../newindex/base/page/BaseTimerTaskFragment.java:76`
+  默认周期 `bg(i, 3000L)`（**3000ms**）。
+- `.tmp_review/jadx_out_signsvc/.../plate/presenter/BiddingZTlQuotaPresenter.java:261-262`
+  `j0→a0(i,i2,true)`；`:174-188` `a0→y(2103,z)`。
+- `.tmp_review/main_src/.../newindex/base/SocketPresenter.java:193`
+  `y()`=`ux0.v().c(w).g(u(w)).f(true).d(k).e((byte)4)` —— **0x40 订阅通道重发请求**。
+
+**存储重构（A，已实施 + 生产迁移完成）**：`kpl_bidding_series` 旧单日单文档嵌入
+ticks 实测 16,767,304B≈BSON 16MB 上限（tick 中位 26KB，旧 SERIES_MAX_TICKS=1200
+×25.8KB≈31MB 估算错，11-19 午后 bid_series_fail=749 code 10334 拒写）→ 逐 tick
+文档化：日 meta（_id=date，不含 ticks，tick_n/$inc）+ tick 文档（{date,ts,n,it}，
+索引 {date:1,ts:1}）；append=insert_one，无读改写/无 $slice/无上限（常量同轮删除，
+红线 1）。消费合同经 `load_bidding_series` 同形（+codes_only 轻量宇宙读）；
+迁移 `scripts/migrate_bidding_series_per_tick.py`（mongoexport 归档先行→逐档
+改写→计数核对，幂等可重跑；test 库干跑验证后生产 11-17/18/19 三档 1488 tick
+全 ok，归档 data/backups/kpl_bidding_series_legacy_dragon_board_quant_*.json）。
+
+**pid8 3s 重请求 lane（B，已实施默认 off，待次日窗预登记开火）**：
+`_drain_pid8_refresh` 窗门控 [09:15,09:30)（App「页可见且静止」语义的无头等价，
+披露），每 3s 重发 pid=8 各页 2103 请求（帧形态与 setup 6d 完全同款：pkg 0x40
++ ext 02 0837；读循环 2s recv 网格量化→实际节拍 3-4s，披露）；会话重建随 setup
+初始 burst 重置；ErrResp 1002 → 既有 fail-fast+退避梯，不新增重试循环。
+**频控预算（红线 10）**：7 页×1 帧/3s≈2.33 帧/s；窗 15min≈2100 帧/日（预登记
+验收预算 ≤2500 帧/单窗）；每页周期=App 静止刷新周期（3s），非客户端自创轮询。
+开关 `KPL_PID8_REFRESH`（默认 0）；status 观测 `pid8_refresh:{enabled,frames_sent,
+last_ts,send_drops,window_active}`。
+
+**次日竞价窗预登记开火（预算 ≤2500 帧，单窗）**：
+1. `KPL_PID8_REFRESH=1` 重启 :8002；观察 status：1002/rst 计数 vs 基线不升级、
+   `corpus_persist.bid_series_fail=0`、`sub_registry.evicted_n` 零增长（review L2：
+   长寿会话下 pid8 lane 条目逼近 2000 上限会挤占其他 lane pending，先观察后定案）。
+2. 窗后 `scripts/auction_window_check.py --date <当日> --wzs`（④ 预算 1 GET，
+   survey §6 合同不带 refresh）：①首 tick ≤09:15:10；②窗内观测事件 ≥150；
+   ③gap 中位 ≤4s、max ≤15s（会话轮转上限）；④603324 类首开/首加与 Wzs 同日
+   缓存对拍值层收敛（首开差 ≤5%、首加同笔）。
+3. 验收通过 → 翻默认 on（serve_kpl_socket `_PID8_REFRESH` 缺省改 1）+重启+
+   本节勾选；不通过 → env off 回退，残留登记，**不盲探**（红线 9）。
+
+**同轮披露同步（C/D，已实施）**：:8000 重启落地 trio 投影（603324 jj_amount
+0→14187008 src=mbl_col10_preexit、jj_turnover 0→1.0974 src=derived_cap、net=None
+状态门，API 对拍通过）；relay 试盘页 jj 换手/成交额 tooltip 同步投影状态机口径
++ jjAmountSrc/jjTurnoverSrc 逐行 sub 披露；ticks 直读点（facts/routes/supplement/
+window_check/backfill）全切 load_bidding_series。残留（会话 ~39s 被杀攻坚/3006
+零捕获归因/掉池股撮合终值 Type=7 源/Wzs end_time 判据）见 plan §7，另立预登记。
+
 ## 四、数据语义与已知限制
 
 - **价格是 ×10000 整数缩放**：113000=11.30 元、8900980=890.098（板块点位）。展示层需自行除以 10000 或标注口径。

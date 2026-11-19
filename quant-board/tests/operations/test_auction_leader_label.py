@@ -16,8 +16,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.operations import auction_leader_label as L
+from tests.series_fake import FakeSeriesCol, seed_series_legacy
 
 DATE = "2026-11-13"
+
+
+def _seed_series(db, legacy_doc):
+    """kpl_bidding_series 2026-11-19 逐 tick 文档化：旧嵌入种子适配新形态。"""
+    col = seed_series_legacy(FakeSeriesCol(), legacy_doc)
+    db.cols["kpl_bidding_series"] = col
+    return col
 
 
 class FakeCol:
@@ -652,10 +660,10 @@ def test_run_wires_trial_in_window(env, monkeypatch):
     """官方序列试盘行 → 叙事出试盘行 + trialState=ok/derived（§7.17 单主链）。"""
     db, calls = env
     monkeypatch.setattr(L, "_in_auction_window", lambda: True)
-    db["kpl_bidding_series"].docs[DATE] = _series_doc(DATE, {
+    _seed_series(db, _series_doc(DATE, {
         "603135": {"start_time": "09:15:00", "end_time": "09:20:11",
                    "first_amount": 2_116_000.0, "last_amount": 2_116_000.0,
-                   "jj_percent": -2.36, "jj_amount": 3_310_000.0}})
+                   "jj_percent": -2.36, "jj_amount": 3_310_000.0}}))
     res = L.run(DATE, confirm_budget=True)
     assert res["ok"]
     doc = db[L.COLLECTION].docs[f"{DATE}:603135"]
@@ -755,7 +763,7 @@ def _trial_strength_setup(monkeypatch, db, rows, boards):
     monkeypatch.setattr(L, "get_auction_snapshot_tencent",
                         lambda codes: {"ok": False, "items": {}, "missing": list(codes)})
     # §7.17 raw 整集合退役：试盘行种子=官方序列档（单主链）
-    db["kpl_bidding_series"].docs[DATE] = _series_doc(DATE, rows)
+    _seed_series(db, _series_doc(DATE, rows))
     yield
     jiuyan_board.reset_jiuyan_board_cache()
     jiuyan_industry_root.reset_jiuyan_industry_root_cache()
@@ -907,9 +915,9 @@ def test_trial_strength_dry_run_reads_series(env, monkeypatch):
     db["jiuyan_industry_stocks"].docs["node:机器人"] = {
         "_id": "node:机器人", "name": "机器人", "stockN": 4, "batchDate": "2026-10-25",
         "stocks": [{"code": c} for c in ("600100", "600101", "600102", "600103")]}
-    db["kpl_bidding_series"].docs[DATE] = _series_doc(DATE, {
+    _seed_series(db, _series_doc(DATE, {
         "600100": _srow(jj_percent=7.0), "600101": _srow(jj_percent=8.0),
-        "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)})
+        "600102": _srow(jj_percent=9.0), "600103": _srow(jj_percent=6.5)}))
     # 单主链纯库读：dry-run 天然零外呼
     try:
         res = L.run(DATE, dry_run=True)
@@ -1146,3 +1154,66 @@ def test_trial_strength_derive_error_fail_visible(env, monkeypatch):
     ts = doc["corpusState"]["trialState"]
     assert ts["state"] == "derive_failed:RuntimeError"
     assert len(calls) == 2
+
+
+# ══════ 竞价三字段投影接线（2026-11-19 用户裁决彻底版）══════
+
+def test_bid_line_projection_dropped_stock(env):
+    """掉池股语料：净额段整段缺席、额=col10 掉池前观测、换手派生；
+    doc 增 bidLine/bidLineState 结构化字段（rebuild 路径 A 定位锚）；
+    corpusState.bidTrio 留痕。零 jev 真实调用（env fake dispatch）。"""
+    db, calls = env
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=8))
+    t0 = _dt.datetime.fromisoformat(f"{DATE}T09:15:35+08:00").timestamp()
+    t1 = _dt.datetime.fromisoformat(f"{DATE}T09:23:23+08:00").timestamp()
+    t2 = _dt.datetime.fromisoformat(f"{DATE}T09:24:51+08:00").timestamp()
+    raw = ["603135", "中重科技", "", "", "", "", 0, 0, 0, 0, 120000000,
+           "", 2000000000, "", 0, 0, ""]
+    db["kpl_mbl_series"].docs[DATE] = {"_id": DATE, "frames": [
+        {"ts": f"{DATE}T09:15:35+08:00", "rows": [raw]},
+        {"ts": f"{DATE}T09:23:23+08:00", "rows": [raw]},
+        {"ts": f"{DATE}T09:24:51+08:00", "rows": []}]}
+    db["kpl_daban_pool"].docs[DATE] = {"_id": DATE, "bid_ts": t2, "bid_items": [
+        {"stock_id": "603135", "name": "中重科技", "bidding_pct": 10.0,
+         "bidding_net": 0.0, "bidding_turnover": 0.0, "bidding_amount": 0.0,
+         "zt_buy_amount": 9e6, "real_float": 2000000000.0, "last_seen_ts": t1}]}
+    res = L.run(DATE, confirm_budget=True)
+    assert res["okCount"] >= 1
+    doc = db["hotlist_jev_auction_leader_labels"].docs[f"{DATE}:603135"]
+    ln = doc["bidLine"]
+    assert ln and ln.startswith("竞价（09:25 匹配价）：")
+    assert "竞价净额" not in ln                 # 缺位整段缺席（红线 8）
+    assert "竞价成交额 1.20亿" in ln            # col10 掉池前观测
+    assert "竞价换手 6%" in ln                  # 派生 120000000/2e9*100=6
+    assert ln in doc["narrative"].split("\n")
+    st = doc["bidLineState"]["codes"]["603135"]
+    assert st["trio_state"] == "dropped_pre_match"
+    assert st["net_state"] == "missing"
+    assert st["amount_src"] == "mbl_col10_preexit"
+    assert doc["corpusState"]["bidTrio"]["bidding_net"] is None
+    assert doc["bidLineState"]["census"]["net_missing_n"] >= 1
+
+
+def test_bid_line_projection_true_zero_kept(env):
+    """留池真 0（公布后终态）：净额 0 照出（状态门而非值门）。"""
+    db, calls = env
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=8))
+    t_pub = _dt.datetime.fromisoformat(f"{DATE}T09:26:20+08:00").timestamp()
+    raw = ["603135", "中重科技", "", "", "", "", 0, 0, 0, 0, 0,
+           "", 2000000000, "", 0, 0, ""]
+    db["kpl_mbl_series"].docs[DATE] = {"_id": DATE, "frames": [
+        {"ts": f"{DATE}T09:26:20+08:00", "rows": [raw]}]}
+    # 公布锚需沪市非零额+任意净额非零 → 加 603030 公布行
+    raw2 = ["603030", "全筑股份", "", "", "", "", 11109148, 1.07, 26669214, 0,
+            26669214, "", 2499813743, "", 0, 0, ""]
+    db["kpl_mbl_series"].docs[DATE]["frames"][0]["rows"].append(raw2)
+    db["kpl_daban_pool"].docs[DATE] = {"_id": DATE, "bid_ts": t_pub, "bid_items": [
+        {"stock_id": "603135", "name": "中重科技", "bidding_pct": 10.0,
+         "bidding_net": 0.0, "bidding_turnover": 0.0, "bidding_amount": 0.0,
+         "zt_buy_amount": 9e6, "last_seen_ts": t_pub}]}
+    L.run(DATE, confirm_budget=True)
+    doc = db["hotlist_jev_auction_leader_labels"].docs[f"{DATE}:603135"]
+    assert "竞价净额 0.0万" in doc["bidLine"]
+    assert doc["bidLineState"]["codes"]["603135"]["net_state"] == "published"

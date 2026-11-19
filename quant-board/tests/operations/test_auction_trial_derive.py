@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.operations import auction_trial_derive as M
+from tests.series_fake import FakeSeriesCol, seed_series_legacy
 
 
 class _Coll:
@@ -22,8 +23,15 @@ class _Coll:
     def __init__(self, owner, name):
         self.owner, self.name = owner, name
 
+    def find(self, q=None, projection=None):
+        if self.name == "kpl_bidding_series":
+            return self.owner.series.find(q, projection)
+        return []
+
     def find_one(self, q, projection=None, sort=None):
         import copy
+        if self.name == "kpl_bidding_series":
+            return self.owner.series.find_one(q, projection)
         if self.name == "kpl_morning_bidding_raw":
             # 2026-11-19 裁决 1+2：_id<date 倒序查询=前日回退源
             if isinstance(q.get("_id"), dict) and "$lt" in q["_id"]:
@@ -33,16 +41,19 @@ class _Coll:
             return copy.deepcopy(self.owner.auct) if self.owner.auct else None
         if self.name == "kpl_daban_pool":
             return {"bid_items": copy.deepcopy(self.owner.bid_items or [])}
-        return copy.deepcopy(self.owner.doc) if self.owner.doc else None
+        return None
 
 
 class FakeSeriesDb:
-    """三集合假库：kpl_bidding_series + kpl_morning_bidding_raw（bk_name join）
-    + kpl_auction_price（09:15/09:25 价格存档，2026-11-18）。"""
+    """三集合假库：kpl_bidding_series（2026-11-19 逐 tick 文档化，旧嵌入
+    fixture 经 seed_series_legacy 适配为新形态）+ kpl_morning_bidding_raw
+    （bk_name join）+ kpl_auction_price（09:15/09:25 价格存档）。"""
 
     def __init__(self, doc=None, mbl_rows=None, auct=None, mbl_prev=None,
                  bid_items=None):
-        self.doc = doc
+        self.series = FakeSeriesCol()
+        if doc:
+            seed_series_legacy(self.series, doc)
         self.mbl = {"rows": mbl_rows} if mbl_rows is not None else None
         self.auct = auct
         self.mbl_prev = {"rows": mbl_prev} if mbl_prev is not None else None
@@ -147,7 +158,7 @@ def test_derive_absent_states():
     rows, state = M.derive_trial_rows_from_series(FakeSeriesDb(None), "2026-11-17")
     assert rows == {} and state["state"] == "absent"
     assert state["reason"] == "no_series_archive"
-    rows, state = M.derive_trial_rows_from_series(FakeSeriesDb({"_id": "d", "ticks": []}),
+    rows, state = M.derive_trial_rows_from_series(FakeSeriesDb({"_id": "2026-11-17", "ticks": []}),
                                                   "2026-11-17")
     assert state["reason"] == "no_ztbuy_visible"
 
@@ -296,7 +307,7 @@ def test_derive_first_add_tick_delta():
 
 def test_derive_first_add_none_when_monotone_decrease():
     """全撤减无追加 → first_add=None（不补 0）。"""
-    doc = {"_id": "d", "ticks": [
+    doc = {"_id": "2026-11-17", "ticks": [
         _tick(_BASE + 0, [{"s": "605255", "zt_buy_amount": 9e6}]),
         _tick(_BASE + 10, [{"s": "605255", "zt_buy_amount": 8e6}]),
         _tick(_BASE + 20, [{"s": "605255", "zt_buy_amount": 7e6}])]}
@@ -307,7 +318,7 @@ def test_derive_first_add_none_when_monotone_decrease():
 
 def test_derive_first_add_skips_missing_frames():
     """缺值帧不配对（不猜）：7e6→None→9e6 不产生跨帧 delta。"""
-    doc = {"_id": "d", "ticks": [
+    doc = {"_id": "2026-11-17", "ticks": [
         _tick(_BASE + 0, [{"s": "605255", "zt_buy_amount": 7e6}]),
         _tick(_BASE + 10, [{"s": "605255", "zt_buy_amount": None}]),
         _tick(_BASE + 20, [{"s": "605255", "zt_buy_amount": 9e6}])]}

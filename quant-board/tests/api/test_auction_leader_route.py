@@ -13,8 +13,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.api import hotlist_jev_auction_routes as R
 from backend.data.repositories import repository_factory
+from tests.series_fake import FakeSeriesCol, seed_series
 
 DATE = "2026-11-13"
+
+
+def _series_col(db):
+    """kpl_bidding_series 2026-11-19 逐 tick 文档化：专用假集合（多日共存）。"""
+    col = db.cols.get("kpl_bidding_series")
+    if not isinstance(col, FakeSeriesCol):
+        col = FakeSeriesCol()
+        db.cols["kpl_bidding_series"] = col
+    return col
+
+
+def _series_ticks(db, date):
+    """活引用 tick 文档（ts 升序；夹具变异用，非读口合同）。"""
+    return sorted((d for d in _series_col(db).docs
+                   if d.get("date") == date and "it" in d),
+                  key=lambda d: d.get("ts") or 0)
+
+
+def _series_meta(db, date):
+    return next(d for d in _series_col(db).docs if d.get("_id") == date)
 
 
 class FakeCursor:
@@ -444,8 +465,8 @@ def test_trial_merge_into_push_missing_row(client):
         ticks.append({"ts": _cst_ts(DATE, hm), "it": [
             {"s": c, "bidding_pct": jp, "bidding_amount": 8e7,
              "bidding_turnover": 1.0, "zt_buy_amount": zb} for c, jp in pcts.items()]})
-    db["kpl_bidding_series"].docs[DATE] = {
-        "_id": DATE, "ticks": ticks, "updated_at": f"{DATE}T09:26:09+08:00"}
+    seed_series(_series_col(db), DATE, ticks,
+                updated_at=f"{DATE}T09:26:09+08:00")
     try:
         doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
         rows_out = {x["code"]: x for x in doc["leaders"]}
@@ -479,9 +500,9 @@ def _seed_trial_series(db, date=DATE, codes=None):
             {"s": c, "bidding_pct": pcts.get(c, 5.0), "bidding_amount": 6e7,
              "bidding_turnover": 1.2, "zt_buy_amount": zb,
              "price": 10.0, "pct": pcts.get(c, 5.0), "real_float": 5e9} for c in use]})
-    db["kpl_bidding_series"].docs[date] = {
-        "_id": date, "date": date, "ticks": ticks,
-        "updated_at": f"{date}T09:26:09+08:00", "window": ["09:15:00", "09:27:00"]}
+    seed_series(_series_col(db), date, ticks,
+                updated_at=f"{date}T09:26:09+08:00",
+                window=["09:15:00", "09:27:00"])
 
 
 def test_auction_trial_derived_single_main_chain(client):
@@ -555,7 +576,7 @@ def test_auction_trial_partial_fields_not_zeroed(client):
     """部分股末帧委买额缺位 → 该股如实缺席，其余股照显（不连带清空/不补 0）。"""
     c, db = client
     _seed_trial_series(db, codes=["600102", "600900"])
-    ticks = db["kpl_bidding_series"].docs[DATE]["ticks"]
+    ticks = _series_ticks(db, DATE)
     for it in ticks[-1]["it"]:
         if it["s"] == "600900":
             del it["zt_buy_amount"]
@@ -573,10 +594,10 @@ def test_auction_trial_no_date_fallback_when_today_empty(client):
     """评审 M1：最新日序列档零可用行（委买全 0）→ 无 date 也回退历史档，不吞数据。"""
     c, db = client
     _seed_trial_day(db, DATE)
-    db["kpl_bidding_series"].docs["2026-11-18"] = {
-        "_id": "2026-11-18", "ticks": [{"ts": _cst_ts("2026-11-18", "09:16:00"),
-        "it": [{"s": "600102", "zt_buy_amount": 0}]}],
-        "updated_at": "2026-11-18T09:26:09+08:00"}
+    seed_series(_series_col(db), "2026-11-18",
+                [{"ts": _cst_ts("2026-11-18", "09:16:00"),
+                  "it": [{"s": "600102", "zt_buy_amount": 0}]}],
+                updated_at="2026-11-18T09:26:09+08:00")
     try:
         doc = c.get("/api/hotlist-jev/auction-trial").json()
         assert doc["ok"] and not doc.get("degraded")
@@ -634,10 +655,10 @@ def test_auction_trial_quote_supplement_join(client, monkeypatch):
     """昨涨幅=落库独立源 join；现价=实时快照 join；仅补缺位+miss 计数透出。"""
     c, db = client
     _seed_trial_series(db)
-    for t in db["kpl_bidding_series"].docs[DATE]["ticks"]:
+    for t in _series_ticks(db, DATE):
         for it in t["it"]:
             it.pop("price", None)   # 实测 pid=8 price 列空 → 派生 price=None
-    db["kpl_bidding_series"].docs[DATE]["prev_pct"] = {
+    _series_meta(db, DATE)["prev_pct"] = {
         "600102": {"pct": 5.5}, "600100": {"pct": -1.2}}
     monkeypatch.setattr(R, "read_realtime_prices",
                         lambda codes: ({"600102": {"price": 12.5}}, 1794965169000))

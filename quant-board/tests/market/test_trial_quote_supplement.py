@@ -11,8 +11,27 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.services.market import trial_quote_supplement as S
+from tests.series_fake import FakeSeriesCol, seed_series
 
 DATE = "2026-11-18"
+
+
+def _series_col(db):
+    """kpl_bidding_series 2026-11-19 逐 tick 文档化：专用假集合。"""
+    col = db.cols.get(S.COLLECTION_SERIES)
+    if not isinstance(col, FakeSeriesCol):
+        col = FakeSeriesCol()
+        db.cols[S.COLLECTION_SERIES] = col
+    return col
+
+
+def _series_meta(db, date):
+    return next(d for d in _series_col(db).docs if d.get("_id") == date)
+
+
+def _series_ticks(db, date):
+    return [d for d in _series_col(db).docs
+            if d.get("date") == date and "it" in d]
 
 
 @pytest.fixture(autouse=True)
@@ -40,12 +59,14 @@ class FakeDb:
         self.cols = {}
 
     def __getitem__(self, name):
+        if name == S.COLLECTION_SERIES:
+            return _series_col(self)
         return self.cols.setdefault(name, FakeCol())
 
 
 def _seed_universe(db, codes=("600102", "600100")):
-    db[S.COLLECTION_SERIES].docs[DATE] = {"_id": DATE, "ticks": [
-        {"ts": 1, "it": [{"s": c, "zt_buy_amount": 1e6} for c in codes]}]}
+    seed_series(_series_col(db), DATE, [
+        {"ts": 1, "it": [{"s": c, "zt_buy_amount": 1e6} for c in codes]}])
 
 
 def _bars(c):
@@ -60,12 +81,12 @@ def test_collect_computes_prev_pct_and_filters_today(monkeypatch):
     monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: _bars(c))
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "ok" and r["ok_n"] == 2
-    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    ser = _series_meta(db, DATE)
     rows = ser["prev_pct"]
     assert rows["600102"]["pct"] == 10.0          # (11/10-1)*100，非当日棒
     assert rows["600102"]["prevDate"] == "2026-11-17"
     assert ser["prev_pct_state"]["attempts_n"] == 2
-    assert ser.get("ticks")   # 字段级加字段，ticks 不被触碰
+    assert _series_ticks(db, DATE)   # 字段级加字段，tick 文档不被触碰
 
 
 def test_collect_limit_respected(monkeypatch):
@@ -80,7 +101,7 @@ def test_collect_limit_respected(monkeypatch):
 def test_collect_daily_cap_no_fetch(monkeypatch):
     db = FakeDb()
     _seed_universe(db)
-    db[S.COLLECTION_SERIES].docs[DATE].update(
+    _series_meta(db, DATE).update(
         {"prev_pct_state": {"attempts_n": 10**6}})
     from backend.operations import tdx_daily_bars as T
 
@@ -99,16 +120,15 @@ def test_collect_one_close_not_zero(monkeypatch):
                         lambda c, **k: {"2026-11-17": {"close": 11.0}})
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "all_failed" and r["backoff_rounds"] == 1
-    doc = db[S.COLLECTION_SERIES].docs[DATE]
+    doc = _series_meta(db, DATE)
     assert doc["prev_pct"] == {}
     assert doc["prev_pct_state"]["failed"]["600102"] == "no_two_closes"
 
 
 def test_collect_backoff_skip_decrements(monkeypatch):
     db = FakeDb()
-    _seed_universe(db)
-    db[S.COLLECTION_SERIES].docs[DATE] = {
-        "_id": DATE, "prev_pct_state": {"backoff_rounds": 2}}
+    seed_series(_series_col(db), DATE, [],
+                prev_pct_state={"backoff_rounds": 2})
     from backend.operations import tdx_daily_bars as T
 
     def boom(*a, **k):
@@ -116,7 +136,7 @@ def test_collect_backoff_skip_decrements(monkeypatch):
     monkeypatch.setattr(T, "fetch_daily_bars", boom)
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "backoff" and r["remaining"] == 1
-    assert db[S.COLLECTION_SERIES].docs[DATE]["prev_pct_state"]["backoff_rounds"] == 1
+    assert _series_meta(db, DATE)["prev_pct_state"]["backoff_rounds"] == 1
 
 
 def test_collect_no_universe_zero_fetch(monkeypatch):
@@ -127,6 +147,16 @@ def test_collect_no_universe_zero_fetch(monkeypatch):
         raise AssertionError("无宇宙不得外呼")
     monkeypatch.setattr(T, "fetch_daily_bars", boom)
     assert S.collect_prev_day_pct(db, DATE)["state"] == "skipped_no_universe"
+
+
+def test_universe_codes_only_lightweight_union():
+    """2026-11-19 逐 tick 文档化：universe 走 codes_only 轻量读（it.s 投影），
+    序列∪MBL 并集去重排序；不拉全量 it。"""
+    db = FakeDb()
+    _seed_universe(db, codes=("600102", "600100"))
+    db[S.COLLECTION_MBL_RAW].docs[DATE] = {"_id": DATE, "rows": {"002685": {}}}
+    assert S.trial_universe_codes(db, DATE) == ["002685", "600100", "600102"]
+    assert S.trial_universe_codes(FakeDb(), DATE) == []
 
 
 class FakeRedis:
@@ -181,12 +211,12 @@ def test_collect_open_pct_piggyback_zero_extra_fetch(monkeypatch):
     r = S.collect_prev_day_pct(db, DATE)
     assert r["state"] == "ok" and r["ok_n"] == 2 and r["open_ok_n"] == 2
     assert len(calls) == 2, "每股一次取数双字段，零新增外呼"
-    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    ser = _series_meta(db, DATE)
     op = ser["open_pct"]["600102"]
     assert op["price"] == 11.5 and op["src"] == "tdx_bar"
     assert op["pct"] == round((11.5 / 11.0 - 1) * 100, 4)
     assert ser["open_pct_state"]["n"] == 2
-    assert ser.get("ticks"), "字段级加字段，ticks 不被触碰"
+    assert _series_ticks(db, DATE), "字段级加字段，tick 文档不被触碰"
 
     def boom(*a, **k):
         raise AssertionError("双字段完成后不得外呼")
@@ -203,7 +233,7 @@ def test_collect_open_band_suspect_skip_and_no_retry(monkeypatch):
             DATE: {"close": 12.0, "open": 20.0}}   # 涨停价 12.1，20 越界
     monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: bars)
     r = S.collect_prev_day_pct(db, DATE)
-    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    ser = _series_meta(db, DATE)
     assert ser["open_pct"] == {} and r["open_ok_n"] == 0
     assert ser["open_pct_state"]["bandSuspect"] == ["600102"]
 
@@ -222,7 +252,7 @@ def test_collect_open_no_today_bar_disclosed_and_no_retry(monkeypatch):
     bars = {"2026-11-16": {"close": 10.0}, "2026-11-17": {"close": 11.0}}
     monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: dict(bars))
     r = S.collect_prev_day_pct(db, DATE)
-    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    ser = _series_meta(db, DATE)
     assert r["ok_n"] == 1, "prev_pct 不受当日棒缺影响"
     assert ser["open_pct"] == {} and r["open_ok_n"] == 0
     assert ser["open_pct_state"]["openNoBar"] == ["600102"]
@@ -244,8 +274,8 @@ def test_collect_open_pre0925_not_pending(monkeypatch):
     now_post = dt.datetime.now(cst).replace(hour=9, minute=26, second=0,
                                             microsecond=0).timestamp()
     db = FakeDb()
-    db[S.COLLECTION_SERIES].docs[today] = {"_id": today, "ticks": [
-        {"ts": 1, "it": [{"s": "600102", "zt_buy_amount": 1e6}]}]}
+    seed_series(_series_col(db), today, [
+        {"ts": 1, "it": [{"s": "600102", "zt_buy_amount": 1e6}]}])
     from backend.operations import tdx_daily_bars as T
     bars = {"2026-11-16": {"close": 10.0}, "2026-11-17": {"close": 11.0},
             today: {"close": 12.0, "open": 11.5}}
@@ -253,7 +283,7 @@ def test_collect_open_pre0925_not_pending(monkeypatch):
     r = S.collect_prev_day_pct(db, today, now=now_pre)
     assert r["open_pending_n"] == 0 and r["open_ok_n"] == 0
     assert r["ok_n"] == 1, "prev_pct 不受 09:25 门控影响"
-    ser = db[S.COLLECTION_SERIES].docs[today]
+    ser = _series_meta(db, today)
     assert ser.get("open_pct") or {} == {}
     r2 = S.collect_prev_day_pct(db, today, now=now_post)
     assert r2["open_ok_n"] == 1

@@ -307,9 +307,12 @@ SERIES_WINDOW = (dtime(9, 15), dtime(9, 27))   # 竞价语义窗（元数据）�
 #   2026-11-18 用户裁决拆采集窗门控：本常量仅作日档 window 元数据与消费层语义
 #   参照（derive_trial_rows_from_series 自带同窗 tick 过滤+计数）；采集层全量
 #   落库不再以此为门（§4.0 数据链禁硬门禁）。
-SERIES_MAX_TICKS = 1200                         # $slice 存储预算（非数据门控）：拆节流后全日
-#   tick 入档，1200×~10KB≈12MB < 16MB BSON 上限；旧 400 上限在拆节流后会把竞价窗
-#   早帧挤出（$slice 保尾），故扩容保竞价基线。
+# 2026-11-19 存储重构（auction-trial-density-storage-fix-plan §2）：逐 tick 文档化。
+# 旧形态=单日单文档嵌入 ticks + $slice 预算（SERIES_MAX_TICKS=1200）——tick 中位
+# 26KB，1200×25.8KB≈31MB 远超 16MB BSON 上限（旧注释「~10KB」估算错），11-19 午后
+# bid_series_fail=749（code 10334 拒写）。新形态：tick=独立文档（单 tick ≤~40KB «
+# 16MB），append=insert_one，无读改写、无 $slice、无 tick 数上限（常量同轮删除，
+# 红线 1 单一事实源）；日 meta 文档 _id=date 只放 last_*/tick_n/加字段，不再含 ticks。
 _SERIES_FIELDS = ("bidding_pct", "bidding_amount", "bidding_net", "bidding_turnover",
                   "zt_buy_amount", "price", "pct", "real_float")
 
@@ -321,7 +324,9 @@ def archive_bidding_series(db: Any, snapshot: dict[str, Any], *, now: Optional[d
     数据链禁硬门禁）；竞价语义窗 [09:15,09:27) 过滤由消费层
     derive_trial_rows_from_series 承担（early/lateTicksFiltered 计数留痕）。
     - tick 内容 = 合并快照压缩行（仅具名竞价字段短键，不全量 quotas）；
-    - fail-visible：空快照/无日期结构化拒绝；$slice 存储预算内追加。
+    - 2026-11-19 逐 tick 文档化：insert_one(tick 文档) + update_one(日 meta
+      `$set` last_* / `$inc` tick_n, upsert)；无读改写、无 $slice、无上限；
+    - fail-visible：空快照/无日期结构化拒绝；写失败结构化 reason 留痕不抛。
     """
     now = now or datetime.now(TZ_SHANGHAI)
     date = str(snapshot.get("date") or "")
@@ -329,23 +334,39 @@ def archive_bidding_series(db: Any, snapshot: dict[str, Any], *, now: Optional[d
     if not date or not items:
         return {"ok": False, "reason": "empty_snapshot" if not items else "no_date",
                 "date": date or None}
-    tick = {"ts": float(snapshot.get("ts") or time.time()),
+    tick = {"date": date,
+            "ts": float(snapshot.get("ts") or time.time()),
             "n": len(items),
             "it": [{"s": str(it.get("stock_id") or "")[-6:],
                     **{f: it.get(f) for f in _SERIES_FIELDS}}
                    for it in items]}
-    prev = db[_SERIES_COLLECTION].find_one({"_id": date}) or {}
-    ticks = prev.get("ticks") or []
-    db[_SERIES_COLLECTION].update_one(
-        {"_id": date},
-        {"$push": {"ticks": {"$each": [tick], "$slice": -SERIES_MAX_TICKS}},
-         "$set": {"date": date, "last_ts": tick["ts"], "last_n": len(items),
-                  "updated_at": now.isoformat(timespec="seconds"),
-                  "fields": list(_SERIES_FIELDS),
-                  "window": [str(SERIES_WINDOW[0]), str(SERIES_WINDOW[1])]}},
-        upsert=True)
+    col = db[_SERIES_COLLECTION]
+    _ensure_series_index(db)
+    try:
+        col.insert_one(tick)
+    except Exception as exc:   # noqa: BLE001 — 写失败留痕不阻断收流（fail-visible）
+        return {"ok": False, "date": date,
+                "reason": f"write_failed:{type(exc).__name__}", "error": str(exc)}
+    upd = {"$set": {"date": date, "last_ts": tick["ts"], "last_n": len(items),
+                    "updated_at": now.isoformat(timespec="seconds"),
+                    "fields": list(_SERIES_FIELDS),
+                    "window": [str(SERIES_WINDOW[0]), str(SERIES_WINDOW[1])]},
+           "$inc": {"tick_n": 1}}
+    try:
+        col.update_one({"_id": date}, upd, upsert=True)
+    except Exception:
+        # 2026-11-19 review S5：tick 已入库但 meta $inc 失败 → tick_n 漂移。
+        # 单次 best-effort 重试（读侧计数派生自 len(ticks) 不受影响；极端下
+        # 已生效但抛错的重复 $inc 只漂移 audit 计数，注释登记残留风险）
+        try:
+            col.update_one({"_id": date}, upd, upsert=True)
+        except Exception as exc:   # noqa: BLE001
+            return {"ok": False, "date": date,
+                    "reason": f"write_failed:meta_update:{type(exc).__name__}",
+                    "error": str(exc)}
+    meta = col.find_one({"_id": date}, {"tick_n": 1}) or {}
     return {"ok": True, "date": date,
-            "tick_n": min(len(ticks) + 1, SERIES_MAX_TICKS),
+            "tick_n": int(meta.get("tick_n") or 0),
             "item_n": len(items), "ts": tick["ts"]}
 
 
@@ -1587,18 +1608,74 @@ def derive_stock_series_facts(ticks: list[dict]) -> dict[str, dict]:
     return out
 
 
-def load_bidding_series(db: Any, date: str) -> dict[str, Any] | None:
-    """竞价序列日档读（纯库读）；无档返回 None。"""
-    doc = db[_SERIES_COLLECTION].find_one({"_id": date})
-    if not doc:
+def load_bidding_series(db: Any, date: str, *, codes_only: bool = False) -> dict[str, Any] | None:
+    """竞价序列日档读（纯库读；2026-11-19 逐 tick 文档化后唯一读口）。
+
+    meta=find_one(_id=date)；ticks=find({date, it 存在}).sort(ts,_id)——同 ts 页序
+    按 _id（插入序；页成员互斥，序不影响派生）。返回 {**meta, "ticks": ticks}
+    （消费合同与旧嵌入形态同形；tick 投影 ts/n/it，不带 _id/date，JSON 安全）。
+    meta 与 ticks 皆无 → None。
+    codes_only=True：轻量宇宙读 find({date},{it.s:1}) 聚合 codes（避免全量 it
+    传输，supplement universe 专用），返回 {**meta, "codes": [...]}。
+    """
+    col = db[_SERIES_COLLECTION]
+    meta = col.find_one({"_id": date}) or {}
+    if "ticks" in meta:
+        # 未迁移旧嵌入档原样透传（迁移漏档/回滚重导入后未迁即读的守卫；
+        # 2026-11-19 review S1：显式 "ticks" 键会覆盖嵌入数组伪装空档，
+        # 违反 §4.0 缺位不伪装；旧合同 = 整档含嵌入 ticks）
+        if codes_only:
+            codes: set[str] = set()
+            for fr in meta["ticks"] or []:
+                for it in fr.get("it") or []:
+                    c = str(it.get("s") or "")[-6:]
+                    if c:
+                        codes.add(c)
+            out_meta = {k: v for k, v in meta.items() if k != "ticks"}
+            out_meta["codes"] = sorted(codes)
+            return out_meta
+        return meta
+    q = {"date": date, "it": {"$exists": True}}   # 排除日 meta（meta 无 it 字段）
+    if codes_only:
+        codes: set[str] = set()
+        for t in col.find(q, {"it.s": 1, "_id": 0}):
+            for it in t.get("it") or []:
+                c = str(it.get("s") or "")[-6:]
+                if c:
+                    codes.add(c)
+        if not meta and not codes:
+            return None
+        return {**meta, "codes": sorted(codes)}
+    ticks = list(col.find(q, {"ts": 1, "n": 1, "it": 1, "_id": 0})
+                 .sort([("ts", 1), ("_id", 1)]))
+    if not meta and not ticks:
         return None
-    return doc
+    return {**meta, "ticks": ticks}
 
 
 # ── 09:15/09:25 集合竞价价格+涨幅存档（2026-11-18 用户裁决：3006 现有流归档）──
 # 真 09:25 = 撮合开盘价（App 个股竞价面板「匹配价」09:25 冻结=开）；试盘三源
 # （MBL/bid/pid8 序列）均成员制，掉池股无终值 → 以 3006 行情 09:25 快照为权威。
 # 09:15 快照同存（首帧竞价价/涨幅），供审计与「试盘顶板 vs 撮合回落」对照。
+# 逐 tick 日档集合名（新形态写路径唯一集合；读走 load_bidding_series）
+_SERIES_INDEXED_DBS: set[str] = set()
+
+
+def _ensure_series_index(db: Any) -> None:
+    """幂等建 {date:1, ts:1} 索引（2026-11-19 review S3：迁移脚本只覆盖
+    有旧档的库；全新库/重建测试库不走迁移路径，读侧 find({date}).sort
+    会 collscan）。进程级缓存一次；失败不阻断写链（缺索引只降性能，
+    由 Mongo 慢查询暴露，不吞数据）。"""
+    try:
+        key = str(getattr(db, "name", None) or id(db))
+        if key in _SERIES_INDEXED_DBS:
+            return
+        db[_SERIES_COLLECTION].create_index([("date", 1), ("ts", 1)])
+        _SERIES_INDEXED_DBS.add(key)
+    except Exception:   # noqa: BLE001 — 索引创建失败不阻断写链
+        pass
+
+
 _AUCTION_PRICE_COLLECTION = "kpl_auction_price"
 
 

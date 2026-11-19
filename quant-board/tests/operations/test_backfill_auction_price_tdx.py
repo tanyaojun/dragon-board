@@ -34,6 +34,15 @@ def _mkdb(series, auct_store):
             self.owner, self.name = owner, name
 
         def find(self, q, p=None):
+            if self.name == "kpl_bidding_series":
+                # 2026-11-19 逐 tick 文档化：meta（无 it）/tick（有 it）两形态
+                if (q.get("it") or {}).get("$exists") is False:
+                    return iter([{"_id": d} for d in sorted(self.owner.series)])
+                date = q.get("date")
+                dates = [date] if date else sorted(self.owner.series)
+                return iter([{"date": d, "ts": 1,
+                              "it": [{"s": c} for c in self.owner.series.get(d, [])]}
+                             for d in dates])
             date = q.get("_id")
             dates = [date] if date else sorted(self.owner.series)
             out = []
@@ -47,6 +56,11 @@ def _mkdb(series, auct_store):
             flat.update(u["$set"])
 
         def find_one(self, q):
+            if self.name == "kpl_bidding_series":
+                d = q.get("_id")
+                if d in self.owner.series:
+                    return {"_id": d, "date": d, "tick_n": 1}
+                return None
             flat = self.owner.auct.get(q["_id"]) or {}
             if not flat:
                 return None

@@ -227,3 +227,23 @@ def test_bk_name_src_disclosure_20261119(html):
     assert "esc(r.bkNameSrc" in html
     assert "r.bkNameSrc" in html
     assert "mbl_prev=前日MBL" in html and "bid_plate=pid8推送" in html
+
+
+def test_trial_jj_trio_tooltip_projection_20261119(html):
+    """改动 C（density-storage-fix-plan §4）：jj 换手/成交额 tooltip 同步投影
+    状态机口径 + jjAmountSrc/jjTurnoverSrc 逐行 sub 披露（open0925Src 同款）；
+    旧措辞「09:25 冻结（MBL→bid）优先，缺位=末帧观测值」退役；start/end 观测
+    首末帧 tooltip 保留不动。"""
+    fn = _fn(html, "atRender")
+    assert "投影状态机（2026-11-19 trio）" in fn
+    assert "mbl_postmatch 撮合公布" in fn
+    assert "mbl_col10_virtual 留池窗内虚拟" in fn
+    assert "mbl_col10_preexit 掉池前虚拟观测（≠撮合终值）" in fn
+    assert "derived_cap 派生换手=额/流通市值×100" in fn
+    assert "None 不烘 0" in fn
+    assert "KPL_BID_TRIO_SRC[r.jjTurnoverSrc]" in fn
+    assert "KPL_BID_TRIO_SRC[r.jjAmountSrc]" in fn
+    assert "09:25 冻结 bidding_turnover（MBL→bid）优先" not in html
+    assert "09:25 冻结 bidding_amount（MBL→bid）优先" not in html
+    assert "观测首帧时点（官方序列，≠Wzs 试盘开始语义）" in fn
+    assert "观测末帧时点（官方序列，≠Wzs 试盘结束语义）" in fn

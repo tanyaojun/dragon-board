@@ -48,14 +48,14 @@ def _daily_cap() -> int:
 
 
 def trial_universe_codes(db: Any, date: str) -> list[str]:
-    """当日试盘宇宙（序列∪MBL，纯库读零外呼）。"""
+    """当日试盘宇宙（序列∪MBL，纯库读零外呼）。
+
+    2026-11-19 逐 tick 文档化：序列侧走 load_bidding_series(codes_only=True)
+    轻量读（find({date},{it.s:1}) 聚合，避免全量 it 传输）。"""
+    from backend.services.kpl_daban_archiver import load_bidding_series
     codes: set[str] = set()
-    s = db[COLLECTION_SERIES].find_one({"_id": date}, {"ticks": 1}) or {}
-    for t in s.get("ticks") or []:
-        for it in t.get("it") or []:
-            c = str(it.get("s") or "")[-6:]
-            if c:
-                codes.add(c)
+    s = load_bidding_series(db, date, codes_only=True) or {}
+    codes.update(s.get("codes") or [])
     m = db[COLLECTION_MBL_RAW].find_one({"_id": date}, {"rows": 1}) or {}
     codes.update(str(c)[-6:] for c in (m.get("rows") or {}))
     return sorted(c for c in codes if c)

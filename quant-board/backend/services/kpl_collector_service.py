@@ -311,6 +311,15 @@ class KplCollectorService:
         # 零节流连发（qn0.z()），0.3s 旧档无源码依据。当初「贴沿 20s 窗口」动机
         # 已证伪（真凶=3101 错通道），留值纯因实弹稳定。
         drain_pause: Optional[tuple] = None,
+        # App 同款 pid8 3s 重请求 lane（2026-11-19 密度根因修复，
+        # auction-trial-density-storage-fix-plan §3；源码依据：盯盘竞价页
+        # BiddingZTQuotaFragment 继承 MVPTimerTaskFragment→BaseTimerTaskFragment
+        # 默认周期 3000ms，Xf(666)→Pg()→p.j0(firstVisible,count)→a0(i,i2,true)
+        # →y(2103,true) 0x40 订阅通道重发请求；.tmp_review/jadx_out_signsvc）。
+        # 服务端对 2103 按「请求-快照」回整页 burst，会话内无周期更新——
+        # App 靠 3s 定时重请求取密度，不是靠服务端周期推送。实施轮默认 off，
+        # 次日窗预登记开火验收通过后翻默认 on（KPL_PID8_REFRESH）。
+        pid8_refresh: bool = False,
     ):
         if ka_mode not in ("610", "off", "none"):
             raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off|none）")
@@ -482,6 +491,17 @@ class KplCollectorService:
         self._auction_lane_cap = 800                # 订阅面预算上限（超帽只披露不静默）
         self._auction_stats: Dict[str, Any] = {
             "sub_frames": 0, "send_drops": 0, "cap_dropped_n": 0, "last_sub_ts": 0.0}
+        # pid8 3s 重请求 lane（2026-11-19，App BaseTimerTaskFragment 3000ms 同款）。
+        # 频控预算（红线 10）：7 页×1 帧/3s≈2.33 帧/s；窗 [09:15,09:30) 15min≈2100
+        # 帧/日（预登记验收预算 ≤2500 帧/单窗）；每页周期=App 静止刷新周期（3s），
+        # 非客户端自创轮询；读循环 2s recv 网格量化→实际节拍 3-4s（披露）；
+        # 超预算只披露不静默（frames_sent/send_drops 进 status）。窗门控=App
+        # 「页可见且静止」语义的无头等价（披露）；ErrResp 1002 → 既有 fail-fast+
+        # 退避梯，不新增重试循环（红线 9）。
+        self._pid8_refresh = bool(pid8_refresh)
+        self._pid8_refresh_stats: Dict[str, Any] = {
+            "frames_sent": 0, "last_ts": 0.0, "send_drops": 0}
+        self._pid8_last_refresh = 0.0   # 会话重建随 setup 初始 burst 重置（_session）
         # 竞价序列：2026-11-18 窗门控+节流已拆，pid=8 推送即全量落库（§3.9）
         # 龙虎榜快照缓存（task-4 读口）：2112/3004 均**空帧抑制**（同 2103 规：空 items
         # 不覆盖非空快照，仅刷 ts + last_empty_seen；2112 以 total=0 为语义清空）
@@ -855,6 +875,71 @@ class KplCollectorService:
         self._emit(KplEvent(type="auction_lane_status", ts=time.time(),
                             note=f"sent {len(items)} mid-session 3006 frames",
                             n=len(self._auction_subscribed), frames=len(items)))
+
+    _PID8_REFRESH_INTERVAL_S = 3.0   # App BaseTimerTaskFragment 默认 3000ms 同款
+
+    def _drain_pid8_refresh(self, sock: Any, next_seq: Any,
+                            now: Optional[float] = None) -> None:
+        """App 同款 pid8 3s 重请求（仅会话线程；密度根因修复，plan §3）。
+
+        窗门控 [09:15,09:30)；每 3s 重发 pid=8 各页 2103 请求，帧形态与 setup 6d
+        完全同款（pkg 0x40 + ext 02 0837，priority 前插语义复用）；帧间拟人停顿
+        复用 _drain_send（C2/C3）；会话重建随 setup 初始 burst 自然重置；
+        send 失败 fail-visible 后 fail-fast 上抛重连（ErrResp 1002 由既有
+        dispatch 杀连链处理，不新增重试循环）。落库联动：2103 pid8 每帧即归档
+        （既有钩子不变）。
+
+        已知边界（2026-11-19 review L2 登记）：每 tick 经 _drain_send 向
+        _sub_registry 写入 7 条 SubEntry(key=pid8:N)，max_entries=2000 无终态
+        不可淘汰（pop 最旧 pending）。当前会话 ~39s 被杀（~13 tick≈91 条）远离
+        上限；若后续会话寿命攻坚成功、单会话活满窗（~2100 条逼近上限），会挤占
+        其他 lane（2203/2013/detail）pending 条目（有 evicted_n 计数非静默）。
+        开火窗验收观察 evicted_n；如需改注册语义须先红线 9 源码定案。
+        """
+        if not self._pid8_refresh or not self._daban_subs:
+            return
+        if 8 not in self._daban_list_pids:
+            return
+        now = now if now is not None else time.time()
+        if not self._auction_window_active(now):
+            return
+        if now - self._pid8_last_refresh < self._PID8_REFRESH_INTERVAL_S:
+            return
+        self._pid8_last_refresh = now
+        items = []
+        for page in range(self._daban_list_pages):
+            req_pb = daban.build_daban_stock_list_req_pb(
+                8, index=page * self._daban_list_page_size,
+                count=self._daban_list_page_size)
+            items.append({
+                "cmd": daban.CMD_DABAN_STOCK_LIST, "req": req_pb,
+                "ext": bytes([0x02]) + struct.pack(">H", daban.CMD_DABAN_STOCK_LIST),
+                "priority": True, "key": f"pid8:{page}"})
+        try:
+            self._drain_send(sock, next_seq, items, "pid8_refresh")
+        except OSError as exc:
+            sent = getattr(exc, "sent_count", 0)
+            dropped = len(items) - sent
+            # review L1：部分发送成功帧也计入 frames_sent（观测面不少计）
+            self._pid8_refresh_stats["frames_sent"] += sent
+            self._pid8_refresh_stats["send_drops"] += dropped
+            self._err(f"pid8 refresh send failed: {exc} "
+                      f"(sent={sent} dropped={dropped}, fail-fast reconnect)")
+            self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
+                                lane="pid8_refresh", cmd=daban.CMD_DABAN_STOCK_LIST,
+                                sent=sent, dropped=dropped, session=self._session_no,
+                                error=str(exc)))
+            raise
+        self._pid8_refresh_stats["frames_sent"] += len(items)
+        self._pid8_refresh_stats["last_ts"] = now
+
+    def _pid8_refresh_status(self) -> Dict[str, Any]:
+        """pid8 重请求 lane 结构化观测（status 透出；不藏状态）。"""
+        return {"enabled": self._pid8_refresh,
+                "frames_sent": self._pid8_refresh_stats["frames_sent"],
+                "last_ts": self._pid8_refresh_stats["last_ts"],
+                "send_drops": self._pid8_refresh_stats["send_drops"],
+                "window_active": self._auction_window_active()}
 
     def _auction_lane_status(self) -> Dict[str, Any]:
         """竞价 lane 结构化观测（status 透出；不藏状态）。"""
@@ -1491,6 +1576,8 @@ class KplCollectorService:
             },
             # 竞价订阅 lane 观测（2026-11-19 fail-visible：宇宙/已订/待订/窗/帽丢弃）
             "auction_lane": self._auction_lane_status(),
+            # pid8 3s 重请求 lane 观测（2026-11-19 密度修复，fail-visible）
+            "pid8_refresh": self._pid8_refresh_status(),
             "corpus_persist": dict(self._corpus_persist_stats),
             "anti_cheat_rounds": self._stats.get("anti_cheat_rounds", 0),
             # 会话寿命观测（2026-11-09 抖动根因修复验证）：setup=连接到订阅完成耗时，
@@ -2223,6 +2310,8 @@ class KplCollectorService:
             # （实弹口径见 _drain_setup_subs 注释）
             self._stats["last_setup_s"] = round(time.time() - t_setup, 1)
             self._session_streaming = True   # 死因观测：进入收流（区分 setup 早退）
+            # pid8 重请求节拍重置：setup 初始 burst 已发，首次重请求 +3s（App 同款）
+            self._pid8_last_refresh = time.time()
             self._emit(KplEvent(type="status", ts=time.time(), status="streaming",
                                 session=self._session_no))
             # 7) 收流 + 保活：3001 按块轮转（优先块与普通块交替，单请求 ≤200 id）；
@@ -2315,6 +2404,8 @@ class KplCollectorService:
                 # 竞价 lane 补订排最前（仅窗内活跃，≤4 帧/次≈1.2s；09:25 撮合推送
                 # 时效优先于 detail flush 合同；窗外零帧零开销）
                 self._drain_auction_subs(sock, next_seq)
+                # pid8 3s 重请求（仅窗内+开关开；密度根因修复，plan §3）
+                self._drain_pid8_refresh(sock, next_seq, now)
                 self._drain_detail_subs(sock, next_seq)
                 self._drain_zt_reason_subs(sock, next_seq)
                 self._drain_theme_subs(sock, next_seq)

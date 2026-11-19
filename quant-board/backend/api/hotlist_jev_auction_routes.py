@@ -399,7 +399,11 @@ def get_auction_trial(date: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
     try:
-        dates = sorted(str(d["_id"]) for d in db[COLLECTION_SERIES].find({}, {"_id": 1}))
+        # 2026-11-19 逐 tick 文档化：日期索引只取日 meta。判别用 _id 类型
+        # （meta _id=日期串、tick _id=ObjectId，review S4：$exists:false 无法走
+        # 索引会全集合扫 tick 文档；$type 走 _id 天然索引，同 backfill/migrate 口径）
+        dates = sorted(str(d["_id"]) for d in db[COLLECTION_SERIES].find(
+            {"_id": {"$type": "string"}}, {"_id": 1}))
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"auction_trial_read_failed: {exc}"}
     target = (date or "").strip() or (dates[-1] if dates else "")
@@ -567,7 +571,8 @@ def get_auction_bidding_series(date: str | None = None) -> dict[str, Any]:
     date = date or _dt.now().strftime("%Y-%m-%d")
     try:
         db = repository_factory.get_runtime_mongodb_database()
-        doc = db[_BIDDING_SERIES_COLLECTION].find_one({"_id": date})
+        from backend.services.kpl_daban_archiver import load_bidding_series
+        doc = load_bidding_series(db, date)
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"bidding_series_read_failed: {exc}"}
     if not doc:

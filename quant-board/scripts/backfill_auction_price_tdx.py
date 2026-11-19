@@ -70,18 +70,17 @@ def _intraday_forbidden(date: str, now: Any = None) -> bool:
 def backfill(db: Any, dates: list[str] | None = None, *, root: str | None = None) -> dict:
     """逐日回补 s0925 缺失股 → 汇总 {date: {filled, skippedLive, noBar, samples}}。"""
     if dates is None:
-        dates = sorted(d["_id"] for d in db["kpl_bidding_series"].find({}, {"_id": 1}))
+        dates = sorted(d["_id"] for d in db["kpl_bidding_series"].find(
+            {"_id": {"$type": "string"}}, {"_id": 1}))   # meta _id=日期串（review S4，走 _id 索引）
     if root is None:
         root, _ = resolve_root()
     summary: dict[str, dict] = {}
     for date in dates:
         universe: set[str] = set()
-        for doc in db["kpl_bidding_series"].find({"_id": date}, {"ticks": 1}):
-            for tick in doc.get("ticks") or []:
-                for it in tick.get("it") or []:
-                    c = str(it.get("s") or "")[-6:]
-                    if c:
-                        universe.add(c)
+        # 2026-11-19 逐 tick 文档化：走 load_bidding_series(codes_only=True) 轻量读
+        from backend.services.kpl_daban_archiver import load_bidding_series
+        sdoc = load_bidding_series(db, date, codes_only=True) or {}
+        universe.update(sdoc.get("codes") or [])
         existing = (load_auction_price(db, date) or {}).get("s0925") or {}
         filled: dict[str, dict] = {}
         no_bar: list[str] = []
@@ -126,7 +125,8 @@ def main() -> None:
     db = repository_factory.get_runtime_mongodb_database()
     dates = sys.argv[1:] or None
     if dates is None:
-        dates = sorted(d["_id"] for d in db["kpl_bidding_series"].find({}, {"_id": 1}))
+        dates = sorted(d["_id"] for d in db["kpl_bidding_series"].find(
+            {"_id": {"$type": "string"}}, {"_id": 1}))   # meta _id=日期串（review S4）
     run = [d for d in dates if not _intraday_forbidden(d)]
     for d in dates:
         if d not in run:

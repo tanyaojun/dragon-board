@@ -5,18 +5,20 @@
     .venv/Scripts/python.exe scripts/auction_window_check.py            # 当日
     .venv/Scripts/python.exe scripts/auction_window_check.py --date 2026-11-18
 
-检查面（验收口径 = prereg §7.13 / 2026-11-17 定案）：
+检查面（验收口径 = density-storage-fix-plan-20261119 §6，取代 prereg §7.13 旧阈值）：
   A 进程在位：:8002 采集服务 / :8001 scheduler（只 GET 本地状态口）
   B 收敛面 flags：sub_staged=False / sub_unique_id=True / unsub_enabled=True /
     ka_mode=off / zt_reasons_subscribed=0 / stock_detail_subs=False
-  C 主链 tick 观测：序列档 ticks 时间轴、首 tick 时刻、窗内 tickN、最大空窗
+  C 主链 tick 观测：序列档 ticks 时间轴、首 tick 时刻、窗内观测事件数、gap 中位/max
   D 09:26 挂链产物：trialState（source/n_rows/tickN/plateJoinedN）/ mblState /
     bidSupplement / roster pushState
   E 日档完整性：kpl_daban_pool bid 通道 pages_missing / 成员数 / bid_ts
-  F 验收四项：
-    ① 首 tick ≤09:15:30          ④ 窗内 tickN ≥20
-    ③ posture 翻转率 vs 涨停开盘 3/4 基线（首末帧比较，§7.9 用户裁决语义）
-    ② first比：Wzs 退役后无真值参照——输出 first/max 值层原始比，参照源留用户裁决
+  F 验收四项（pid8 3s 重请求 lane 开火后）：
+    ① 首 tick ≤09:15:10          ② 窗内观测事件 ≥150
+    ③ gap 中位 ≤4s、max ≤15s（会话轮转上限）
+    ④ --wzs：603324 类首开/首加与 Wzs 同日缓存对拍（窗后 1 GET，survey §6 合同，
+      预算 1 发；首开差 ≤5%、首加同笔）——默认零外呼，显式 --wzs 才发
+  另：posture 翻转率 vs 涨停开盘 3/4 基线（首末帧比较，§7.9 语义）保留作健康度代理
 """
 from __future__ import annotations
 
@@ -36,7 +38,6 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 TZ = zoneinfo.ZoneInfo("Asia/Shanghai")
 COL_LABEL = "hotlist_jev_auction_leader_labels"
 COL_POOL = "kpl_daban_pool"
-COL_SERIES = "kpl_bidding_series"
 COL_LIVE = "kpl_live_daily"
 WINDOW = (9 * 60 + 15, 9 * 60 + 27)  # 试盘行派生窗（与 collector 门控一致）
 
@@ -66,6 +67,10 @@ def _db():
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=None)
+    ap.add_argument("--wzs", action="store_true",
+                    help="窗后 Wzs 同日缓存对拍（预算 1 GET，survey §6 合同；默认零外呼）")
+    ap.add_argument("--wzs-code", default="603324",
+                    help="对拍目标股（默认 603324 盛剑科技，11-19 复盘锚）")
     args = ap.parse_args()
     date = args.date or dt.datetime.now(TZ).strftime("%Y-%m-%d")
     print(f"=== 竞价窗体检 {date}（只读） ===")
@@ -95,14 +100,15 @@ def main() -> int:
               f" zt_reason_sub={col.get('zt_reasons_subscribed')} detail={col.get('stock_detail_subs')}）")
 
     db = _db()
-    # C 主链 tick 观测
-    ser = db[COL_SERIES].find_one({"date": date}) or {}
+    # C 主链 tick 观测（2026-11-19 逐 tick 文档化：走 load_bidding_series 唯一读口）
+    from backend.services.kpl_daban_archiver import load_bidding_series
+    ser = load_bidding_series(db, date) or {}
     ticks = ser.get("ticks") or []
     w_lo, w_hi = WINDOW
     in_win: list[dict] = []
     print(f"\n[C] 序列档 ticks（窗门控 {ser.get('window')}，共 {len(ticks)} 帧）：")
     prev_ts = None
-    max_gap = 0.0
+    gaps: list[float] = []
     for t in ticks:
         ts = t.get("ts")
         if not isinstance(ts, (int, float)):
@@ -113,15 +119,20 @@ def main() -> int:
         if inwin:
             in_win.append(t)
             if prev_ts is not None:
-                max_gap = max(max_gap, ts - prev_ts)
+                gaps.append(ts - prev_ts)
         prev_ts = ts
         print(f"    {_hhmm(ts)}  n={t.get('n')}  {'窗内' if inwin else '窗外(冻结后)'}")
     first_ts = in_win[0]["ts"] if in_win else None
-    v1 = first_ts is not None and dt.datetime.fromtimestamp(first_ts, TZ).strftime("%H:%M:%S") <= "09:15:30"
-    v4 = len(in_win) >= 20
-    print(f"    首tick={_hhmm(first_ts) if first_ts else '缺席'}  窗内tickN={len(in_win)}"
-          f"  最大空窗={max_gap:.0f}s")
-    print(f"    ①首tick≤09:15:30: {'✅' if v1 else '❌'}    ④窗内tickN≥20: {'✅' if v4 else '❌'}")
+    gaps_sorted = sorted(gaps)
+    gap_med = (gaps_sorted[len(gaps_sorted) // 2] if gaps_sorted else None)
+    gap_max = max(gaps) if gaps else 0.0
+    v1 = first_ts is not None and dt.datetime.fromtimestamp(first_ts, TZ).strftime("%H:%M:%S") <= "09:15:10"
+    v2 = len(in_win) >= 150
+    v3 = gap_med is not None and gap_med <= 4.0 and gap_max <= 15.0
+    print(f"    首tick={_hhmm(first_ts) if first_ts else '缺席'}  窗内观测事件={len(in_win)}"
+          f"  gap中位={f'{gap_med:.1f}s' if gap_med is not None else '—'}  gap_max={gap_max:.0f}s")
+    print(f"    ①首tick≤09:15:10: {'✅' if v1 else '❌'}    ②窗内事件≥150: {'✅' if v2 else '❌'}"
+          f"    ③gap中位≤4s且max≤15s: {'✅' if v3 else '❌'}")
 
     # D 挂链产物
     lab = db[COL_LABEL].find_one({"_id": {"$regex": date}}) or {}
@@ -183,10 +194,82 @@ def main() -> int:
     print(f"    日档页完整: {'✅' if missing == [] or missing is None else '❌ ' + str(missing)}")
 
     # F 汇总
-    print(f"\n[F] 判定汇总：①{'✅' if v1 else '❌'} ③翻转率={f'{rate:.0%}' if rate is not None else '—'}"
-          f" ④{'✅' if v4 else '❌'} ②值层见上（参照源留裁决） 源头{'✅' if src_ok else '❌'}"
+    print(f"\n[F] 判定汇总：①{'✅' if v1 else '❌'} ②{'✅' if v2 else '❌'} ③{'✅' if v3 else '❌'}"
+          f" posture翻转率={f'{rate:.0%}' if rate is not None else '—'}"
+          f" ④{'见下' if args.wzs else '未跑（--wzs 显式开启，预算 1 GET）'}"
+          f" 源头{'✅' if src_ok else '❌'}"
           f" 日档{'✅' if missing in ([], None) else '❌'}")
+
+    # ④ Wzs 同日缓存对拍（窗后 1 GET，survey §6 合同；预算 1 发，不带 refresh）
+    if args.wzs:
+        v4 = _wzs_compare(date, args.wzs_code, drows)
+        print(f"    ④Wzs对拍: {'✅' if v4 else '❌'}")
     return 0
+
+
+def _wzs_compare(date: str, code: str, drows: dict) -> bool:
+    """603324 类首开/首加 vs Wzs 同日缓存（1 GET，fetched 回显披露）。
+
+    值层收敛判据（plan §6）：首开差 ≤5%、首加同笔（相对差 ≤5% 容差，
+    观测首帧时点差导致的尾差披露不阻断）。Wzs rank=数值原值（元）。
+    """
+    url = ("http://wzslinker.top/companys/api-auction.php"
+           f"?page=limit_up_bidding&date={date}")
+    print(f"\n[W] Wzs 对拍 {code}（预算 1 GET，不带 refresh）：{url}")
+    resp = _get(url, timeout=15.0)
+    if not isinstance(resp, dict) or resp.get("_error"):
+        print(f"    ❌ 请求失败：{resp}")
+        return False
+    print(f"    fetched={resp.get('fetched')} saved_at={resp.get('saved_at')}"
+          f" actual_date={resp.get('actual_date')} is_fallback={resp.get('is_fallback')}")
+    try:
+        sl = resp["data"]["data"]["stock_list"]
+        keys = [h.get("sort_key") for h in sl["head_info"]]
+        i_code = keys.index("stock_id")
+        i_first = keys.index("first_amount")
+        i_add = keys.index("first_add")
+    except (KeyError, TypeError, ValueError) as exc:
+        print(f"    ❌ 合同解析失败：{type(exc).__name__}: {exc}")
+        return False
+    wzs_row = None
+    for row in sl.get("list") or []:
+        cell = row[i_code] if isinstance(row, list) and len(row) > i_code else {}
+        if str((cell.get("param") or {}).get("code") or "") == code:
+            wzs_row = row
+            break
+    if wzs_row is None:
+        print(f"    ❌ Wzs 当日榜无 {code}（掉池/未顶板均可能，留用户裁决）")
+        return False
+
+    def _num(cell):
+        try:
+            return float(cell.get("rank"))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    w_first, w_add = _num(wzs_row[i_first]), _num(wzs_row[i_add])
+    mine = drows.get(code) or {}
+    m_first, m_add = mine.get("first_amount"), mine.get("first_add")
+    print(f"    Wzs: first={w_first} first_add={w_add}"
+          f"（start={wzs_row[keys.index('start_time')].get('rank') if 'start_time' in keys else '--'}）")
+    print(f"    我方: first={m_first} first_add={m_add}（start={mine.get('start_time')}）")
+    ok = True
+    if w_first and m_first is not None:
+        diff = abs(m_first - w_first) / w_first
+        ok = ok and diff <= 0.05
+        print(f"    首开相对差={diff:.2%} {'✅≤5%' if diff <= 0.05 else '❌>5%'}")
+    else:
+        ok = False
+        print("    首开缺一方值 ❌（不伪 0）")
+    if w_add is not None and m_add is not None:
+        denom = max(abs(w_add), 1.0)
+        diff = abs(m_add - w_add) / denom
+        ok = ok and diff <= 0.05
+        print(f"    首加相对差={diff:.2%} {'✅同笔' if diff <= 0.05 else '❌非同笔'}")
+    else:
+        ok = False
+        print("    首加缺一方值 ❌（不伪 0）")
+    return ok
 
 
 if __name__ == "__main__":
