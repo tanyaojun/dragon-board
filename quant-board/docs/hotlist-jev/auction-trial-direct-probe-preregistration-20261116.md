@@ -569,3 +569,193 @@ limit_rules 单源真实涨/跌停价校验 open，越界（除权/无限制新�
 「开盘涨幅均值」（jj_percent=09:25 打分口径，消同名两时点漂移）；null 排序恒末尾；
 trialState 0925/0915 覆盖计数进页头；连板行情越界护栏板籍感知（北交 31/其余 21，
 修 30cm 误杀）。
+
+## 2026-11-19 增补：开盘涨幅列盘中空窗事故定案与修复（open_pct 顺带取数）
+
+- **事故**：11-19 竞价试盘页「开盘涨幅」342 只全 `--`（页头 0925存档 0/缺 342），
+  「现价」同帧全 `--`（现价缺 342）。
+- **根因 1（开盘涨幅）**：live 归档 `_capture_auction_price` 当日 auct15_ok=auct25_ok=0
+  （auct_fail=0，非落库失败）。3006 订阅面=浏览器驱动（板块引导+连板/个股页签 merge），
+  **竞价试盘页不并试盘宇宙入订阅面** → 竞价窗内 3006 面无试盘股（当日甚至零个股），
+  归档覆盖⊆订阅面 ⇒ 结构性零捕获；11-17/11-18 存量 s0925 全为 TDX 回补（src=tdx_lday）
+  佐证 live 捕获自上线从未产出。成员制三源（MBL/bid/pid8）掉池股留早退值（上文缺陷
+  定案）⇒ **不得**作开盘涨幅列回退（002652 锚：早退 9.77% vs 真开盘 0.00%）。
+- **机制核实（§1.2-6 原料→题目→协议顺序）**：TDX **socket 日线**（tdx_daily_bars，
+  非本地 lday 文件——后者盘后才落，上文「live 不可用 TDX」仅指 lday）盘中已含当日棒
+  open：11-19 10:15 实测 301391 open=50.9/9.09%、300324 4.31/−2.93%、002685
+  8.11/10.04%，与 MBL 09:28:17 冻结榜（09:25 撮合后拉取）逐值一致 ⇒ 当日棒 open=真开盘。
+- **修复（零新增外呼/零新增订阅）**：`collect_prev_day_pct` 同一次 fetch_daily_bars
+  **顺带**读当日棒 open → `(open/昨收−1)×100` 落库 `kpl_bidding_series.open_pct`
+  加字段（+`open_pct_state` 审计；bandSuspect 除权越界名单镜像 backfill B1 宁缺勿错
+  不重试）；单写者=:8000 archiver 字段级 $set（ticks 不触碰）。当日 09:25 CST 前
+  open 未撮合→不列 pending 不烧预算；open 缺位优先于 prev-only 缺位入批。
+  频控预算重登记（§1.2-9）：日尝试上限 600→**1200**（最坏 2×宇宙=prev 先于 09:25
+  完成时 open 独立遍历；正常同批顺带=1×宇宙；30/轮、退避、探针上限不变）。
+- **消费链**：derive `pct0925/p0925` = 存档 s0925 → `open_pct`（src=tdx_bar，
+  open0925Src=tdx_bar_open 逐行披露）→ 如实缺席；**不回退 MBL/bid/末帧**。
+  `jj_percent` 链同插 TDX 步（archive→tdx_bar_open→MBL→bid→末帧），修成员制
+  早退值进打分/均值门缺陷。state 增 `open0925TdxN`，MissingN=rows−archive−tdx。
+- **根因 2（现价）**：MarketQuotesCache 写侧周期=fetch 耗时 F+sleep(interval)，
+  旧 TTL=interval ⇒ **每周期必有 F 秒 Redis 过期空窗**（跨进程读侧整列缺席，
+  10:00:13 帧命中空窗）。修复：TTL 缺省=interval+fetch 超时上限+30s 裕量
+  （300+120+30=450s）；显式 ttl 注入仍尊重；档龄经 `:ts`/priceFetchedAtMs 披露不变。
+- **前端同轮同步（§1.2-5）**：开盘涨幅列子标签「存档 09:25」/「TDX 开盘」（值在场
+  门控）、title 披露回退链与成员制禁回退理由；页头计数改「0925存档 N/TDX M/缺 K」。
+- **残留**：存档 live 捕获覆盖缺陷未修（修它需把试盘宇宙并 3006 面=每会话 +342 id
+  重订单元，§1.2-10 频控红线风险，且依赖浏览器竞价窗在线）——open_pct 兜底已覆盖
+  全宇宙，存档保留为第一权威（面内股双源互证）；bandSuspect/无当日棒股开盘涨幅
+  如实缺席，收盘后 backfill_auction_price_tdx 既有路径补齐。
+
+## 2026-11-19 增补二：竞价订阅 lane 预登记（live 归档脱离浏览器依赖，用户裁决）
+
+- **裁决**：增补一的 open_pct TDX 顺带回填**降级为事后审计/补隙**，不作主解——
+  竞价龙头须 09:26 前出结果，30/轮×60s 回填赶不上；权威源 live 归档依赖浏览器
+  竞价窗在线的缺陷必须修。备选 python-bridge TDX socket 推送**不采纳**：bridge
+  现为轮询架构（TDX_POLL_INTERVAL_MS=100）、mootdx 无订阅推送接口，新协议面需
+  另立频控登记；KPL lane 有 App 源码合同且复用现有会话，零新增连接。
+- **根因复述**：3006 订阅面=浏览器 POST 面（set_subscriptions merge），竞价试盘页
+  不并宇宙 → 竞价窗面内无试盘股 → 归档零捕获（11-19 auct15/25_ok=0）。
+- **方案（collector 单写者，服务端供料）**：宇宙=**pid=8 竞价池 2103 推送成员**
+  （daban 默认订阅面，服务端自有，与浏览器无关；bid_series_ok=254 佐证）。
+  窗 [09:15,09:30) CST 内：①pid8 推送新成员入 `_pending_auction_sub`，读循环
+  `_drain_auction_subs` **会话中途增量补订 3006**；②session setup 6b 面=浏览器面
+  ∪ lane（`_effective_stock_ids`）；③窗外 lane 不入面不发送（离屏生命周期，
+  reset_subscriptions_to_default 只回落浏览器面不抹 lane）。捕获链
+  `_capture_auction_price` 不变（推送即落库 §1.2-8）。
+- **源码合同（红线 9，.tmp_review/main_src jadx，零猜测）**：
+  `w30.java:230`、`StockInfoBottomSelectBar.java:175`：
+  `SocketRepository.e().m(3006, ux0.v().c(3006).f(true).d(mn0.h(ids)).e((byte)4).a())`
+  = App **会话中途**重发 3006 HQStockIdListReq 原行为（pkg=0x40）；
+  `SelectedStockPresenter.k()`（自选全列表）/`QuotationLandPresenter`（列表页 face）
+  = 面变重发同款；`mn0.h`=Hq.HQStockIdListReq{f1 repeated stockIds}。
+  ≤200 id/帧=2026-10-27 实测 1106 护栏（沿用 setup 6b 分块）。
+- **频控预算登记（§1.2-10）**：零新增连接（复用现有会话轮转与 App 退避梯）；
+  面增量 ≤800 id 且仅窗内（cap_dropped_n 披露，超帽=订阅面预算决策非数据拒收）；
+  中途帧走 _drain_send 既有拟人停顿（_drain_pause 同 2203/2013 lane 节奏）；
+  帧增量估算：setup +2 帧/会话×窗内 ~22 会话 ≈44 + 中途补订 ≤2 帧/入池波 ≈<60
+  帧/窗（vs 既有 setup ~660 帧/窗，+9%）；send 失败 fail-visible+fail-fast 重连，
+  下一会话 setup 全面自愈（同 2203 合同）。
+- **09:26 deadline 链**：09:25:00 撮合 → 3006 推送（已订面全量，**掉池股亦推**——
+  面订阅不随池籍掉出，成员制早退缺陷类由此消解）→ 采集线程即时落库 s0925 →
+  09:26 derive/竞价龙头读存档权威 ✓。晚入池成员经中途补订数秒内覆盖面；极端尾
+  （09:25 后才订上）s0925 缺席 → open_pct 顺带棒补隙（事后）+ jj 链回退披露。
+- **观测（fail-visible）**：status.auction_lane={window_active,date,universe_n,
+  subscribed_n,pending_n,cap,cap_dropped_n,sub_frames,send_drops,last_sub_ts}；
+  既有 auct15_ok/auct25_ok/auct_fail 不变。
+- **验证**：单测 tests/hotlist/test_kpl_auction_lane.py 9 例（窗门控/白名单/去重/
+  跨日重置/超帽披露/面并集与 reset 分离/窗外零帧/中途帧 pkg+ext+cmd+分块/
+  send 失败 id 级披露+fail-fast）；tests/hotlist+operations+api 2362 过。
+  **实弹验证计划（明日 11-20 竞价窗）**：09:15 起 auction_lane.universe_n 随 pid8
+  推送增长、subscribed_n 跟进；09:25:10 auct25_ok ≈ universe_n；09:26
+  auction-trial open0925N>0、open0925MissingN≈0、竞价龙头 jjSource=open0925_archive
+  主导。今日 11:30 午间休市重启 :8002 加载（零推送损失）。
+
+## 2026-11-19 增补三：竞价龙头 09:26 deadline 根治（用户裁决 1+2：槽位前移 + run 并行）
+
+**裁决**：用户 2026-11-19 批准「1+2」——① run 内重排/并行（MBL 降为并行审计源、
+plate/circulated_value 纯库读兜底）；② 投喂槽位 09:26 → **09:25:20**。不改 09:29
+（后移会把投喂推过 09:30 开盘窗，且 MBL 是 run 内现采、后移不解决任何缺席）。
+
+**实测时间线（mongo 取证，三日一致）**：
+| 环节 | 11-17 | 11-18 | 11-19 |
+|---|---|---|---|
+| 槽触发 | 09:26 | 09:26 | 09:26 |
+| roster 补归档 archivedAt | — | 09:26:03 | 09:26:16 |
+| MBL fetchedAt | 09:28:55 | 09:28:13 | 09:28:17 |
+| leader computedAt | 09:29:08–14 | 09:28:28–35 | 09:28:33–47 |
+
+即旧链投喂完成本就晚于 09:26 ≈2.5–3min；roster HTTP ≈16s，其余 ≈120s 消耗在
+T-1 DB bundle/basis/腾讯串行段（逐相耗时以往无披露，本轮起 timings 进返回态）。
+
+**MBL 冻结边界（不盲猜）**：`kpl_mbl_series` 09:26:20 帧与 raw 冻结档逐值相等
+（含 plate/circulated_value）；09:24:51 帧仍盘前虚拟态（75 行 vs 冻结 89 行）→
+MBL 审计线程冻结下界 **09:26:20**（实测边界），下界前不归档盘前态。
+**金额权威早已在 socket 链**：pid8 序列 09:25:13/09:25:50/09:26:26 帧
+bidding_amount/zt_buy_amount 与 MBL 冻结值精确相等 → MBL 字段级边际贡献仅
+plate/circulated_value 与对拍审计（label 内本就只进 mblState 审计载荷）。
+
+**方案（已实施）**：
+- scheduler `_AUCTION_LEADER_LABEL_AT = 09:25:20`（重试梯不变 ≤3 次 +5min）。
+- run 入口即启动两 daemon 线程：MBL 审计（floor 睡到 09:26:20 后现采落库，单写者
+  replace 幂等）与 T-1 DB bundle（bctx/market_line/t1_rows/pool_prev/prev_cross/
+  streak/lanes，原串行块原样移入）；主线程 roster HTTP 与之并行。
+- basis 线程 ∥ 腾讯榜外补源（主线程）；bundle join 无预算上限（必需输入，耗时披露）。
+- MBL join 受 `_RUN_BUDGET_S=40` 总预算（09:25:20+40s=09:26）；超时
+  `mblState=parallel_pending` 披露、线程独立完成归档；早退路径 orphan 语义：
+  bundle 纯读无害、MBL 归档幂等独立落地。
+- derive bk_name 纯库读回退链：同日 MBL raw → 最近前日 raw 档（_id<date 倒序首条）
+  → 同日 pid8 bid lane plate（pos11）；逐股 `bkNameSrc` + state `plateSrcN` 披露；
+  页面 bk 列 title 同步「板块来源=」（§1.2-5 同轮）。
+- timings：roster_s/prev_ctx_wait_s/tencent_s/basis_wait_s/mbl_wait_s/derive_s/total_s
+  进 run 返回态前部（scheduler 日志前 200 字符可见）。
+
+**验证**：新增 `tests/operations/test_auction_label_parallel.py` 7 例（槽位/worker
+fail-visible/bundle keys+error/线程先于 roster（Event 同步防 race）/join 预算
+parallel_pending/dry-run 零 MBL 线程）+ derive 回退 3 例 + 页面守卫 1 例；
+既有 label/derive/route/relay 套件 136 例全绿。
+
+**残留与明日实弹（11-20）**：
+- 重试日 ≥09:30:20 出 MBL 窗 [09:25,09:30) → MBL 审计 parallel_pending/skipped
+  披露不阻断；窗放宽须 App 同屏对拍钉死冻结态持续语义后另裁决，本轮不盲改。
+- prev_ctx bundle 实测耗时未知（旧 120s 串行段主嫌之一）：明日 timings 实弹定位；
+  若 bundle 仍 >40s，下一轮按证据治理 bundle（索引/缓存），不再盲并行。
+- 实弹判据：09:25:20 槽触发；leader computedAt ≤09:26；timings 逐相在场；
+  mblState=ok（≈09:26:2x 落库）或 parallel_pending 披露；plateSrcN 回退计数可见。
+- 生效重启：scheduler 宿主 = :8000 backend.main；午间休市窗重启（零推送损失）。
+
+## 2026-11-19 增补四：调度器三缺陷定案与 A+B+C 修复（用户裁决「A+B+C 全做」）
+
+> 定案与方案全文：`docs/hotlist-jev/auction-leader-label-scheduler-fix-plan-20261119.md`。
+> 事故：12:33:10 launcher 全栈重启 → 12:33:40 补跑竞价链（烧 11234 tokens）→ 12:35:49/50
+> 落库 002122/600156 两个 noon leader → 算力板双龙头。机制三缺陷：D1 内存 state 重启失忆、
+> D2 槽条件无窗上界、D3 选择重算致人群漂移（加法漂移）。
+
+**更正**：增补三尾注「scheduler 宿主 = :8000 backend.main」有误——:8001
+（`backend/collector_main`，Redis 单实例锁）才是 scheduler 唯一宿主；:8000 不跑 scheduler。
+
+**已实施（A）日级 run 状态持久化**：
+- 新集合 `hotlist_jev_label_run_state`（勘察后无可复用通道：missed-slot 走的 record_run
+  是快照槽专用、无 kpl_collector_events；三链同构故共用一集合，方案原文的单链集合名
+  `hotlist_jev_auction_leader_run_state` 不采纳），doc `_id="{chain}:{date}"`，字段
+  chain/tradingDate/firstRunAt/attempts/lastOk/lastResult(结构化 dict)/lastAt/updatedAt/
+  abandonedWindow?。单写者=scheduler 循环（§1.2-1）。
+- `first_run`=持久层无当日 ok/已跑标记（attempts>0 亦算已跑），内存 `state["done"]` 降级
+  缓存；`retry_due` 依持久化 attempts/lastOk/lastAt；执行前预写 attempts+1/lastOk=False/
+  lastAt（崩溃留痕），执行后落 lastOk/lastResult/lastAt。读写失败 logger.exception 留痕
+  不静默（fail-visible，调度层降级内存语义）。
+- 同构推广三链一次落地：auction_leader_label / theme_leader_label / fengkou_red_obs。
+- status 种子：持久化 attempt 回填 `sched._auction_leader_last`（`restoredFromRunState:
+  true`），`/api/snapshot-collector/scheduler/status` 的 auctionLeader.attempt 跨重启不回退。
+
+**已实施（B）窗上界**：`_AUCTION_LEADER_WINDOW_END=09:35`；窗外一律不跑（含重启
+first_run 场景），一次性落 `abandonedWindow: true` + `lastResult.state=abandoned_window`
+终态（不重复写、不再重试）+ logger.info 留痕。实际窗内最多 2 次尝试（09:25:20/09:30:20）；
+`_AUCTION_LEADER_MAX_ATTEMPTS=3` 语义不变。MBL 窗不放宽、vA1 题集/投喂语义不动。
+scheduler 竞价链决策抽为 `_auction_leader_slot_tick`（可测）。
+
+**已实施（C）当日选择冻结**：新集合 `hotlist_jev_auction_leader_selections`
+（`_id=<date>`，rows/selection/unionN/slot="s0925"/frozenAt/computedBy），单写者=label run。
+- `run()` 选择段前读冻结档：有 → 直接以冻结 rows 为人群（板籍/来源/trialStrength 快照
+  原样，不重算 union/排名/第三源 roster）；派生字段（jj_percent/basis/ammo/语料）照常
+  取最新库值——人群冻结、数据新鲜。
+- 无 → 正常选择，成功执行后写冻结档（首跑即冻结）；dry_run 不读不写；codes 单股重跑
+  不写冻结档；force 绕过冻结档（重算人群，可跑任意 code）且不覆写冻结档。
+- 推送源缺席/取数失败 + 冻结档在场 → 以冻结人群继续（人群不被 redefine，只影响叙事
+  注入，auctionPushState 披露）。
+- 返回态增 `selectionFrozen: bool` / `freezeState` / `forcedOutsideSelection`（force+codes
+  未命中重算人群时披露）。settle（16:10）与锚行/复盘链不读冻结档。
+
+**实现出入记录（对方案原文）**：① A 落库通道定案为三链共用 `hotlist_jev_label_run_state`；
+② lastResult 存结构化 dict（非 JSON 串）；③ force 的 forcedOutsideSelection 相对「重算
+人群」披露（force 本就绕过冻结）；④ codes 单股重跑不写冻结档（保全日人群完整性）。
+
+**测试**：新增 `tests/operations/test_auction_label_scheduler_state.py` 12 例（A：持久化
+ok 挡 first_run/持久化间隔挡 retry/预写留痕/status 种子；B：窗外放弃一次写入不重复/
+09:30:20 重试在窗内/09:35:00 边界/常量合同；C：首跑写冻结档/原料漂移人群不变不加新股/
+dry_run 零读写/force 绕过+披露+不覆写）。既有 auction 4 套件 105 例 + theme/fengkou 4
+套件 126 例全绿。测试禁真 jev/真网络，全 monkeypatch/假库（§1.2-7）。
+
+**生效与实弹（11-20）**：重启 :8001（当前进程缓存旧 label/scheduler 代码，A+B+C 与
+1+2 须一并载入）。判据：09:25:20 首跑触发；selections 冻结档当日落库；leader computedAt
+≤09:26；首跑后重启 :8001 不再补跑（run_state ok 标记在场）；重试 09:30:20 在窗内且人群=
+冻结档；09:35 后不再执行；auctionLeader.attempt 跨重启不回退。

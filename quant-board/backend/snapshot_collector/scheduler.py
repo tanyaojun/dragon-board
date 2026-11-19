@@ -574,9 +574,16 @@ _THEME_LEADER_LHB_BACKFILL_SLOTS = (
     (datetime.time(7, 10), "morning"),
 )
 
-# 竞价龙头晨间投喂时点（vA1，2026-11-13 预登记 A1）：09:26 = 9:25 集合竞价冻结
-# + :8000 archiver ≤60s 轮询 lag 保障；失败重试每日最多 3 次、间隔 ≥5 分钟。
-_AUCTION_LEADER_LABEL_AT = datetime.time(9, 26)
+# 竞价龙头晨间投喂时点（vA1，2026-11-13 预登记 A1；2026-11-19 用户裁决 1+2 前移）：
+# 09:25:20 = 9:25 撮合冻结 + pid8 首帧实测 09:25:13 在库 + 竞价 lane s0925 ≈09:25:10
+# 在库；run 内并行取数 + 40s join 预算保 09:26 deadline（实测旧 09:26 槽因 run 串行
+# 耗时投喂完成 09:28:28–09:29:14，见预登记增补三）。失败重试每日最多 3 次、间隔 ≥5 分钟
+# （重试日 ≥09:30:20 出 MBL 窗 → MBL 审计层 parallel_pending/skipped 披露，不阻断）。
+_AUCTION_LEADER_LABEL_AT = datetime.time(9, 25, 20)
+# 窗上界（B，2026-11-19 用户裁决）：首跑 09:25:20 + retry_after 5min 的重试 09:30:20
+# 在窗内；09:35:20 的第二次重试出窗。窗外一律不跑（含重启后 first_run 场景），
+# 一次性落 abandoned_window 终态（fail-visible），杜绝 12:33 重启补跑类事故（D2）。
+_AUCTION_LEADER_WINDOW_END = datetime.time(9, 35)
 _AUCTION_LEADER_MAX_ATTEMPTS = 3
 _AUCTION_LEADER_RETRY_AFTER = datetime.timedelta(minutes=5)
 _FENGKOU_RED_OBS_AT = datetime.time(15, 10)
@@ -591,6 +598,170 @@ def _parse_iso(v: Any) -> datetime.datetime | None:
         return datetime.datetime.fromisoformat(str(v)) if v else None
     except (TypeError, ValueError):
         return None
+
+
+# ── 日级 run 状态持久化（A，2026-11-19 用户裁决 D1）────────────────────────────
+# scheduler 纯内存 state（{date, done}）任何重启后 first_run=True → 补跑（事故：
+# 12:33:10 重启 → 12:33:40 补跑竞价链烧 jev token + 双龙头）。本节把三链
+# （auction_leader_label / theme_leader_label / fengkou_red_obs）的 first_run /
+# retry_due 判定与 attempts 记账搬到 MongoDB 日档，内存 state["done"] 降级为缓存。
+# 三链同构共用一集合，doc _id="{chain}:{date}"（勘察结论：missed-slot 走的
+# record_run 是快照槽专用通道，不复用；无 kpl_collector_events 集合）。
+# 单写者 = scheduler 本循环（§1.2-1）；读写失败 logger.exception 留痕不静默，
+# 读写失败时调度层降级为内存语义（fail-visible：不阻断主链，缺口在日志暴露）。
+_LABEL_RUN_STATE_COLLECTION = "hotlist_jev_label_run_state"
+
+
+def _label_run_state_db() -> Any:
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    return get_runtime_mongodb_database()
+
+
+def _label_state_iso(now: datetime.datetime) -> str:
+    return now.astimezone(TZ_SHANGHAI).isoformat(timespec="seconds")
+
+
+def _label_state_load(key: str, date: str) -> dict | None:
+    try:
+        return _label_run_state_db()[_LABEL_RUN_STATE_COLLECTION].find_one(
+            {"_id": f"{key}:{date}"})
+    except Exception:
+        logger.exception("label run state load failed: %s %s", key, date)
+        return None
+
+
+def _label_state_terminal(doc: dict | None) -> bool:
+    """当日终态：已 ok 或已窗外放弃——first_run/retry_due 均不再触发。"""
+    return bool(doc and (doc.get("lastOk") or doc.get("abandonedWindow")))
+
+
+def _persisted_first_run(key: str, date: str, *,
+                         in_memory_done: bool) -> tuple[bool, dict | None]:
+    """first_run = 持久层无当日 ok/已跑标记（attempts>0 也算已跑）；返回 (first_run, doc)。"""
+    if in_memory_done:
+        return False, None
+    doc = _label_state_load(key, date)
+    if doc is None:
+        return True, None
+    if _label_state_terminal(doc) or int(doc.get("attempts") or 0) > 0:
+        return False, doc
+    return True, doc
+
+
+def _persisted_retry_due(key: str, date: str, *, max_attempts: int,
+                         retry_after_s: float, now: datetime.datetime) -> bool:
+    """retry_due 依持久化 attempts/lastOk/lastAt（重启后不失真）。"""
+    doc = _label_state_load(key, date)
+    if doc is None or _label_state_terminal(doc):
+        return False
+    if int(doc.get("attempts") or 0) >= max_attempts:
+        return False
+    last_at = _parse_iso(doc.get("lastAt"))
+    return last_at is None or (now - last_at).total_seconds() >= retry_after_s
+
+
+def _label_state_mark_attempt(key: str, date: str, *, now: datetime.datetime) -> int:
+    """执行前预写 attempts+1 / lastOk=False / lastAt（崩溃也留痕，重启依 lastAt 判重试）。"""
+    doc = _label_state_load(key, date) or {}
+    attempts = int(doc.get("attempts") or 0) + 1
+    iso = _label_state_iso(now)
+    try:
+        _label_run_state_db()[_LABEL_RUN_STATE_COLLECTION].update_one(
+            {"_id": f"{key}:{date}"},
+            {"$set": {"chain": key, "tradingDate": date,
+                      "firstRunAt": doc.get("firstRunAt") or iso,
+                      "attempts": attempts, "lastOk": False,
+                      "lastAt": iso, "updatedAt": iso}},
+            upsert=True)
+    except Exception:
+        logger.exception("label run state mark attempt failed: %s %s", key, date)
+    return attempts
+
+
+def _label_state_mark_result(key: str, date: str, *, attempts: int, ok: bool,
+                             result: Any, now: datetime.datetime,
+                             abandoned: bool = False) -> None:
+    """执行后落账 lastOk/lastResult(截断)/lastAt；abandoned=True 写窗外放弃终态。"""
+    doc = _label_state_load(key, date) or {}
+    iso = _label_state_iso(now)
+    # lastResult 存结构化 dict（供查询/审计）；非 dict 结果截断 JSON 串兑底
+    if isinstance(result, dict):
+        last_result: Any = result
+    else:
+        last_result = json.dumps(result, ensure_ascii=False, default=str)[:2000]
+    patch: dict[str, Any] = {
+        "chain": key, "tradingDate": date,
+        "firstRunAt": doc.get("firstRunAt") or iso,
+        "attempts": max(int(attempts or 0), 1),
+        "lastOk": bool(ok),
+        "lastResult": last_result,
+        "lastAt": iso, "updatedAt": iso}
+    if abandoned:
+        patch["abandonedWindow"] = True
+    try:
+        _label_run_state_db()[_LABEL_RUN_STATE_COLLECTION].update_one(
+            {"_id": f"{key}:{date}"}, {"$set": patch}, upsert=True)
+    except Exception:
+        logger.exception("label run state mark result failed: %s %s", key, date)
+
+
+async def _auction_leader_slot_tick(sched: "SnapshotCollectorScheduler",
+                                    state: dict, now: datetime.datetime,
+                                    trading_date: str, run_once: Any) -> None:
+    """竞价龙头晨间投喂槽决策（A 持久化 + B 窗上界，2026-11-19 用户裁决）。
+
+    - first_run/retry_due/attempts 全走持久化日档，重启不再失忆补跑（D1）；
+    - 窗上界 09:35：窗外一律不跑（含重启 first_run 场景），一次性落
+      abandoned_window 终态（D2，fail-visible）；
+    - status 种子：持久化 attempt 回填 sched._auction_leader_last，status 端点
+      attempt 跨重启不回退（§4 实弹判据）。
+    """
+    key = "auction_leader_label"
+    if now.time() >= _AUCTION_LEADER_WINDOW_END:
+        if not state.get("auction_leader_abandoned"):
+            state["auction_leader_abandoned"] = True
+            doc = _label_state_load(key, trading_date)
+            if not _label_state_terminal(doc):
+                _label_state_mark_result(
+                    key, trading_date,
+                    attempts=max(int((doc or {}).get("attempts") or 0), 1),
+                    ok=False,
+                    result={"state": "abandoned_window",
+                            "reason": "attempt/restart after window end "
+                                      f"{_AUCTION_LEADER_WINDOW_END.isoformat()}; "
+                                      "no run, no jev tokens"},
+                    abandoned=True, now=now)
+                logger.info("auction leader label 窗外放弃（%s 已过窗上界 %s）",
+                            trading_date, _AUCTION_LEADER_WINDOW_END.isoformat())
+        return
+    if now.time() < _AUCTION_LEADER_LABEL_AT:
+        return
+    first_run, run_doc = _persisted_first_run(
+        key, trading_date, in_memory_done=key in state["done"])
+    if run_doc and not sched._auction_leader_last:
+        sched._auction_leader_last = {
+            "ok": bool(run_doc.get("lastOk")),
+            "attempt": int(run_doc.get("attempts") or 0),
+            "at": run_doc.get("lastAt"),
+            "restoredFromRunState": True}
+    retry_due = (False if first_run else _persisted_retry_due(
+        key, trading_date, max_attempts=_AUCTION_LEADER_MAX_ATTEMPTS,
+        retry_after_s=_AUCTION_LEADER_RETRY_AFTER.total_seconds(), now=now))
+    if not (first_run or retry_due):
+        return
+    state["done"].add(key)
+    attempts = _label_state_mark_attempt(key, trading_date, now=now)
+    state["auction_leader_attempts"] = attempts
+    if not first_run:
+        logger.info("auction leader label 重试第 %s 次（%s）", attempts, trading_date)
+    auction_result = await asyncio.to_thread(run_once, trading_date)
+    _label_state_mark_result(key, trading_date, attempts=attempts,
+                             ok=bool(auction_result.get("ok")),
+                             result=auction_result, now=now)
+    sched._auction_leader_last = {**auction_result, "attempt": attempts,
+                                  "at": now.isoformat(timespec="seconds")}
+    logger.info("auction leader label %s: %s", trading_date,
+                json.dumps(auction_result, ensure_ascii=False, default=str)[:200])
 
 
 def jiuyan_enabled() -> bool:
@@ -687,36 +858,16 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                                         json.dumps(theme_result, ensure_ascii=False,
                                                    default=str)[:200])
                             break
-                # 竞价龙头晨间投喂（09:26，vA1 预登记 A1）：独立集合/独立题集代际；
-                # 限次退避重试镜像 17:30 链（防一次通道抖动吃掉整天样本）。
+                # 竞价龙头晨间投喂（09:25:20，vA1 预登记 A1；2026-11-19 裁决 1+2 前移）
+                # + A 持久化 / B 窗上界（2026-11-19 用户裁决）：决策逻辑抽到
+                # _auction_leader_slot_tick（可测），此处只保留开关门控。
                 if now.time() >= _AUCTION_LEADER_LABEL_AT:
                     from backend.operations.schedule import (
                         run_auction_leader_label_once, auction_leader_label_enabled)
                     if auction_leader_label_enabled():
-                        attempts = int(state.get("auction_leader_attempts") or 0)
-                        prev = sched._auction_leader_last or {}
-                        prev_at = _parse_iso(prev.get("at"))
-                        retry_due = (
-                            not prev.get("ok")
-                            and attempts < _AUCTION_LEADER_MAX_ATTEMPTS
-                            and (prev_at is None
-                                 or (now - prev_at).total_seconds() >= _AUCTION_LEADER_RETRY_AFTER.total_seconds()))
-                        first_run = "auction_leader_label" not in state["done"]
-                        if first_run or retry_due:
-                            if first_run:
-                                state["done"].add("auction_leader_label")
-                            state["auction_leader_attempts"] = attempts + 1
-                            if attempts and not first_run:
-                                logger.info("auction leader label 重试第 %s 次（%s）",
-                                            attempts + 1, trading_date)
-                            auction_result = await asyncio.to_thread(
-                                run_auction_leader_label_once, trading_date)
-                            sched._auction_leader_last = {
-                                **auction_result, "attempt": attempts + 1,
-                                "at": now.isoformat(timespec="seconds")}
-                            logger.info("auction leader label %s: %s", trading_date,
-                                        json.dumps(auction_result, ensure_ascii=False,
-                                                   default=str)[:200])
+                        await _auction_leader_slot_tick(
+                            sched, state, now, trading_date,
+                            run_auction_leader_label_once)
                 # 最强风口红名观察（15:10，2026-11-15 用户裁决「先观察再定」）：盘后一次性
                 # 6 发快照落 kpl_fengkou_red_obs + 历史 pending 日 T+1 回填；纯观察，
                 # 不进锚人群不烧 jev（预登记 fengkou-red-name-observation-20261115）。
@@ -725,22 +876,29 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                     from backend.operations.schedule import (
                         run_fengkou_red_observation_once, fengkou_red_observation_enabled)
                     if fengkou_red_observation_enabled():
-                        obs_attempts = int(state.get("fengkou_red_obs_attempts") or 0)
-                        obs_prev = sched._fengkou_red_obs_last or {}
-                        obs_prev_at = _parse_iso(obs_prev.get("at"))
-                        obs_retry_due = (
-                            not obs_prev.get("ok")
-                            and obs_attempts < _FENGKOU_RED_OBS_MAX_ATTEMPTS
-                            and (obs_prev_at is None
-                                 or (now - obs_prev_at).total_seconds()
-                                 >= _FENGKOU_RED_OBS_RETRY_AFTER.total_seconds()))
-                        if ("fengkou_red_obs" not in state["done"]) or obs_retry_due:
+                        # A 持久化（2026-11-19 用户裁决，同构推广）：first_run/retry
+                        # 走 MongoDB 日档，重启不再失忆补跑；内存 done 降级缓存。
+                        fk_first, _fk_doc = _persisted_first_run(
+                            "fengkou_red_obs", trading_date,
+                            in_memory_done="fengkou_red_obs" in state["done"])
+                        fk_retry = (False if fk_first else _persisted_retry_due(
+                            "fengkou_red_obs", trading_date,
+                            max_attempts=_FENGKOU_RED_OBS_MAX_ATTEMPTS,
+                            retry_after_s=_FENGKOU_RED_OBS_RETRY_AFTER.total_seconds(),
+                            now=now))
+                        if fk_first or fk_retry:
                             state["done"].add("fengkou_red_obs")
-                            state["fengkou_red_obs_attempts"] = obs_attempts + 1
+                            obs_attempts = _label_state_mark_attempt(
+                                "fengkou_red_obs", trading_date, now=now)
+                            state["fengkou_red_obs_attempts"] = obs_attempts
                             obs_result = await asyncio.to_thread(
                                 run_fengkou_red_observation_once, trading_date)
+                            _label_state_mark_result(
+                                "fengkou_red_obs", trading_date,
+                                attempts=obs_attempts, ok=bool(obs_result.get("ok")),
+                                result=obs_result, now=now)
                             sched._fengkou_red_obs_last = {
-                                **obs_result, "attempt": obs_attempts + 1,
+                                **obs_result, "attempt": obs_attempts,
                                 "at": now.isoformat(timespec="seconds")}
                             logger.info("fengkou red observation %s: %s", trading_date,
                                         json.dumps(obs_result, ensure_ascii=False,
@@ -753,27 +911,32 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                     from backend.operations.schedule import (
                         run_theme_leader_label_once, theme_leader_label_enabled)
                     if theme_leader_label_enabled():
-                        attempts = int(state.get("theme_leader_attempts") or 0)
-                        prev = sched._theme_leader_last or {}
-                        prev_at = _parse_iso(prev.get("at"))
-                        retry_due = (
-                            not prev.get("ok")
-                            and attempts < _THEME_LEADER_MAX_ATTEMPTS
-                            and (prev_at is None
-                                 or (now - prev_at).total_seconds() >= _THEME_LEADER_RETRY_AFTER.total_seconds())
-                        )
-                        first_run = "theme_leader_label" not in state["done"]
-                        if first_run or retry_due:
-                            if first_run:
-                                state["done"].add("theme_leader_label")
-                            state["theme_leader_attempts"] = attempts + 1
-                            if attempts and not first_run:
+                        # A 持久化（2026-11-19 用户裁决，同构推广）：同上，防重启补跑
+                        # 重烧 jev（本链每日 ≈112k tokens，重启失忆代价最大）。
+                        th_first, _th_doc = _persisted_first_run(
+                            "theme_leader_label", trading_date,
+                            in_memory_done="theme_leader_label" in state["done"])
+                        th_retry = (False if th_first else _persisted_retry_due(
+                            "theme_leader_label", trading_date,
+                            max_attempts=_THEME_LEADER_MAX_ATTEMPTS,
+                            retry_after_s=_THEME_LEADER_RETRY_AFTER.total_seconds(),
+                            now=now))
+                        if th_first or th_retry:
+                            state["done"].add("theme_leader_label")
+                            attempts = _label_state_mark_attempt(
+                                "theme_leader_label", trading_date, now=now)
+                            state["theme_leader_attempts"] = attempts
+                            if not th_first:
                                 logger.info("theme leader label 重试第 %s 次（%s）",
-                                            attempts + 1, trading_date)
+                                            attempts, trading_date)
                             leader_result = await asyncio.to_thread(
                                 run_theme_leader_label_once, trading_date)
+                            _label_state_mark_result(
+                                "theme_leader_label", trading_date,
+                                attempts=attempts, ok=bool(leader_result.get("ok")),
+                                result=leader_result, now=now)
                             sched._theme_leader_last = {
-                                **leader_result, "attempt": attempts + 1,
+                                **leader_result, "attempt": attempts,
                                 "at": now.isoformat(timespec="seconds")}
                             logger.info("theme leader label %s: %s", trading_date,
                                         json.dumps(leader_result, ensure_ascii=False,

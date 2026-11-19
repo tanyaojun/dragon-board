@@ -157,3 +157,104 @@ def test_read_realtime_prices_redis_down(monkeypatch):
     assert S.read_realtime_prices(["600102"]) == ({}, None)
     monkeypatch.setattr(RC, "get_hotlist_redis_client", lambda: None)
     assert S.read_realtime_prices(["600102"]) == ({}, None)
+
+
+# ── 开盘涨幅顺带取数（2026-11-19 修复：零新增外呼，TDX 当日棒 open）──
+
+def _bars_with_open(c):
+    b = _bars(c)
+    b[DATE] = {"close": 12.0, "open": 11.5}
+    return b
+
+
+def test_collect_open_pct_piggyback_zero_extra_fetch(monkeypatch):
+    """同一次 fetch_daily_bars 顺带落 open_pct；双字段完成后零外呼 complete。"""
+    db = FakeDb()
+    _seed_universe(db)
+    from backend.operations import tdx_daily_bars as T
+    calls = []
+
+    def spy(c, **k):
+        calls.append(c)
+        return _bars_with_open(c)
+    monkeypatch.setattr(T, "fetch_daily_bars", spy)
+    r = S.collect_prev_day_pct(db, DATE)
+    assert r["state"] == "ok" and r["ok_n"] == 2 and r["open_ok_n"] == 2
+    assert len(calls) == 2, "每股一次取数双字段，零新增外呼"
+    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    op = ser["open_pct"]["600102"]
+    assert op["price"] == 11.5 and op["src"] == "tdx_bar"
+    assert op["pct"] == round((11.5 / 11.0 - 1) * 100, 4)
+    assert ser["open_pct_state"]["n"] == 2
+    assert ser.get("ticks"), "字段级加字段，ticks 不被触碰"
+
+    def boom(*a, **k):
+        raise AssertionError("双字段完成后不得外呼")
+    monkeypatch.setattr(T, "fetch_daily_bars", boom)
+    assert S.collect_prev_day_pct(db, DATE)["state"] == "complete"
+
+
+def test_collect_open_band_suspect_skip_and_no_retry(monkeypatch):
+    """除权 band 越界（镜像 backfill B1）→ 宁缺勿错只披露，且不重试烧预算。"""
+    db = FakeDb()
+    _seed_universe(db, codes=("600102",))
+    from backend.operations import tdx_daily_bars as T
+    bars = {"2026-11-16": {"close": 10.0}, "2026-11-17": {"close": 11.0},
+            DATE: {"close": 12.0, "open": 20.0}}   # 涨停价 12.1，20 越界
+    monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: bars)
+    r = S.collect_prev_day_pct(db, DATE)
+    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    assert ser["open_pct"] == {} and r["open_ok_n"] == 0
+    assert ser["open_pct_state"]["bandSuspect"] == ["600102"]
+
+    def boom(*a, **k):
+        raise AssertionError("band 嫌疑股不得重试外呼")
+    monkeypatch.setattr(T, "fetch_daily_bars", boom)
+    assert S.collect_prev_day_pct(db, DATE)["state"] == "complete"
+
+
+def test_collect_open_no_today_bar_disclosed_and_no_retry(monkeypatch):
+    """review 2026-11-19 minor：取数成功但当日棒缺（停牌等）→ openNoBar 披露
+    并退出 pending 面，不逐轮烧日预算（fail-visible）。"""
+    db = FakeDb()
+    _seed_universe(db, codes=("600102",))
+    from backend.operations import tdx_daily_bars as T
+    bars = {"2026-11-16": {"close": 10.0}, "2026-11-17": {"close": 11.0}}
+    monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: dict(bars))
+    r = S.collect_prev_day_pct(db, DATE)
+    ser = db[S.COLLECTION_SERIES].docs[DATE]
+    assert r["ok_n"] == 1, "prev_pct 不受当日棒缺影响"
+    assert ser["open_pct"] == {} and r["open_ok_n"] == 0
+    assert ser["open_pct_state"]["openNoBar"] == ["600102"]
+    assert ser["open_pct_state"]["pending_n"] == 0
+
+    def boom(*a, **k):
+        raise AssertionError("当日棒缺股不得重试外呼")
+    monkeypatch.setattr(T, "fetch_daily_bars", boom)
+    assert S.collect_prev_day_pct(db, DATE)["state"] == "complete"
+
+
+def test_collect_open_pre0925_not_pending(monkeypatch):
+    """当日 09:25 撮合前 open 不列 pending（不烧日预算）；09:25 后同棒顺带取。"""
+    import datetime as dt
+    cst = dt.timezone(dt.timedelta(hours=8))
+    today = dt.datetime.now(cst).strftime("%Y-%m-%d")
+    now_pre = dt.datetime.now(cst).replace(hour=9, minute=0, second=0,
+                                           microsecond=0).timestamp()
+    now_post = dt.datetime.now(cst).replace(hour=9, minute=26, second=0,
+                                            microsecond=0).timestamp()
+    db = FakeDb()
+    db[S.COLLECTION_SERIES].docs[today] = {"_id": today, "ticks": [
+        {"ts": 1, "it": [{"s": "600102", "zt_buy_amount": 1e6}]}]}
+    from backend.operations import tdx_daily_bars as T
+    bars = {"2026-11-16": {"close": 10.0}, "2026-11-17": {"close": 11.0},
+            today: {"close": 12.0, "open": 11.5}}
+    monkeypatch.setattr(T, "fetch_daily_bars", lambda c, **k: bars)
+    r = S.collect_prev_day_pct(db, today, now=now_pre)
+    assert r["open_pending_n"] == 0 and r["open_ok_n"] == 0
+    assert r["ok_n"] == 1, "prev_pct 不受 09:25 门控影响"
+    ser = db[S.COLLECTION_SERIES].docs[today]
+    assert ser.get("open_pct") or {} == {}
+    r2 = S.collect_prev_day_pct(db, today, now=now_post)
+    assert r2["open_ok_n"] == 1
+    assert ser["open_pct"]["600102"]["pct"] == round((11.5 / 11.0 - 1) * 100, 4)

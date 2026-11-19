@@ -146,7 +146,7 @@ class MarketQuotesCache:
         tqdm_module: Any | None = None,
         redis_client: Any | None = None,
         redis_key_prefix: str = "",
-        ttl_seconds: float = 300.0,
+        ttl_seconds: float | None = None,
         now_ms: Callable[[], int] | None = None,
         fetch_timeout_seconds: float = 120.0,
     ) -> None:
@@ -156,9 +156,15 @@ class MarketQuotesCache:
         self._tqdm_module = tqdm_module
         self._redis = redis_client
         self._redis_prefix = str(redis_key_prefix or "").strip(":")
-        self._ttl_seconds = max(60, int(ttl_seconds))
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._fetch_timeout_seconds = max(30.0, float(fetch_timeout_seconds))
+        # TTL 必须覆盖「刷新间隔 + 单次 fetch 耗时」：写侧周期=fetch 耗时 F +
+        # sleep(interval)，若 TTL=interval 则每周期必有 F 秒过期空窗（跨进程读侧
+        # 整列缺席；2026-11-19 10:00 竞价试盘现价缺 342 事故）。默认=interval+
+        # fetch 超时上限+30s 裕量；显式 ttl_seconds 仍尊重（测试/诊断注入）。
+        self._ttl_seconds = max(
+            60, int(ttl_seconds if ttl_seconds is not None
+                    else self.refresh_interval_seconds + self._fetch_timeout_seconds + 30))
         self._rows: dict[str, dict[str, Any]] = {}
         self._fetched_at_ms = 0
         self._last_error: str | None = None
@@ -364,7 +370,7 @@ def get_market_quotes_cache() -> MarketQuotesCache:
             refresh_interval_seconds=settings.market_quotes_refresh_interval_seconds,
             redis_client=get_hotlist_redis_client(settings),
             redis_key_prefix=settings.redis_key_prefix,
-            ttl_seconds=settings.market_quotes_refresh_interval_seconds,
+            # ttl 缺省=interval+fetch 超时+30s（防周期过期空窗，见构造函数注）
         )
     return _quotes_cache
 

@@ -22,12 +22,17 @@ class _Coll:
     def __init__(self, owner, name):
         self.owner, self.name = owner, name
 
-    def find_one(self, q, projection=None):
+    def find_one(self, q, projection=None, sort=None):
         import copy
         if self.name == "kpl_morning_bidding_raw":
+            # 2026-11-19 裁决 1+2：_id<date 倒序查询=前日回退源
+            if isinstance(q.get("_id"), dict) and "$lt" in q["_id"]:
+                return copy.deepcopy(self.owner.mbl_prev) if self.owner.mbl_prev else None
             return copy.deepcopy(self.owner.mbl) if self.owner.mbl else None
         if self.name == "kpl_auction_price":
             return copy.deepcopy(self.owner.auct) if self.owner.auct else None
+        if self.name == "kpl_daban_pool":
+            return {"bid_items": copy.deepcopy(self.owner.bid_items or [])}
         return copy.deepcopy(self.owner.doc) if self.owner.doc else None
 
 
@@ -35,10 +40,13 @@ class FakeSeriesDb:
     """三集合假库：kpl_bidding_series + kpl_morning_bidding_raw（bk_name join）
     + kpl_auction_price（09:15/09:25 价格存档，2026-11-18）。"""
 
-    def __init__(self, doc=None, mbl_rows=None, auct=None):
+    def __init__(self, doc=None, mbl_rows=None, auct=None, mbl_prev=None,
+                 bid_items=None):
         self.doc = doc
         self.mbl = {"rows": mbl_rows} if mbl_rows is not None else None
         self.auct = auct
+        self.mbl_prev = {"rows": mbl_prev} if mbl_prev is not None else None
+        self.bid_items = bid_items
 
     def __getitem__(self, name):
         return _Coll(self, name)
@@ -81,9 +89,13 @@ def test_derive_fields_from_series():
     # 委买额时序统计：首帧/峰值/末帧
     assert r["first_amount"] == 7.0e6 and r["max_amount"] == 9.0e6
     assert r["last_amount"] == 8.98e6
-    # 末帧语义：jj_percent/jj_amount/jj_turnover 取末帧
-    assert r["jj_percent"] == 4.78 and r["jj_amount"] == 1.3979616e7
-    assert r["jj_turnover"] == 0.15
+    # 末帧语义：jj_percent 取末帧（pct 链不接投影）；jj_amount/jj_turnover 接投影层
+    # （2026-11-19：本 fixture 无公布锚（仅窗内 tick）→ in_pool_pre_match 态，
+    # 额=series 窗内虚拟观测（可计算部分保全），换手缺市值→None+no_float_cap）
+    assert r["jj_percent"] == 4.78
+    assert r["jj_amount"] == 1.3979616e7
+    assert r["jjAmountSrc"] == "series_virtual"
+    assert r["jj_turnover"] is None and r["jjTurnoverSrc"] is None
 
 
 def test_derive_excludes_no_ztbuy():
@@ -101,6 +113,34 @@ def test_derive_plate_missing_fail_visible():
     rows, state = M.derive_trial_rows_from_series(FakeSeriesDb(_doc()), "2026-11-17")
     assert state["state"] == "ok" and state["plateMissing"] is True
     assert rows["605255"]["bk_name"] is None
+
+
+def test_bk_name_src_same_day_disclosure():
+    """2026-11-19 裁决 1+2：同日 MBL 命中 → bkNameSrc=mbl_same + plateSrcN 计数。"""
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
+    assert rows["605255"]["bkNameSrc"] == "mbl_same"
+    assert state["plateSrcN"] == {"mbl_same": 1}
+
+
+def test_bk_name_fallback_prev_mbl():
+    """同日 raw 缺席（09:26 读口）→ 前日 MBL 档回退，桥接不再静默死亡。"""
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), mbl_prev={"605255": {"plate": "机器人"}}), "2026-11-17")
+    assert rows["605255"]["bk_name"] == "机器人"
+    assert rows["605255"]["bkNameSrc"] == "mbl_prev"
+    assert state["plateSrcN"] == {"mbl_prev": 1}
+    assert state["plateMissing"] is True   # 同日源缺席仍披露
+
+
+def test_bk_name_fallback_bid_plate():
+    """同日+前日 MBL 均缺席 → pid8 bid lane plate（pos11）回退。"""
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(_doc(), bid_items=[{"stock_id": "605255", "plate": "机器人",
+                                        "bidding_pct": 4.78}]), "2026-11-17")
+    assert rows["605255"]["bk_name"] == "机器人"
+    assert rows["605255"]["bkNameSrc"] == "bid_plate"
+    assert state["plateSrcN"] == {"bid_plate": 1}
 
 
 def test_derive_absent_states():
@@ -138,26 +178,44 @@ def test_derive_jj_frozen_mbl_primary():
 
 
 def test_derive_jj_bid_frozen_for_mbl_absent():
-    """MBL 榜外掉池股 → bid 通道 09:25 匹配推送冻结值兑底（jjSource=bid_frozen）。"""
+    """MBL 榜外掉池股 → bid 通道公布后终态兑底（投影 bid_frozen，jjSource=bid_frozen）。
+    公布锚 = mbl 完整公布帧（603030 沪市非零）；605255 不在公布帧但 bid last_seen
+    严格晚于额锚 → 留池持久证据分支。"""
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=8))
+    t_pub = _dt.datetime(2026, 11, 17, 9, 26, 20, tzinfo=tz).timestamp()
+    t_ls = _dt.datetime(2026, 11, 17, 9, 27, 0, tzinfo=tz).timestamp()
+    pub_raw = ["603030", "", "", "", "", "", 11109148, 1.07, 26669214, 0,
+               26669214, "", 2499813743, "", 0, 0, ""]
+
     class DbWithBid(FakeSeriesDb):
         def __getitem__(self, name):
             if name == "kpl_daban_pool":
                 class C:
                     def find_one(self, q, projection=None):
-                        return {"bid_items": [{"stock_id": "605255",
-                                "bidding_pct": 6.6, "bidding_amount": 3e7,
-                                "bidding_turnover": 0.3}]}
+                        return {"bid_ts": t_ls, "bid_items": [
+                            {"stock_id": "605255", "bidding_pct": 6.6,
+                             "bidding_amount": 3e7, "bidding_turnover": 0.3,
+                             "last_seen_ts": t_ls}]}
+                return C()
+            if name == "kpl_mbl_series":
+                class C:
+                    def find_one(self, q, projection=None):
+                        return {"frames": [{"ts": "2026-11-17T09:26:20+08:00",
+                                            "rows": [pub_raw]}]}
                 return C()
             return super().__getitem__(name)
     rows, state = M.derive_trial_rows_from_series(
         DbWithBid(_doc(), _mbl_rows()), "2026-11-17")
     r = rows["605255"]
     assert r["jj_percent"] == 6.6 and r["jj_amount"] == 3e7
+    assert r["jjAmountSrc"] == "bid_frozen"
     assert r["jjSource"] == "bid_frozen" and r["jjFrozen"] is True
 
 
 def test_derive_jj_frozen_partial_fallback():
-    """冻结值逐字段回退：pct 在/amount 缺 → amount 取末帧，不连坐。"""
+    """冻结值逐字段不连坐：pct 在（mbl_frozen）/amount 缺 → 投影窗内虚拟观测
+    兜底（series_virtual，无公布锚 fixture 形态），pct 链不受影响。"""
     mbl = _mbl_rows()
     mbl["605255"]["bidding_pct"] = 5.5
     rows, _ = M.derive_trial_rows_from_series(
@@ -165,7 +223,59 @@ def test_derive_jj_frozen_partial_fallback():
     r = rows["605255"]
     assert r["jj_percent"] == 5.5
     assert r["jj_amount"] == 1.3979616e7
+    assert r["jjAmountSrc"] == "series_virtual"
     assert r["jjSource"] == "mbl_frozen"
+
+
+def test_derive_jj_amount_turnover_projection_600410():
+    """投影层锚（2026-11-19 实档回放切片）：掉池股 600410 额=col10 掉池前
+    虚拟观测 124381050@09:23:23、换手=派生 0.6132（额/流通市值×100）、
+    净额缺位 None（jj_percent 链独立不接投影）。"""
+    import datetime as _dt
+    tz = _dt.timezone(_dt.timedelta(hours=8))
+    t0 = _dt.datetime(2026, 11, 19, 9, 15, 35, tzinfo=tz).timestamp()
+    t1 = _dt.datetime(2026, 11, 19, 9, 23, 23, tzinfo=tz).timestamp()
+    doc = {"_id": "2026-11-19", "ticks": [
+        _tick(t0, [{"s": "600410", "bidding_pct": 9.99, "bidding_amount": 0.0,
+                    "bidding_net": 0.0, "bidding_turnover": 0.0,
+                    "zt_buy_amount": 1.2e8, "real_float": 20285151636.0}]),
+        _tick(t1, [{"s": "600410", "bidding_pct": 9.99, "bidding_amount": 0.0,
+                    "bidding_net": 0.0, "bidding_turnover": 0.0,
+                    "zt_buy_amount": 1.248e8, "real_float": 20285151636.0}]),
+        _tick(t1 + 88, [])]}   # 09:24:51 空帧：600410 掉池证据（末帧不在场）
+    raw10 = ["600410", "华胜天成", "", "", "", "", 0, 0, 0, 0, 124381050,
+             "", 20285151636, "", 0, 0, ""]
+    mbl_ser = {"_id": "2026-11-19", "frames": [
+        {"ts": "2026-11-19T09:15:35+08:00", "rows": [raw10]},
+        {"ts": "2026-11-19T09:23:23+08:00", "rows": [raw10]},
+        {"ts": "2026-11-19T09:24:51+08:00", "rows": []}]}
+    pool = {"_id": "2026-11-19", "bid_ts": t1 + 88, "bid_items": [
+        {"stock_id": "600410", "name": "华胜天成", "bidding_pct": 9.98811,
+         "bidding_net": 0.0, "bidding_turnover": 0.0, "bidding_amount": 0.0,
+         "zt_buy_amount": 124802850.0, "real_float": 20285151636.0,
+         "last_seen_ts": t1}]}
+
+    class Db(FakeSeriesDb):
+        def __getitem__(self, name):
+            if name == "kpl_mbl_series":
+                class C:
+                    def find_one(self, q, projection=None):
+                        return mbl_ser
+                return C()
+            if name == "kpl_daban_pool":
+                class C:
+                    def find_one(self, q, projection=None):
+                        return pool
+                return C()
+            return super().__getitem__(name)
+
+    rows, state = M.derive_trial_rows_from_series(Db(doc), "2026-11-19")
+    r = rows["600410"]
+    assert r["jj_amount"] == 124381050.0
+    assert r["jjAmountSrc"] == "mbl_col10_preexit"
+    assert r["jj_turnover"] == 0.6132 and r["jjTurnoverSrc"] == "derived_cap"
+    assert state["trioCensus"]["net_missing_n"] == 1
+    assert state["trioState"]["tsPub"] is None   # 无公布锚（掉池股-only 切片）
 
 
 def test_derive_first_add_tick_delta():
@@ -324,11 +434,57 @@ def test_derive_pct0915_series_first_fallback_and_archive_priority():
 
 
 def test_derive_open0925_missing_fallback_disclosure():
-    """存档缺 → 回退旧链（MBL→bid→序列末帧），open0925N/MissingN 结构化披露。"""
+    """存档缺且无 TDX 开盘棒 → 开盘涨幅列如实缺席（不回退 MBL/bid/末帧：
+    成员制早退值≠开盘，11-16 缺陷定案）；jj_percent 仍走旧链披露。"""
     rows, state = M.derive_trial_rows_from_series(
         FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
     assert state["open0925N"] == 0 and state["open0925MissingN"] == 1
+    assert state["open0925TdxN"] == 0
     assert rows["605255"]["jjSource"] != "open0925_archive"
+    assert rows["605255"]["pct0925"] is None and rows["605255"]["p0925"] is None
+    assert rows["605255"]["open0925Src"] is None
+
+
+def test_derive_open0925_tdx_bar_fallback():
+    """2026-11-19 修复：存档缺 → TDX 盘中开盘棒（open_pct 加字段）兜底权威；
+    锚：301391 11-19 open=50.9/9.09% == MBL 09:28 冻结 == TDX 真开盘。"""
+    doc = _doc()
+    doc["open_pct"] = {"605255": {"price": 4.40, "pct": 0.0, "src": "tdx_bar"}}
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(doc, _mbl_rows()), "2026-11-17")
+    r = rows["605255"]
+    assert r["pct0925"] == 0.0 and r["p0925"] == 4.40
+    assert r["open0925Src"] == "tdx_bar_open"
+    assert r["jj_percent"] == 0.0 and r["jjSource"] == "tdx_bar_open"
+    assert r["jjFrozen"] is True
+    assert state["open0925TdxN"] == 1 and state["open0925MissingN"] == 0
+    assert state["open0925N"] == 0
+
+
+def test_derive_open0925_price_without_pct_not_half_broken():
+    """review 2026-11-19 minor：开盘棒只带 price 缺 pct → 不产出 p0925 有值而
+    pct0925/open0925Src 双 None 的半缺位行（price 仅在 pct 在场时顺带取）。"""
+    doc = _doc()
+    doc["open_pct"] = {"605255": {"price": 4.40, "src": "tdx_bar"}}
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(doc, _mbl_rows()), "2026-11-17")
+    r = rows["605255"]
+    assert r["pct0925"] is None and r["p0925"] is None
+    assert r["open0925Src"] is None
+    assert state["open0925TdxN"] == 0 and state["open0925MissingN"] == 1
+
+
+def test_derive_open0925_archive_priority_over_tdx_bar():
+    """存档在 → 第一权威不被 TDX 开盘棒压过（逐行 src 披露）。"""
+    doc = _doc()
+    doc["open_pct"] = {"605255": {"price": 4.40, "pct": 0.0, "src": "tdx_bar"}}
+    auct = {"s0925": {"605255": {"price": 4.50, "pct": 2.27, "ts": 2.0}}}
+    rows, state = M.derive_trial_rows_from_series(
+        FakeSeriesDb(doc, _mbl_rows(), auct=auct), "2026-11-17")
+    r = rows["605255"]
+    assert r["pct0925"] == 2.27 and r["p0925"] == 4.50
+    assert r["open0925Src"] == "open0925_archive"
+    assert state["open0925N"] == 1 and state["open0925TdxN"] == 0
 
 
 def test_collector_capture_auction_price_0915_0925(monkeypatch):

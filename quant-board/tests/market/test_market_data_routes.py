@@ -324,11 +324,13 @@ async def test_quotes_cache_refresh_writes_redis_with_ttl() -> None:
     assert await cache.refresh() is True
 
     key = "test:market:quotes:tencent:v1"
-    assert redis.expires[key] == 300
+    # 2026-11-19：TTL 缺省=interval(300)+fetch 超时(120)+30 裕量=450——
+    # TTL=interval 时每周期必有 fetch 耗时秒级过期空窗（试盘现价整列缺席事故）
+    assert redis.expires[key] == 450
     assert "600519" in redis.hashes[key]
     assert "000001" in redis.hashes[key]
     # 2026-11-18 快照 ts 单源透出（试盘现价读侧披露档龄）
-    assert redis.expires[key + ":ts"] == 300
+    assert redis.expires[key + ":ts"] == 450
     assert redis.values[key + ":ts"] == "1000"
 
 

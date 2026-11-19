@@ -873,6 +873,9 @@ def test_em_empty_pool_requires_explicit_zero(monkeypatch):
         _FakeResponse(payload={"data": {"pool": []}}),            # 空池未自报 0 → 不可用
         _FakeResponse(payload={"data": {"tc": 0, "pool": []}}),   # 显式 tc=0 → 合法 0
     ])
+    # 时间炸弹修复（2026-11-19）：窗口=今天-30d 随真实日期滚动，10-19 用例
+    # 出窗后恒 None；冻结窗口与邻用例同口径（测试确定性，不触网）
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
     assert mdp.fetch_limit_down_em("2026-10-19") is None
     rows = mdp.fetch_limit_down_em_rows("2026-10-19")
     assert rows is not None and rows["count"] == 0 and rows["rows"] == []
@@ -894,6 +897,7 @@ def test_rows_payload_exposes_rows_returned(monkeypatch):
         "junk",                   # 非 dict → 坏行
     ]}}
     _patch_em(monkeypatch, responses=[_FakeResponse(payload=payload)])
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")   # 冻窗防时间炸弹
     out = mdp.fetch_limit_down_em_rows("2026-10-19")
     assert out["rowsReturned"] == 3 and len(out["rows"]) == 1 and out["badRows"] == 2
     assert out["count"] == 4 and out["truncated"] is True   # EM 自报 4 > 实返 3 → 真截断

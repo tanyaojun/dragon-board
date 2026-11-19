@@ -9366,6 +9366,33 @@ function kplPoolRender(view){
 // 竞昨比=竞价成交量/昨日成交量×100%（2026-10-28 用户需求派生列，basis 缺失显 '--'，
 //   kplDabanRows 内富化；历史档同口径，basis 按存档日期惰性拉取）。
 // 历史=本地按日存档 /daban-bidding（kpl_daban_pool 同日档 bid_ 通道，逐日回退同涨停行情）。
+// 竞价三字段投影 tooltip（2026-11-19 用户裁决：src/state/时点/派生口径只进结构化
+// 与 tooltip，不进语料叙事——红线 8）；未投影旧快照无 trio_state → 无 tooltip（不伪造口径）。
+const KPL_BID_TRIO_STATE = {in_pool_matched:'留池·撮合公布', in_pool_pre_match:'留池·窗内未公布',
+  dropped_pre_match:'掉池·未收到公布', dropped_post_match:'掉池·已收到公布',
+  not_in_auction_pool:'不在竞价榜', no_mbl_series_day:'历史日·无帧档回退'};
+const KPL_BID_TRIO_SRC = {mbl_postmatch:'MBL公布帧', mbl_frozen:'MBL冻结', bid_frozen:'socket终态',
+  series_postmatch:'socket公布帧', mbl_col10_virtual:'col10窗内虚拟', mbl_col10_preexit:'col10掉池前观测',
+  bid_virtual:'socket窗内虚拟', bid_preexit_virtual:'socket掉池前观测',
+  series_virtual:'series窗内虚拟', series_preexit_virtual:'series掉池前观测',
+  derived_cap:'派生=额/流通市值×100', tencent_auction:'腾讯补源实测'};
+function kplBidTrioTip(r, field){
+  if (!r || !r.trio_state) return '';
+  const parts = [KPL_BID_TRIO_STATE[r.trio_state] || r.trio_state];
+  if (field === 'net'){
+    parts.push(r.bidding_net_state === 'published' ? '净额=公布值（真0保留）' : '净额未公布·缺位（不烘0）');
+  } else if (field === 'tur'){
+    const s = KPL_BID_TRIO_SRC[r.bidding_turnover_src];
+    parts.push(r.bidding_turnover == null ? '换手缺位' : (s ? '换手=' + s : '换手'));
+    if (r.bidding_turnover_src === 'derived_cap' && r.float_cap != null) parts.push('流通市值 ' + kfmtAmt(r.float_cap));
+  } else {
+    const s = KPL_BID_TRIO_SRC[r.bidding_amount_src];
+    parts.push(r.bidding_amount == null ? '成交额缺位（无虚拟撮合观测）' : (s ? '额=' + s : '额'));
+    if (r.amount_ts) parts.push('时点 ' + r.amount_ts);
+  }
+  if ((r.trio_reasons || []).length) parts.push('注:' + r.trio_reasons.join(','));
+  return parts.join(' · ');
+}
 function kplBidSetAggSort(key){
   const s = KPL.bidAggSort;
   if (s.key === key) s.dir = -s.dir;
@@ -9403,14 +9430,16 @@ function kplBidRender(){
   };
   let ph = '<thead><tr>' + bh('#') + bh('板块', 'name') + bh('家数', 'n')
     + bh('竞价净额', 'bidding_net') + bh('竞价成交额', 'bidding_amount') + '</tr></thead><tbody>';
-  // 「全部」行（同炸板池）：全量口径按个股去重；缺值聚合显 '--'，不烘成 0（评审 P2-4）
+  // 「全部」行（同炸板池）：全量口径按个股去重；缺值聚合显 '--'，不烘成 0（评审 P2-4）；
+  // 覆盖率 tooltip（2026-11-19 投影层：缺位股不计入合计，sumN/n 披露）
   const allSum = kplDabanAllSums('kplbid', ['bidding_net', 'bidding_amount']);
+  const allCovTip = (c, label) => `${label}合计：覆盖 ${allSum.sumN[c] || 0}/${allSum.n}（缺位 ${allSum.n - (allSum.sumN[c] || 0)} 只未公布，不计入合计）`;
   if (!q){
     ph += `<tr${sel ? '' : ' class="on"'} onclick="kplBidSelect('')">`
       + `<td class="kpl-uni">--</td><td>全部</td>`
       + `<td class="kpl-uni" title="全量口径：按个股去重（不按板块重复计）">${allSum.n}</td>`
-      + `<td class="kpl-uni ${kcls(allSum.sums.bidding_net)}">${allSum.sumN.bidding_net ? kfmtAmt(allSum.sums.bidding_net) : '--'}</td>`
-      + `<td class="kpl-uni">${allSum.sumN.bidding_amount ? kfmtAmt(allSum.sums.bidding_amount) : '--'}</td></tr>`;
+      + `<td class="kpl-uni ${kcls(allSum.sums.bidding_net)}" title="${esc(allCovTip('bidding_net', '竞价净额'))}">${allSum.sumN.bidding_net ? kfmtAmt(allSum.sums.bidding_net) : '--'}</td>`
+      + `<td class="kpl-uni" title="${esc(allCovTip('bidding_amount', '竞价成交额'))}">${allSum.sumN.bidding_amount ? kfmtAmt(allSum.sums.bidding_amount) : '--'}</td></tr>`;
   }
   let pn = 0;
   for (const a of agg){
@@ -9421,8 +9450,8 @@ function kplBidRender(){
       + `<td class="kpl-uni">${pn}</td>`
       + `<td>${esc(a.name)}</td>`
       + `<td class="kpl-uni">${a.n}</td>`
-      + `<td class="kpl-uni ${kcls(a.sums.bidding_net)}">${a.sumN.bidding_net ? kfmtAmt(a.sums.bidding_net) : '--'}</td>`
-      + `<td class="kpl-uni">${a.sumN.bidding_amount ? kfmtAmt(a.sums.bidding_amount) : '--'}</td></tr>`;
+      + `<td class="kpl-uni ${kcls(a.sums.bidding_net)}" title="竞价净额合计：覆盖 ${a.sumN.bidding_net || 0}/${a.n}（缺位 ${a.n - (a.sumN.bidding_net || 0)} 只未公布，不计入合计）">${a.sumN.bidding_net ? kfmtAmt(a.sums.bidding_net) : '--'}</td>`
+      + `<td class="kpl-uni" title="竞价成交额合计：覆盖 ${a.sumN.bidding_amount || 0}/${a.n}（缺位 ${a.n - (a.sumN.bidding_amount || 0)} 只，不计入合计）">${a.sumN.bidding_amount ? kfmtAmt(a.sums.bidding_amount) : '--'}</td></tr>`;
   }
   $(conf.p + 'PlateTable').innerHTML = (pn || (!q && allSum.n))
     ? ph + '</tbody>' : '<tbody><tr><td class="empty">' + (q ? '无匹配板块（过滤词无命中）' : '暂无板块（等待 2103 推送）') + '</td></tr></tbody>';
@@ -9451,9 +9480,9 @@ function kplBidRender(){
     html += `<tr><td class="kpl-uni">${esc(r.stock_id || '--')}</td>`
       + `<td>${esc(r.name || '--')}${allB ? '<div style="margin-top:2px">' + allB + '</div>' : ''}</td>`
       + `<td class="kpl-uni ${kcls(knumUnit(r.bidding_pct))}">${kfmtNum(knumUnit(r.bidding_pct)) + (r.bidding_pct == null ? '' : '%')}</td>`
-      + `<td class="kpl-uni ${kcls(knumUnit(r.bidding_net))}">${kfmtAmt(knumUnit(r.bidding_net))}</td>`
-      + `<td class="kpl-uni">${kfmtNum(knumUnit(r.bidding_turnover), 1)}</td>`
-      + `<td class="kpl-uni">${kfmtAmt(knumUnit(r.bidding_amount))}</td>`
+      + `<td class="kpl-uni ${kcls(knumUnit(r.bidding_net))}" title="${esc(kplBidTrioTip(r, 'net'))}">${kfmtAmt(knumUnit(r.bidding_net))}</td>`
+      + `<td class="kpl-uni" title="${esc(kplBidTrioTip(r, 'tur'))}">${kfmtNum(knumUnit(r.bidding_turnover), 1)}</td>`
+      + `<td class="kpl-uni" title="${esc(kplBidTrioTip(r, 'amt'))}">${kfmtAmt(knumUnit(r.bidding_amount))}</td>`
       + `<td class="kpl-uni" title="竞昨比=竞价成交量/昨日成交量×100%（成交额/竞价价派生；原料缺失显 --，不猜数）">${kfmtNum(r.ratio_prev_vol) + (r.ratio_prev_vol == null ? '' : '%')}</td>`
       + `<td class="kpl-uni">${kfmtAmt(knumUnit(r.zt_buy_amount))}</td>`
       + `<td class="kpl-uni ${kcls(knumUnit(r.pct))}" title="${KPL.dabanMode.kplbid === 'history' ? '历史档=收盘态值（竞价页签实时涨幅随盘刷新）' : '实时涨幅（pid=8 pos6）'}">${kfmtNum(knumUnit(r.pct)) + (r.pct == null ? '' : '%')}</td>`
@@ -9474,10 +9503,13 @@ function kplBidRender(){
   const gap = (snap && snap.pages_missing && snap.pages_missing.length)
     ? ` · 页缺口 ${snap.pages_missing.join(',')}` : '';
   const mode = kplDabanModeLabel('kplbid');
+  // 页头 census（2026-11-19 投影层：公布/虚拟/掉池观测/净额缺位 日级披露）
+  const tc = snap && snap.trioCensus;
+  const censusTxt = tc ? ` · 撮合公布 ${tc.matched_n}/虚拟 ${tc.virtual_n}/掉池前观测 ${tc.preexit_n}/净额缺位 ${tc.net_missing_n}` : '';
   $(conf.p + 'Stats').textContent =
     `集合竞价（${mode}）· 快照 ${ts} · 分组 ${pn} · 本页 ${rows.length} 只 · 上游 maxSize ${maxN}`
     + (snap && snap.pages ? ` · 已收 ${snap.pages}/${snap.pages_expected} 页` : '') + gap
-    + (snap && snap.date ? ` · ${snap.date}` : '');
+    + (snap && snap.date ? ` · ${snap.date}` : '') + censusTxt;
 }
 
 // ══════════ KPL 行情 · 大盘 KPI 条（七卡，kpl 组子页公用，2026-10-27）══════════
@@ -9964,6 +9996,7 @@ function atRender(){
             jjAmtN: atNum(r.jj_amount), priceN: atNum(r.price), pctN: atNum(r.percent),
             aucPctN: atNum(r.pct0915),
             openPctN: atNum(r.pct0925), openPrN: atNum(r.p0925),
+            openSrc: r.open0925Src,
             prePctN: atNum(r.pre_percent), floatN: atNum(r.circulated_value),
             firstN: atNum(r.first_amount), firstAddN: atNum(r.first_add),
             maxN: atNum(r.max_amount), lastN: atNum(r.last_amount)};
@@ -10018,7 +10051,7 @@ function atRender(){
     html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
       + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
       + `<td class="kpl-uni ${kcls(r.aucPctN)}" title="${esc(pctTip)}">${atPct(r.aucPctN)}${r.aucPctN != null ? (r.jj915Src === 'open0915_archive' ? '<div class=\"kpl-sub\">竞价 09:15</div>' : r.start_time ? '<div class=\"kpl-sub\">首帧 ' + esc(String(r.start_time)) + '</div>' : '') : ''}</td>`
-      + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅=09:25 撮合开盘涨幅（kpl_auction_price 存档；历史日=TDX 开盘回补 src=tdx_lday）${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅=09:25 撮合开盘涨幅（权威=kpl_auction_price 存档；缺位回退 TDX 盘中开盘棒 open_pct，open0925Src 逐行披露；不回退 MBL/bid/末帧——成员制早退值≠开盘；历史日=TDX 开盘回补 src=tdx_lday）${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}${r.openPctN != null && r.openSrc ? '<div class=\"kpl-sub\">' + (r.openSrc === 'open0925_archive' ? '存档 09:25' : r.openSrc === 'tdx_bar_open' ? 'TDX 开盘' : esc(String(r.openSrc))) + '</div>' : ''}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价换手=09:25 冻结 bidding_turnover（MBL→bid）优先，缺位=序列末帧观测值' : '竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）'}">${atPct(r.jjTurN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '竞价成交额=09:25 冻结 bidding_amount（MBL→bid）优先，缺位=末帧观测值（board_amt Σ口径），单位=元' : '竞价成交额=jj_amount（元，rank 原值）'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
       + `<td class="kpl-uni"${atDerived ? ' title="观测首帧时点（官方序列，≠Wzs 试盘开始语义）"' : ''}>${esc(String(r.start_time || '--'))}</td>`
@@ -10031,7 +10064,7 @@ function atRender(){
       + `<td class="kpl-uni ${kcls(r.pctN)}" title="${atDerived ? '涨幅=末帧 pct（官方序列观测值）' : 'percent 当日涨幅（收盘口径以行情源为准）'}">${atPct(r.pctN)}</td>`
       + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（kpl_bidding_series.prev_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
       + `<td class="kpl-uni" title="${atDerived ? '流通值=末帧 real_float（bid 口径实际流通，≠Wzs 历史口径，禁止跨源派生比率）' : 'circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）'}">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
-      + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
+      + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名） · 板块来源=${esc(r.bkNameSrc || '缺席')}（mbl_same=同日MBL/mbl_prev=前日MBL/bid_plate=pid8推送）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
   }
   $('atStockTable').innerHTML = decorated.length ? html + '</tbody>'
     : '<tbody><tr><td class="empty">' + (sq ? '无匹配个股（搜索词无命中）'
@@ -10049,7 +10082,7 @@ function atRender(){
       + (AT.nameMiss ? ` · 名称缺失 ${AT.nameMiss} 只` : '')
       + (model.unboarded.length ? ` · 未分板块 ${model.unboarded.length} 只` : '') + fb
       + (AT.trialState && AT.trialState.open0925N != null
-        ? ` · 0925存档 ${AT.trialState.open0925N}/缺 ${AT.trialState.open0925MissingN}` : '')
+        ? ` · 0925存档 ${AT.trialState.open0925N}/TDX ${AT.trialState.open0925TdxN || 0}/缺 ${AT.trialState.open0925MissingN}` : '')
       + (AT.trialState && AT.trialState.open0915N != null
         ? ` · 0915存档 ${AT.trialState.open0915N}/首帧回退 ${AT.trialState.seriesFirst0915N}` : '');
   // 2026-11-14 用户裁决：页头长段「数据源：…」描述删除；fail-visible 收敛到

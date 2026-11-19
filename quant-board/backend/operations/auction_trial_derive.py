@@ -10,7 +10,12 @@
 派生口径（仅消费 roster 实读字段，其余不猜不补 0）：
 - jj_percent = 09:25 存档开盘涨幅权威（3006 现有流归档 kpl_auction_price，
   2026-11-18 用户裁决：真 09:25=撮合开盘，掉池股亦有；p0925/pct0925 全披露）；
-  缺位逐层回退 MBL→bid→序列末帧（jjSource/jjFrozen 逐行披露）
+  缺位逐层回退 TDX 盘中开盘棒→MBL→bid→序列末帧（jjSource/jjFrozen 逐行披露）
+- pct0925/p0925（开盘涨幅列）= 存档 s0925 → TDX 盘中开盘棒（kpl_bidding_series
+  .open_pct，2026-11-19 修复：live 归档覆盖⊆浏览器 3006 订阅面致竞价窗零捕获；
+  TDX 当日棒 open 非成员制全宇宙覆盖，archiver 顺带 prev_pct 取数零新增外呼）；
+  **不回退 MBL/bid/序列末帧**（成员制掉池股早退值≠开盘，11-16 预登记缺陷定案；
+  002652 锚：早退 9.77% vs 真开盘 0.00%）；缺位如实 None + open0925Src 披露
 - pct0915 = 竞价涨幅（09:15 竞价，2026-11-18 用户裁决与 09:25 开盘涨幅两时点
   分列展示）：权威=存档 s0915；缺档回退序列首帧 bidding_pct 观测值
   （jj915Src=open0915_archive/series_first 逐行披露；p0915 仅存档在场时有值）
@@ -23,14 +28,18 @@
 - circulated_value  = 末帧 real_float（bid 口径实际流通，≠Wzs 历史口径，披露）
 - pre_percent       = None（昨涨幅无零外呼本地源：日线需外呼，读侧红线 9 禁；
   如需补齐走采集路径预登记，docs §7.15）
-- jj_amount         = 末帧 bidding_amount（竞价成交额，board_amt Σ口径）
-- jj_turnover       = 末帧 bidding_turnover
+- jj_amount/jj_turnover = 竞价三字段单一投影层（auction_bidding_facts，2026-11-19
+  用户裁决）：公布值（留池真 0 保留）→ 掉池股 col10 窗内末帧虚拟观测 → 派生换手；
+  净额状态门缺位（未公布 None，不烘 0）；jjAmountSrc/jjTurnoverSrc 逐行披露。
+  投影全源读失败 → 旧链（MBL冻结→bid冻结→序列末帧）观测兜底 + legacy_fallback 披露
 - pre_percent       = None（roster 链 row_basis → preseal=False → 分母=代码口径
   limit；WzsLinker 昨涨停行 pre_percent=limit，比值数学等价；ST 由 bre.st_name_fix
   名称补正，不依赖 pre_percent 探测）
 - universe = 序列内 zt_buy_amount>0 的股（委买额可见 ⊇ 试盘页宇宙，语义偏移
   记录于 docs §7.9；roster 自带 中热×mid50_95×撤减 过滤）
-- bk_name = 同日 kpl_morning_bidding_raw col11 板块 join（板块归属主链靠 bk_name
+- bk_name = 同日 kpl_morning_bidding_raw col11 板块 join（2026-11-19 裁决 1+2 增
+  纯库读回退链：同日 raw → 最近前日 raw 档 → 同日 pid8 bid lane plate；逐股源
+  bkNameSrc 披露；板块归属主链靠 bk_name
   桥接：11-13 真值验证无 bk_name → mappedN=0 第三源静默死亡；注入后 mappedN/
   归属/入选与 WzsLinker 真值形态完全等价，见 tests test_historical_equivalence_1113）
 
@@ -120,6 +129,19 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
                           "jj_turnover": _f((r or {}).get("bidding_turnover"))}
     except Exception as exc:  # noqa: BLE001 — join 失败结构化留痕，不阻断派生
         plate_source_error = f"mbl_plate_join_failed:{type(exc).__name__}"
+    # 2026-11-19 裁决 1+2：bk_name 纯库读回退源①=最近前日 MBL raw 档（09:26 读口
+    # 同日 raw 未落库时板块桥接不再静默死亡；_id<date 倒序首条=最近归档日）
+    plates_prev: dict[str, str] = {}
+    try:
+        pm = db[COLLECTION_MBL_RAW].find_one({"_id": {"$lt": date}},
+                                             sort=[("_id", -1)],
+                                             projection={"rows": 1}) or {}
+        for c, r in (pm.get("rows") or {}).items():
+            p = str((r or {}).get("plate") or "").strip()
+            if p:
+                plates_prev[str(c)[-6:]] = p
+    except Exception:  # noqa: BLE001 — 回退源失败不阻断（同日源仍可用）
+        plates_prev = {}
     # bid 通道 09:25 匹配推送冻结值（MBL 榜外掉池股的官方终值兑底，纯库读）
     bid_frozen: dict[str, dict] = {}
     try:
@@ -130,7 +152,9 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
                 bid_frozen[c6] = {
                     "jj_percent": _f((i or {}).get("bidding_pct")),
                     "jj_amount": _f((i or {}).get("bidding_amount")),
-                    "jj_turnover": _f((i or {}).get("bidding_turnover"))}
+                    "jj_turnover": _f((i or {}).get("bidding_turnover")),
+                    # 2026-11-19 裁决 1+2：bk_name 回退源②=pid8 bid lane plate（pos11）
+                    "plate": str((i or {}).get("plate") or "").strip() or None}
     except Exception:  # noqa: BLE001 — bid 读失败不阻断（MBL/序列仍可用）
         bid_frozen = {}
     # 09:15/09:25 价格+涨幅存档（3006 现有流，2026-11-18 用户裁决）：09:25=真撮合开盘
@@ -144,6 +168,21 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         ap25 = ap.get("s0925") or {}
     except Exception:  # noqa: BLE001 — 读失败不阻断（回退旧链+披露）
         ap15, ap25 = {}, {}
+    # TDX 盘中开盘棒（archiver 顺带 prev_pct 取数落库，2026-11-19）：非成员制
+    # 全宇宙开盘涨幅兜底权威；sdoc 全档读已含 open_pct 加字段
+    open_bar: dict = sdoc.get("open_pct") or {}
+    # 竞价三字段单一投影层（2026-11-19 用户裁决：净额/成交额/换手状态门投影，
+    # 纯库读零外呼；jj_percent 链不接投影——开盘涨幅语义独立，见头注）
+    trio_facts: dict = {}
+    trio_state: dict = {}
+    try:
+        from backend.operations.auction_bidding_facts import resolve_bidding_trio
+        _trio = resolve_bidding_trio(db, date)
+        trio_facts, trio_state = _trio["facts"], _trio["state"]
+        trio_census = _trio["census"]
+    except Exception as exc:  # noqa: BLE001 — 投影失败不阻断（旧链兜底+披露）
+        trio_census = {}
+        trio_state = {"state": f"trio_failed:{type(exc).__name__}"}
 
     def _hmss(ts: Any) -> str | None:
         if not isinstance(ts, (int, float)):
@@ -152,10 +191,12 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
 
     rows: dict[str, dict] = {}
     plate_hit = 0
+    plate_src_n: dict = {}
     first_add_n = 0
     float_n = 0
     frozen_n = 0
     open_n = 0
+    open_tdx_n = 0
     open0915_n = 0
     first0915_n = 0
     for code, f in facts.items():
@@ -163,9 +204,18 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         last_amount = _f((last or {}).get("zt_buy_amount"))
         if not last or last_amount is None or last_amount <= 0:
             continue  # 委买额不可见 → 不在试盘宇宙（如实缺席，不补 0）
-        plate = plates.get(str(code)[-6:])
+        c6p = str(code)[-6:]
+        plate = plates.get(c6p)
+        bk_src = "mbl_same" if plate else None
+        if not plate:
+            plate = plates_prev.get(c6p)
+            bk_src = "mbl_prev" if plate else None
+        if not plate:
+            plate = (bid_frozen.get(c6p) or {}).get("plate") or None
+            bk_src = "bid_plate" if plate else None
         if plate:
             plate_hit += 1
+            plate_src_n[bk_src] = plate_src_n.get(bk_src, 0) + 1
         # 首加额=首笔观测追加委买增量（连续两帧均有限且后>前）
         h = hist.get(code) or []
         first_add = next((b - a for a, b in zip(h, h[1:])
@@ -182,9 +232,29 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         a25 = ap25.get(c6) or {}
         fz = frozen.get(c6) or {}
         bf = bid_frozen.get(c6) or {}
-        # 权威=09:25 存档开盘涨幅；缺位逐层回退 MBL→bid→序列末帧（披露 jjSource）
+        # 开盘涨幅（09:25 撮合开盘）：权威=存档 s0925 → TDX 盘中开盘棒；
+        # 不回退 MBL/bid/末帧（成员制早退值≠开盘，缺陷定案见头注）
+        ob = open_bar.get(c6) or {}
+        open_pct = _f(a25.get("pct"))
+        open_pr = _f(a25.get("price"))
+        open_src = "open0925_archive" if open_pct is not None else None
+        if open_pct is None:
+            open_pct = _f(ob.get("pct"))
+            # 半缺位形态防制（review 2026-11-19 minor）：仅当 pct 在场才顺带取 price，
+            # 防止档记录只带 price 缺 pct 时产出 p0925 有值而 pct0925/src 双 None 的行
+            if open_pct is not None:
+                open_pr = _f(ob.get("price"))
+                open_src = "tdx_bar_open"
+        if open_src == "open0925_archive":
+            open_n += 1
+        elif open_src == "tdx_bar_open":
+            open_tdx_n += 1
+        # 权威=09:25 存档开盘涨幅；缺位逐层回退 TDX 开盘棒→MBL→bid→序列末帧（披露 jjSource）
         jj_pct = _f(a25.get("pct"))
         jj_src = "open0925_archive" if jj_pct is not None else None
+        if jj_pct is None:
+            jj_pct = _f(ob.get("pct"))
+            jj_src = "tdx_bar_open" if jj_pct is not None else None
         if jj_pct is None:
             jj_pct = fz.get("jj_percent")
             jj_src = "mbl_frozen" if jj_pct is not None else None
@@ -194,21 +264,30 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         if jj_pct is None:
             jj_pct = _f(last.get("bidding_pct"))
             jj_src = "series_last"
-        jj_amt = fz.get("jj_amount")
-        if jj_amt is None:
-            jj_amt = bf.get("jj_amount")
-        if jj_amt is None:
-            jj_amt = _f(last.get("bidding_amount"))
-        jj_tur = fz.get("jj_turnover")
-        if jj_tur is None:
-            jj_tur = bf.get("jj_turnover")
-        if jj_tur is None:
-            jj_tur = _f(last.get("bidding_turnover"))
+        # 竞价成交额/换手：接投影层（公布值→col10 虚拟观测→派生换手；净额状态门
+        # 缺位不烘 0）；投影无该股（全源读失败降级）→ 旧链观测兜底 + 披露
+        fact = trio_facts.get(c6)
+        if fact is not None:
+            jj_amt = fact["bidding_amount"]
+            jj_amt_src = fact["bidding_amount_src"]
+            jj_tur = fact["bidding_turnover"]
+            jj_tur_src = fact["bidding_turnover_src"]
+        else:
+            jj_amt = fz.get("jj_amount")
+            if jj_amt is None:
+                jj_amt = bf.get("jj_amount")
+            if jj_amt is None:
+                jj_amt = _f(last.get("bidding_amount"))
+            jj_amt_src = "legacy_fallback" if jj_amt is not None else None
+            jj_tur = fz.get("jj_turnover")
+            if jj_tur is None:
+                jj_tur = bf.get("jj_turnover")
+            if jj_tur is None:
+                jj_tur = _f(last.get("bidding_turnover"))
+            jj_tur_src = "legacy_fallback" if jj_tur is not None else None
         is_frozen = jj_src != "series_last"
         if is_frozen:
             frozen_n += 1
-        if jj_src == "open0925_archive":
-            open_n += 1
         # 竞价涨幅（09:15 竞价）：权威=存档 s0915；缺档回退序列首帧观测值（时点披露）
         pct915 = _f(a15.get("pct"))
         src915 = "open0915_archive" if pct915 is not None else None
@@ -222,13 +301,16 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
         rows[code] = {
             "code": code,
             "bk_name": plate,   # 桥接主链靠它；缺 → 板块归属缺席（fail-visible）
+            "bkNameSrc": bk_src,   # 同日 MBL/前日 MBL/pid8 plate/None（裁决 1+2 披露）
             "jj_percent": jj_pct,
             "jj_amount": jj_amt,
             "jj_turnover": jj_tur,
+            "jjAmountSrc": jj_amt_src,
+            "jjTurnoverSrc": jj_tur_src,
             "jjSource": jj_src,
             "jjFrozen": is_frozen,
             "p0915": _f(a15.get("price")), "pct0915": pct915, "jj915Src": src915,
-            "p0925": _f(a25.get("price")), "pct0925": _f(a25.get("pct")),
+            "p0925": open_pr, "pct0925": open_pct, "open0925Src": open_src,
             "first_amount": _f(first.get("zt_buy_amount")) if first else None,
             "first_add": first_add,
             "max_amount": _f(mx.get("zt_buy_amount")) if mx else None,
@@ -248,12 +330,15 @@ def derive_trial_rows_from_series(db: Any, date: str) -> tuple[dict[str, dict], 
            "plateJoinedN": plate_hit,
            "firstAddN": first_add_n, "floatJoinedN": float_n,
            "frozenJoinedN": frozen_n,
-           "open0925N": open_n, "open0925MissingN": len(rows) - open_n,
-           "open0915N": open0915_n, "seriesFirst0915N": first0915_n}
+           "open0925N": open_n, "open0925TdxN": open_tdx_n,
+           "open0925MissingN": len(rows) - open_n - open_tdx_n,
+           "open0915N": open0915_n, "seriesFirst0915N": first0915_n,
+           "trioCensus": trio_census, "trioState": trio_state}
     if plate_source_error:
         out["plateSourceError"] = plate_source_error
+    out["plateSrcN"] = plate_src_n   # 逐股板块源计数（裁决 1+2 披露）
     if not plates:
-        out["plateMissing"] = True   # 板块 join 全缺席（如历史日 MBL raw 无档）
+        out["plateMissing"] = True   # 同日 MBL raw 缺席（回退链仍可用，见 plateSrcN）
     return rows, out
 
 

@@ -190,6 +190,11 @@ def test_trial_two_pct_columns_20261118(html):
         "子标签以值在场门控（null 不暗示存在观测）"
     assert "开盘涨幅=09:25 撮合开盘涨幅" in fn and "src=tdx_lday" in fn
     assert "stockSort: {key: 'aucPctN', dir: -1}" in html, "默认排序键与竞价涨幅列一致"
+    # 2026-11-19：开盘涨幅源逐行披露（存档/TDX 开盘棒）+ 值在场门控子标签
+    assert "openSrc: r.open0925Src" in fn
+    assert "r.openPctN != null && r.openSrc ?" in fn
+    assert "'TDX 开盘'" in fn and "'存档 09:25'" in fn
+    assert "open0925TdxN" in fn, "页头 0925 覆盖计数含 TDX 兜底档（fail-visible）"
 
 
 def test_trial_board_mean_label_0925(html):
@@ -214,3 +219,11 @@ def test_trial_state_coverage_in_stats(html):
     assert "AT.trialState = (r && r.trialState) || null;" in html
     fn = _fn(html, "atRender")
     assert "0925存档" in fn and "0915存档" in fn and "seriesFirst0915N" in fn
+
+
+def test_bk_name_src_disclosure_20261119(html):
+    """2026-11-19 裁决 1+2：bk_name 回退链逐股源披露（mbl_same/mbl_prev/bid_plate）。"""
+    assert "板块来源=" in html
+    assert "esc(r.bkNameSrc" in html
+    assert "r.bkNameSrc" in html
+    assert "mbl_prev=前日MBL" in html and "bid_plate=pid8推送" in html

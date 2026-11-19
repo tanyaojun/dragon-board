@@ -26,7 +26,9 @@ import argparse
 import json
 import logging
 import sys
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +76,10 @@ from backend.analysis.hotlist.theme_leader_ammo import (
 )
 from backend.operations.auction_bidding_direct import (
     collect_auction_bidding_direct)
+from backend.operations.auction_bidding_facts import (
+    _bid_line_state as _trio_line_state,
+    apply_trio,
+    resolve_bidding_trio)
 from backend.operations.auction_trial_derive import derive_trial_rows_from_series
 from backend.operations.theme_leader_baseline import (day_leader_rows, sealed_and_info,
                                                       trading_dates)
@@ -106,6 +112,13 @@ from backend.services.kpl_live_archive import archive_morning_live, load_auction
 logger = logging.getLogger(__name__)
 
 COLLECTION = "hotlist_jev_auction_leader_labels"
+# 当日人群冻结档（C，2026-11-19 裁决 D3）：晨间首跑成功执行后冻结 selection rows，
+# 当日重试直接以冻结 rows 为人群（板籍/来源/trialStrength 快照原样，不重算 union/排名，
+# 防数据修正致 per-board top1 漂移→加法漂移落新 doc）；派生字段（jj_percent/basis/
+# ammo 等）重试照常取最新库值——人群冻结、数据新鲜。单写者=label run（§1.2-1）；
+# dry_run 不读不写；force 绕过（单股重跑可跑任意 code，披露 forcedOutsideSelection）。
+SELECTION_FREEZE_COLLECTION = "hotlist_jev_auction_leader_selections"
+FREEZE_SLOT = "s0925"
 ORIGIN = "auction_leader_label_v1"
 RESULT_MARKER = "AUCTION_LEADER_RESULT_JSON:"
 SAMPLE_ORIGIN_LIVE = "live"
@@ -140,6 +153,35 @@ def source_bucket(selection_sources: list | None) -> str:
 def _db():
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     return get_runtime_mongodb_database()
+
+
+def load_frozen_selection(db: Any, date: str) -> tuple[dict | None, dict]:
+    """读当日冻结人群档（C，2026-11-19 裁决 D3）。返回 (doc, state)；读失败
+    fail-visible 不阻断（降级为重算语义，state 留痕 load_failed:*）。"""
+    try:
+        doc = db[SELECTION_FREEZE_COLLECTION].find_one({"_id": date})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("auction selection freeze load failed: %s", date)
+        return None, {"state": f"load_failed:{type(exc).__name__}"}
+    return doc, {"state": "frozen_hit" if doc else "absent"}
+
+
+def save_frozen_selection(db: Any, date: str, rows: list, selection: dict) -> dict:
+    """首跑成功执行后冻结当日人群（单写者=label run，首跑即冻结）。写失败
+    fail-visible 不阻断返回（freezeState 留痕 save_failed:*）。"""
+    try:
+        db[SELECTION_FREEZE_COLLECTION].update_one(
+            {"_id": date},
+            {"$set": {"date": date, "rows": [dict(r) for r in rows],
+                      "unionN": len(rows), "slot": FREEZE_SLOT,
+                      "selection": dict(selection),
+                      "frozenAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+                      "computedBy": ORIGIN}},
+            upsert=True)
+        return {"state": "ok", "rows": len(rows)}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("auction selection freeze save failed: %s", date)
+        return {"state": f"save_failed:{type(exc).__name__}"}
 
 
 def auction_seal_base_rate(db: Any, before: str) -> dict | None:
@@ -360,6 +402,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
             bid_item, (basis_map or {}).get(code))}
     bid_entries = [{"label": f"{row.get('name') or code}",
                     "item": bid_item, "peers": peers}]
+    bid_line_txt = auction_bid_line(bid_entries)
     lhb_codes, lhb_roles = _lhb_codes_roles(
         [str(r.get("code")) for r in board_codes], [(code, "待判龙头")])
     lhb_txt = lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles) \
@@ -381,7 +424,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         leader_name=str(row.get("name") or ""), leader_code=code, board=board,
         push_board=row.get("pushBoard"),
         push_line=None,   # 推送行由 run() 注入（全日共用 entries，个股级只列自身）
-        bid_line=auction_bid_line(bid_entries),
+        bid_line=bid_line_txt,
         trial_line=auction_trial_line((trial or {}).get("row")),
         bidding_series_line=_bidding_series_line_for(db, date, code, series_state),
         board_strength=auction_board_strength_line(board, trial_strength),
@@ -400,6 +443,11 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
         evidence_block=block["text"])
     return {"docKind": DOC_KIND_LEADER, "row": row, "narrative": narrative,
             "evidence": block,
+            # 六件套行结构化留痕（2026-11-19 投影层：供 rebuild 路径 A 精确换行）
+            "bidLine": bid_line_txt,
+            "bidLineState": _trio_line_state(lanes.get("bidTrioCensus") or {},
+                                             lanes.get("bidTrio") or {}, [code],
+                                             lanes.get("bidTrioState")),
             # 真竞价涨幅（09:25 匹配价，bid 通道 bidding_pct；含腾讯榜外补源）——
             # 与推送芯片 pct（实时涨幅）严格分离，落库 auctionPct 取此值（2026-11-14 修复）
             "auctionBidPct": (bid_item or {}).get("bidding_pct"),
@@ -408,6 +456,7 @@ def build_one(db: Any, date: str, prev_date: str | None, row: dict,
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
                             "bidIn": code in bid_items, "bidSource": bid_source,
                             "bidSupplement": bid_supplement,
+                            "bidTrio": (lanes.get("bidTrio") or {}).get(code),
                             "basisState": basis_state,
                             "prevPool": pool_prev.get("degraded"),
                             "prevPoolCross": sealed_src,
@@ -451,6 +500,7 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
                 _bi, (basis_map or {}).get(str(r.get("code"))))}
         bid_entries.append({"label": str(r.get("name") or r.get("code")), "item": _bi})
     codes = [str(r.get("code")) for r in rows]
+    bid_line_txt = auction_bid_line(bid_entries)
     lhb_codes, lhb_roles = _lhb_codes_roles(codes, [(c, "入选龙头") for c in codes])
     lhb_txt = lhb_line(lhb_facts, codes=lhb_codes, roles=lhb_roles) \
         if lhb_facts is not None else None
@@ -467,7 +517,7 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         board=board,
         push_line=auction_push_line(push_entries, codes=codes),
         board_structure=auction_board_structure_line(members, prev_date=prev_date),
-        bid_line=auction_bid_line(bid_entries),
+        bid_line=bid_line_txt,
         base_rate=auction_base_rate_line(base_rate_stats),
         reason_line=limitup_reason_line(reason_entries_for_leaders(rows, reason_corpus)),
         regulatory_line=reg_line,
@@ -475,6 +525,10 @@ def build_sector_one(db: Any, date: str, prev_date: str | None, board: str,
         evidence_block=block["text"])
     return {"docKind": DOC_KIND_SECTOR, "rows": rows, "board": board,
             "narrative": narrative, "evidence": block,
+            "bidLine": bid_line_txt,
+            "bidLineState": _trio_line_state(lanes.get("bidTrioCensus") or {},
+                                             lanes.get("bidTrio") or {}, codes,
+                                             lanes.get("bidTrioState")),
             "lhbState": _lhb_state_payload(lhb_facts, line_rendered=lhb_txt is not None),
             "regulatoryState": _regulatory_state(reg_corpus or {}, reg_entries),
             "corpusState": {"prevDate": prev_date, "bidLane": lanes.get("bidLane"),
@@ -546,6 +600,9 @@ def _label_one(db, col, date: str, built: dict, *,
         "regulatoryState": built.get("regulatoryState"),
         "corpusState": built.get("corpusState"),
         "corpusFrozen": bool(built.get("corpusFrozen")),
+        # 六件套行结构化字段（2026-11-19 投影层；旧档缺→None，rebuild 路径 B fallback）
+        "bidLine": built.get("bidLine"),
+        "bidLineState": built.get("bidLineState"),
         "auctionPushState": built.get("auctionPushState"),
         "sectorJudgmentState": (built.get("sectorJudgmentState")
                                 if doc_kind == DOC_KIND_LEADER else None),
@@ -593,6 +650,87 @@ def _label_one(db, col, date: str, built: dict, *,
     return bool(parsed["ok"]), _usage_tokens(parsed.get("usage"))
 
 
+# ── 2026-11-19 用户裁决 1+2：并行取数相（09:26 deadline 根治，预登记增补三）──
+# 旧串行链实测：09:26 槽 → roster HTTP ≈16s → T-1 DB bundle/basis/腾讯串行 ≈120s
+# → MBL 09:28:1x → 投喂完成 09:28:28–09:29:14（三日一致）。现：MBL 审计线程与
+# T-1 DB bundle 线程在 run 入口即启动，与 roster HTTP 并行；basis 与腾讯榜外补源
+# 并行；MBL join 受 40s 总预算约束（槽 09:25:20 + 40s = 09:26），超时 parallel_pending
+# 披露、线程独立完成归档（单写者 replace 幂等）。MBL 冻结下界 09:26:20 = 实测冻结
+# 边界（kpl_mbl_series 09:26:20 帧与 raw 冻结值逐值相等；09:24:51 帧仍盘前虚拟态），
+# 不盲猜提前归档盘前态。timings 逐相耗时进返回态（scheduler 日志前 200 字符可见）。
+_RUN_BUDGET_S = 40.0
+_MBL_FROZEN_FLOOR_HM = "09:26:20"
+
+
+def _sleep_until_mbl_floor() -> None:
+    """睡到 MBL 冻结下界（CST）；已过则零睡。独立函数供测试 monkeypatch。"""
+    from datetime import datetime as _dt, time as _dtime, timedelta, timezone
+    now = _dt.now(timezone(timedelta(hours=8)))
+    h, m, s = (int(x) for x in _MBL_FROZEN_FLOOR_HM.split(":"))
+    floor = now.replace(hour=h, minute=m, second=s, microsecond=0)
+    if now < floor:
+        time.sleep((floor - now).total_seconds())
+
+
+def _mbl_audit_worker(db: Any, date: str, holder: dict) -> None:
+    """MBL 并行审计源采集线程：冻结下界后现采落库（单写者=本线程）。"""
+    try:
+        _sleep_until_mbl_floor()
+        holder["state"] = collect_auction_bidding_direct(db, date)
+    except Exception as exc:  # noqa: BLE001 — 审计源失败不阻断投喂（fail-visible）
+        holder["state"] = {"state": f"fetch_failed:{exc}"}
+
+
+def _basis_worker(date: str, codes: list, holder: dict) -> None:
+    """竞昨比原料线程（内部已并发+12h 缓存）；与腾讯榜外补源并行。"""
+    try:
+        bp = get_daban_prev_day_basis(date, codes)
+        holder["basis"] = bp.get("basis") or {}
+        holder["state"] = "ok" if holder["basis"] else "missing"
+    except Exception as exc:  # noqa: BLE001 — 原料失败不阻断投喂（竞昨比缺席）
+        holder["state"] = f"fetch_failed:{exc}"
+
+
+def _prev_context_bundle(db: Any, date: str, prev_dates: list,
+                         dataset_id: str, holder: dict) -> None:
+    """T-1 语料/池/交叉源/lanes 纯 DB bundle（与 roster HTTP 并行；原串行块原样移入）。"""
+    from backend.operations.jev_label_jiuyan import market_facts_line
+    prev_date = prev_dates[-1] if prev_dates else None
+    try:
+        holder["bctx"] = ABM.load_board_context(db, prev_date)
+        holder["market_line"] = (market_facts_line(db, prev_date, dataset_id)
+                                 if prev_date else None)
+        t1_rows: dict[str, dict] = {}
+        if prev_date:
+            t1_all, _meta = day_leader_rows(db, prev_date, dataset_id,
+                                            prev_date=prev_dates[-2] if len(prev_dates) > 1 else None,
+                                            space_mode=True, pool_dates=prev_dates)
+            for r in t1_all or []:
+                t1_rows[str(r.get("code"))] = r
+        holder["t1_rows"] = t1_rows
+        holder["pool_prev"] = (fetch_pool_quality(db, prev_date) if prev_date
+                               else {"items": {}, "degraded": "no_prev_date"})
+        # P1 交叉源（2026-11-14b）：韭研+THS 封板二分（纯 DB 读零外呼）
+        prev_cross: dict = {"sealed": None, "info": {}, "state": "no_prev_date"}
+        streak_map: dict = {}
+        if prev_date:
+            try:
+                _s, _i, _m = sealed_and_info(db, prev_date)
+                prev_cross = {"sealed": _s, "info": _i,
+                              "state": "ok" if _s is not None else "ths_missing"}
+            except Exception as exc:  # noqa: BLE001 — 交叉源失败不阻断投喂
+                prev_cross = {"sealed": None, "info": {}, "state": f"fetch_failed:{exc}"}
+            try:
+                streak_map = jiuyan_streak_map(db, prev_date) or {}
+            except Exception:  # noqa: BLE001 — 连板补全失败不阻断（streak 缺位省略）
+                streak_map = {}
+        holder["prev_cross"] = prev_cross
+        holder["streak_map"] = streak_map
+        holder["lanes"] = fetch_daban_lanes(db, date)
+    except Exception as exc:  # noqa: BLE001 — bundle 意外异常结构化上抛（run join 后 raise）
+        holder["error"] = f"prev_context_bundle_failed:{type(exc).__name__}: {exc}"
+
+
 def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         max_leaders: int | None = None, force: bool = False,
         codes: set[str] | None = None, dataset_id: str = DEFAULT_DATASET_ID,
@@ -606,105 +744,131 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     if sample_origin is None:
         sample_origin = (SAMPLE_ORIGIN_LIVE if date == time.strftime("%Y-%m-%d")
                          else SAMPLE_ORIGIN_BACKFILL)
+    # 并行取数相（2026-11-19 裁决 1+2）：MBL 审计线程 + T-1 DB bundle 线程入口即启动，
+    # 与 roster HTTP 并行；dry_run 零外呼零写入（MBL 线程不启动，bundle 纯 DB 读保留）。
+    _t0 = time.monotonic()
+    timings: dict = {}
+    prev_dates = trading_dates_before(db, date, 2, dataset_id)
+    prev_date = prev_dates[-1] if prev_dates else None
+    mbl_holder: dict = {}
+    mbl_thread = None
+    if not dry_run and _in_auction_window():
+        mbl_thread = threading.Thread(target=_mbl_audit_worker,
+                                      args=(db, date, mbl_holder), daemon=True)
+        mbl_thread.start()
+    ctx_holder: dict = {}
+    ctx_thread = threading.Thread(target=_prev_context_bundle,
+                                  args=(db, date, prev_dates, dataset_id, ctx_holder),
+                                  daemon=True)
+    ctx_thread.start()
+    _ts = time.monotonic()
     push, push_meta = roster_for(db, date, fetch_missing=not dry_run)
+    timings["roster_s"] = round(time.monotonic() - _ts, 2)
     push_rows = [{"code": str(s.get("code")), "name": s.get("name"),
                   "board": s.get("board"), "pct": s.get("pct")}
                  for s in (push or {}).get("stocks") or [] if s.get("code")]
-    prev_dates = trading_dates_before(db, date, 2, dataset_id)
-    prev_date = prev_dates[-1] if prev_dates else None
-    # 选龙（vA4）：推送为基源 ∪ 竞价强度第三源（jiuyan 龙序源已退役 2026-11-15）
-    fetch_failed = (push_meta or {}).get("pushState") == "fetch_failed"
-    if not push_rows:
-        reason = (push_meta or {}).get("reason") or "auction_push_missing"
-        print(f"{date} 推送源缺席（{reason}），跳过打标（fail-visible，不兜底选龙；"
-              "第三源不单独触发）")
-        return {"ok": not fetch_failed, "date": date, "leaders": 0,
-                "skippedReason": "auction_push_missing",
-                "errorCode": "auction_push_fetch_failed" if fetch_failed else None,
-                "auctionPushState": push_meta}
-    if fetch_failed:
-        # B3：瞬时取数失败先重试（不吃掉推送样本）
-        print(f"{date} 竞价推送取数失败，交退避重试")
-        return {"ok": False, "date": date, "leaders": 0,
-                "skippedReason": "auction_push_missing",
-                "errorCode": "auction_push_fetch_failed",
-                "auctionPushState": push_meta}
-    # 基源去重（B6）：推送股保留 pct/概念桥映射；第三源 trial 随后并集
-    by_code: dict[str, dict] = {}
-    for s in push_rows:
-        by_code[s["code"]] = {**s, "selectionSources": [SOURCE_PUSH]}
-    rows = list(by_code.values())
-    selection = {"pushN": len(push_rows), "unionN": len(rows)}
+    # C 冻结人群（2026-11-19 裁决 D3）：选择段前先读冻结档；有 → 直接以冻结 rows
+    # 为人群（板籍/来源/trialStrength 快照原样，不重算 union/排名），推送源缺席/
+    # 取数失败不再 redefine 人群（只影响叙事注入，auctionPushState 披露）。
+    # force 绕过（可跑任意 code，披露 forcedOutsideSelection）；dry_run 不读不写。
+    frozen_doc: dict | None = None
+    freeze_state: dict = {"state": "skipped_dry_run" if dry_run else "absent"}
+    if not dry_run and not force:
+        frozen_doc, freeze_state = load_frozen_selection(db, date)
+    if frozen_doc is not None:
+        rows = [dict(r) for r in (frozen_doc.get("rows") or [])]
+        by_code: dict[str, dict] = {r["code"]: r for r in rows}
+        selection = {**(frozen_doc.get("selection") or {}),
+                     "selectionFrozen": True, "frozenAt": frozen_doc.get("frozenAt")}
+        if codes:
+            rows = [r for r in rows if r["code"] in codes]
+    else:
+        # 选龙（vA4）：推送为基源 ∪ 竞价强度第三源（jiuyan 龙序源已退役 2026-11-15）
+        fetch_failed = (push_meta or {}).get("pushState") == "fetch_failed"
+        if not push_rows:
+            reason = (push_meta or {}).get("reason") or "auction_push_missing"
+            timings["total_s"] = round(time.monotonic() - _t0, 2)   # 早退也报全程耗时（review nit）
+            print(f"{date} 推送源缺席（{reason}），跳过打标（fail-visible，不兜底选龙；"
+                  "第三源不单独触发）")
+            return {"ok": not fetch_failed, "date": date, "timings": timings, "leaders": 0,
+                    "skippedReason": "auction_push_missing",
+                    "errorCode": "auction_push_fetch_failed" if fetch_failed else None,
+                    "auctionPushState": push_meta,
+                    "selectionFrozen": False, "freezeState": freeze_state}
+        if fetch_failed:
+            # B3：瞬时取数失败先重试（不吃掉推送样本）
+            print(f"{date} 竞价推送取数失败，交退避重试")
+            return {"ok": False, "date": date, "timings": timings, "leaders": 0,
+                    "skippedReason": "auction_push_missing",
+                    "errorCode": "auction_push_fetch_failed",
+                    "auctionPushState": push_meta,
+                    "selectionFrozen": False, "freezeState": freeze_state}
+        # 基源去重（B6）：推送股保留 pct/概念桥映射；第三源 trial 随后并集
+        by_code: dict[str, dict] = {}
+        for s in push_rows:
+            by_code[s["code"]] = {**s, "selectionSources": [SOURCE_PUSH]}
+        rows = list(by_code.values())
+        selection = {"pushN": len(push_rows), "unionN": len(rows)}
     # 2026-11-13 用户裁决（二次修订）：板块归属取 jiuyan 打标链 **T−1 涨停分组**
     # 板块名（产业树成分反查映射不上，作废）；无命中回退推送概念 + boardSource 留痕
-    bctx = ABM.load_board_context(db, prev_date)
-    for r in rows:
-        res = ABM.resolve_leader_board(bctx, r["code"], r.get("board"))
-        r["board"] = res["board"]
-        r["pushBoard"] = res["pushBoard"]
-        r["boardSource"] = res["boardSource"]
-        r["boardMapping"] = {"pickedBy": res["pickedBy"],
-                             "candidates": res["candidates"],
-                             "t1Final": res["t1Final"],
-                             "t1Date": prev_date}
-    excluded = [r for r in rows if r["board"] and digest.is_not_a_theme(r["board"])]
-    if excluded:
-        print(f"{date} 排除非题材行政桶 {len(excluded)} 只（{'、'.join(sorted({r['board'] for r in excluded}))}）——仅日志留痕")
-        rows = [r for r in rows if not (r["board"] and digest.is_not_a_theme(r["board"]))]
-        # 评审 P2-1（2026-11-15）：by_code 同步剔除——被排除双源行不得在第三源
-        # overlap 判定中吞掉同 code 的合法 trial 候选（应作 trial_new 入并集）
-        for r in excluded:
-            by_code.pop(r["code"], None)
-    if codes:
-        rows = [r for r in rows if r["code"] in codes]
-    # 评审 P1-2（2026-11-15）：codes 单股重跑时早退推迟到第三源并集之后——
-    # trial-only 股不在双源名单，旧早退会截断其重跑；全日无 codes 路径语义不变
-    if not rows and not codes:
-        return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders",
-                "selection": selection}
-    rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
-    # 一次取数全日共用（与题材链同哲学；T−1 语料 + 当日竞价）
-    from backend.operations.jev_label_jiuyan import market_facts_line
-    market_line = market_facts_line(db, prev_date, dataset_id) if prev_date else None
-    t1_rows: dict[str, dict] = {}
-    if prev_date:
-        t1_all, _meta = day_leader_rows(db, prev_date, dataset_id,
-                                        prev_date=prev_dates[-2] if len(prev_dates) > 1 else None,
-                                        space_mode=True, pool_dates=prev_dates)
-        for r in t1_all or []:
-            t1_rows[str(r.get("code"))] = r
-    pool_prev = fetch_pool_quality(db, prev_date) if prev_date else {"items": {}, "degraded": "no_prev_date"}
-    # P1 交叉源（2026-11-14b）：韭研+THS 封板二分（题材链单一实现复用，纯 DB 读
-    # 零外呼）；THS 缺/取数失败 → sealed=None 回退池单源旧口径 + prevPoolCross 留痕
-    prev_cross: dict = {"sealed": None, "info": {}, "state": "no_prev_date"}
-    streak_map: dict = {}
-    if prev_date:
-        try:
-            _s, _i, _m = sealed_and_info(db, prev_date)
-            prev_cross = {"sealed": _s, "info": _i,
-                          "state": "ok" if _s is not None else "ths_missing"}
-        except Exception as exc:  # noqa: BLE001 — 交叉源失败不阻断投喂
-            prev_cross = {"sealed": None, "info": {}, "state": f"fetch_failed:{exc}"}
-        try:
-            streak_map = jiuyan_streak_map(db, prev_date) or {}
-        except Exception:  # noqa: BLE001 — 连板补全失败不阻断（streak 缺位省略）
-            streak_map = {}
-    lanes = fetch_daban_lanes(db, date)
+    _ts = time.monotonic()
+    ctx_thread.join()   # bundle 为必需输入，无预算上限（耗时进 timings 披露）
+    timings["prev_ctx_wait_s"] = round(time.monotonic() - _ts, 2)
+    if ctx_holder.get("error"):
+        raise RuntimeError(ctx_holder["error"])
+    bctx = ctx_holder["bctx"]
+    market_line = ctx_holder["market_line"]
+    t1_rows = ctx_holder["t1_rows"]
+    pool_prev = ctx_holder["pool_prev"]
+    prev_cross = ctx_holder["prev_cross"]
+    streak_map = ctx_holder["streak_map"]
+    lanes = ctx_holder["lanes"]
+    forced_outside: list[str] | None = None
+    if frozen_doc is None:
+        for r in rows:
+            res = ABM.resolve_leader_board(bctx, r["code"], r.get("board"))
+            r["board"] = res["board"]
+            r["pushBoard"] = res["pushBoard"]
+            r["boardSource"] = res["boardSource"]
+            r["boardMapping"] = {"pickedBy": res["pickedBy"],
+                                 "candidates": res["candidates"],
+                                 "t1Final": res["t1Final"],
+                                 "t1Date": prev_date}
+        excluded = [r for r in rows if r["board"] and digest.is_not_a_theme(r["board"])]
+        if excluded:
+            print(f"{date} 排除非题材行政桶 {len(excluded)} 只（{'、'.join(sorted({r['board'] for r in excluded}))}）——仅日志留痕")
+            rows = [r for r in rows if not (r["board"] and digest.is_not_a_theme(r["board"]))]
+            # 评审 P2-1（2026-11-15）：by_code 同步剔除——被排除双源行不得在第三源
+            # overlap 判定中吞掉同 code 的合法 trial 候选（应作 trial_new 入并集）
+            for r in excluded:
+                by_code.pop(r["code"], None)
+        if codes:
+            rows = [r for r in rows if r["code"] in codes]
+        # 评审 P1-2（2026-11-15）：codes 单股重跑时早退推迟到第三源并集之后——
+        # trial-only 股不在双源名单，旧早退会截断其重跑；全日无 codes 路径语义不变
+        if not rows and not codes:
+            return {"ok": True, "date": date, "timings": timings, "leaders": 0,
+                    "skippedReason": "no_leaders", "selection": selection,
+                    "selectionFrozen": False, "freezeState": freeze_state}
+        rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
+    if force and codes:
+        # C：force 不受冻结限制；未命中人群的 code 如实披露
+        have = {r["code"] for r in rows}
+        forced_outside = sorted(c for c in codes if c not in have)
     # 竞昨比原料（腾讯日K，按日 12h 缓存与页面共享；≤入选股数/日（双源 roster）、
     # 单股失败 10min 退避——红线 9 预算见 vA2 预登记 §6）；dry-run 零外呼
-    basis_map: dict = {}
-    basis_state = "dry_run_skipped" if dry_run else "missing"
+    basis_holder: dict = {}
+    basis_thread = None
     if not dry_run:
-        try:
-            bp = get_daban_prev_day_basis(date, [r["code"] for r in rows])
-            basis_map = bp.get("basis") or {}
-            basis_state = "ok" if basis_map else "missing"
-        except Exception as exc:   # noqa: BLE001 原料失败不阻断投喂（竞昨比缺席）
-            basis_state = f"fetch_failed:{exc}"
+        basis_thread = threading.Thread(target=_basis_worker,
+                                        args=(date, [r["code"] for r in rows], basis_holder),
+                                        daemon=True)
+        basis_thread.start()
     # 竞价榜外补源（2026-11-13 用户裁决：KPL 竞价榜非全市场）：腾讯竞价快照，
     # 仅 09:25–09:30 窗口、仅榜外缺码、单条批量 URL；失败不阻断（榜外照旧缺席）
     bid_items = lanes.get("bid") or {}
     bid_supplement = "skipped_dry_run" if dry_run else "skipped_out_of_window"
+    _ts = time.monotonic()
     if not dry_run and _in_auction_window():
         missing = [r["code"] for r in rows if r["code"] not in bid_items]
         if missing:
@@ -715,8 +879,17 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                 bid_supplement = "tencent_auction" if sup.get("items") else "sup_missing"
             except Exception as exc:   # noqa: BLE001 补源失败不阻断
                 bid_supplement = f"fetch_failed:{exc}"
+    timings["tencent_s"] = round(time.monotonic() - _ts, 2)
     if bid_items:
         lanes["bid"] = bid_items   # 写回（lanes 假件可能无 bid 键：保证注入传播）
+    basis_map: dict = {}
+    basis_state = "dry_run_skipped" if dry_run else "missing"
+    if basis_thread is not None:
+        _ts = time.monotonic()
+        basis_thread.join()
+        timings["basis_wait_s"] = round(time.monotonic() - _ts, 2)
+        basis_map = basis_holder.get("basis") or {}
+        basis_state = basis_holder.get("state") or "missing"
     # 试盘源（2026-11-17 正名，用户裁决）：**主链 = KPL socket 官方推送序列**
     # （pid=8 竞价池实时页，下方 trial_rows_from_series 即官方序列的试盘行加工层，
     # 主链一环）。WzsLinker（第三方非官方代理，11-16 实证故障）**已退役出链**：
@@ -724,20 +897,39 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     # 竞价列表真源头直采（2026-11-16 MITM 定案合同：kaipanla.com MorningBiddingList
     # Type=4 PidType=0；与试盘 fetch 同窗一次，冻结态全量快照落 kpl_morning_bidding_raw）
     mbl_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
-    if not dry_run and _in_auction_window():
-        try:
-            mbl_state = collect_auction_bidding_direct(db, date)
-        except Exception as exc:  # noqa: BLE001 失败不阻断投喂（fail-visible）
-            mbl_state = {"state": f"fetch_failed:{exc}"}
+    if mbl_thread is not None:
+        _ts = time.monotonic()
+        mbl_thread.join(timeout=max(0.0, _RUN_BUDGET_S - (time.monotonic() - _t0)))
+        timings["mbl_wait_s"] = round(time.monotonic() - _ts, 2)
+        mbl_state = mbl_holder.get("state") or {
+            "state": "parallel_pending", "floor": _MBL_FROZEN_FLOOR_HM,
+            "note": "审计源不阻断投喂，线程独立完成归档"}
+    # 竞价三字段单一投影层（2026-11-19 用户裁决）：腾讯补源合并 + MBL 审计源
+    # join 后、语料构造前调 apply_trio → 龙头/板块两条叙事链同修（peers 对比段
+    # 同用投影值）。腾讯补源实测值优先于派生（apply_trio 内 tencent_auction 分支）。
+    # 纯库读零外呼，dry-run 亦可用；失败降级留痕不阻断投喂（§4.0）。
+    # parallel_pending 态冻结未落库 → 投影读既有源（mbl_series 帧/bid/series），
+    # 缺位如实披露，不等待不阻断。
+    try:
+        _trio = resolve_bidding_trio(db, date)
+        if bid_items:
+            apply_trio(bid_items, _trio["facts"])
+        lanes["bidTrio"] = _trio["facts"]
+        lanes["bidTrioCensus"] = _trio["census"]
+        lanes["bidTrioState"] = _trio["state"]
+    except Exception as exc:  # noqa: BLE001 — 投影失败不阻断（raw 值照旧+留痕）
+        lanes["bidTrioState"] = {"state": f"trio_failed:{type(exc).__name__}"}
     trial_state: dict = {"state": "skipped_dry_run" if dry_run else "skipped_out_of_window"}
     trial_rows: dict = {}
     # 第三源自建派生（2026-11-16 item11：官方 socket 序列派生试盘字段，WzsLinker
     # 退役第一步）：序列档有委买额数据即用，零 WzsLinker 外呼（红线 9 预算）；
     # 纯库读，dry-run 亦可用（与 archive 回读同语义）
+    _ts = time.monotonic()
     try:
         derived_rows, derived_state = derive_trial_rows_from_series(db, date)
     except Exception as exc:  # noqa: BLE001 派生失败不阻断（fail-visible 留痕）
         derived_rows, derived_state = {}, {"state": f"derive_failed:{type(exc).__name__}"}
+    timings["derive_s"] = round(time.monotonic() - _ts, 2)
     if derived_rows:
         trial_rows = derived_rows
         trial_state = derived_state
@@ -745,57 +937,68 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         trial_state = derived_state   # 派生异常留痕不丢（无回退后唯一审计面）
     # 2026-11-18 raw 退役（§7.17）：无历史档回退；序列缺席 → 第三源整源缺席
     # （fail-visible，双源不受影响，不兑底选龙）
-    # 第三源选龙（严格档 + 每板前三；与读口共用 trial_strength_roster 单一实现）：
-    # 中热 2-5亿 × mid50_95 × 撤减，root 粗桶；软上限 ≤6 只/日（超限截断记账）
-    try:
-        trows, tstate = trial_strength_roster(
-            db, date, trial_rows,
-            max_total=TRIAL_STRENGTH_MAX_PER_DAY if trial_max is None else trial_max)
-    except Exception as exc:  # noqa: BLE001 — roster 失败不阻断双源打标（评审 P2-4，与读口 trialRosterError 对称）
-        print(f"{date} 第三源 roster 计算失败：{exc}——双源继续（fail-visible）")
-        trows, tstate = [], {"state": "absent",
-                             "reason": f"roster_failed:{type(exc).__name__}: {exc}"}
-    overlap_trial_n = 0
-    trial_new: list[dict] = []
-    for tr in trows:
-        cur = by_code.get(tr["code"])
-        if cur is not None:
-            # 重叠股：追加源标签 + 强度载荷（保留基源 board/pct，叙事不变）
-            if SOURCE_TRIAL_STRENGTH not in cur["selectionSources"]:
-                cur["selectionSources"].append(SOURCE_TRIAL_STRENGTH)
-            cur["trialStrength"] = tr["trialStrength"]
-            overlap_trial_n += 1
-        else:
-            new = {"code": tr["code"], "name": tr.get("name"), "board": tr["board"],
-                   "pct": None, "pushBoard": None,
-                   "selectionSources": [SOURCE_TRIAL_STRENGTH],
-                   "boardSource": BOARD_SOURCE_TRIAL,
-                   "boardMapping": {"pickedBy": "trial_root_strength",
-                                    "candidates": [{"name": tr["board"],
-                                                     "n": tr["trialStrength"]["boardTrialN"]}]},
-                   "trialStrength": tr["trialStrength"]}
-            by_code[tr["code"]] = new
-            trial_new.append(new)
-    selection["trialN"] = len(trows)
-    selection["overlapTrialN"] = overlap_trial_n
-    if trial_new:
-        rows.extend(trial_new)
-        # 第三源同规：非题材行政桶剔除 + codes 过滤（双源行已处理，幂等）
-        excluded_t = [r for r in trial_new
-                      if r["board"] and digest.is_not_a_theme(r["board"])]
-        if excluded_t:
-            print(f"{date} 第三源排除非题材行政桶 {len(excluded_t)} 只（{'、'.join(sorted({r['board'] for r in excluded_t}))}）——仅日志留痕")
-            rows = [r for r in rows if not (r.get("boardSource") == BOARD_SOURCE_TRIAL
-                                            and r["board"]
-                                            and digest.is_not_a_theme(r["board"]))]
-        if codes:
-            rows = [r for r in rows if r["code"] in codes]
-        rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
-        selection["unionN"] = len(rows)
+    if frozen_doc is None:
+        # 第三源选龙（严格档 + 每板前三；与读口共用 trial_strength_roster 单一实现）：
+        # 中热 2-5亿 × mid50_95 × 撤减，root 粗桶；软上限 ≤6 只/日（超限截断记账）
+        # （C 冻结重试不重算第三源——人群已在首跑冻结）
+        try:
+            trows, tstate = trial_strength_roster(
+                db, date, trial_rows,
+                max_total=TRIAL_STRENGTH_MAX_PER_DAY if trial_max is None else trial_max)
+        except Exception as exc:  # noqa: BLE001 — roster 失败不阻断双源打标（评审 P2-4，与读口 trialRosterError 对称）
+            print(f"{date} 第三源 roster 计算失败：{exc}——双源继续（fail-visible）")
+            trows, tstate = [], {"state": "absent",
+                                 "reason": f"roster_failed:{type(exc).__name__}: {exc}"}
+        overlap_trial_n = 0
+        trial_new: list[dict] = []
+        for tr in trows:
+            cur = by_code.get(tr["code"])
+            if cur is not None:
+                # 重叠股：追加源标签 + 强度载荷（保留基源 board/pct，叙事不变）
+                if SOURCE_TRIAL_STRENGTH not in cur["selectionSources"]:
+                    cur["selectionSources"].append(SOURCE_TRIAL_STRENGTH)
+                cur["trialStrength"] = tr["trialStrength"]
+                overlap_trial_n += 1
+            else:
+                new = {"code": tr["code"], "name": tr.get("name"), "board": tr["board"],
+                       "pct": None, "pushBoard": None,
+                       "selectionSources": [SOURCE_TRIAL_STRENGTH],
+                       "boardSource": BOARD_SOURCE_TRIAL,
+                       "boardMapping": {"pickedBy": "trial_root_strength",
+                                        "candidates": [{"name": tr["board"],
+                                                         "n": tr["trialStrength"]["boardTrialN"]}]},
+                       "trialStrength": tr["trialStrength"]}
+                by_code[tr["code"]] = new
+                trial_new.append(new)
+        selection["trialN"] = len(trows)
+        selection["overlapTrialN"] = overlap_trial_n
+        if trial_new:
+            rows.extend(trial_new)
+            # 第三源同规：非题材行政桶剔除 + codes 过滤（双源行已处理，幂等）
+            excluded_t = [r for r in trial_new
+                          if r["board"] and digest.is_not_a_theme(r["board"])]
+            if excluded_t:
+                print(f"{date} 第三源排除非题材行政桶 {len(excluded_t)} 只（{'、'.join(sorted({r['board'] for r in excluded_t}))}）——仅日志留痕")
+                rows = [r for r in rows if not (r.get("boardSource") == BOARD_SOURCE_TRIAL
+                                                and r["board"]
+                                                and digest.is_not_a_theme(r["board"]))]
+            if codes:
+                rows = [r for r in rows if r["code"] in codes]
+            rows.sort(key=lambda r: (str(r.get("board") or ""), -(r.get("pct") or 0)))
+            selection["unionN"] = len(rows)
+        if codes is None and not dry_run:
+            # C 冻结快照（首跑即冻结；codes 单股重跑不写冻结档）
+            freeze_rows = [dict(r) for r in rows]
+            freeze_selection = dict(selection)
+    else:
+        trows, tstate = [], {"state": "selection_frozen"}
     if not rows:
         # codes 单股重跑：双源与 trial 均未命中 → 保持 skip 语义（评审 P1-2）
-        return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders",
-                "selection": selection, "trialStrengthState": tstate}
+        return {"ok": True, "date": date, "timings": timings, "leaders": 0,
+                "skippedReason": "no_leaders", "selection": selection,
+                "trialStrengthState": tstate,
+                "selectionFrozen": frozen_doc is not None,
+                "freezeState": freeze_state, "forcedOutsideSelection": forced_outside}
     gene_corpus = fetch_gene_corpus(db, prev_date) if prev_date else {}
     notice_corpus = fetch_notice_corpus(db, prev_date) if prev_date else {}
     heat_corpus = fetch_theme_heat(db, prev_date) if prev_date else {}
@@ -862,8 +1065,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         is_trial = r.get("boardSource") == BOARD_SOURCE_TRIAL
         # 〇 重跑语料冻结（2026-11-14b）：单只重跑（codes+force）复用晨间原件
         # narrative/corpusState，防盘后重跑用当日 final 重建注入 look-ahead
-        # （天普 11-13 21:10 重跑教训）；全日 force 不受影响（有意重建）
-        frozen_doc = col.find_one({"_id": f"{date}:{r['code']}"}) if (codes and force) else None
+        # （天普 11-13 21:10 重跑教训）；全日 force 不受影响（有意重建）。
+        # 命名 rerun_doc：与外层 C 冻结人群档 frozen_doc（2026-11-19 裁决 D3）区分
+        rerun_doc = col.find_one({"_id": f"{date}:{r['code']}"}) if (codes and force) else None
         trow = trial_rows.get(r["code"])
         trial = ({"row": trow, "source": "wzslinker_auction",
                   "fetchedAt": trial_state.get("saved_at"),
@@ -882,11 +1086,14 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
                           trial=trial, reg_corpus=reg_corpus,
                           mbl_state=mbl_state,
                           trial_strength=r.get("trialStrength") if is_trial else None)
-        if (frozen_doc and frozen_doc.get("status") == "ok"
-                and frozen_doc.get("narrative")):
-            built["narrative"] = frozen_doc["narrative"]
-            built["corpusState"] = frozen_doc.get("corpusState") or built["corpusState"]
+        if (rerun_doc and rerun_doc.get("status") == "ok"
+                and rerun_doc.get("narrative")):
+            built["narrative"] = rerun_doc["narrative"]
+            built["corpusState"] = rerun_doc.get("corpusState") or built["corpusState"]
             built["corpusFrozen"] = True
+            # 冻结叙事配套冻结六件套行（旧档无 bidLine → None，rebuild 路径 B 承接）
+            built["bidLine"] = rerun_doc.get("bidLine")
+            built["bidLineState"] = rerun_doc.get("bidLineState") or built.get("bidLineState")
             built["chars"] = len(built["narrative"])
             built["estimatedTokens"] = estimate_tokens(built["chars"])
         else:
@@ -927,9 +1134,11 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
             print(f"----- {b.get('docKind')} {b.get('board') or (b.get('row') or {}).get('code')} "
                   f"chars={b['chars']} -----")
             print(b["narrative"])
-        return {"ok": True, "date": date, "dryRun": True, "leaders": len(todo),
-                "docs": len(built_all), "estimatedTokens": est,
-                "selection": selection, "trialStrengthState": tstate}
+        return {"ok": True, "date": date, "timings": timings, "dryRun": True,
+                "leaders": len(todo), "docs": len(built_all), "estimatedTokens": est,
+                "selection": selection, "trialStrengthState": tstate,
+                "selectionFrozen": frozen_doc is not None,
+                "freezeState": freeze_state, "forcedOutsideSelection": forced_outside}
     if not confirm_budget:
         print(f"{date} 预计 {len(built_all)} 调用 ≈{est} tokens；真实开火需 --confirm-budget")
         raise SystemExit(2)
@@ -960,11 +1169,21 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         ok_n += 1 if ok else 0
         degraded_n += 0 if ok else 1
         tokens += tk
-    result = {"ok": True, "date": date, "leaders": len(todo), "docs": len(built_all),
+    timings["total_s"] = round(time.monotonic() - _t0, 2)
+    # C 冻结落档（首跑即冻结，2026-11-19 裁决 D3）：成功执行后写；冻结命中重试/
+    # 单股重跑（codes）/force 均不覆写（单写者=label run 全日跑，§1.2-1）
+    selection_frozen = frozen_doc is not None
+    if frozen_doc is None and not dry_run and not force and codes is None:
+        freeze_state = save_frozen_selection(db, date, freeze_rows, freeze_selection)
+        selection_frozen = freeze_state.get("state") == "ok"
+    result = {"ok": True, "date": date, "timings": timings,
+              "leaders": len(todo), "docs": len(built_all),
               "okCount": ok_n, "degraded": degraded_n, "tokensUsed": tokens,
               "estimatedTokensBudgetGuard": est,
               "selection": selection, "trialStrengthState": tstate,
-              "questionSetVersion": QUESTION_SET_VERSION_AUCTION_LEADER}
+              "questionSetVersion": QUESTION_SET_VERSION_AUCTION_LEADER,
+              "selectionFrozen": selection_frozen, "freezeState": freeze_state,
+              "forcedOutsideSelection": forced_outside}
     return result
 
 
