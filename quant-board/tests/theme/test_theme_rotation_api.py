@@ -5,14 +5,15 @@ from backend.main import app
 
 class FakeFrameDb:
     def __init__(self, frames, sectors):
-        self._frames = frames
-        self._sectors = sectors
+        # 2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）
+        self._frames = [
+            {**frame, "sectorRows": sectors}
+            for frame in frames
+        ]
 
     def __getitem__(self, name):
         if name == "snapshot_frames":
             return _FakeFrameCollection(self._frames)
-        if name == "snapshot_sector_rows":
-            return _FakeSectorCollection(self._sectors)
         raise KeyError(name)
 
 
@@ -20,29 +21,22 @@ class _FakeFrameCollection:
     def __init__(self, frames):
         self._frames = frames
 
-    def find_one(self, query, sort=None):
-        # M6：仅当查询要求 algorithmVersion 且存在帧时返回
-        if "rotationSummary.algorithmVersion" not in query:
-            return None
-        return self._frames[0] if self._frames else None
-
-
-class _FakeSectorCollection:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def find(self, query):
-        return self
-
-    def sort(self, key_or_list):
-        return self._rows
-
-    def __iter__(self):
-        return iter(self._rows)
+    def find_one(self, query, projection=None, sort=None):
+        # rotationSummary 门控：仅当查询要求 algorithmVersion 且存在帧时返回；
+        # sector rows 回放查询（datasetId+snapshotId）按匹配返回。
+        if "rotationSummary.algorithmVersion" in query:
+            return self._frames[0] if self._frames else None
+        matches = [
+            frame for frame in self._frames
+            if all(frame.get(key) == value for key, value in (query or {}).items())
+        ]
+        return matches[0] if matches else None
 
 
 def _patch_db(monkeypatch, frames, sectors):
     import backend.api.theme_rotation_routes as routes
+    # 帧文档须带 datasetId（sector_rows_by_snapshot 按 datasetId+snapshotId 查帧）
+    frames = [{**frame, "datasetId": "dragonboard_live"} for frame in frames]
     monkeypatch.setattr(routes, "get_runtime_mongodb_database", lambda: FakeFrameDb(frames, sectors))
 
 
@@ -72,7 +66,7 @@ def test_theme_rotation_summary_envelope_shape(monkeypatch):
             },
         }],
         sectors=[{
-            "themeId": "BKAI", "themeName": "人工智能", "rank": 1,
+            "entityType": "hot_theme", "themeId": "BKAI", "themeName": "人工智能", "rank": 1,
             "rotationState": "mainline", "lifecycle": "expanding", "rotationScore": 78.0,
         }],
     )
@@ -134,6 +128,10 @@ def test_theme_rotation_summary_reads_through_redis_cache(monkeypatch):
             "mainLines": [],
             "algorithmVersion": "theme_rotation_v2",
         },
+        "sectorRows": [{
+            "entityType": "hot_theme", "themeId": "BKAI", "themeName": "人工智能", "rank": 1,
+            "rotationState": "mainline", "lifecycle": "expanding", "rotationScore": 78.0,
+        }],
     }]
     monkeypatch.setattr(
         routes,
@@ -151,6 +149,8 @@ def test_theme_rotation_summary_reads_through_redis_cache(monkeypatch):
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json() == second.json()
-    assert calls["count"] == 1  # 第二次命中 Redis read-through，不再查库
+    # 第二次命中 Redis read-through：仍为 2 次 find_one（latest frame + sector rows），
+    # 不再随请求次数增长（2026-11-19 起 sector rows 改从帧内嵌读取，也走 find_one）
+    assert calls["count"] == 2
     assert fake_cache.deps is not None
     assert any("index" in key for key in fake_cache.deps[1])

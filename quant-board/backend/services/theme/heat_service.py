@@ -154,34 +154,34 @@ class ThemeHeatService:
         return {**snapshot, "factors": enriched}
 
     def _load_latest_rotation_state(self) -> dict[str, dict[str, object]]:
-        """读取最近一次引擎落库的 sector rows rotationState（只读，异常时按无数据处理）。"""
+        """读取最近一次引擎落库的 sector rows rotationState（只读，异常时按无数据处理）。
+
+        2026-11-19 起 sector rows 内嵌在帧文档 sectorRows 数组（独立集合已 drop）。
+        """
         try:
             db = get_runtime_mongodb_database()
-            latest = db["snapshot_sector_rows"].find_one(
+            latest = db["snapshot_frames"].find_one(
                 {
-                    "entityType": "hot_theme",
-                    "rotationState": {"$nin": [None, ""]},
+                    # 任意内嵌 hot_theme 行携带 rotationState 即可（首行可能是 sector 类型无 rotationState，
+                    # 不能用 sectorRows.0 判定）
+                    "sectorRows": {
+                        "$elemMatch": {
+                            "entityType": "hot_theme",
+                            "rotationState": {"$nin": [None, ""]},
+                        }
+                    },
                 },
+                {"snapshotId": 1, "sectorRows": 1},
                 sort=[("timestamp", -1)],
             )
             if not latest:
                 return {}
-            rows = list(
-                db["snapshot_sector_rows"].find(
-                    {
-                        "snapshotId": latest.get("snapshotId"),
-                        "entityType": "hot_theme",
-                    },
-                    {
-                        "themeId": 1,
-                        "entityKey": 1,
-                        "rotationState": 1,
-                        "lifecycle": 1,
-                        "rotationScore": 1,
-                        "_id": 0,
-                    },
-                )
-            )
+            rows = [
+                embedded
+                for embedded in latest.get("sectorRows") or []
+                if isinstance(embedded, dict)
+                and embedded.get("entityType") == "hot_theme"
+            ]
         except Exception:
             return {}
         result: dict[str, dict[str, object]] = {}

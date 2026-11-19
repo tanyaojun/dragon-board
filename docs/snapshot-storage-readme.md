@@ -1,5 +1,10 @@
 # 快照存储说明
 
+> **2026-11-19 退役说明**：`snapshot_sector_rows` 独立集合已 drop，sector rows 内嵌进
+> `snapshot_frames.sectorRows`；ThemeTrend 整条策略链（回测/优化/研究/CLI）已删除。
+> 详见 `docs/theme-rotation/2026-11-19-sectorsrows-collection-retirement.md`。
+
+
 ## 当前结构
 正式快照事实库当前由 QuantBoard SQLite 承接，Dragon Board 前端通过
 [backendRead.ts](/D:/dragon-board/src/services/snapshot/backendRead.ts) 读取后端 API。

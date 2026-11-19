@@ -116,7 +116,7 @@ quant-board/
 - `datasets`
 - `snapshot_frames`（快照帧）
 - `snapshot_stock_rows`（股票行情行）
-- `snapshot_sector_rows`（板块/题材行）
+- sector rows（板块/题材行）：2026-11-19 起内嵌在 `snapshot_frames.sectorRows`（独立集合已 drop）
 - `stock_names`（A 股代码表）
 - `trade_journal`（候选池交易日志，含 7 个执行字段）
 - `golden_ranktrend_cases`

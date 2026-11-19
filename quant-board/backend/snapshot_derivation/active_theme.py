@@ -16,7 +16,7 @@
   绝不回退 themes[0] 旧口径（那是字典序伪装）。
 
 纯函数零 IO：strength 表由调用方注入（生产=market_context.sectors，
-历史回放=snapshot_sector_rows 当日帧），单一事实源不复制。
+历史回放=帧内嵌 sectorRows 当日帧，2026-11-19 起独立集合已 drop），单一事实源不复制。
 """
 from __future__ import annotations
 

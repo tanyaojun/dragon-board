@@ -225,7 +225,6 @@ def test_light_backup_v2_only_dumps_snapshot_collections(tmp_path: Path) -> None
             "snapshot_records": [{"snapshotId": "r1"}],
             "snapshot_frames": [{"snapshotId": "s1"}],
             "snapshot_stock_rows": [{"rowId": "w1"}],
-            "snapshot_sector_rows": [{"rowId": "z1"}],
         }
     )
     service = make_service(tmp_path, dumper)
@@ -235,13 +234,12 @@ def test_light_backup_v2_only_dumps_snapshot_collections(tmp_path: Path) -> None
     assert result["ok"] is True
     assert result["manifest"]["schemaVersion"] == "mongodb_backup.v2"
     assert result["manifest"]["strategy"] == "light_dump"
-    assert len(dumper.commands) == 4
+    assert len(dumper.commands) == 3
     dumped = {cmd[cmd.index("--collection") + 1] for cmd in dumper.commands}
     assert dumped == {
         "snapshot_records",
         "snapshot_frames",
         "snapshot_stock_rows",
-        "snapshot_sector_rows",
     }
     assert set(result["manifest"]["docCounts"]) == dumped
 

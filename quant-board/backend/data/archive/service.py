@@ -45,12 +45,14 @@ def _mongodb_snapshot_rows(
         "records": ("snapshot_records", [("snapshotId", 1)]),
         "frames": ("snapshot_frames", [("snapshotId", 1)]),
         "stockRows": ("snapshot_stock_rows", [("snapshotId", 1), ("code", 1)]),
-        "sectorRows": ("snapshot_sector_rows", [("snapshotId", 1), ("entityKey", 1)]),
     }
     rows: dict[str, list[dict[str, Any]]] = {}
     for key, (collection, sort_spec) in collections.items():
         cursor = mongo_db[collection].find(spec).sort(sort_spec)
         rows[key] = [_strip_mongo_row(row) for row in cursor]
+    # 2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）
+    sector_rows = [row for frame in rows["frames"] for row in frame.get("sectorRows") or []]
+    rows["sectorRows"] = sector_rows
     return rows
 
 
@@ -162,7 +164,6 @@ class ArchiveService:
                 "records": rows["records"] or [{"archiveId": archive_id}],
                 "frames": rows["frames"] or [{"archiveId": archive_id}],
                 "stock_rows": rows["stockRows"],
-                "sector_rows": rows["sectorRows"],
             },
         )
         manifest_payload = {

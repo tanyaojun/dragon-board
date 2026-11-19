@@ -12,7 +12,6 @@ ALLOWED_OBJECT_ARCHIVE_FILENAMES = {
     "records.parquet",
     "frames.parquet",
     "stock_rows.parquet",
-    "sector_rows.parquet",
     "trades.parquet",
     "equity_curve.parquet",
     "signals.parquet",

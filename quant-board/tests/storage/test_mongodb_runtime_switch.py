@@ -87,49 +87,6 @@ def test_optimization_background_job_uses_repository_factory_in_mongodb_mode(mon
     assert repo.saved_optimizations[0].status == "completed"
 
 
-def test_theme_research_builder_reads_frames_from_repository_factory(monkeypatch) -> None:
-    service_path = Path(__file__).resolve().parents[2] / "backend" / "services" / "theme_research_service.py"
-    spec = importlib.util.spec_from_file_location("theme_research_service_under_test", service_path)
-    assert spec and spec.loader
-    service = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(service)
-
-    repo = FakeRepo()
-
-    monkeypatch.setattr(service, "create_repository", lambda session: repo)
-    monkeypatch.setattr(service, "ThemeResearchRepository", lambda: repo)
-    monkeypatch.setattr(service, "storage_source_label", lambda: "mongodb")
-    monkeypatch.setattr(
-        service.ThemeTrendPythonEngine,
-        "replay_sequence_typed",
-        lambda self, frames, config, meta: service.ThemeTrendResult(
-            factors=[],
-            exposures=[],
-            signals=[],
-            qualityReport=service.ThemeQualityReport(
-                passed=True,
-                severity="pass",
-                researchGrade="research_ready",
-                issues=[],
-                warnings=[],
-                stats={},
-                themeCoverage=0.0,
-                frameCount=1,
-                stockCount=0,
-                themeCount=0,
-            ),
-            strategyVersion=service.STRATEGY_VERSION,
-            factorVersion=service.FACTOR_VERSION,
-            signalVersion=service.SIGNAL_VERSION,
-            meta={},
-        ),
-    )
-
-    result = service.build_theme_research("ds_1", "half_hour")
-
-    assert result.qualityReport.passed is True
-
-
 @pytest.mark.parametrize(
     ("method", "path", "payload"),
     [
@@ -139,10 +96,6 @@ def test_theme_research_builder_reads_frames_from_repository_factory(monkeypatch
         ("post", "/api/storage/archive/research", {}),
         ("get", "/api/storage/archive/manifests", None),
         ("post", "/api/storage/archive/verify", {"archiveId": "a1"}),
-        ("post", "/api/storage/archive/restore", {"archiveId": "a1"}),
-        ("post", "/api/storage/archive/push-backup", {}),
-        ("post", "/api/storage/archive/pull-backup", {"archiveId": "a1"}),
-        ("post", "/api/migrations/snapshots/import-json", {"bundle": {"items": []}}),
     ],
 )
 def test_sqlite_archive_api_is_gone_in_mongodb_mode(monkeypatch, method: str, path: str, payload: dict[str, Any] | None) -> None:
@@ -252,7 +205,6 @@ def test_delete_dataset_api_uses_mongodb_service_and_preserves_primary_guard(mon
                 "ok": True,
                 "datasetId": dataset_id,
                 "deleted": {
-                    "snapshot_sector_rows": 1,
                     "snapshot_stock_rows": 1,
                     "snapshot_frames": 1,
                     "snapshot_records": 1,

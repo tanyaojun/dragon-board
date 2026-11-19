@@ -96,7 +96,6 @@ class FakeMongoDb:
                 "snapshot_records",
                 "snapshot_frames",
                 "snapshot_stock_rows",
-                "snapshot_sector_rows",
                 "archive_manifests",
             )
         }
@@ -109,7 +108,17 @@ class FakeMongoDb:
             slot = f"10:{index:02d}"
             snapshot_id = f"{snapshot_type}:{trading_date}:{slot}"
             for collection, payload in (
-                ("snapshot_frames", {"sectorRowCount": sectors}),
+                # 2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）
+                ("snapshot_frames", {"sectorRowCount": sectors,
+                                     "sectorRows": [
+                                         {
+                                             "entityType": "hot_theme",
+                                             "entityKey": f"t{sector_index}",
+                                             "entityName": f"题材{sector_index}",
+                                             "rank": sector_index + 1,
+                                         }
+                                         for sector_index in range(sectors)
+                                     ]}),
                 ("snapshot_records", {}),
             ):
                 self.collections[collection].append(
@@ -135,18 +144,6 @@ class FakeMongoDb:
                         "code": f"00000{stock_index}",
                         "name": f"股票{stock_index}",
                         "themes": [{"themeId": "t1"}],
-                    }
-                )
-            for sector_index in range(sectors):
-                self.collections["snapshot_sector_rows"].append(
-                    {
-                        "_id": f"oid-sector-{snapshot_id}-{sector_index}",
-                        "datasetId": dataset_id,
-                        "snapshotId": snapshot_id,
-                        "type": snapshot_type,
-                        "tradingDate": trading_date,
-                        "slotTime": slot,
-                        "entityKey": f"theme_{sector_index}",
                     }
                 )
 

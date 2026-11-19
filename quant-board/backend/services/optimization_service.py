@@ -2,7 +2,6 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 from backend.analysis.ranktrend.jump_research import build_jump_research_request, summarize_jump_research
-from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
     normalize_strategy_name,
 )
@@ -19,28 +18,6 @@ from backend.services.shared import (
     camel_get,
     _prepare_frames_for_backtest
 )
-
-
-def _grid_requests_daily_factors(search_space: dict[str, Any]) -> bool:
-    """搜索空间是否含 >0 的 persistenceScoreWeight（list choices 或 range spec）。
-
-    Phase 4 P4-3 前置接线（2026-09-27 Path B）：为真时才读 theme_daily_factors
-    装载日级持续性原料（一次装载、全 trial 复用），避免默认路径零必要 IO。
-    数值化口径与 ThemeTrendConfig.from_patch 一致（float() 可析的字符串也算，
-    code review M-5：否则 "0.5" 会被探测漏掉而引擎侧生效，全 trial source_not_provided）。
-    """
-    def _positive(value: Any) -> bool:
-        try:
-            return not isinstance(value, bool) and float(value) > 0
-        except (TypeError, ValueError):
-            return False
-
-    spec = search_space.get("persistenceScoreWeight")
-    if isinstance(spec, dict):
-        return any(_positive(v) for v in (spec.get("low"), spec.get("high")))
-    if isinstance(spec, list):
-        return any(_positive(v) for v in spec)
-    return False
 
 
 class OptimizationService:
@@ -123,141 +100,6 @@ class OptimizationService:
             "randomSeed": request["random_seed"],
         }
 
-    def run_theme_trend(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:
-        """执行题材趋势策略参数优化（grid/random 搜索）。
-
-        wait 参数保留用于与 run_ranktrend 接口对齐；当前 MVP 始终同步执行。
-        后续可扩展异步路径。
-        """
-        from backend.optimization.search_space import (
-            theme_confluence_search_space,
-            theme_parameter_groups,
-            theme_search_space,
-            normalize_search_space,
-            select_candidates,
-        )
-        from backend.optimization.objective import score_theme_trend
-
-        dataset_id = str(camel_get(payload, "dataset_id", "datasetId", ""))
-        snapshot_type = str(camel_get(payload, "snapshot_type", "snapshotType", "half_hour"))
-        strategy_name = str(camel_get(payload, "strategy_name", "strategyName", "theme_rotation"))
-        search_profile = str(camel_get(payload, "search_profile", "searchProfile", "theme_trend"))
-        method = str(camel_get(payload, "method", default="random"))
-        objective = str(camel_get(payload, "objective", default="stability"))
-        random_seed = int(camel_get(payload, "random_seed", "randomSeed", 20260430))
-        max_trials = max(1, int(camel_get(payload, "trials", default=12)))
-
-        frames = self.repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type)
-        if not frames:
-            raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
-
-        param_grid_input = camel_get(payload, "parameter_grid", "parameterGrid", {}) or {}
-        search_space = normalize_search_space(
-            param_grid_input
-            if param_grid_input
-            else (theme_confluence_search_space() if search_profile == "theme_confluence" else theme_search_space())
-        )
-
-        run_id = new_id("opt")
-        config_hash = stable_hash({k: v for k, v in payload.items() if k != "parameterGrid"})
-
-        trial_results: list[dict[str, Any]] = []
-        total_candidates = candidate_count(search_space)
-        trial_params_list = select_candidates(search_space, max_trials, method, random_seed)
-
-        trial_errors: list[dict[str, Any]] = []
-        # 日级持续性原料（Path B，2026-09-27）：搜索空间含 >0 权重时才装载，
-        # 一次装载全 trial 复用；非 Mongo/读失败/无行 → {} + 结构化源级标记，
-        # 引擎逐信号打 persistence_daily_key_missing（fail-visible，不静默按 0）。
-        daily_factors = None
-        daily_source_flags: list[str] = []
-        if _grid_requests_daily_factors(search_space):
-            from backend.services.theme.daily_factors_service import load_daily_persistence_inputs
-
-            trading_days = sorted({str(f.get("tradingDate") or "") for f in frames} - {""})
-            daily_factors, daily_source_flags = load_daily_persistence_inputs(dataset_id, trading_days)
-        for trial_idx, trial_params in enumerate(trial_params_list):
-            try:
-                config = ThemeTrendConfig.from_patch({
-                    k: v for k, v in trial_params.items()
-                })
-                engine_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config, daily_factors=daily_factors)
-                score = score_theme_trend(engine_result, objective)
-                trial_results.append({
-                    "trialId": trial_idx,
-                    "params": {k: v for k, v in trial_params.items()},
-                    "score": score,
-                    "themeCount": len(engine_result.get("factors", [])),
-                    "mainlineCount": sum(1 for f in engine_result.get("factors", []) if f.get("lifecycle") == "mainline"),
-                    "engineFactors": engine_result.get("factors", [])[:50],
-                })
-            except Exception as exc:
-                trial_errors.append({
-                    "trialId": trial_idx,
-                    "params": {k: v for k, v in trial_params.items()},
-                    "error": str(exc)[:200],
-                })
-
-        trial_results.sort(key=lambda t: t["score"], reverse=True)
-        best = trial_results[0] if trial_results else {}
-
-        result_payload = {
-            "runId": run_id,
-            "method": method,
-            "objective": objective,
-            "searchProfile": search_profile,
-            "supportedParameterGroups": theme_parameter_groups(search_profile),
-            "candidateCount": total_candidates,
-            "trials": len(trial_results),
-            "trialErrors": trial_errors,
-            "best": best,
-            "trialList": trial_results[:50],
-        }
-        if daily_source_flags:
-            # 数据源级结构化原因透出（code review I-4）
-            result_payload["dailyFactorSourceFlags"] = daily_source_flags
-
-        opt_run = OptimizationRun(
-            id=run_id,
-            dataset_id=dataset_id,
-            strategy_name=strategy_name,
-            method=method,
-            random_seed=random_seed,
-            status="completed" if trial_results else "failed",
-            config_hash=config_hash,
-            request_json=dumps_json_field(payload),
-            result_json=dumps_json_field(result_payload),
-        )
-        self.repo.save_optimization_run(opt_run)
-
-        return {
-            "id": run_id,
-            "runId": run_id,
-            "status": opt_run.status,
-            "method": method,
-            "strategyName": strategy_name,
-            "analysisMode": "theme_trend",
-            "searchProfile": search_profile,
-            "supportedParameterGroups": theme_parameter_groups(search_profile),
-            "candidateCount": total_candidates,
-            "randomSeed": random_seed,
-            "best": best,
-            "trialCount": len(trial_results),
-        }
-
-    def run_theme_confluence(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:
-        request = {
-            **payload,
-            "strategy_name": camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"),
-            "strategyName": camel_get(payload, "strategy_name", "strategyName", "hotlist_theme_confluence"),
-            "search_profile": "theme_confluence",
-            "searchProfile": "theme_confluence",
-        }
-        result = self.run_theme_trend(request, wait=wait)
-        result["analysisMode"] = "theme_confluence"
-        result["strategyName"] = str(request["strategyName"])
-        result["searchProfile"] = "theme_confluence"
-        return result
 
     def run_ranktrend_jump_research(self, payload: dict[str, Any]) -> dict[str, Any]:
         research_payload = build_jump_research_request(payload)

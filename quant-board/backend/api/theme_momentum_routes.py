@@ -1,7 +1,7 @@
 # quant-board/backend/api/theme_momentum_routes.py
 """题材动量 v2 只读 API：GET /api/theme-momentum/summary。
 
-从 snapshot_sector_rows（hot_theme）按交易日聚合日线序列，计算 v2 题材动量，
+从帧内嵌 sectorRows（hot_theme，2026-11-19 起独立集合已 drop）按交易日聚合日线序列，计算 v2 题材动量，
 返回全字段排行（RPS/距年内高点/多窗口动量/整体性/资金量能/拥挤惩罚/intraday/reasons）。
 复用 theme-rotation/summary 的 Redis 缓存模式；纯计算无 I/O 副作用。
 """

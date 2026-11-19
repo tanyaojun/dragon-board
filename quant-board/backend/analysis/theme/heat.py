@@ -189,7 +189,7 @@ def _compute_theme_factor(
     # 打标，不续接断链前计数、不用 0 分伪装中性）。
     # 读侧走 metadata.consecutiveHotBuckets 与写侧对齐（heat_service._last_success
     # 供给的是含 metadata 的完整因子；历史顶层路径错位曾致全库恒 0）。
-    # 跨日持续性口径 = theme_daily_factors factors.heatLevelStreak
+    # 跨日持续性研究口径原挂 theme_daily_factors（2026-11-19 集合随 ThemeTrend 链淘汰已 drop）
     # （factor_series.level_streak，与 D3 同面板对照防双持续性重复计分）。
     # 公式 min(计数×20, 100) 日内粒度约 5 桶饱和，仅供实时观察；研究口径以日级为准。
     previous_metadata = (previous_factor or {}).get("metadata")

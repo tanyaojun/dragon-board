@@ -494,15 +494,15 @@ class TestMongoIntegrationApply:
 
         assert result.status == "completed"
         assert db["snapshot_frames"].find_one({"snapshotId": snapshot_id})["sectorRowCount"] == 239
-        assert db["snapshot_sector_rows"].count_documents({"snapshotId": snapshot_id}) == 239
-        assert db["snapshot_sector_rows"].count_documents(
-            {
-                "snapshotId": snapshot_id,
-                "entityType": "hot_theme",
-                "metadata.quoteSource": "tencent",
-                "metadata.fundSource": None,
-            }
-        ) == 239
+        # 2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）
+        embedded = db["snapshot_frames"].find_one({"snapshotId": snapshot_id})["sectorRows"]
+        assert len(embedded) == 239
+        assert all(
+            row.get("entityType") == "hot_theme"
+            and (row.get("metadata") or {}).get("quoteSource") == "tencent"
+            and (row.get("metadata") or {}).get("fundSource") is None
+            for row in embedded
+        )
 
 
 class TestMongoIntegrationDedup:

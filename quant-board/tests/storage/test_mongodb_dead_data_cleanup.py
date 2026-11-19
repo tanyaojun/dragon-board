@@ -25,8 +25,13 @@ class FakeCollection:
     def count_documents(self, query: dict[str, object]) -> int:
         return len(self.find(query))
 
-    def find(self, query: dict[str, object] | None = None) -> list[dict[str, object]]:
-        return [row for row in self.rows if _matches(row, query or {})]
+    def find(self, query: dict[str, object] | None = None, projection: dict[str, object] | None = None) -> list[dict[str, object]]:
+        rows = [row for row in self.rows if _matches(row, query or {})]
+        if projection:
+            included = {key for key, enabled in projection.items() if enabled}
+            if included:
+                rows = [{key: row.get(key) for key in included} for row in rows]
+        return rows
 
     def delete_many(self, query: dict[str, object]) -> DeleteResult:
         before = len(self.rows)
@@ -231,7 +236,6 @@ def test_cleanup_datasets_removes_test_residue_and_five_minute_records(tmp_path:
         "snapshot_records": 2,
         "snapshot_frames": 1,
         "snapshot_stock_rows": 1,
-        "snapshot_sector_rows": 0,
     }
 
 
@@ -313,7 +317,6 @@ def test_compact_runs_on_row_deletion_targets_after_apply(monkeypatch, tmp_path:
         "snapshot_records",
         "snapshot_frames",
         "snapshot_stock_rows",
-        "snapshot_sector_rows",
         "backtest_result_chunks",
     ]
     assert all(item["ok"] for item in step["collections"])
@@ -321,7 +324,6 @@ def test_compact_runs_on_row_deletion_targets_after_apply(monkeypatch, tmp_path:
         ("compact", "snapshot_records"),
         ("compact", "snapshot_frames"),
         ("compact", "snapshot_stock_rows"),
-        ("compact", "snapshot_sector_rows"),
         ("compact", "backtest_result_chunks"),
     ]
     audit = db["migration_audit"].rows[-1]

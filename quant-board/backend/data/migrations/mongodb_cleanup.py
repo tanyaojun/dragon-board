@@ -8,7 +8,6 @@ SNAPSHOT_CHILD_COLLECTIONS = (
     "snapshot_records",
     "snapshot_frames",
     "snapshot_stock_rows",
-    "snapshot_sector_rows",
 )
 
 DATASET_RESEARCH_COLLECTIONS = (

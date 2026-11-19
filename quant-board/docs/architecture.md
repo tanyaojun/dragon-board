@@ -160,7 +160,7 @@ ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 
 1. 导入阶段
    - 输入：MongoDB 主库中的正式快照事实集合，历史 SQLite/JSON/IndexedDB 导出只作为迁移来源。
-   - 输出：`datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+   - 输出：`datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`；sector rows 自 2026-11-19 起内嵌在帧文档 `sectorRows`（独立集合已 drop）。
    - 写入策略：Dragon Board 正式快照通过 `POST /api/snapshots/ingest` 落 MongoDB；`sourceType=mongodb_snapshots` 只建立研究视图/筛选口径，不再复制快照事实行。SQLite/Supabase 旧写入和 failover 链路在 Mongo 模式下禁用。
 
 2. 分析阶段
@@ -205,7 +205,7 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 - `POST /api/snapshots/ingest` 与后台采集进程 `snapshot_collector`（8001 直写 MongoDB）是正式快照进入 MongoDB 的**两条写入路径**，二者共用同一数据层方法 `save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）：2026-07 起日常生产写入由 collector 承担，ingest 保留给手工/离线导入与前端诊断（前端 `snapshot.sweep` 默认关闭）。**写入后的快照缓存失效由数据层 after-save 钩子统一触发**（`backend/data/repositories/snapshot_post_save.py` + `backend/services/snapshot_post_save_hooks.py`），不得在各路径各写一份。**analyze 产物落库（`snapshot_analysis`）是写路径自身的同步步骤**（2026-09-15 重构）：采集主链在 `snapshot_collector/service.py` `_run_post_persist_chain` 内按 落帧 → analyze → 槽位情绪（displayStatus join）→ 当日 EOD 顺序同步执行（线程池，不阻塞事件循环）；ingest 路由由 BackgroundTasks 同步执行。此前的"数据层钩子 + 后台 worker 异步提交"路径（2026-09-10）在落帧与 analyze 之间留时序空窗，已退役删除——任何把 analyze 重新挪出写路径的改动都会复现 displayStatus join 恒 miss 的回归。
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
 - `GET /api/ranktrend/rank-series?rank_basis=attention` 必须携带非空 `codes`，且仅允许 MongoDB 主库；非 MongoDB 环境返回 `503`。读取时在限窗前过滤无效 `avgRankNum`，再按每帧有效 `avgRankNum ASC, code ASC` 重建关注度排名，不改写快照事实字段，也不回退到 `rank` 或 `compRank`。
-- `POST /api/ranktrend/analyze` 帧级输出 `themeContext` 与 `themeMomentumContext`、每股输出 `analysis.themeMomentum`（只读投影，第4轨数据源）：题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 纯函数基于已落库 `snapshot_sector_rows`（`entityType=hot_theme`）按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象（D2 解耦，2026-08-06）。`projection="ranktrend"` 读口同时携带 `hotThemes` 与股票 `themes/mainTheme/themeRole/themeContribution/leadStatus`。题材动量独立为 `GET /api/theme-momentum/summary`，不新增 MongoDB 集合。
+- `POST /api/ranktrend/analyze` 帧级输出 `themeContext` 与 `themeMomentumContext`、每股输出 `analysis.themeMomentum`（只读投影，第4轨数据源）：题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 纯函数基于帧内嵌 `sectorRows`（`entityType=hot_theme`，2026-11-19 起独立集合已 drop）按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象（D2 解耦，2026-08-06）。`projection="ranktrend"` 读口同时携带 `hotThemes` 与股票 `themes/mainTheme/themeRole/themeContribution/leadStatus`。题材动量独立为 `GET /api/theme-momentum/summary`，不新增 MongoDB 集合。
 - RankTrend 批量读按 `code` 分区在 MongoDB 端截取窗口，前端先发布 RankTrend/Jump/resonance，再异步同步 Fusion、候选日志和执行投影。Redis 响应通过 `cache.hit` 与统一耗时日志观测；API ingest 和后台 snapshot collector 的成功事实写入都会递增 dataset cache generation，阻止慢读回写已失效响应。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
 - `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
@@ -306,7 +306,11 @@ MongoDB 模式下 `snapshot_frames` 还承担 formal snapshot 修复对账基线
 
 RankTrend 信号列随股票行保存：`directionSignal/Confidence`、`accelerationSignal/Confidence`、`crossSignal/Confidence`（零轴穿越）、`finalSignal/Confidence`、`jumpDirection`（跃迁方向）、`jumpConfidence`（跃迁度）、`macdCross`（MACD 金叉死叉）、`resonanceIntensity`（共振强度，由上述信号加权派生）。
 
-### snapshot_sector_rows
+### snapshot_sector_rows（已 drop，2026-11-19）
+
+> 2026-11-19 起本集合退役：sector rows 内嵌进 `snapshot_frames.sectorRows`，
+> 本节保留为历史结构说明。
+
 
 一条快照内的板块、题材、主线实体一行。首期可先导入，策略使用可后置。
 
@@ -323,7 +327,7 @@ RankTrend 信号列随股票行保存：`directionSignal/Confidence`、`accelera
 - `factorBreakdown`：`{strength, flow, breadth, crowding, lifecycle}` 子分
 - `qualityFlags`：字段缺失/历史不足时显式标记（`rotation_history_insufficient` 等）
 
-引擎只依赖 `snapshot_sector_rows`/`snapshot_stock_rows` 跨槽位历史（MongoDB），
+引擎只依赖帧内嵌 sector rows/`snapshot_stock_rows` 跨槽位历史（MongoDB），
 历史或字段不足时输出 `null + reasons[] + qualityFlags`，绝不阻断快照入库（fail-visible）。
 同时每个 frame 顶层写入 `rotationSummary`（**camelCase** 合同）：
 `marketPhase/rotationSpeed/mainlineConcentration/maxBoardHeight/mainLines/inflowThemes/

@@ -17,8 +17,13 @@ class FakeCollection:
     def count_documents(self, query: dict[str, object]) -> int:
         return len(self.find(query))
 
-    def find(self, query: dict[str, object] | None = None) -> list[dict[str, object]]:
-        return [row for row in self.rows if _matches(row, query or {})]
+    def find(self, query: dict[str, object] | None = None, projection: dict[str, object] | None = None) -> list[dict[str, object]]:
+        rows = [row for row in self.rows if _matches(row, query or {})]
+        if projection:
+            included = {key for key, enabled in projection.items() if enabled}
+            if included:
+                rows = [{key: row.get(key) for key in included} for row in rows]
+        return rows
 
     def find_one(self, query: dict[str, object], projection: dict[str, object] | None = None) -> dict[str, object] | None:
         rows = self.find(query)
@@ -164,7 +169,6 @@ def test_snapshot_backfill_dry_run_supports_explicit_cross_type_donor() -> None:
                     }
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )
@@ -209,6 +213,15 @@ def test_snapshot_backfill_apply_can_materialize_missing_half_hour_slot_from_dai
                         "timestamp": 900,
                         "stockRowCount": 1,
                         "sectorRowCount": 1,
+                        # 2026-11-19 起 sector rows 内嵌在帧文档（donor 帧携带内嵌行）
+                        "sectorRows": [
+                            {
+                                "entityType": "sector",
+                                "entityKey": "bank",
+                                "entityName": "银行",
+                                "rank": 1,
+                            }
+                        ],
                     }
                 ]
             ),
@@ -223,22 +236,6 @@ def test_snapshot_backfill_apply_can_materialize_missing_half_hour_slot_from_dai
                         "slotTime": "15:00",
                         "timestamp": 900,
                         "code": "000001",
-                        "rank": 1,
-                    }
-                ]
-            ),
-            "snapshot_sector_rows": FakeCollection(
-                [
-                    {
-                        "datasetId": "dragonboard_live",
-                        "snapshotId": "daily:2026-06-11:15:00",
-                        "rowId": "daily:2026-06-11:15:00:sector:bank",
-                        "type": "daily",
-                        "tradingDate": "2026-06-11",
-                        "slotTime": "15:00",
-                        "timestamp": 900,
-                        "entityType": "sector",
-                        "entityKey": "bank",
                         "rank": 1,
                     }
                 ]
@@ -258,7 +255,9 @@ def test_snapshot_backfill_apply_can_materialize_missing_half_hour_slot_from_dai
     assert db["snapshot_frames"].find_one({"snapshotId": "half_hour:2026-06-11:15:00"}) is not None
     assert db["snapshot_records"].find_one({"snapshotId": "half_hour:2026-06-11:15:00"}) is not None
     assert db["snapshot_stock_rows"].count_documents({"snapshotId": "half_hour:2026-06-11:15:00"}) == 1
-    assert db["snapshot_sector_rows"].count_documents({"snapshotId": "half_hour:2026-06-11:15:00"}) == 1
+    # 2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）
+    repaired_frame = db["snapshot_frames"].find_one({"snapshotId": "half_hour:2026-06-11:15:00"})
+    assert repaired_frame is not None and len(repaired_frame.get("sectorRows") or []) == 1
 
 
 def test_snapshot_backfill_apply_can_materialize_missing_close_slot_from_same_type_previous_slot() -> None:
@@ -309,7 +308,6 @@ def test_snapshot_backfill_apply_can_materialize_missing_close_slot_from_same_ty
                     }
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )
@@ -379,7 +377,6 @@ def test_snapshot_backfill_apply_can_materialize_missing_daily_close_slot_from_l
                     }
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )
@@ -449,7 +446,6 @@ def test_snapshot_backfill_apply_repairs_count_mismatch_and_missing_record() -> 
                     },
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )
@@ -502,7 +498,6 @@ def test_snapshot_backfill_default_scope_includes_missing_records_and_count_only
                     }
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )
@@ -769,7 +764,6 @@ def _seed_database() -> FakeMongoDatabase:
                     },
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )
@@ -842,7 +836,6 @@ def _seed_cross_dataset_slot_database() -> FakeMongoDatabase:
                     },
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
             "migration_audit": FakeCollection([]),
         }
     )

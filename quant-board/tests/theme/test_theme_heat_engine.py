@@ -277,8 +277,8 @@ def test_main_board_st_uses_main_board_threshold_since_rule_change() -> None:
 # 修复前双重缺陷：写侧 metadata.consecutiveHotBuckets / 读侧顶层路径错位恒 None；
 # 递增逻辑整体缺失（读 prev 直接 ×20）。修复后口径：
 #   计数 = 上一帧 heatLevel ≥ HOT_LEVEL_THRESHOLD(70) ? prev计数+1 : 0
-#   分数 = min(计数 × 20, 100)（日内槽位粒度；跨日研究口径 = theme_daily_factors
-#          factors.heatLevelStreak，factor_series.level_streak）
+#   分数 = min(计数 × 20, 100)（日内槽位粒度；跨日研究口径原挂 theme_daily_factors，
+#          2026-11-19 随 ThemeTrend 链淘汰已 drop）
 
 _QUOTES_2 = {
     "000001": {"code": "000001", "change": 6, "amount": 100000000, "volumeRatio": 2},

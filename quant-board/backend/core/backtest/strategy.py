@@ -93,41 +93,8 @@ RESEARCH_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
-THEME_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
-    {
-        "key": "theme_rotation",
-        "label": "题材轮动策略",
-        "description": "基于题材生命周期强度买卖高暴露股票。入场：ignition/expansion/mainline；退出：cooling/reversal、拥挤过高。",
-    },
-    {
-        "key": "leader_theme_confirmation",
-        "label": "龙头题材确认策略",
-        "description": "龙头股必须获得强题材确认才买入；题材退潮或拥挤过高时降级为观察。",
-    },
-    {
-        "key": "hotlist_theme_confluence",
-        "label": "热榜题材共振策略",
-        "description": "RankTrend 候选 + 题材强度/生命周期共振；题材噪声暴露、拥挤背离时过滤。",
-    },
-    {
-        "key": "theme_rotation_chase",
-        "label": "轮动补涨策略（SG 驱动）",
-        "description": "Phase R3 研究变体：SG1 RRG 象限迁移 / SG2 rotationState 切换 / SG3 资金转正初现驱动进场，"
-        "补涨语义不给 A_MAIN；主线不明环境下与主线确认策略对照。",
-    },
-    {
-        "key": "theme_state_hybrid",
-        "label": "状态门控混合策略",
-        "description": "Phase R3 研究变体：引擎 mainLines 非空日走主线确认规则（theme_rotation 规则），"
-        "空/缺失日走 SG 驱动补涨规则；mainLines 消费引擎口径（2026-09-26 第四轮裁决）。",
-    },
-]
-
-THEME_STRATEGY_NAMES = {definition["key"] for definition in THEME_STRATEGY_DEFINITIONS}
-
 SUPPORTED_STRATEGY_NAMES = {definition["key"] for definition in STRATEGY_DEFINITIONS}
 SUPPORTED_STRATEGY_NAMES |= {definition["key"] for definition in RESEARCH_STRATEGY_DEFINITIONS}
-SUPPORTED_STRATEGY_NAMES |= THEME_STRATEGY_NAMES
 
 CONTROL_STRATEGIES = [
     definition for definition in STRATEGY_DEFINITIONS if definition["key"] != DEFAULT_STRATEGY_NAME

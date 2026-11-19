@@ -21,7 +21,6 @@ SNAPSHOT_COLLECTIONS = (
     "snapshot_records",
     "snapshot_frames",
     "snapshot_stock_rows",
-    "snapshot_sector_rows",
     "archive_manifests",
 )
 
@@ -146,23 +145,6 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
                 ]
             },
         ],
-        "snapshot_sector_rows": [
-            {"keys": [("datasetId", 1), ("rowId", 1)], "unique": True},
-            {"keys": [("datasetId", 1), ("snapshotId", 1), ("rank", 1)]},
-            {"keys": [("datasetId", 1), ("snapshotId", 1), ("timestamp", 1), ("rank", 1)]},
-            {"keys": [("datasetId", 1), ("entityType", 1), ("entityKey", 1), ("tradingDate", 1)]},
-            {
-                "keys": [
-                    ("datasetId", 1),
-                    ("entityType", 1),
-                    ("entityKey", 1),
-                    ("type", 1),
-                    ("tradingDate", 1),
-                    ("timestamp", 1),
-                ]
-            },
-            {"keys": [("datasetId", 1), ("type", 1), ("tradingDate", 1), ("timestamp", 1), ("rank", 1)]},
-        ],
         "backtest_runs": [
             {"keys": [("id", 1)], "unique": True},
             {"keys": [("datasetId", 1), ("strategyName", 1), ("snapshotType", 1), ("createdAt", -1)]},
@@ -281,8 +263,7 @@ def map_sqlite_row_to_mongo(
             "snapshot_records",
             "snapshot_frames",
             "snapshot_stock_rows",
-            "snapshot_sector_rows",
-            "backtest_trades",
+                    "backtest_trades",
             "backtest_equity_curve",
             "backtest_signals",
             "backtest_quality_reports",
@@ -695,11 +676,12 @@ def _find_count_mismatches(database: Any, dataset_id: str, frames: list[dict[str
         snapshot_id = str(row.get("snapshotId") or "")
         if snapshot_id:
             stock_counts[snapshot_id] = stock_counts.get(snapshot_id, 0) + 1
+    # 2026-11-19 sector rows embedded in snapshot_frames.sectorRows (collection dropped)
     sector_counts: dict[str, int] = {}
-    for row in database["snapshot_sector_rows"].find({"datasetId": dataset_id}):
-        snapshot_id = str(row.get("snapshotId") or "")
+    for frame_doc in database["snapshot_frames"].find({"datasetId": dataset_id}, {"snapshotId": 1, "sectorRows": 1}):
+        snapshot_id = str(frame_doc.get("snapshotId") or "")
         if snapshot_id:
-            sector_counts[snapshot_id] = sector_counts.get(snapshot_id, 0) + 1
+            sector_counts[snapshot_id] = len(frame_doc.get("sectorRows") or [])
 
     mismatches: list[dict[str, Any]] = []
     for frame in frames:

@@ -24,8 +24,13 @@ class FakeCollection:
     def count_documents(self, _filter: dict[str, object]) -> int:
         return len([row for row in self.rows if _matches(row, _filter)])
 
-    def find(self, _filter: dict[str, object] | None = None) -> list[dict[str, object]]:
-        return [row for row in self.rows if _matches(row, _filter or {})]
+    def find(self, _filter: dict[str, object] | None = None, projection: dict[str, object] | None = None) -> list[dict[str, object]]:
+        rows = [row for row in self.rows if _matches(row, _filter or {})]
+        if projection:
+            included = {key for key, enabled in projection.items() if enabled}
+            if included:
+                rows = [{key: row.get(key) for key in included} for row in rows]
+        return rows
 
     def index_information(self) -> dict[str, dict[str, object]]:
         return {
@@ -464,7 +469,6 @@ def test_verify_mongodb_migration_detects_missing_half_hour_close_slot_without_d
                     for slot in ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"]
                 ]
             ),
-            "snapshot_sector_rows": FakeCollection([]),
         }
     )
     for name, expected_indexes in build_mongodb_indexes().items():
@@ -624,6 +628,10 @@ def test_verify_mongodb_migration_reports_counts_indexes_and_continuity() -> Non
                 "timestamp": 1,
                 "stockRowCount": 1,
                 "sectorRowCount": 1,
+                # 2026-11-19 起 sector rows 内嵌在帧文档（独立集合已 drop）
+                "sectorRows": [
+                    {"entityType": "sector", "entityKey": "bank", "entityName": "银行", "rank": 1}
+                ],
             },
             {
                 "datasetId": "dragonboard_live",
@@ -633,6 +641,9 @@ def test_verify_mongodb_migration_reports_counts_indexes_and_continuity() -> Non
                 "timestamp": 2,
                 "stockRowCount": 1,
                 "sectorRowCount": 1,
+                "sectorRows": [
+                    {"entityType": "sector", "entityKey": "bank", "entityName": "银行", "rank": 1}
+                ],
             },
         ]
     )
@@ -658,12 +669,6 @@ def test_verify_mongodb_migration_reports_counts_indexes_and_continuity() -> Non
         [
             {"datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000001", "rank": 3},
             {"datasetId": "dragonboard_live", "snapshotId": "s2", "code": "000001", "rank": 2},
-        ]
-    )
-    fake_db["snapshot_sector_rows"].rows.extend(
-        [
-            {"datasetId": "dragonboard_live", "snapshotId": "s1", "rowId": "sector-1"},
-            {"datasetId": "dragonboard_live", "snapshotId": "s2", "rowId": "sector-2"},
         ]
     )
     fake_db["stock_names"].rows.append({"code": "000001", "active": True})

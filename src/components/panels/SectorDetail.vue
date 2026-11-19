@@ -21,7 +21,7 @@
         </div>
       </div>
 
-      <!-- 标签页 - 添加历史趋势 -->
+      <!-- 标签页 -->
       <div class="tabs-left">
         <button class="tab-btn" :class="{ active: view === 'overview' }" @click="view = 'overview'">
           📈 概览
@@ -34,13 +34,8 @@
           🔗 联动分析
           <span v-if="correlationThemes.length" class="tab-count">{{ correlationThemes.length }}</span>
         </button>
-        <!-- ✅ 新增：历史趋势标签页 -->
-        <button class="tab-btn" :class="{ active: view === 'history' }" @click="view = 'history'">
-          📅 历史趋势
-        </button>
       </div>
 
-      <!-- 内容区域 -->
       <div class="panel-content" ref="contentRef">
         <!-- 加载状态 -->
         <div v-if="loading" class="loading-state">
@@ -431,83 +426,6 @@
         </template>
       </div>
 
-      <!-- 历史趋势视图 -->
-      <div v-if="view === 'history'" class="history-view">
-        <div class="time-range-selector">
-          <button class="time-btn" :class="{ active: timeRange === '1h' }" @click="setTimeRange('1h')">1小时</button>
-          <button class="time-btn" :class="{ active: timeRange === '6h' }" @click="setTimeRange('6h')">6小时</button>
-          <button class="time-btn" :class="{ active: timeRange === '1d' }" @click="setTimeRange('1d')">1天</button>
-          <button class="time-btn" :class="{ active: timeRange === '1w' }" @click="setTimeRange('1w')">1周</button>
-          <button class="time-btn" :class="{ active: timeRange === '1m' }" @click="setTimeRange('1m')">1月</button>
-        </div>
-
-        <div class="indicator-selector">
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('heat') }"
-            @click="toggleIndicator('heat')">🔥 热度</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('zt') }"
-            @click="toggleIndicator('zt')">📈 涨停</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('rank') }"
-            @click="toggleIndicator('rank')">📊 热度排名</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('rotationState') }"
-            @click="toggleIndicator('rotationState')">🔄 轮动状态</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('mainNetInflow') }"
-            @click="toggleIndicator('mainNetInflow')">💰 净流入趋势</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('change') }"
-            @click="toggleIndicator('change')">💹 涨跌</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('volume') }"
-            @click="toggleIndicator('volume')">📊 成交额</button>
-        </div>
-
-        <!-- 窗口锚定提示：非交易日/数据间歇时窗口锚定到最后可用交易日 -->
-        <div v-if="historyAnchorHint" class="history-anchor-hint">
-          所选窗口内无交易数据，已锚定到最后可用交易日 {{ historyAnchorHint }}
-        </div>
-
-        <!-- 历史数据结构化状态：加载/错误/空态，不伪造曲线 -->
-        <div v-if="historyLoading" class="history-state">
-          <div class="loading-spinner"></div>
-          <span>加载历史快照数据...</span>
-        </div>
-        <div v-else-if="historyError" class="history-state">
-          <span class="error-icon">⚠️</span>
-          <span>{{ historyError }}</span>
-          <button class="retry-btn" @click="loadHistoryData">重试</button>
-        </div>
-        <div v-else-if="historyPoints.length === 0" class="history-state">
-          <span class="empty-icon">📊</span>
-          <span>暂无历史快照数据（统计口径 half_hour）</span>
-        </div>
-        <template v-else>
-          <div v-if="historySourceHint" class="history-source-hint">⚠️ {{ historySourceHint }}</div>
-          <div class="history-chart" ref="chartRef"></div>
-
-          <div class="history-stats-grid">
-            <div class="history-stat-card">
-              <div class="stat-label">最高热度</div>
-              <div class="stat-value">{{ historyStats.max === null ? '--' : formatHeat(historyStats.max) }}</div>
-              <div class="stat-time">{{ formatTime(historyStats.maxTime) }}</div>
-            </div>
-            <div class="history-stat-card">
-              <div class="stat-label">最低热度</div>
-              <div class="stat-value">{{ historyStats.min === null ? '--' : formatHeat(historyStats.min) }}</div>
-              <div class="stat-time">{{ formatTime(historyStats.minTime) }}</div>
-            </div>
-            <div class="history-stat-card">
-              <div class="stat-label">平均热度</div>
-              <div class="stat-value">{{ historyStats.avg === null ? '--' : formatHeat(historyStats.avg) }}</div>
-              <div class="stat-trend" :class="historyStats.trend >= 0 ? 'up' : 'down'">
-                {{ historyStats.trend > 0 ? '+' : '' }}{{ historyStats.trend.toFixed(1) }}
-              </div>
-            </div>
-            <div class="history-stat-card">
-              <div class="stat-label">涨停峰值</div>
-              <div class="stat-value">{{ historyStats.maxZT === null ? '--' : historyStats.maxZT }}</div>
-              <div class="stat-time">{{ formatTime(historyStats.maxZTTime) }}</div>
-            </div>
-          </div>
-        </template>
-      </div>
-
       <div class="panel-footer" v-if="hasThemeData && !loading">
         <span>📡 MongoDB 题材映射 + 腾讯行情 + 同花顺资金</span>
         <span>🕒 {{ formatTime(displayLastUpdate) }}</span>
@@ -523,7 +441,6 @@ import { dataLayer } from '../../services/DataLayer'
 import { useStockStore } from '../../stores/stock'
 import { useFavoriteStore } from '../../stores/favorite'
 import { usePanel } from '../../composables/usePanel'
-import * as echarts from 'echarts'
 import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
@@ -543,11 +460,6 @@ import {
   formatOpenNum,
 } from '../../services/theme/stockLimitUpRows'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
-import {
-  fetchThemeHistorySeries,
-  type ThemeHistoryPoint,
-  type ThemeHistoryTimeRange,
-} from '../../services/theme/themeHistorySeries'
 import { StockUtils } from '../../utils/common'
 
 const props = defineProps<{
@@ -563,7 +475,7 @@ const emit = defineEmits<{
 }>()
 
 const version = '6.0.0'
-const view = ref<'overview' | 'stocks' | 'correlation' | 'history'>('overview')
+const view = ref<'overview' | 'stocks' | 'correlation'>('overview')
 const loading = ref(false)
 const error = ref<string | null>(null)
 const themeRuntime = useThemeRuntimeSnapshot()
@@ -839,312 +751,6 @@ watch(() => props.sectorName, async (newName) => {
   }
 }, { immediate: true })
 
-// ========== 历史趋势（生产数据：MongoDB 快照 sector rows + 成分股成交量聚合） ==========
-const timeRange = ref<ThemeHistoryTimeRange>('1d')
-const selectedIndicators = ref<string[]>(['heat', 'zt', 'rank', 'rotationState', 'mainNetInflow'])
-const chartRef = ref<HTMLElement | null>(null)
-let chart: echarts.ECharts | null = null
-
-// 轮动状态类别轴（自下而上：退潮→流出→中性→萌发→流入→主线，语义热度递增）
-const ROTATION_STATE_AXIS_CATEGORIES = ['退潮', '流出', '中性', '萌发', '流入', '主线']
-const historyAnchorHint = ref<string | null>(null)
-
-const historyLoading = ref(false)
-// 全源失败的结构化原因；部分源失败用 historySourceHint 提示，不清空已有数据
-const historyError = ref<string | null>(null)
-const historySourceHint = ref<string | null>(null)
-const historyPoints = ref<ThemeHistoryPoint[]>([])
-let historyRequestId = 0
-
-async function loadHistoryData() {
-  if (!blockCode.value || !props.sectorName) return
-  const requestId = ++historyRequestId
-  historyLoading.value = true
-  try {
-    const result = await fetchThemeHistorySeries({
-      themeId: blockCode.value,
-      themeName: props.sectorName,
-      timeRange: timeRange.value,
-    })
-    if (requestId !== historyRequestId) return // 过期响应丢弃
-    historyPoints.value = result.points
-    historyAnchorHint.value = result.anchorDate ?? null
-    const failedSources = [result.sectorRows, result.volumeSeries].filter(s => !s.ok)
-    if (!result.ok) {
-      historyError.value = result.message || '历史数据不可用'
-      historySourceHint.value = null
-    } else {
-      historyError.value = null
-      historySourceHint.value = failedSources.length
-        ? `部分数据源不可用: ${failedSources.map(s => s.message).filter(Boolean).join('; ')}`
-        : null
-    }
-    // 先解除 loading 态：v-else 分支挂载图表容器（chartRef）后才能渲染 ECharts
-    historyLoading.value = false
-    await nextTick()
-    renderChart()
-  } catch (err) {
-    if (requestId !== historyRequestId) return
-    historyError.value = err instanceof Error ? err.message : '加载历史数据失败'
-  } finally {
-    if (requestId === historyRequestId) historyLoading.value = false
-  }
-}
-
-// 统计卡片：热度缺失的槽位不参与计算（不补 0），全缺时字段为 null 显示 '--'
-const historyStats = computed(() => {
-  const history = historyPoints.value
-  const heats = history.map(h => h.heat).filter((v): v is number => v !== null)
-  const ztCounts = history.map(h => h.ztCount).filter((v): v is number => v !== null)
-  const empty = { max: null, maxTime: 0, min: null, minTime: 0, avg: null, trend: 0, maxZT: null, maxZTTime: 0 }
-  if (heats.length === 0) return empty
-
-  const max = Math.max(...heats)
-  const maxTime = history.find(h => h.heat === max)?.timestamp || 0
-  const min = Math.min(...heats)
-  const minTime = history.find(h => h.heat === min)?.timestamp || 0
-  const avg = heats.reduce((a, b) => a + b, 0) / heats.length
-  const maxZT = ztCounts.length ? Math.max(...ztCounts) : null
-  const maxZTTime = maxZT === null ? 0 : history.find(h => h.ztCount === maxZT)?.timestamp || 0
-
-  // 趋势斜率：仅对热度可计算的连续样本做最小二乘
-  let trend = 0
-  if (heats.length >= 3) {
-    const n = heats.length
-    const indices = Array.from({ length: n }, (_, i) => i)
-    const sumX = indices.reduce((a, b) => a + b, 0)
-    const sumY = heats.reduce((a, b) => a + b, 0)
-    const sumXY = indices.reduce((a, b, i) => a + b * heats[i], 0)
-    const sumX2 = indices.reduce((a, b) => a + b * b, 0)
-    const denominator = n * sumX2 - sumX * sumX
-    trend = denominator === 0 ? 0 : (n * sumXY - sumX * sumY) / denominator
-  }
-
-  return { max, maxTime, min, minTime, avg, trend, maxZT, maxZTTime }
-})
-
-function setTimeRange(range: ThemeHistoryTimeRange) {
-  timeRange.value = range
-  loadHistoryData()
-}
-
-function toggleIndicator(indicator: string) {
-  if (selectedIndicators.value.includes(indicator)) {
-    selectedIndicators.value = selectedIndicators.value.filter(i => i !== indicator)
-  } else {
-    selectedIndicators.value = [...selectedIndicators.value, indicator]
-  }
-  nextTick(() => renderChart())
-}
-
-function formatHeat(heat: number | null): string {
-  if (heat === null) return '--'
-  if (heat >= 10000) return (heat / 10000).toFixed(1) + '万'
-  if (heat >= 1000) return (heat / 1000).toFixed(1) + 'k'
-  return heat.toString()
-}
-
-// ✅ 完整的 ECharts 渲染函数（null 缺失值断线，不补 0）
-function renderChart() {
-  if (!chartRef.value || historyPoints.value.length === 0) return
-
-  // loading/空态的 v-if 状态链会卸载并重挂图表容器（如切换时间范围）：
-  // 旧实例绑定的 DOM 已分离，必须 dispose 后重建，否则 setOption 落空、图表空白
-  if (chart && chart.getDom() !== chartRef.value) {
-    chart.dispose()
-    chart = null
-  }
-  if (!chart) {
-    chart = echarts.init(chartRef.value)
-  }
-
-  const history = historyPoints.value
-  const indicators = selectedIndicators.value
-  // 指标定义驱动的 series/yAxis 构建：轴按所选指标动态生成、右侧多轴错位排布，
-  // 避免全量静态轴在右缘互相压盖（2026-09-27 视觉反馈）。
-  interface MetricDef {
-    key: string
-    name: string
-    type: 'line' | 'bar'
-    color: string
-    category?: boolean
-    inverse?: boolean
-    area?: boolean
-    dashed?: boolean
-    symbol?: string
-  }
-
-  const METRIC_DEFS: MetricDef[] = [
-    { key: 'heat', name: '热度', type: 'line', color: '#ff7f50', area: true },
-    { key: 'zt', name: '涨停股', type: 'bar', color: '#ff4757' },
-    { key: 'rank', name: '热度排名', type: 'line', color: '#e67e22', inverse: true, symbol: 'triangle' },
-    { key: 'rotationState', name: '轮动状态', type: 'line', color: '#9b59b6', category: true, symbol: 'rect' },
-    { key: 'mainNetInflow', name: '净流入趋势', type: 'line', color: '#1abc9c' },
-    { key: 'change', name: '平均涨跌', type: 'line', color: '#2ed573', dashed: true, symbol: 'diamond' },
-    { key: 'volume', name: '成交额', type: 'line', color: '#3498db', area: true },
-  ]
-
-  const metricValue = (key: string, h: ThemeHistoryPoint): number | string | null => {
-    switch (key) {
-      case 'heat': return h.heat
-      case 'zt': return h.ztCount
-      case 'rank': return h.rank
-      case 'rotationState': {
-        const label = h.rotationState ? rotationStateLabelText(h.rotationState) : null
-        return label && ROTATION_STATE_AXIS_CATEGORIES.includes(label) ? label : null
-      }
-      case 'mainNetInflow': return h.mainNetInflow
-      case 'change': return h.avgChange
-      case 'volume': return h.totalAmount
-      default: return null
-    }
-  }
-
-  const series: any[] = []
-  const yAxes: any[] = []
-  let leftAxisUsed = false
-  let rightOffset = 0
-
-  for (const def of METRIC_DEFS) {
-    if (!indicators.includes(def.key)) continue
-    const yAxisIndex = yAxes.length
-    if (!leftAxisUsed) {
-      // 首个选中指标占左侧主轴（带基准网格线）
-      yAxes.push({
-        type: 'value',
-        name: def.name,
-        splitLine: { lineStyle: { color: 'var(--border-color)', type: 'dashed' } },
-        axisLabel: { color: 'var(--text-secondary)', fontSize: 10 },
-      })
-      leftAxisUsed = true
-    } else {
-      yAxes.push({
-        type: def.category ? 'category' : 'value',
-        name: def.name,
-        position: 'right',
-        offset: rightOffset,
-        inverse: !!def.inverse,
-        data: def.category ? ROTATION_STATE_AXIS_CATEGORIES : undefined,
-        splitLine: { show: false },
-        axisLine: { show: false },
-        axisLabel: {
-          color: 'var(--text-secondary)',
-          fontSize: 9,
-          formatter: def.key === 'mainNetInflow'
-            ? (value: number) => (Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(0)}亿` : `${(value / 1e4).toFixed(0)}万`)
-            : undefined,
-        },
-      })
-      rightOffset += 30
-    }
-
-    const entry: any = {
-      name: def.name,
-      type: def.type,
-      data: history.map(h => metricValue(def.key, h)),
-      connectNulls: false,
-      yAxisIndex,
-    }
-    if (def.type === 'line') {
-      entry.smooth = !def.category
-      entry.symbol = def.symbol ?? 'circle'
-      entry.symbolSize = 5
-      entry.lineStyle = { color: def.color, width: 1.5, type: def.dashed ? 'dashed' : 'solid' }
-      if (def.area) {
-        entry.areaStyle = {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: def.color + '4d' },
-            { offset: 1, color: def.color + '00' },
-          ]),
-        }
-      }
-      if (def.category) entry.step = 'middle'
-    } else {
-      entry.itemStyle = { color: def.color }
-      entry.barWidth = 8
-    }
-    series.push(entry)
-  }
-
-  // 右侧多轴错位：按占位扩展右留白，防止轴标签互相压盖
-  const rightAxesCount = Math.round(rightOffset / 30)
-  const gridRight = rightAxesCount === 0 ? '8%' : `${Math.min(32, 12 + rightAxesCount * 6)}%`
-
-  // 跨天范围时 x 轴标签带日期，单日内只显示槽位时间
-  const uniqueDates = new Set(history.map(h => h.tradingDate))
-  const xLabels = history.map(h =>
-    uniqueDates.size > 1 ? `${h.tradingDate.slice(5)} ${h.slotTime}` : h.slotTime
-  )
-
-  const option = {
-    grid: {
-      left: '6%',
-      right: gridRight,
-      top: '14%',
-      bottom: '12%',
-      containLabel: true
-    },
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'cross' }
-    },
-    legend: {
-      data: series.map(s => s.name),
-      top: 0,
-      itemWidth: 12,
-      itemHeight: 8,
-      textStyle: { color: 'var(--text-secondary)', fontSize: 10 }
-    },
-    xAxis: {
-      type: 'category',
-      data: xLabels,
-      axisLabel: {
-        color: 'var(--text-secondary)',
-        fontSize: 10,
-        rotate: 30
-      },
-      axisLine: { lineStyle: { color: 'var(--border-color)' } }
-    },
-    yAxis: yAxes,
-    series,
-    backgroundColor: 'transparent'
-  }
-
-  chart.setOption(option)
-  chart.resize()
-}
-
-// 监听窗口大小变化（具名 handler：卸载时可移除，避免面板反复开关累积监听器）
-function handleWindowResize() {
-  if (chart) {
-    chart.resize()
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('resize', handleWindowResize)
-})
-
-// 在组件卸载时销毁图表
-onUnmounted(() => {
-  window.removeEventListener('resize', handleWindowResize)
-  if (chart) {
-    chart.dispose()
-    chart = null
-  }
-})
-
-// 监听指标选择变化重新渲染（数据加载由 loadHistoryData 负责）
-watch(
-  selectedIndicators,
-  () => {
-    if (view.value === 'history') {
-      nextTick(() => renderChart())
-    }
-  },
-  { deep: true }
-)
-
 // ========== 操作函数 ==========
 const loadingMessage = computed(() => loading.value ? '加载板块详情...' : '')
 
@@ -1161,11 +767,6 @@ const refresh = async () => {
     if (blockCode.value) {
       themeStockRows.value = await sectorAnalyzer.loadSectorStocks(blockCode.value, props.sectorName, true)
     }
-    // 历史趋势页签打开时同步刷新历史序列
-    if (view.value === 'history') {
-      await loadHistoryData()
-    }
-
     await nextTick()
 
   } catch (err) {
@@ -1273,23 +874,6 @@ function getCorrelationColor(corr: number = 0): string {
 onMounted(() => {
   if (props.visible && props.sectorName) {
     loadData()
-  }
-  // 渲染图表
-  nextTick(() => {
-    if (view.value === 'history') {
-      renderChart()
-    }
-  })
-})
-
-watch(view, (newView) => {
-  if (newView === 'history') {
-    // 首次进入或数据为空时拉取；已有数据只重渲染
-    if (historyPoints.value.length === 0 && !historyError.value) {
-      loadHistoryData()
-    } else {
-      nextTick(() => renderChart())
-    }
   }
 })
 
@@ -2357,127 +1941,6 @@ td.outflow {
   transition: width 0.3s;
 }
 
-/* ========== 历史趋势视图 ========== */
-.history-view {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* 历史数据结构化状态（加载/错误/空态） */
-.history-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 40px 20px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.history-source-hint {
-  padding: 6px 10px;
-  background: rgba(255, 177, 66, 0.12);
-  border: 1px solid rgba(255, 177, 66, 0.3);
-  border-radius: 8px;
-  color: #ffb142;
-  font-size: 11px;
-}
-
-.time-range-selector,
-.indicator-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.time-btn,
-.indicator-btn {
-  padding: 4px 12px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.time-btn:hover,
-.indicator-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.time-btn.active,
-.indicator-btn.active {
-  background: var(--color-highlight);
-  border-color: var(--color-highlight);
-  color: #000;
-}
-
-.history-chart {
-  height: 250px;
-  width: 100%;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 10px;
-}
-
-.history-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.history-stat-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 12px;
-  text-align: center;
-}
-
-.history-stat-card .stat-label {
-  font-size: 10px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.history-stat-card .stat-value {
-  font-size: 18px;
-  font-weight: bold;
-  color: var(--text-title);
-  line-height: 1.2;
-}
-
-.history-stat-card .stat-time {
-  font-size: 9px;
-  color: var(--text-secondary);
-  margin-top: 4px;
-}
-
-.history-stat-card .stat-trend {
-  font-size: 11px;
-  font-weight: 500;
-  margin-top: 4px;
-}
-
-.history-stat-card .stat-trend.up {
-  color: #ff4757;
-}
-
-.history-stat-card .stat-trend.down {
-  color: #2ed573;
-}
-
 /* ========== 通用状态样式 ========== */
 .loading-state,
 .error-state,
@@ -2558,14 +2021,6 @@ td.outflow {
 td:empty::before {
   content: '-';
   color: var(--text-secondary);
-}
-
-.history-anchor-hint {
-  padding: 6px 12px;
-  border: 1px dashed var(--border-color);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
 }
 
 /* 轮动状态区（概览合并字段） */

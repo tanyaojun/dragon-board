@@ -21,6 +21,9 @@ _STOCK_ROWS_BATCH_SIZE = 200
 
 # hotThemes 读侧投影白名单（ranktrend+themes）：heatLevel 2026-09 落库迁移加入；
 # metadata（口径标记 factorVersion）已在白名单。
+# 2026-11-19 起 sector rows 不再独立落集合，统一内嵌进 snapshot_frames.sectorRows
+# （瘦身白名单内嵌，独立集合 snapshot_sector_rows 已 drop，历史见
+# data/backups/snapshot_sector_rows_20261119/）。
 HOT_THEME_FRAME_FIELDS: dict[str, int] = {
     "_id": 0,
     "snapshotId": 1,
@@ -44,6 +47,33 @@ HOT_THEME_FRAME_FIELDS: dict[str, int] = {
     "code": 1,
     "name": 1,
 }
+
+# sector rows 内嵌帧文档的瘦身白名单（2026-11-19 冻结）：
+# 只保留存活消费方在读的字段；被删 ThemeTrend 链专用的冗余采集上下文
+# （datasetId/snapshotId/tradingDate/slotTime/timestamp/type/captureMode/source/
+#  id/rowId 等）不再逐行重复存储，读取时由帧上下文回注。
+# metadata 只保留口径标记（factorVersion/mappingVersion）。
+SECTOR_ROW_EMBED_FIELDS: tuple[str, ...] = (
+    "entityType", "entityKey", "entityName", "entityCode", "themeId", "themeName",
+    "rank", "rankChange",
+    "heatScore", "heatLevel", "ztCount", "leaderCount", "change", "avgChange",
+    "mainNetInflow", "volumeRatio",
+    "momentumScore", "breadthScore", "crowdingRisk", "persistenceScore",
+    "fundScore", "leadershipScore", "correlationScore",
+    "maxBoardHeight", "negativeInflowStreak", "positiveInflowStreak",
+    "rotationState", "rotationScore", "lifecycle",
+    "heatTrend", "flowTrend", "breadthTrend", "crowdingTrend",
+    "mainlineConcentrationRank", "reasons", "factorBreakdown",
+    "qualityFlags", "themeQualityFlags",
+)
+SECTOR_ROW_META_KEEP_FIELDS: tuple[str, ...] = (
+    "factorVersion", "mappingVersion", "quoteSource", "fundSource",
+)
+# 读取时由帧上下文回注的字段（帧级事实，不逐行存）。
+SECTOR_ROW_FRAME_CONTEXT_FIELDS: tuple[str, ...] = (
+    "datasetId", "snapshotId", "tradingDate", "slotTime", "timestamp",
+    "type", "captureMode", "source",
+)
 
 
 class MongoRepository:
@@ -75,9 +105,8 @@ class MongoRepository:
         self._delete_dataset_children(dataset.id)
         self.db["datasets"].replace_one({"id": dataset.id}, self._dataset_to_doc(dataset), upsert=True)
         self._insert_many("snapshot_records", [self._record_doc(dataset.id, item) for item in records])
-        self._insert_many("snapshot_frames", [self._frame_doc(dataset.id, item) for item in frames])
+        self._insert_many("snapshot_frames", self._frame_docs_with_sector_rows(dataset.id, frames, sector_rows))
         self._insert_many("snapshot_stock_rows", [self._stock_doc(dataset.id, item) for item in stock_rows])
-        self._insert_many("snapshot_sector_rows", [self._sector_doc(dataset.id, item) for item in sector_rows])
         self._refresh_dataset_summary(dataset.id)
         return self.get_dataset(dataset.id) or dataset
 
@@ -90,7 +119,6 @@ class MongoRepository:
         deleted = {
             name: int(self.db[name].delete_many(query).deleted_count)
             for name, query in {
-                "snapshot_sector_rows": {"datasetId": dataset_id},
                 "snapshot_stock_rows": {"datasetId": dataset_id},
                 "snapshot_frames": {"datasetId": dataset_id},
                 "snapshot_records": {"datasetId": dataset_id},
@@ -180,9 +208,8 @@ class MongoRepository:
             self._delete_snapshot_children(dataset.id, snapshot_ids)
             self.db["datasets"].replace_one({"id": dataset.id}, self._dataset_to_doc(dataset), upsert=True)
             self._insert_many("snapshot_records", [self._record_doc(dataset.id, item) for item in records])
-            self._insert_many("snapshot_frames", [self._frame_doc(dataset.id, item) for item in frames])
+            self._insert_many("snapshot_frames", self._frame_docs_with_sector_rows(dataset.id, frames, sector_rows))
             self._insert_many("snapshot_stock_rows", [self._stock_doc(dataset.id, item) for item in stock_rows])
-            self._insert_many("snapshot_sector_rows", [self._sector_doc(dataset.id, item) for item in sector_rows])
             self._refresh_dataset_summary(dataset.id)
             self.db["migration_audit"].insert_many(
                 [
@@ -755,15 +782,35 @@ class MongoRepository:
         )
         row_entity_types = self._merge_values(entity_type, entity_types)
         row_entity_keys = self._merge_values(entity_key, entity_keys)
-        if row_entity_types:
-            query["entityType"] = {"$in": row_entity_types}
-        if row_entity_keys:
-            query["entityKey"] = {"$in": row_entity_keys}
+        # 2026-11-19 起行数据内嵌在帧文档 sectorRows 数组里（集合已 drop）。
+        # 帧级过滤（type/tradingDate/captureMode 等）走索引，行级过滤（entityType/
+        # entityKey）在回注上下文后应用；行数按 (timestamp, rank) 排序后截 limit。
         direction = 1 if sort == "asc" else -1
-        cursor = self.db["snapshot_sector_rows"].find(query).sort([("timestamp", direction), ("rank", 1)])
+        cursor = self.db["snapshot_frames"].find(query).sort([("timestamp", direction)])
+        rows: list[dict[str, Any]] = []
+        for frame in cursor:
+            context = {
+                field: frame.get(field)
+                for field in SECTOR_ROW_FRAME_CONTEXT_FIELDS
+            }
+            for embedded in frame.get("sectorRows") or []:
+                if not isinstance(embedded, dict):
+                    continue
+                if row_entity_types and embedded.get("entityType") not in row_entity_types:
+                    continue
+                if row_entity_keys and embedded.get("entityKey") not in row_entity_keys:
+                    continue
+                rows.append(self.local_sector_to_bundle_dict({**context, **embedded}))
+        # 排序口径与旧集合链一致：timestamp 按 direction，同 timestamp 内 rank 恒升序
+        # （稳定两段排序：先 rank 升序，再按 direction 稳定排 timestamp）。
+        rows.sort(key=lambda row: row.get("rank") if isinstance(row.get("rank"), (int, float)) else 10**9)
+        rows.sort(
+            key=lambda row: row.get("timestamp") or 0,
+            reverse=direction < 0,
+        )
         if limit and limit > 0:
-            cursor = cursor.limit(limit)
-        return {"rows": [self.local_sector_to_bundle_dict(row) for row in cursor], "source": "mongodb"}
+            rows = rows[: int(limit)]
+        return {"rows": rows, "source": "mongodb"}
 
     def aggregate_stock_volume_by_theme(
         self,
@@ -841,11 +888,18 @@ class MongoRepository:
 
     def snapshot_table_counts(self, dataset_id: str | None = None) -> dict[str, int]:
         query = {"datasetId": dataset_id} if dataset_id else {}
+        frame_query = {"datasetId": dataset_id} if dataset_id else {}
+        sector_agg = list(self.db["snapshot_frames"].aggregate([
+            {"$match": frame_query},
+            {"$project": {"n": {"$size": {"$ifNull": ["$sectorRows", []]}}}},
+            {"$group": {"_id": None, "sum": {"$sum": "$n"}}},
+        ]))
         return {
             "snapshots": int(self.db["snapshot_records"].count_documents(query)),
             "snapshot_frames": int(self.db["snapshot_frames"].count_documents(query)),
             "snapshot_stock_rows": int(self.db["snapshot_stock_rows"].count_documents(query)),
-            "snapshot_sector_rows": int(self.db["snapshot_sector_rows"].count_documents(query)),
+            # sector rows 已内嵌进帧文档（snapshot_sector_rows 集合已 drop）
+            "snapshot_sector_rows": int(sector_agg[0]["sum"]) if sector_agg else 0,
         }
 
     def load_dataset_bundle_slice(
@@ -879,7 +933,14 @@ class MongoRepository:
         ]
         sector_rows = [
             self.local_sector_to_bundle_dict(row)
-            for row in self.db["snapshot_sector_rows"].find({"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}).sort([("timestamp", 1), ("rank", 1), ("entityType", 1), ("entityKey", 1)])
+            for frame in self.db["snapshot_frames"].find(
+                {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}},
+                {"snapshotId": 1, "datasetId": 1, "tradingDate": 1, "slotTime": 1,
+                 "timestamp": 1, "type": 1, "captureMode": 1, "source": 1, "sectorRows": 1},
+            ).sort([("timestamp", 1)])
+            for embedded in (frame.get("sectorRows") or [])
+            if isinstance(embedded, dict)
+            for row in [{**{field: frame.get(field) for field in SECTOR_ROW_FRAME_CONTEXT_FIELDS}, **embedded}]
         ]
         return records, frames, stock_rows, sector_rows
 
@@ -1101,14 +1162,38 @@ class MongoRepository:
         entity_type: str | None = None,
         fields: dict[str, int] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
+        """回放帧内嵌 sectorRows（2026-11-19 起，独立集合已 drop）。
+
+        fields 语义从 Mongo 投影变为读侧行字段过滤：白名单（如
+        HOT_THEME_FRAME_FIELDS）内且行上存在的字段才保留；帧上下文字段
+        （snapshotId/tradingDate/timestamp 等）始终回注，消费方不感知存储形态变化。
+        """
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
         query: dict[str, Any] = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
-        if entity_type:
-            query["entityType"] = entity_type
-        for row in self.db["snapshot_sector_rows"].find(query, fields).sort([("rank", 1)]):
-            rows_by_snapshot[str(row.get("snapshotId"))].append(self.local_sector_to_bundle_dict(row))
+        projection = {"snapshotId": 1, "datasetId": 1, "tradingDate": 1, "slotTime": 1,
+                      "timestamp": 1, "type": 1, "captureMode": 1, "source": 1, "sectorRows": 1}
+        for frame in self.db["snapshot_frames"].find(query, projection):
+            context = {field: frame.get(field) for field in SECTOR_ROW_FRAME_CONTEXT_FIELDS}
+            for embedded in frame.get("sectorRows") or []:
+                if not isinstance(embedded, dict):
+                    continue
+                if entity_type and embedded.get("entityType") != entity_type:
+                    continue
+                if fields is not None:
+                    row = {
+                        key: value for key, value in embedded.items()
+                        if fields.get(key) == 1
+                    }
+                else:
+                    row = dict(embedded)
+                rows_by_snapshot[str(frame.get("snapshotId"))].append(
+                    self.local_sector_to_bundle_dict({**context, **row})
+                )
+            rows_by_snapshot[str(frame.get("snapshotId"))].sort(
+                key=lambda row: row.get("rank") if isinstance(row.get("rank"), (int, float)) else 10**9
+            )
         return rows_by_snapshot
 
     @staticmethod
@@ -1182,7 +1267,7 @@ class MongoRepository:
         if not snapshot_ids:
             return
         query = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
-        for name in ["snapshot_sector_rows", "snapshot_stock_rows", "snapshot_frames", "snapshot_records"]:
+        for name in ["snapshot_stock_rows", "snapshot_frames", "snapshot_records"]:
             self.db[name].delete_many(query)
 
     def _capture_snapshot_replacement(
@@ -1199,7 +1284,6 @@ class MongoRepository:
                     "snapshot_records",
                     "snapshot_frames",
                     "snapshot_stock_rows",
-                    "snapshot_sector_rows",
                 ]
             },
         }
@@ -1221,7 +1305,7 @@ class MongoRepository:
 
     def _delete_dataset_children(self, dataset_id: str) -> None:
         query = {"datasetId": dataset_id}
-        for name in ["snapshot_sector_rows", "snapshot_stock_rows", "snapshot_frames", "snapshot_records"]:
+        for name in ["snapshot_stock_rows", "snapshot_frames", "snapshot_records"]:
             self.db[name].delete_many(query)
 
     def _refresh_dataset_summary(self, dataset_id: str) -> None:
@@ -1246,7 +1330,13 @@ class MongoRepository:
         dataset.snapshot_count = int(self.db["snapshot_records"].count_documents({"datasetId": dataset_id}))
         dataset.frame_count = frame_count
         dataset.stock_row_count = int(self.db["snapshot_stock_rows"].count_documents({"datasetId": dataset_id}))
-        dataset.sector_row_count = int(self.db["snapshot_sector_rows"].count_documents({"datasetId": dataset_id}))
+        # sector rows 内嵌在帧文档 sectorRows 数组里，行数 = 帧内嵌行数总和
+        sector_agg = list(self.db["snapshot_frames"].aggregate([
+            {"$match": {"datasetId": dataset_id}},
+            {"$project": {"n": {"$size": {"$ifNull": ["$sectorRows", []]}}}},
+            {"$group": {"_id": None, "sum": {"$sum": "$n"}}},
+        ]))
+        dataset.sector_row_count = int(sector_agg[0]["sum"]) if sector_agg else 0
         dataset.start_date = trading_dates[0] if trading_dates else None
         dataset.end_date = trading_dates[-1] if trading_dates else None
         dataset.snapshot_types_json = json_dumps(snapshot_types)
@@ -1378,9 +1468,46 @@ class MongoRepository:
         return {**item, "datasetId": dataset_id, "rowId": row_id, "id": row_id}
 
     @staticmethod
-    def _sector_doc(dataset_id: str, item: dict[str, Any]) -> dict[str, Any]:
-        row_id = str(item.get("rowId") or item.get("id") or f"{item.get('snapshotId')}:{item.get('entityType')}:{item.get('entityKey')}")
-        return {**item, "datasetId": dataset_id, "rowId": row_id, "id": row_id}
+    def _slim_sector_row(item: dict[str, Any]) -> dict[str, Any]:
+        """按冻结白名单瘦身 sector 行，供内嵌进帧文档（ThemeTrend 链专用冗余字段不再落库）。"""
+        out = {key: item[key] for key in SECTOR_ROW_EMBED_FIELDS if key in item}
+        meta = item.get("metadata")
+        if isinstance(meta, dict):
+            slim_meta = {key: meta[key] for key in SECTOR_ROW_META_KEEP_FIELDS if key in meta}
+            if slim_meta:
+                out["metadata"] = slim_meta
+        return out
+
+    @classmethod
+    def _frame_docs_with_sector_rows(
+        cls,
+        dataset_id: str,
+        frames: list[dict[str, Any]],
+        sector_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """生成帧文档并把同快照的 sector rows 瘦身后内嵌进 sectorRows（按 rank 排序）。
+
+        2026-11-19 起唯一持久化形态：snapshot_sector_rows 独立集合已淘汰，
+        帧文档是 sector rows 的单一事实源（单一事实源硬红线 §1.2.1）。
+        """
+        docs = [cls._frame_doc(dataset_id, item) for item in frames]
+        if not sector_rows:
+            return docs
+        rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in sector_rows:
+            if not isinstance(item, dict):
+                continue
+            snapshot_id = cls._snapshot_id_from_payload(item)
+            if snapshot_id:
+                rows_by_snapshot[snapshot_id].append(cls._slim_sector_row(item))
+        for doc in docs:
+            embedded = rows_by_snapshot.get(str(doc.get("snapshotId")))
+            if embedded:
+                embedded.sort(
+                    key=lambda row: row.get("rank") if isinstance(row.get("rank"), (int, float)) else 10**9
+                )
+                doc["sectorRows"] = embedded
+        return docs
 
     @staticmethod
     def _snapshot_id_from_payload(item: dict[str, Any]) -> str:

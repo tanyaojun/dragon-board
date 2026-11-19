@@ -17,14 +17,16 @@
 - 存储主链：当前运行主库是 MongoDB（单主链 + R2 对象备份）。**2026-09-29 起 SQLite/Supabase 运行链代码已物理删除**，旧 API/CLI 由 410 桩直接返回；`storage_backend` 默认 mongodb，sqlite 仅剩显式 opt-in 的一次性诊断口。回测/生产写库只入 `dragon_board_quant`，pytest 数据只入 `dragon_board_test` + Redis pytest 前缀。实施状态以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
 - 当前同步批次：MongoDB 模式不再登记 SQLite/Supabase `sync_outbox`，不再运行 Supabase 自动同步、`push-backup`、`prune-backup` 或 SQLite 90 天明细归档作为生产链路；旧 API/CLI 在 Mongo 模式下应返回 410 或拒绝执行。
 - MongoDB 替换 IndexedDB/SQLite 的当前切口：Dragon Board 正式写入和读取仍只通过 QuantBoard 后端 API；`POST /api/snapshots/ingest` 写入 MongoDB，`GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows` 从 MongoDB 读取并保持 camelCase 字段合同。IndexedDB 和历史 JSON 只作为迁移前来源，不再作为正式 fallback。
+2026-11-19 淘汰裁决：snapshot_sector_rows 独立集合已 drop，sector rows 改为内嵌进`snapshot_frames.sectorRows`（瘦身白名单，读取时回注帧上下文）；ThemeTrend 整条策略链已删除。详见 `docs/theme-rotation/2026-11-19-sectorsrows-collection-retirement.md`。
 - 题材映射当前切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 MongoDB 题材集合；旧 `themeDATA.db` 和旧浏览器 `ThemeDataDB/theme_mapping` 只作为迁移源或审计参考。
 - failover 当前切口：不保留 SQLite + Supabase 运行时降级路径。MongoDB 不可用时正式接口必须结构化失败，不返回空列表或 `backup_only` 伪装成功。
 - 题材模块 V2：Dragon Board 快照会写入稳定题材列，QuantBoard 回测会生成 `ThemeCandidateSupport`。默认 `useThemeFactorForExecution=false`，题材只做候选解释；只有显式开启时才参与置信度调整和拥挤风险降级。
-- 题材模块 V12 目标：ThemeTrend 作为与 RankTrend 并列的 QuantBoard 研究链，承接题材趋势、题材共振回测、优化、API/CLI 和报告合同。当前已进入可运行主链；剩余深化项为 TS golden 多场景自动导出与 walk-forward/样本外报告（bayesian/tpe 搜索器已于 2026-05-03 `0e6de8e5` 接入，`2026-09-26-themetrend-v12-upgrade-design.md` §9 勘误）。
-- V12 Phase 1 已完成：ThemeTrend 研究数据合同（`ThemeFactorFrame`、`ThemeStockExposureFrame`、`ThemeSignalRow`、`ThemeQualityReport`）、研究结果集合/表、`ThemeResearchRepository` 和 `ThemeResearchService`（从正式快照事实回放构建题材研究帧，不修改题材基础映射）。所有记录均保留完整溯源链，质量门禁返回结构化失败。
-- V12 存储口径：MongoDB 模式下 ThemeTrend 新研究结果进入 MongoDB 研究集合；旧 research SQLite 和 `themeDATA.db` 只作为迁移前历史口径，不再作为运行主库。
-- V12 边界：Dragon Board 根项目不新增回测平台；共振策略以 RankTrend 候选为主，ThemeTrend 只能辅助排序、置信度、拥挤风险降级和解释，不得独立制造买入信号。
-- V12 策略口径：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 必须在执行信号中保留独立入场、降级、过滤和解释字段；Dragon Board 只展示 QuantBoard 研究摘要，不在根项目实现交易模拟。
+- 题材模块 V12 已退役（2026-11-19 用户裁决）：ThemeTrend 整条策略链（引擎/回测/优化/研究服务/CLI/API/QB 前端页签）已物理删除，题材只保留 RankTrend 候选解释、题材动量 v2 与轮动状态展示；详见 `docs/theme-rotation/2026-11-19-sectorsrows-collection-retirement.md`。
+- V12 Phase 1 遗留合同随 2026-11-19 淘汰裁决一并删除（`theme_factor_frames` 等研究集合已 drop）。
+
+- V12 存储口径（历史）：研究集合已随 ThemeTrend 淘汰 drop，不再产生新研究结果。
+- 题材边界：Dragon Board 根项目不新增回测平台；题材只做候选解释与展示（momentum/rotation 读口保留），不得独立制造买入信号。
+- 题材策略口径（2026-11-19 更新）：`theme_rotation` 等 five 个题材回测策略已随 ThemeTrend 链删除，`SUPPORTED_STRATEGY_NAMES` 只含 RankTrend 系策略；回测候选解释层（themeRole/themeSupportScore 等展示字段）保留。
 - L2 资金流口径：`estimated_l1` 只允许作为观察指标；正式资金流回测必须使用 `broker_l2` 或 `official_l2`，并在质量门禁中保留 `capital_flow_source`、`capital_flow_confidence`、`money_flow_estimated`。
 - 后端快照采集器：`backend/snapshot_collector/` 已正式切换为生产快照主链，写入 `dragonboard_live`。由**独立进程** `backend/collector_main`（默认端口 8001）承载调度器，经 DragonBoardLauncher 作为核心启动项管理；8000 Quant API 进程不再启动采集调度器（避免双采/争锁）。写入 live 数据集需显式设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=1`、`QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 和 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，CLI 预检和 quality gate 才会放行；任意其它 dataset 仍被拒绝。Dragon Board 前端已默认关闭正式快照自动写库，手动诊断入口保留。该模块的改动必须通过以下测试链路验证：
   - 后端 pytest：`tests/snapshot_collector/`（2026-09-29 起测试按领域归档到 tests/ 子目录，覆盖 models、slots、providers、builder、quality_gate、state、service、service_factory、routes 和 repository 合同）
@@ -107,9 +109,9 @@ backend/
 18. 优化结果只生成候选参数，不得自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值；CLI 必须支持 `tpe` 和异步提交 `--no-wait` 口径。`optuna_tpe` 仅作为后端兼容别名。
 19. 题材因子不得绕过 RankTrend 独立制造买入信号；执行开关开启时也只能辅助已有候选分层。
 20. 题材基础映射新增或更新必须进入 QuantBoard MongoDB 题材集合；不得重新把浏览器 IndexedDB 或旧 `themeDATA.db` 当成运行主库，也不得把题材静态映射混入快照事实集合或研究集合。
-21. V12 ThemeTrend 回测、优化、signals、quality report 和报告结果在 MongoDB 模式下必须归属 MongoDB 研究集合；不得进入 Supabase 或旧 `themeDATA.db`。
-22. 新增 ThemeTrend API/CLI 合同时必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，默认 `snapshot_type=half_hour`，`quarter_hour` 只能显式传入。
-23. 文档或实现涉及 ThemeTrend 时，必须区分“已完成能力”和“V12 目标/拟新增合同/首批落地”，不得把计划中的接口描述成已上线事实。
+21. （2026-11-19 作废）ThemeTrend 链已删除；题材领域不再产生独立研究集合，任何新研究集合必须先在 docs 立项。
+22. 新增任何回测/优化 API/CLI 合同时必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，默认 `snapshot_type=half_hour`，`quarter_hour` 只能显式传入。
+23. 文档涉及题材能力时必须区分“已实现”和“拟新增合同”，不得把计划中的接口描述成已上线事实；ThemeTrend 相关历史文档一律按已淘汰口径阅读。
 24. 资金流策略正式回测不得默认消费 L1 估算主力资金；如显式允许 `estimated_l1`，报告必须标注实验口径和高风险。
 25. `trade_journal` 在 fusion 候选池语义中只能作为 execution overlay，不得反推 `triggered_wait_entry`、`active_holding`、`exit_signaled` 或 `closed`。
 

@@ -27,7 +27,7 @@ def backfill_empty_snapshot_rows(
 ) -> dict[str, Any]:
     frame_rows = list(database["snapshot_frames"].find({"datasetId": dataset_id}))
     stock_counts = _row_counts(database, dataset_id, "snapshot_stock_rows")
-    sector_counts = _row_counts(database, dataset_id, "snapshot_sector_rows")
+    sector_counts = _sector_row_counts_from_frames(database, dataset_id)
     target_snapshot_ids = list(
         snapshot_ids or _default_target_snapshot_ids(database, dataset_id, frame_rows, stock_counts, sector_counts)
     )
@@ -78,7 +78,7 @@ def backfill_empty_snapshot_rows(
 
     frame_rows = list(database["snapshot_frames"].find({"datasetId": dataset_id}))
     stock_counts = _row_counts(database, dataset_id, "snapshot_stock_rows")
-    sector_counts = _row_counts(database, dataset_id, "snapshot_sector_rows")
+    sector_counts = _sector_row_counts_from_frames(database, dataset_id)
     refreshed_scope = set(effective_scope)
     refreshed_scope.update(str(item.get("snapshotId") or "") for item in applied_plans if item.get("snapshotId"))
     applied_count_fixes = _apply_count_fixes(
@@ -308,11 +308,10 @@ def _plan_cross_dataset_slot_copy(
             {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
         )
     )
-    donor_sector_rows = int(
-        database["snapshot_sector_rows"].count_documents(
-            {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
-        )
+    donor_frame_doc = database["snapshot_frames"].find_one(
+        {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}, {"sectorRows": 1}
     )
+    donor_sector_rows = len((donor_frame_doc or {}).get("sectorRows") or [])
     return {
         "ok": donor_stock_rows > 0,
         "snapshotId": snapshot_id,
@@ -474,14 +473,17 @@ def _apply_backfill_plan(database: Any, dataset_id: str, plan: dict[str, Any]) -
         _clone_row(row, target)
         for row in database["snapshot_stock_rows"].find({"datasetId": dataset_id, "snapshotId": donor_snapshot_id})
     ]
-    sector_rows = [
-        _clone_row(row, target)
-        for row in database["snapshot_sector_rows"].find({"datasetId": dataset_id, "snapshotId": donor_snapshot_id})
-    ]
+    donor_frame_for_rows = database["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "snapshotId": donor_snapshot_id}, {"sectorRows": 1}
+    )
+    sector_rows = list((donor_frame_for_rows or {}).get("sectorRows") or [])
     if stock_rows:
         database["snapshot_stock_rows"].insert_many(stock_rows, ordered=False)
     if sector_rows:
-        database["snapshot_sector_rows"].insert_many(sector_rows, ordered=False)
+        database["snapshot_frames"].update_one(
+            {"datasetId": dataset_id, "snapshotId": plan["snapshotId"]},
+            {"$set": {"sectorRows": sector_rows}},
+        )
     metadata = dict(target.get("metadata") or {})
     metadata["backfill"] = {
         "sourceSnapshotId": donor_snapshot_id,
@@ -522,14 +524,14 @@ def _apply_missing_slot_plan(database: Any, dataset_id: str, plan: dict[str, Any
         _clone_row(row, target)
         for row in database["snapshot_stock_rows"].find({"datasetId": dataset_id, "snapshotId": donor_snapshot_id})
     ]
-    sector_rows = [
-        _clone_row(row, target)
-        for row in database["snapshot_sector_rows"].find({"datasetId": dataset_id, "snapshotId": donor_snapshot_id})
-    ]
+    donor_frame_for_rows = database["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "snapshotId": donor_snapshot_id}, {"sectorRows": 1}
+    )
+    sector_rows = list((donor_frame_for_rows or {}).get("sectorRows") or [])
     if stock_rows:
         database["snapshot_stock_rows"].insert_many(stock_rows, ordered=False)
     if sector_rows:
-        database["snapshot_sector_rows"].insert_many(sector_rows, ordered=False)
+        target["sectorRows"] = sector_rows
     target["stockRowCount"] = len(stock_rows)
     target["sectorRowCount"] = len(sector_rows)
     database["snapshot_frames"].update_one(
@@ -633,24 +635,22 @@ def _apply_cross_dataset_slot_copy(
             {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
         )
     ]
-    sector_rows = [
-        _clone_row(row, target_frame, target_dataset_id=target_dataset_id)
-        for row in database["snapshot_sector_rows"].find(
-            {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}
-        )
-    ]
+    donor_frame_doc = database["snapshot_frames"].find_one(
+        {"datasetId": donor_dataset_id, "snapshotId": snapshot_id}, {"sectorRows": 1}
+    )
+    sector_rows = list((donor_frame_doc or {}).get("sectorRows") or [])
     target_record["stockRowCount"] = len(stock_rows)
     target_record["sectorRowCount"] = len(sector_rows)
     target_frame["stockRowCount"] = len(stock_rows)
     target_frame["sectorRowCount"] = len(sector_rows)
+    if sector_rows:
+        target_frame["sectorRows"] = sector_rows
 
     try:
         database["snapshot_records"].insert_many([target_record], ordered=False)
         database["snapshot_frames"].insert_many([target_frame], ordered=False)
         if stock_rows:
             database["snapshot_stock_rows"].insert_many(stock_rows, ordered=False)
-        if sector_rows:
-            database["snapshot_sector_rows"].insert_many(sector_rows, ordered=False)
     except Exception:
         _rollback_cross_dataset_slot_copy(database, target_dataset_id, snapshot_id)
         raise
@@ -668,7 +668,6 @@ def _rollback_cross_dataset_slot_copy(database: Any, target_dataset_id: str, sna
     query = {"datasetId": target_dataset_id, "snapshotId": snapshot_id}
     for collection_name in (
         "snapshot_stock_rows",
-        "snapshot_sector_rows",
         "snapshot_frames",
         "snapshot_records",
     ):
@@ -972,6 +971,16 @@ def _row_counts(database: Any, dataset_id: str, collection_name: str) -> dict[st
     return counts
 
 
+def _sector_row_counts_from_frames(database: Any, dataset_id: str) -> dict[str, int]:
+    """2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）。"""
+    counts: dict[str, int] = {}
+    for frame in database["snapshot_frames"].find({"datasetId": dataset_id}, {"snapshotId": 1, "sectorRows": 1}):
+        snapshot_id = str(frame.get("snapshotId") or "")
+        if snapshot_id:
+            counts[snapshot_id] = len(frame.get("sectorRows") or [])
+    return counts
+
+
 def _split_snapshot_id(snapshot_id: str) -> tuple[str, str, str]:
     parts = snapshot_id.split(":")
     if len(parts) < 3:
@@ -990,7 +999,10 @@ def _refresh_dataset_summary(database: Any, dataset_id: str) -> None:
                 "snapshotCount": int(database["snapshot_records"].count_documents({"datasetId": dataset_id})),
                 "frameCount": len(frames),
                 "stockRowCount": int(database["snapshot_stock_rows"].count_documents({"datasetId": dataset_id})),
-                "sectorRowCount": int(database["snapshot_sector_rows"].count_documents({"datasetId": dataset_id})),
+                "sectorRowCount": sum(
+                    len(frame.get("sectorRows") or [])
+                    for frame in database["snapshot_frames"].find({"datasetId": dataset_id}, {"sectorRows": 1})
+                ),
                 "startDate": trading_dates[0] if trading_dates else None,
                 "endDate": trading_dates[-1] if trading_dates else None,
                 "snapshotTypes": snapshot_types,

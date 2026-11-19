@@ -1,5 +1,10 @@
 # Supabase 10 交易日保留与归档落地计划
 
+> **2026-11-19 退役说明**：`snapshot_sector_rows` 独立集合已 drop，sector rows 内嵌进
+> `snapshot_frames.sectorRows`；ThemeTrend 整条策略链（回测/优化/研究/CLI）已删除。
+> 详见 `docs/theme-rotation/2026-11-19-sectorsrows-collection-retirement.md`。
+
+
 ## 目标
 
 Supabase 不再承担完整历史快照库职责，只作为 `dragonboard_live` 最近 10 个交易日的轻量灾备。完整历史主线固定为：

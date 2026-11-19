@@ -112,6 +112,10 @@ class FakeCollection:
     def aggregate(self, pipeline: list[dict[str, Any]], **_kwargs: Any) -> FakeCursor:
         self.aggregate_pipelines.append(pipeline)
         rows = [dict(row) for row in self.rows if _matches(row, pipeline[0]["$match"])]
+        # 2026-11-19 sector rows 内嵌扇文档后的 $project($size)+$group 汇总（帧行数求和）
+        if "$project" in pipeline[1] and "$size" in str(pipeline[1]["$project"]) and "$group" in pipeline[2]:
+            total = sum(len(row.get("sectorRows") or []) for row in rows)
+            return FakeCursor([{"_id": None, "sum": total}])
         if "$sort" in pipeline[1]:
             for key, direction in reversed(list(pipeline[1]["$sort"].items())):
                 rows.sort(key=lambda row: row.get(key) or 0, reverse=int(direction) < 0)
@@ -577,7 +581,6 @@ def test_mongo_repository_deletes_non_primary_dataset_bundle() -> None:
         "ok": True,
         "datasetId": "ds_delete",
         "deleted": {
-            "snapshot_sector_rows": 1,
             "snapshot_stock_rows": 1,
             "snapshot_frames": 1,
             "snapshot_records": 1,

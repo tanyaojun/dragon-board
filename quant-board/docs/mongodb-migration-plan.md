@@ -1,5 +1,10 @@
 # MongoDB 全量主库迁移方案
 
+> **2026-11-19 退役说明**：`snapshot_sector_rows` 独立集合已 drop，sector rows 内嵌进
+> `snapshot_frames.sectorRows`；ThemeTrend 整条策略链（回测/优化/研究/CLI）已删除。
+> 详见 `docs/theme-rotation/2026-11-19-sectorsrows-collection-retirement.md`。
+
+
 本文是 QuantBoard 从 SQLite 主链切换到 MongoDB 的设计方案和实施记录。2026-05-12 停服窗口已完成真实数据迁移、`.env.local` 切换、MongoDB 本地全库备份、Cloudflare R2 上传和 R2 拉回到 `restore-staging` 校验。2026-06-11 已完成一轮正式快照质量修复，详见 [mongodb-snapshot-audit-2026-06-11.md](mongodb-snapshot-audit-2026-06-11.md) 和 [mongodb-snapshot-repair-log-2026-06-11.md](mongodb-snapshot-repair-log-2026-06-11.md)。
 
 ## 2026-09-29 增补：sqlite 运行链物理退役 + 生产/测试完全隔离

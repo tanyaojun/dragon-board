@@ -52,7 +52,6 @@ def _delete_bar(db: Any, snapshot_id: str) -> int:
     n = 0
     n += db["snapshot_frames"].delete_many({"snapshotId": snapshot_id}).deleted_count
     n += db["snapshot_stock_rows"].delete_many({"snapshotId": snapshot_id}).deleted_count
-    n += db["snapshot_sector_rows"].delete_many({"snapshotId": snapshot_id}).deleted_count
     return n
 
 
@@ -228,18 +227,7 @@ def repair_bars(
                         new_rows.append(nr)
                     db["snapshot_stock_rows"].insert_many(new_rows, ordered=False)
 
-            # 3. 复制 sector_rows（板块数据不插值）
-            source_sector_rows = list(db["snapshot_sector_rows"].find({"snapshotId": source_sid}))
-            if source_sector_rows:
-                new_rows = []
-                for row in source_sector_rows:
-                    nr = dict(row)
-                    del nr["_id"]
-                    nr["snapshotId"] = target_sid
-                    key = str(nr.get("entityKey") or nr.get("entityCode") or "")
-                    nr["rowId"] = f"{target_sid}:{key}" if key else target_sid
-                    new_rows.append(nr)
-                db["snapshot_sector_rows"].insert_many(new_rows, ordered=False)
+            # 3. sector_rows 已内嵌在帧文档 sectorRows（2026-11-19 集合已 drop），随帧复制
 
             executed += 1
 

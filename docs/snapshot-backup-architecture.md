@@ -1,5 +1,10 @@
 # 快照备份架构
 
+> **2026-11-19 退役说明**：`snapshot_sector_rows` 独立集合已 drop，sector rows 内嵌进
+> `snapshot_frames.sectorRows`；ThemeTrend 整条策略链（回测/优化/研究/CLI）已删除。
+> 详见 `docs/theme-rotation/2026-11-19-sectorsrows-collection-retirement.md`。
+
+
 ## 当前结构
 快照备份当前只保留两条正式链路：
 

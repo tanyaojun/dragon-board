@@ -46,7 +46,6 @@ SNAPSHOT_CHILD_COLLECTIONS = (
     "snapshot_records",
     "snapshot_frames",
     "snapshot_stock_rows",
-    "snapshot_sector_rows",
 )
 
 # 结果 chunks 只清 2026-06~08 旧研究 run（run 元数据保留，读取返回 resultPurged 标记）
@@ -58,7 +57,6 @@ COMPACT_CANDIDATE_COLLECTIONS: tuple[str, ...] = (
     "snapshot_records",
     "snapshot_frames",
     "snapshot_stock_rows",
-    "snapshot_sector_rows",
     "backtest_result_chunks",
     "backtest_signals",
 )
@@ -253,7 +251,7 @@ def _apply_cleanup_datasets(database: Any, preview: dict[str, Any]) -> dict[str,
     deleted = {"snapshot_records": int(
         database["snapshot_records"].delete_many({"type": FIVE_MINUTE_RECORD_TYPE}).deleted_count
     )}
-    for name in ("snapshot_frames", "snapshot_stock_rows", "snapshot_sector_rows"):
+    for name in ("snapshot_frames", "snapshot_stock_rows"):
         deleted[name] = int(
             database[name].delete_many({"snapshotId": {"$in": five_minute_ids}}).deleted_count
         )
@@ -403,7 +401,7 @@ def _five_minute_counts(database: Any, snapshot_ids: list[str]) -> dict[str, int
             database["snapshot_records"].count_documents({"type": FIVE_MINUTE_RECORD_TYPE})
         )
     }
-    for name in ("snapshot_frames", "snapshot_stock_rows", "snapshot_sector_rows"):
+    for name in ("snapshot_frames", "snapshot_stock_rows"):
         counts[name] = int(database[name].count_documents({"snapshotId": {"$in": snapshot_ids}}))
     return counts
 

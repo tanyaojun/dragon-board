@@ -18,7 +18,6 @@ class ArchiveQueryError(RuntimeError):
 
 ALLOWED_FILTERS = {
     "stock_rows": {"datasetId", "snapshotId", "type", "tradingDate", "code", "slotTime", "__startDate", "__endDate", "__beforeTradingDate"},
-    "sector_rows": {"datasetId", "snapshotId", "type", "tradingDate", "entityType", "entityKey", "__startDate", "__endDate", "__beforeTradingDate"},
     "trades": {"backtestRunId", "backtest_run_id", "code", "side"},
     "equity_curve": {"backtestRunId", "backtest_run_id"},
     "signals": {"backtestRunId", "backtest_run_id", "code", "signal"},

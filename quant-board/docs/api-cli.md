@@ -791,7 +791,7 @@ cd quant-board
 
 ### `POST /api/storage/archive/snapshots`
 
-执行快照明细归档。成功写出 `records.parquet`、`frames.parquet`、`stock_rows.parquet`、`sector_rows.parquet` 和 `manifest.json`，并登记 `archive_manifests`。校验成功后只清理 SQLite 中对应 `dataset_id + snapshot_type + trading_date` 的 `snapshot_stock_rows` 和 `snapshot_sector_rows`；`snapshot_records` 和 `snapshot_frames` 保留。
+执行快照明细归档。成功写出 `records.parquet`、`frames.parquet`（含内嵌 sectorRows）、`stock_rows.parquet` 和 `manifest.json`，并登记 `archive_manifests`。（2026-11-19 起 sector rows 内嵌在帧文档中随帧归档；历史 SQLite 清理语义仅存档参考。）
 
 CLI 等价命令：
 
@@ -918,7 +918,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/theme-momentum/summary?dataset_id=d
 ```
 
 参数：`dataset_id`（默认 `dragonboard_live`）、`snapshot_type`（默认 `half_hour`）。
-从 `snapshot_sector_rows`（`entityType=hot_theme`）按交易日聚合日线序列（收盘槽
+从帧内嵌 sectorRows（`entityType=hot_theme`，2026-11-19 起独立集合已 drop）按交易日聚合日线序列（收盘槽
 `change` 累乘合成虚拟收益指数），计算 v2 六维动量（板块 RPS 5/10/20 / 距年内高点 /
 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚），返回按 `score` 降序的 Top-50 排行。
 响应：`{ ok, status, version, factors[], qualityFlags, computedAt, cache }`，其中
@@ -1162,7 +1162,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 响应帧题材动量（v2，2026-08-06 D2 解耦）：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags/hotThemesFallback`，`factors` 只回传 top-10 题材动量摘要）与 `themeMomentumContext`（`version/factors/qualityFlags/computedAt`，v2 日线动量 Top-20）；每股 `analysis.themeMomentum`（`status/themeId/themeName/score/direction/role/phaseLabel/reasons`，只读投影，第4轨数据源，不参与 decision）。题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象。v1 融合（`resonance.theme.themeMomentumScore`）已废弃。
 
-`hotThemesFallback=true` 表示该帧没有自身的 `hotThemes`（collector 未落库题材因子行），个股题材匹配回退到最近历史帧；此时 `qualityFlags` 追加 `theme_hot_themes_fallback`，`resonance.theme.reasons` 追加同名单（fail-visible，不静默重复题材）。collector 落库的 `snapshot_sector_rows` 含 `rotationState`（生命周期加成/惩罚原料），`snapshot_stock_rows` 含 `themes/mainTheme/themeRole/themeContribution/leadStatus`（角色/贡献按涨跌幅派生落库）。
+`hotThemesFallback=true` 表示该帧没有自身的 `hotThemes`（collector 未落库题材因子行），个股题材匹配回退到最近历史帧；此时 `qualityFlags` 追加 `theme_hot_themes_fallback`，`resonance.theme.reasons` 追加同名单（fail-visible，不静默重复题材）。collector 落库的帧内嵌 `sectorRows` 含 `rotationState`（生命周期加成/惩罚原料），`snapshot_stock_rows` 含 `themes/mainTheme/themeRole/themeContribution/leadStatus`（角色/贡献按涨跌幅派生落库）。
 
 题材数据链缓存：`ranktrend+themes` 的 `load_frame_bundles`（MongoDB sector/stock rows 读取）走 Redis 读穿缓存（TTL 与快照缓存一致，ingest 递增 generation 并按 snapshot 索引失效）；`compute_theme_momentum_series` 按“帧窗口题材指纹 + generation”缓存 60 秒，不同 codes 共享同一历史帧窗口时复用计算。前端复用 `src/services/LRUCache.ts`：题材映射 10 分钟 TTL、题材热度快照与题材成分股 30 秒 TTL（force 均绕过）。
 
@@ -1304,7 +1304,7 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
 
 - 仅在 `QUANT_BOARD_STORAGE_BACKEND=mongodb` 下可用；非 MongoDB 模式返回 410。
 - 禁止删除正式快照主库：`dragonboard_live` 或 `source_type=dragon_board_runtime` 返回 400。
-- 删除范围只包含目标 dataset 的 `datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+- 删除范围只包含目标 dataset 的 `datasets`、`snapshot_records`、`snapshot_frames`、`snapshot_stock_rows`（sector rows 内嵌在帧文档中随帧删除）。
 - 不删除正式快照主库，不删除回测、优化、Golden、题材研究或 MongoDB 备份。
 
 ### `POST /api/datasets/import`
@@ -1330,7 +1330,7 @@ RankTrend 专用排名时序读口，按 `code + snapshotType` 读取单票历�
 
 - `sourceDatasetId` 默认 `dragonboard_live`；迁移期如果该数据集不存在，后端可回退到最新有快照事实行的数据集。
 - `dryRun=true` 只返回会生成的数据集摘要和质量门禁结果，不落库；返回对象带 `virtual=true`、`policy=snapshot_facts_view`。
-- `dryRun=false` 会复制筛选后的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 到新的 `ds_*` 派生数据集；源数据集不被删除、覆盖或改写。
+- `dryRun=false` 会复制筛选后的 `snapshot_records / snapshot_frames（含内嵌 sectorRows） / snapshot_stock_rows` 到新的 `ds_*` 派生数据集；源数据集不被删除、覆盖或改写。
 - 真实生成结果返回 `policy=snapshot_facts_derived_dataset`，元数据中的 `metadata.sourceDatasetId` 和 `metadata.filters` 记录来源数据集、快照类型、日期区间和最大快照数。
 - `mongodb_snapshots` / `sqlite_snapshots` 生成派生研究数据集时不产生新的 Supabase 备份对象。
 
@@ -1385,7 +1385,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/migrations/snapshots/im
 
 ### 快照 ingest 幂等口径
 
-`POST /api/snapshots/ingest` 是 Dragon Board 正式快照写入 MongoDB 的入口。调用方应传入稳定的 `datasetId`、`idempotencyKey` 和 v4 `bundle`；后端会先按 `idempotencyKey` 判重，再按 `dataset_id + snapshot_id` 做逻辑幂等。若同一快照槽位已经存在，接口返回 `ok=true`、`deduped=true`，不会删除或覆盖已落库的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`。
+`POST /api/snapshots/ingest` 是 Dragon Board 正式快照写入 MongoDB 的入口。调用方应传入稳定的 `datasetId`、`idempotencyKey` 和 v4 `bundle`；后端会先按 `idempotencyKey` 判重，再按 `dataset_id + snapshot_id` 做逻辑幂等。若同一快照槽位已经存在，接口返回 `ok=true`、`deduped=true`，不会删除或覆盖已落库的 `snapshot_records / snapshot_frames（含内嵌 sectorRows） / snapshot_stock_rows`。
 
 Dragon Board 当前会在写入前通过 MongoDB 后端读口确认同一 `snapshot_id` 是否已存在，避免定时保存反复提交同一槽位。IndexedDB 不再参与正式快照写入判重。
 
@@ -2060,238 +2060,6 @@ openPositionCount
 找不到 run 返回 `404`，`detail.code=backtest_run_not_found`。非法分页参数返回 `400` 或 `422`，错误体至少包含 `code`、`field` 和 `value`。非法指标返回 `400`，`detail.code=invalid_backtest_metric`，并返回 `allowedMetrics`。旧 `result_json` 中缺失的指标用 `null`，同时在对应 run 的 `missingMetrics` 列出字段名，不能用 `0` 代替。
 
 归一化回测结果属于 MongoDB 研究集合，`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality` 和 `POST /api/backtests/compare` 都不读取 Supabase，也不触发 `sync_outbox`、push/pull 或 failover。
-
-### V12 ThemeTrend 回测接口
-
-以下接口是 V12 已落地的 ThemeTrend 研究回测合同。ThemeTrend 回测和共振回测结果属于 MongoDB 研究集合，不读取或写入 Supabase，不触发 `sync_outbox`、push/pull 或 failover；题材基础映射来自 MongoDB 题材集合。
-
-当前实现会把题材暴露投影为可执行股票信号，复用现有 `TradeSimulator` 产出 `tradeSimulation`，并双写 `/api/backtests/{run_id}/trades`、`/equity`、`/signals`、`/quality`。完整报告归因、TS golden 严格对齐和 Dragon Board 面板级解释仍按 V12 后续项推进。
-
-### `POST /api/backtests/theme-trend`
-
-运行纯 ThemeTrend 题材趋势回测。
-
-```json
-{
-  "datasetId": "dragonboard_live",
-  "snapshotType": "half_hour",
-  "strategyName": "theme_trend_candidate",
-  "strategyVersion": "0.1.0",
-  "randomSeed": 20260430,
-  "lookbackBars": 8,
-  "persistenceBars": 3,
-  "breadthMinStocks": 5,
-  "minThemeCoverage": 0.7,
-  "maxThemeCrowding": 0.85,
-  "initialCash": 1000000,
-  "maxPositions": 5,
-  "positionSize": 0.2
-}
-```
-
-返回字段沿用 RankTrend 回测口径，至少包含 `runId`、`datasetId`、`snapshotType`、`strategyName`、`strategyVersion`、`configHash`、`randomSeed`、`metrics`、`qualityReport` 和 signals 预览。质量门禁失败时使用 HTTP `4xx` 或结构化失败详情，不能返回空成功报告。
-
-### `POST /api/backtests/theme-confluence`
-
-运行 RankTrend + ThemeTrend 共振回测。RankTrend 候选仍是交易候选主来源，ThemeTrend 只辅助排序、置信度、拥挤风险降级和解释。
-
-```json
-{
-  "datasetId": "dragonboard_live",
-  "snapshotType": "half_hour",
-  "strategyName": "theme_confluence_candidate",
-  "strategyVersion": "0.1.0",
-  "randomSeed": 20260430,
-  "rankTrendWeight": 0.65,
-  "themeWeight": 0.35,
-  "lookbackBars": 8,
-  "persistenceBars": 3,
-  "minThemeCoverage": 0.7,
-  "maxThemeCrowding": 0.85,
-  "initialCash": 1000000,
-  "maxPositions": 5,
-  "positionSize": 0.2
-}
-```
-
-共振 signals 必须区分 `rankTrendSignal`、`themeTrendSignal`、`confluenceScore`、`riskFlags`、`quality` 和真实成交结果；不得把题材趋势分数当作唯一交易结论。
-
-### `GET /api/storage/research-summary`
-
-读取 MongoDB 研究集合的轻量统计，用于前端维护页或 CLI 对照。当前返回各研究集合文档数和回测创建时间范围。
-
-### `POST /api/storage/research-cleanup-preview`
-
-预览历史回测清理，不实际删除。请求字段：
-
-| 字段 | 默认 | 说明 |
-| --- | --- | --- |
-| `olderThanDays` | `30` | 只匹配早于该天数的回测 |
-| `keepLatestPerGroup` | `10` | 每个 `dataset/strategy/version/snapshot/config/seed` 分组至少保留最近 N 条 |
-| `datasetId` | 空 | 可选，只清理某个数据集的研究结果 |
-| `snapshotType` | 空 | 可选，`half_hour` 或 `quarter_hour` |
-| `includeFailed` | `false` | 是否纳入非 completed 回测 |
-
-### `POST /api/storage/research-cleanup`
-
-执行历史回测清理。请求字段同 preview，但必须额外传入 `confirm=true`。该接口会显式删除回测归一化子表并执行 `PRAGMA wal_checkpoint(TRUNCATE)`；不会自动 `VACUUM`，避免在线前端操作长时间锁库。
-
-## 优化接口
-
-### `POST /api/optimizations/rank-trend`
-
-启动异步参数优化任务。接口创建 `optimization_runs` 记录后立即返回 `status=running` 和 `runId`，完整结果通过 `GET /api/optimizations/{run_id}` 轮询读取。优化结果只生成候选参数，不会自动写回任何默认参数。
-
-**队列护栏（2026-09-23）**：每个优化任务都会持有全量 frames 数据（生产数据集约 2-4GB 内存）。执行中 1 个 + 排队最多 2 个；排队已满时新任务返回 **HTTP 429**，同时已落库的 `running` 记录立即收口为 `failed`（错误码 `OPTIMIZATION_QUEUE_FULL`）。调用方（批次脚本）应串行提交、轮询等待前序任务完成后再提交下一个，不要并发轰任务。
-
-```json
-{
-  "datasetId": "ds_xxx",
-  "snapshotType": "half_hour",
-  "strategyName": "rank_trend_candidate",
-  "method": "bayesian",
-  "objective": "stability",
-  "trials": 36,
-  "validationMode": "auto",
-  "validationRatio": 0.3,
-  "walkForward": {
-    "enabled": true,
-    "trainWindowDays": 5,
-    "validationWindowDays": 1,
-    "stepDays": 1,
-    "topTrials": 5
-  },
-  "parameterGrid": {
-    "momentumPeriods": [[3, 5, 8, 13, 21]],
-    "minJumpConfidence": [90.0],
-    "takeProfitPct": [0.08, 0.12, 0.16],
-    "stopLossPct": [0.04, 0.06, 0.08],
-    "maxPositions": [3, 5, 8]
-  }
-}
-```
-
-返回：
-
-```json
-{
-  "runId": "opt_xxx",
-  "status": "running"
-}
-```
-
-搜索方法：
-
-| method | 说明 |
-| --- | --- |
-| `grid` | 穷举离散参数组合 |
-| `random` | 固定 `randomSeed` 时可复现的随机采样 |
-| `bayesian` | Optuna `GPSampler` 高斯过程优化 |
-| `tpe` | Optuna `TPESampler` TPE 采样 |
-
-`method=bayesian` 必须写入 `optimizer=optuna_gp` 和 `optimizerMeta.sampler=GPSampler`。TPE 采样口径使用 `method=tpe`，并写入 `optimizer=optuna_tpe`、`optimizerMeta.sampler=TPESampler`。后端仍接受历史请求里的 `method=optuna_tpe`，但它只是 `tpe` 的兼容别名，不作为新的搜索方法展示。
-
-### `GET /api/optimizations/{run_id}`
-
-读取优化任务状态和结果。
-
-运行中：
-
-```json
-{
-  "runId": "opt_xxx",
-  "status": "running",
-  "progress": {
-    "completedTrials": 8,
-    "totalTrials": 36
-  }
-}
-```
-
-完成：
-
-```json
-{
-  "runId": "opt_xxx",
-  "status": "completed",
-  "result": {
-    "best": {},
-    "trials": []
-  }
-}
-```
-
-失败：
-
-```json
-{
-  "runId": "opt_xxx",
-  "status": "failed",
-  "error": {
-    "code": "OPTIMIZATION_FAILED",
-    "message": "参数优化失败",
-    "details": {}
-  }
-}
-```
-
-`status` 只能是 `running`、`completed` 或 `failed`。`failed` 必须返回结构化错误，不能用空 `trials` 或空 `best` 表示失败。
-
-### `POST /api/research/ranktrend-jump`
-
-运行 RankTrend Jump 内生阈值研究复跑。该入口是轻量研究工具，不自动写回默认参数，也不代表自动下单能力。
-
-```json
-{
-  "datasetId": "dragonboard_live",
-  "snapshotType": "half_hour",
-  "randomSeed": 20260430,
-  "trials": 24,
-  "fillFallbackMode": "fallback_penalized",
-  "validationRatio": 0.3,
-  "walkForwardTrainDays": 8,
-  "walkForwardValidationDays": 2,
-  "walkForwardStepDays": 2
-}
-```
-
-口径：
-
-- `method=tpe`，使用 Optuna `TPESampler`。
-- `jumpDeltaPct` 默认连续搜索范围为 `8.0 ~ 22.0`；`delta=15` 只作为候选区间内的研究值，不写回默认。
-- `strategyName=ranktrend_jump`，`objective=ranktrend_jump`。
-- 固定保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
-- 交易模拟使用当前 bar 信号成交、A 股 T+1、`maxHoldingBars=40`、真实权益曲线、涨跌停可成交检查、盘口对手价、成交量/盘口参与率约束。
-- `fillFallbackMode=strict_fill|blocked_fill|fallback_penalized`。前两者缺买一/卖一直接不成交；`fallback_penalized` 允许快照价回退，但增加额外滑点，并在 `researchSummary` 中报告回退占比。
-
-返回包含 `summary` / `researchSummary`：
-
-```json
-{
-  "runId": "opt_xxx",
-  "status": "completed",
-  "analysisMode": "ranktrend_jump_research",
-  "strategyName": "ranktrend_jump",
-  "method": "tpe",
-  "randomSeed": 20260430,
-  "configHash": "abc123",
-  "summary": {
-    "bestDeltaPct": 13.62,
-    "riskLevel": "medium",
-    "snapshotFallbackRate": 0.0421,
-    "walkForward": {
-      "enabled": true,
-      "segmentCount": 4,
-      "positiveReturnSegmentRate": 0.25
-    },
-    "conclusion": "该结果只作为 RankTrend Jump 实盘验证候选，不自动写回默认参数。"
-  }
-}
-```
-
-### V12 ThemeTrend 优化接口
-
-以下接口是 V12 已落地的 ThemeTrend 优化合同。优化结果只生成候选参数，不自动写回 Python、TypeScript、API、CLI、前端表单或文档默认值。
 
 ### `POST /api/optimizations/theme-trend`
 

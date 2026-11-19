@@ -1,6 +1,6 @@
 """题材日线序列聚合（题材动量 v2 第一层）。
 
-把 snapshot_sector_rows（hot_theme）按交易日聚合为每题材日线序列：
+把 sector rows（hot_theme；生产=帧内嵌 sectorRows，2026-11-19 起独立集合已 drop）按交易日聚合为每题材日线序列：
 - 虚拟收益指数：每个交易日取收盘槽（15:00 或最后一槽）的 change（成分股平均涨幅），
   累乘合成 Index_t = Π(1 + change_t)，供 RPS/距年内高点/多窗口动量使用。
 - 辅助日线：日 ztCount（收盘槽）、日 breadthScore（收盘槽）、日 mainNetInflow（收盘槽）、

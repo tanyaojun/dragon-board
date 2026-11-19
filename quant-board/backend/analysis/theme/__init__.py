@@ -1,4 +1,4 @@
-"""题材分析包：题材热度/动量/趋势/轮动（theme_momentum v2 归属）。"""
+"""题材分析包：题材热度/动量/轮动（theme_momentum v2 归属）。ThemeTrend 链已于 2026-11-19 淘汰删除。"""
 
 from backend.analysis.theme.heat import compute_theme_heat
 from backend.analysis.theme.momentum import compute_theme_momentum_series, stock_theme_exposure
@@ -12,7 +12,6 @@ from backend.analysis.theme.rotation import (
     ThemeRotationStatus,
 )
 from backend.analysis.theme.support_index import build_theme_support_index
-from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 
 __all__ = [
     "compute_theme_heat",
@@ -26,6 +25,4 @@ __all__ = [
     "ThemeRotationResult",
     "ThemeRotationStatus",
     "build_theme_support_index",
-    "ThemeTrendConfig",
-    "ThemeTrendPythonEngine",
 ]

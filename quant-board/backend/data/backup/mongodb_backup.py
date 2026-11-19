@@ -81,7 +81,6 @@ LIGHT_BACKUP_COLLECTIONS: tuple[str, ...] = (
     "snapshot_records",
     "snapshot_frames",
     "snapshot_stock_rows",
-    "snapshot_sector_rows",
 )
 
 # 恢复默认目标库：禁止把备份恢复回正式库名本身。

@@ -166,15 +166,21 @@ class _MongoSnapshotCollectorRepository:
             if snapshot_ids
             else []
         )
-        sector_rows = (
+        # 2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop）
+        sector_agg = (
             list(
-                self._db["snapshot_sector_rows"].find(
-                    {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
+                self._db["snapshot_frames"].aggregate(
+                    [
+                        {"$match": {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}},
+                        {"$project": {"n": {"$size": {"$ifNull": ["$sectorRows", []]}}}},
+                        {"$group": {"_id": None, "sum": {"$sum": "$n"}}},
+                    ]
                 )
             )
             if snapshot_ids
             else []
         )
+        sector_rows = [{"_count": sector_agg[0]["sum"]}] if sector_agg else []
         record_ids = {str(r.get("snapshotId")) for r in records}
 
         missing_records = sorted(set(snapshot_ids) - record_ids)

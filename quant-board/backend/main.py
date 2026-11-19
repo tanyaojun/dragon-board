@@ -55,7 +55,6 @@ from backend.data.models.theme_database import theme_status
 from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
-from backend.services.theme.daily_factors_scheduler import theme_daily_factors_scheduler
 from backend.services.market.ths_main_monitor_service import close_ths_main_monitor_service
 from backend.services.market.fund_scheduler import market_fund_scheduler
 from backend.services.market.ths_fund_refresh_scheduler import (
@@ -245,9 +244,6 @@ async def on_startup() -> None:
     # 本 API 进程不再启动采集 scheduler，避免双进程争锁/双采。
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
-    # 题材日频因子盘后补算（2026-09-27 Task1）：仅 mongodb 后端启用，
-    # 每日 18:30 补算缺因子行的交易日，幂等覆盖写 theme_daily_factors。
-    theme_daily_factors_scheduler.start()
     # 2103 打板四页签 + 涨停基因/公告计数语料按日存档（2026-11-07/08 历史回放 + jev 语料数据源）：
     # 仅 mongodb 后端启用，每 60s 拉本机 :8002 合并快照（pidType=1/8/2/3），
     # 合并进 kpl_daban_pool 同日档（_id=交易日；涨停池=成员并集+收盘态标注 sealed/broken；
@@ -413,7 +409,6 @@ async def on_shutdown() -> None:
     await snapshot_collector_scheduler.stop()
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
-    await theme_daily_factors_scheduler.stop()
     from backend.services.kpl_daban_archiver import close_daban_pool_archiver
 
     await close_daban_pool_archiver()
@@ -503,7 +498,6 @@ def health_check(deep: bool = False) -> dict[str, Any]:
         "snapshotCollector": snapshot_collector_scheduler.status(),
         "stockNameRefresh": stock_name_refresh_scheduler.status(),
         "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
-        "themeDailyFactors": theme_daily_factors_scheduler.status(),
         "marketFundRefresh": market_fund_scheduler.status(),
         "thsFundRefresh": get_ths_fund_refresh_scheduler().status(),
         "kplHotness": _kpl_hotness_health(),
@@ -1610,26 +1604,6 @@ def run_ranktrend_backtest(payload: dict[str, Any], db: Any | None = Depends(get
         raise _structured_backtest_error("rank_trend_backtest_failed", error) from error
 
 
-@app.post("/api/backtests/theme-trend")
-def run_theme_trend_backtest(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
-    try:
-        return BacktestService(db).run_theme_trend(payload)
-    except ValueError as error:
-        raise _structured_bad_request(error) from error
-    except Exception as error:
-        raise _structured_backtest_error("theme_trend_backtest_failed", error) from error
-
-
-@app.post("/api/backtests/theme-confluence")
-def run_theme_confluence_backtest(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
-    try:
-        return BacktestService(db).run_theme_confluence(payload)
-    except ValueError as error:
-        raise _structured_bad_request(error) from error
-    except Exception as error:
-        raise _structured_backtest_error("theme_confluence_backtest_failed", error) from error
-
-
 def _backtest_not_found(run_id: str) -> HTTPException:
     return HTTPException(status_code=404, detail={"code": "backtest_run_not_found", "runId": run_id})
 
@@ -1884,22 +1858,6 @@ def run_ranktrend_optimization(payload: dict[str, Any], db: Any | None = Depends
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
-@app.post("/api/optimizations/theme-trend")
-def run_theme_trend_optimization(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
-    try:
-        return OptimizationService(db).run_theme_trend(payload)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-
-@app.post("/api/optimizations/theme-confluence")
-def run_theme_confluence_optimization(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
-    try:
-        return OptimizationService(db).run_theme_confluence(payload)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-
 @app.post("/api/research/ranktrend-jump")
 def run_ranktrend_jump_research(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
@@ -1914,358 +1872,6 @@ def get_optimization(run_id: str, db: Any | None = Depends(get_db)) -> dict[str,
     if not result:
         raise HTTPException(status_code=404, detail=f"optimization run not found: {run_id}")
     return result
-
-
-@app.get("/api/research/theme-summary")
-def get_theme_research_summary(
-    dataset_id: str = "dragonboard_live",
-    snapshot_type: str = "half_hour",
-    db: Any | None = Depends(get_db),
-) -> dict[str, Any]:
-    """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。
-
-    2026-09-12 读口缓存：该读口每次请求全量 ``load_frame_bundles(limit=200)`` + ThemeTrend
-    引擎重放（实测 8~18s），前端超时必然 abort。与 ``GET /api/hotlist-sentiment/series`` 同口径
-    —— Redis TTL 缓存 + 快照依赖失效；**只缓存 ``available=True`` 的成功响应**，降级/异常
-    不缓存（fail-visible，不把"引擎失败"固化成"看起来正常的历史摘要"）。
-    """
-    settings = get_settings()
-    cache = snapshot_cache.get_snapshot_redis_cache()
-    prefix = settings.redis_key_prefix.strip(":")
-    cache_key = f"{prefix}:research:theme-summary:{dataset_id}:{snapshot_type}"
-    cached = cache.get_response(cache_key)
-    if cached is not None:
-        return cached
-
-    response = _compute_theme_research_summary(dataset_id, snapshot_type, db)
-    if response.get("available"):
-        response = {**response, "cache": {"hit": False, "store": "redis"}}
-        cache.set_response(
-            cache_key,
-            response,
-            ttl_seconds=settings.theme_research_summary_cache_ttl_seconds,
-        )
-        cache.register_dependencies(
-            cache_key,
-            snapshot_cache.build_snapshot_cache_index_keys(
-                prefix=settings.redis_key_prefix,
-                dataset_id=dataset_id,
-            ),
-        )
-    return response
-
-
-def _compute_theme_research_summary(
-    dataset_id: str,
-    snapshot_type: str,
-    db: Any | None,
-) -> dict[str, Any]:
-    try:
-        repo = create_repository(db)
-        frames = repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type, limit=200)
-        if not frames or len(frames) < 2:
-            return {"available": False, "reason": "insufficient_frames", "frameCount": len(frames) if frames else 0}
-
-        # 函数内导入避免与 FastAPI startup 事件中的 DB 初始化形成循环依赖
-        from backend.analysis.theme.trend import ThemeTrendPythonEngine
-        result = ThemeTrendPythonEngine().replay_sequence(frames)
-        factors = result.get("factors") or []
-        quality = result.get("qualityReport") or {}
-
-        lifecycle_dist: dict[str, int] = {}
-        for f in factors:
-            lc = str(f.get("lifecycle") or "neutral")
-            lifecycle_dist[lc] = lifecycle_dist.get(lc, 0) + 1
-
-        mainline_themes = [
-            {"themeId": f.get("themeId"), "themeName": f.get("themeName"), "heatScore": f.get("heatScore")}
-            for f in factors
-            if f.get("lifecycle") == "mainline"
-        ][:10]
-
-        crowding_themes = [
-            {"themeId": f.get("themeId"), "themeName": f.get("themeName"), "crowdingRisk": f.get("crowdingRisk")}
-            for f in factors
-            if f.get("lifecycle") == "crowded"
-        ][:5]
-
-        return {
-            "available": True,
-            "datasetId": dataset_id,
-            "snapshotType": snapshot_type,
-            "frameCount": len(frames),
-            "lastTradingDate": str(frames[-1].get("tradingDate") or ""),
-            "lifecycleDistribution": lifecycle_dist,
-            "mainlineThemes": mainline_themes,
-            "crowdingAlerts": crowding_themes,
-            "qualityPassed": not quality.get("blocked", False),
-            "researchGrade": "degraded" if quality.get("warnings") else "research_ready",
-            "themeCount": len({f.get("themeId") for f in factors if f.get("themeId")}),
-            "signalCount": len(factors),
-        }
-    except Exception as exc:
-        return {"available": False, "reason": f"backend_error: {str(exc)[:200]}"}
-
-
-@app.get("/api/reports/theme-trend/{run_id}")
-def get_theme_trend_report(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
-    """主题研究报告：同时查询 optimization_runs 和 backtest_runs。
-
-    bt_* 前缀的回测 ID 从 backtest_runs.result_json 提取 themeTrend 段；
-    opt_* 前缀的优化 ID 从 optimization_runs.result_json.trialList[0] 提取 engineFactors。
-    """
-    bt_service = BacktestService(db)
-    opt_service = OptimizationService(db)
-
-    factors: list[dict[str, Any]] = []
-    trades: list[dict[str, Any]] = []
-    execution_signals: list[dict[str, Any]] = []
-    strategy_name = ""
-    dataset_id = ""
-
-    # 优先按 optimization_runs 查询
-    opt_run = opt_service.repo.get_optimization_run(run_id)
-    if opt_run:
-        raw = loads_json_field(opt_run.result_json, {})
-        trial_list = raw.get("trialList") or []
-        best_trial = trial_list[0] if trial_list else {}
-        factors = best_trial.get("engineFactors") or []
-        parameter_sensitivity = _build_theme_parameter_sensitivity(trial_list)
-        control_attribution = _empty_theme_control_attribution()
-        strategy_name = opt_run.strategy_name
-        dataset_id = opt_run.dataset_id or ""
-    else:
-        # 回退到 backtest_runs
-        bt_run = bt_service.repo.get_backtest_run(run_id)
-        if not bt_run:
-            raise HTTPException(status_code=404, detail={"code": "run_not_found", "runId": run_id})
-        result = loads_json_field(bt_run.result_json, {})
-        tt = result.get("themeTrend") or {}
-        factors = tt.get("factors") or tt.get("signals") or result.get("signals") or []
-        trades = result.get("trades") or ((result.get("tradeSimulation") or {}).get("trades")) or []
-        if not trades:
-            trades = bt_service.repo.get_backtest_trades(run_id)
-        execution_signals = result.get("executionSignals") or []
-        parameter_sensitivity = _build_theme_parameter_sensitivity([])
-        control_attribution = _build_theme_control_attribution(result, trades, execution_signals)
-        strategy_name = bt_run.strategy_name
-        dataset_id = bt_run.dataset_id
-
-    lifecycle_dist: dict[str, int] = {}
-    for f in factors:
-        lc = str(f.get("lifecycle") or "neutral")
-        lifecycle_dist[lc] = lifecycle_dist.get(lc, 0) + 1
-
-    signal_dist: dict[str, int] = {}
-    for f in factors:
-        sig = str(f.get("signal") or "watch")
-        signal_dist[sig] = signal_dist.get(sig, 0) + 1
-
-    crowding_events = [f for f in factors if f.get("lifecycle") == "crowded"]
-    transitions = [f for f in factors if f.get("lifecycleTransition")]
-    trade_report = _build_theme_trade_report(trades, execution_signals)
-
-    return {
-        "runId": run_id,
-        "strategyName": strategy_name,
-        "datasetId": dataset_id,
-        "lifecycleDistribution": lifecycle_dist,
-        "signalDistribution": signal_dist,
-        "crowdingEventCount": len(crowding_events),
-        "lifecycleTransitionCount": len(transitions),
-        "recentTransitions": transitions[:20],
-        "themeCount": len({f.get("themeId") for f in factors if f.get("themeId")}),
-        "totalFactorCount": len(factors),
-        "controlGroupAttribution": control_attribution,
-        "parameterSensitivity": parameter_sensitivity,
-        **trade_report,
-    }
-
-
-def _empty_theme_control_attribution() -> dict[str, Any]:
-    base = {"signalCount": 0, "tradeCount": 0, "winRate": 0, "avgNetReturn": 0, "totalProfit": 0}
-    return {
-        "rankTrendOnly": dict(base),
-        "themeOnly": dict(base),
-        "themeRankTrendConfluence": dict(base),
-        "leaderConfirmation": dict(base),
-        "conclusion": "optimization_run_no_trade_control_groups",
-    }
-
-
-def _summarize_theme_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    count = len(rows)
-    total_profit = round(sum(float(row.get("profit") or 0) for row in rows), 2)
-    total_return = round(sum(float(row.get("netReturn") or 0) for row in rows), 4)
-    wins = sum(1 for row in rows if float(row.get("netReturn") or 0) > 0)
-    return {
-        "tradeCount": count,
-        "winRate": round(wins / count, 4) if count else 0,
-        "avgNetReturn": round(total_return / count, 4) if count else 0,
-        "totalProfit": total_profit,
-    }
-
-
-def _build_theme_control_attribution(
-    result: dict[str, Any],
-    trades: list[dict[str, Any]],
-    execution_signals: list[dict[str, Any]],
-) -> dict[str, Any]:
-    theme_trend = result.get("themeTrend") if isinstance(result.get("themeTrend"), dict) else {}
-    rank_control = theme_trend.get("rankTrendControl") if isinstance(theme_trend.get("rankTrendControl"), dict) else {}
-    signals = result.get("signals") if isinstance(result.get("signals"), list) else []
-    confluence_count = len(execution_signals)
-    leader_signals = [
-        signal for signal in execution_signals
-        if str(signal.get("themeRole") or "").lower() == "leader"
-        or "leader" in str(signal.get("themeReasons") or "").lower()
-        or "龙头" in str(signal.get("themeReasons") or "")
-    ]
-    leader_trades = [
-        trade for trade in trades
-        if str(trade.get("explanation") or "").find("龙头") >= 0
-        or str(trade.get("candidateTier") or "") == "A_MAIN"
-    ]
-    trade_summary = _summarize_theme_rows(trades)
-    leader_trade_summary = _summarize_theme_rows(leader_trades)
-    return {
-        "rankTrendOnly": {
-            "signalCount": int(rank_control.get("signalCount") or 0),
-            "tradeCount": int(rank_control.get("tradeCount") or 0),
-            "totalReturn": rank_control.get("totalReturn"),
-            "maxDrawdown": rank_control.get("maxDrawdown"),
-            "winRate": rank_control.get("winRate") or 0,
-        },
-        "themeOnly": {
-            "signalCount": len(signals),
-            **trade_summary,
-        },
-        "themeRankTrendConfluence": {
-            "signalCount": confluence_count,
-            **trade_summary,
-        },
-        "leaderConfirmation": {
-            "signalCount": len(leader_signals),
-            **leader_trade_summary,
-        },
-        "conclusion": (
-            "theme_confluence_available"
-            if confluence_count or trades
-            else "theme_research_only_no_executable_control_group"
-        ),
-    }
-
-
-def _build_theme_parameter_sensitivity(trials: list[dict[str, Any]]) -> dict[str, Any]:
-    completed = [trial for trial in trials if isinstance(trial, dict) and isinstance(trial.get("params"), dict)]
-    if not completed:
-        return {"trialCount": 0, "parameters": [], "topParameterSet": {}, "warnings": ["no_completed_trials"]}
-    completed = sorted(completed, key=lambda trial: float(trial.get("score") or 0), reverse=True)
-    top_count = max(1, min(5, len(completed)))
-    top_trials = completed[:top_count]
-    keys = sorted({key for trial in completed for key in (trial.get("params") or {}).keys()})
-    rows: list[dict[str, Any]] = []
-    for key in keys:
-        values = [trial.get("params", {}).get(key) for trial in completed]
-        top_values = [trial.get("params", {}).get(key) for trial in top_trials]
-        score_by_value: dict[str, list[float]] = {}
-        for trial in completed:
-            value_key = str((trial.get("params") or {}).get(key))
-            score_by_value.setdefault(value_key, []).append(float(trial.get("score") or 0))
-        best_value, best_scores = max(
-            score_by_value.items(),
-            key=lambda item: (sum(item[1]) / len(item[1]) if item[1] else float("-inf")),
-        )
-        rows.append({
-            "parameter": key,
-            "bestValue": top_trials[0].get("params", {}).get(key),
-            "dominantTopValues": sorted({str(value) for value in top_values}),
-            "testedValueCount": len({str(value) for value in values}),
-            "bestAverageValue": best_value,
-            "bestAverageScore": round(sum(best_scores) / len(best_scores), 4) if best_scores else 0,
-        })
-    return {
-        "trialCount": len(completed),
-        "topTrialCount": top_count,
-        "topParameterSet": completed[0].get("params") or {},
-        "topScore": completed[0].get("score"),
-        "parameters": rows,
-    }
-
-
-def _build_theme_trade_report(trades: list[dict[str, Any]], execution_signals: list[dict[str, Any]]) -> dict[str, Any]:
-    signal_by_entry = {
-        (str(item.get("snapshotId") or ""), str(item.get("code") or "")): item
-        for item in execution_signals
-        if item.get("code")
-    }
-
-    def enrich(trade: dict[str, Any]) -> dict[str, Any]:
-        signal = signal_by_entry.get((str(trade.get("entrySnapshotId") or ""), str(trade.get("code") or "")), {})
-        return {
-            **trade,
-            "lifecycle": trade.get("stage") or signal.get("stage") or "neutral",
-            "themeName": signal.get("mainTheme") or trade.get("themeName") or "",
-            "role": signal.get("themeRole") or trade.get("themeRole") or "",
-            "candidateTier": trade.get("candidateTier") or signal.get("candidateTier") or "",
-            "crowdingTriggered": (
-                trade.get("candidateTier") == "C_CROWDED"
-                or signal.get("candidateTier") == "C_CROWDED"
-                or str(signal.get("stage") or "") in {"crowded", "divergence"}
-                or any(str(flag).startswith("crowding:") for flag in (signal.get("themeRiskFlags") or []))
-            ),
-        }
-
-    enriched = [enrich(trade) for trade in trades]
-
-    def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
-        count = len(rows)
-        total_profit = round(sum(float(row.get("profit") or 0) for row in rows), 2)
-        total_return = round(sum(float(row.get("netReturn") or 0) for row in rows), 4)
-        wins = sum(1 for row in rows if float(row.get("netReturn") or 0) > 0)
-        return {
-            "tradeCount": count,
-            "winRate": round(wins / count, 4) if count else 0,
-            "avgNetReturn": round(total_return / count, 4) if count else 0,
-            "totalNetReturn": total_return,
-            "totalProfit": total_profit,
-        }
-
-    def group_by(field: str) -> dict[str, list[dict[str, Any]]]:
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in enriched:
-            key = str(row.get(field) or "unknown")
-            grouped.setdefault(key, []).append(row)
-        return grouped
-
-    lifecycle_returns = {
-        key: summarize(rows)
-        for key, rows in sorted(group_by("lifecycle").items())
-    }
-    theme_diagnostics = [
-        {"themeName": key, **summarize(rows)}
-        for key, rows in sorted(group_by("themeName").items(), key=lambda item: (-len(item[1]), item[0]))
-    ]
-    tier_diagnostics = [
-        {"candidateTier": key, **summarize(rows)}
-        for key, rows in sorted(group_by("candidateTier").items(), key=lambda item: (-len(item[1]), item[0]))
-    ]
-    role_diagnostics = [
-        {"role": key, **summarize(rows)}
-        for key, rows in sorted(group_by("role").items(), key=lambda item: (-len(item[1]), item[0]))
-    ]
-    crowded_rows = [row for row in enriched if row.get("crowdingTriggered")]
-
-    return {
-        "lifecycleReturnDistribution": lifecycle_returns,
-        "themeTradeDiagnostics": theme_diagnostics,
-        "candidateTierDiagnostics": tier_diagnostics,
-        "roleDiagnostics": role_diagnostics,
-        "crowdingRiskDecay": {
-            "triggeredTradeCount": len(crowded_rows),
-            **summarize(crowded_rows),
-        },
-    }
 
 
 @app.post("/api/golden/import")

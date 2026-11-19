@@ -1,4 +1,8 @@
-"""ranktrend projection 必须返回 hotThemes 与股票 themes，供题材动量计算。"""
+"""ranktrend projection 必须返回 hotThemes 与股票 themes，供题材动量计算。
+
+2026-11-19 起 sector rows 内嵌在帧文档 sectorRows（独立集合已 drop），
+本文件夹具同步改为帧内嵌形态；投影行为合同不变。
+"""
 
 import pytest
 
@@ -31,11 +35,13 @@ class FakeCollection:
         self._rows = list(rows)
         self.last_query = None
         self.last_projection = None
+        self.last_queries = []
         self.call_count = 0
 
     def find(self, query, projection=None):
         self.call_count += 1
         self.last_query = query
+        self.last_queries.append(dict(query or {}))
         self.last_projection = projection
         return self
 
@@ -62,6 +68,30 @@ class FakeDb:
         return self._collections[name]
 
 
+def _embedded_sector_rows():
+    """帧内嵌 sector rows（瘦身形态，无帧级上下文重复字段）。"""
+    return [
+        {
+            "entityType": "hot_theme",
+            "entityKey": "T1",
+            "entityName": "T1概念板块",
+            "heatScore": 80.0,
+            "rank": 1,
+            "rotationState": "mainline",
+            "crowdingRisk": 30.0,
+            "metadata": {"rankEligible": True},
+        },
+        {
+            "entityType": "sector",
+            "entityKey": "BANK",
+            "entityName": "银行",
+            "heatScore": 40.0,
+            "rank": 2,
+            "rotationState": "neutral",
+        },
+    ]
+
+
 def _frames():
     return [{
         "snapshotId": "s1",
@@ -70,21 +100,7 @@ def _frames():
         "tradingDate": "2026-08-04",
         "slotTime": "10:00",
         "timestamp": 1,
-    }]
-
-
-def _sector_rows():
-    return [{
-        "snapshotId": "s1",
-        "datasetId": "dragonboard_live",
-        "entityType": "hot_theme",
-        "entityKey": "T1",
-        "entityName": "T1概念板块",
-        "heatScore": 80.0,
-        "rank": 1,
-        "rotationState": "mainline",
-        "crowdingRisk": 30.0,
-        "metadata": {"rankEligible": True},
+        "sectorRows": _embedded_sector_rows(),
     }]
 
 
@@ -112,7 +128,6 @@ def test_ranktrend_plus_themes_projection_includes_hot_themes_and_stock_themes()
     repo = MongoRepository(FakeDb({
         "snapshot_frames": _frames(),
         "snapshot_stock_rows": _stock_rows(),
-        "snapshot_sector_rows": _sector_rows(),
     }))
     bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
     assert len(bundles) == 1
@@ -126,7 +141,6 @@ def test_plain_ranktrend_projection_stays_lightweight():
     repo = MongoRepository(FakeDb({
         "snapshot_frames": _frames(),
         "snapshot_stock_rows": _stock_rows(),
-        "snapshot_sector_rows": _sector_rows(),
     }))
     bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend")
     assert bundles[0]["hotThemes"] == []
@@ -136,34 +150,29 @@ def test_plain_ranktrend_projection_stays_lightweight():
     assert set(stock) == {"code", "name", "rank", "avgRankNum", "change", "volumeRatio", "zlje", "zljzb"}
 
 
-def test_ranktrend_plus_themes_filters_sector_rows_by_hot_theme_server_side():
-    """M1: ranktrend+themes 只按 hot_theme 服务端过滤 sector rows，不加载行业板块行。"""
-    db = FakeDb({
+def test_ranktrend_plus_themes_hot_themes_only_hot_theme_rows():
+    """M1 合同延续：ranktrend+themes 投影的 hotThemes 只含 hot_theme 行，
+    行业板块（sector）行不进 hotThemes（2026-11-19 起过滤在帧内嵌展开时做）。"""
+    repo = MongoRepository(FakeDb({
         "snapshot_frames": _frames(),
         "snapshot_stock_rows": _stock_rows(),
-        "snapshot_sector_rows": _sector_rows(),
-    })
-    repo = MongoRepository(db)
-    repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
-    sector_query = db._collections["snapshot_sector_rows"].last_query
-    assert sector_query is not None
-    assert sector_query.get("entityType") == "hot_theme"
-    assert db._collections["snapshot_sector_rows"].last_projection is not None
+    }))
+    bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
+    entity_types = {row.get("entityType") for row in bundles[0]["hotThemes"]}
+    assert entity_types == {"hot_theme"}
 
 
-def test_full_projection_does_not_filter_sector_rows_server_side():
-    """full 投影仍需同时取 sector 与 hot_theme，不应加 entityType 过滤。"""
-    db = FakeDb({
+def test_full_projection_includes_sector_and_hot_theme_rows():
+    """full 投影同时展开 sector 与 hot_theme 行（不再有服务端 entityType 单值过滤）。"""
+    repo = MongoRepository(FakeDb({
         "snapshot_frames": _frames(),
         "snapshot_stock_rows": _stock_rows(),
-        "snapshot_sector_rows": _sector_rows(),
-    })
-    repo = MongoRepository(db)
-    repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="full")
-    sector_query = db._collections["snapshot_sector_rows"].last_query
-    assert sector_query is not None
-    assert "entityType" not in sector_query
-    assert db._collections["snapshot_sector_rows"].last_projection is None
+    }))
+    bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="full")
+    entity_types = {row.get("entityType") for row in bundles[0]["entities"]}
+    assert entity_types == {"hot_theme", "sector"}
+    assert {row.get("entityType") for row in bundles[0]["hotThemes"]} == {"hot_theme"}
+    assert {row.get("entityType") for row in bundles[0]["sectors"]} == {"sector"}
 
 
 def test_ranktrend_plus_themes_bundle_reads_use_redis_ttl_cache(monkeypatch):
@@ -193,13 +202,18 @@ def test_ranktrend_plus_themes_bundle_reads_use_redis_ttl_cache(monkeypatch):
     db = FakeDb({
         "snapshot_frames": _frames(),
         "snapshot_stock_rows": _stock_rows(),
-        "snapshot_sector_rows": _sector_rows(),
     })
     repo = MongoRepository(db)
     repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
     stock_calls = db._collections["snapshot_stock_rows"].call_count
-    sector_calls = db._collections["snapshot_sector_rows"].call_count
+
+    def sector_replay_calls() -> int:
+        """帧内嵌 sector 行回放查询数：frames 集合上带 snapshotId 过滤的 find 次数。"""
+        return sum(1 for q in db._collections["snapshot_frames"].last_queries if "snapshotId" in q)
+
+    replay_after_first = sector_replay_calls()
 
     repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
     assert db._collections["snapshot_stock_rows"].call_count == stock_calls
-    assert db._collections["snapshot_sector_rows"].call_count == sector_calls
+    # 缓存命中后不重复回放 sector 行（带 snapshotId 的 frames 查询不新增）
+    assert sector_replay_calls() == replay_after_first

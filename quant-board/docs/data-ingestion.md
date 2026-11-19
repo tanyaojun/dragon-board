@@ -12,13 +12,13 @@ QuantBoard 首期导入 dragon-board 的历史快照数据，形成可复现的�
 
 ## 数据来源
 
-当前正式运行主库是 MongoDB（`dragon_board_quant` 数据库）。Dragon Board 正式快照通过 `POST /api/snapshots/ingest` 写入 MongoDB 集合 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows`。SQLite/Supabase/Parquet 旧链路仅作为迁移前历史、审计/离线备份参考，或在 Mongo 模式下显式禁用入口。
+当前正式运行主库是 MongoDB（`dragon_board_quant` 数据库）。Dragon Board 正式快照通过 `POST /api/snapshots/ingest` 写入 MongoDB 集合 `snapshot_records / snapshot_frames / snapshot_stock_rows`（sector rows 自 2026-11-19 起内嵌在帧文档 `sectorRows`，独立集合已 drop）。SQLite/Supabase/Parquet 旧链路仅作为迁移前历史、审计/离线备份参考，或在 Mongo 模式下显式禁用入口。
 
 日常主路径：
 
 1. MongoDB 快照库直接使用
    - 源数据集默认 `dragonboard_live`（MongoDB `DragonBoardData` 数据库）。
-   - 回测/优化直接消费 `snapshot_frames` + `snapshot_stock_rows` + `snapshot_sector_rows`，不产生中间派生集。
+   - 回测/优化直接消费 `snapshot_frames`（含内嵌 sectorRows）+ `snapshot_stock_rows`，不产生中间派生集。
 
 迁移辅助路径：
 
@@ -122,7 +122,7 @@ snapshot_type = half_hour
 1. 选择源数据集，默认 `dragonboard_live`。
 2. 按 `snapshot_type`、日期区间和最大快照数筛选 `snapshot_frames`。
 3. `dryRun=true` 时只返回带 `virtual=true`、`policy=snapshot_facts_view` 的预览摘要和质量门禁结果，不落库。
-4. `dryRun=false` 时复制筛选出的 `snapshot_records / snapshot_frames / snapshot_stock_rows / snapshot_sector_rows` 到新的 `ds_*` 派生数据集。
+4. `dryRun=false` 时复制筛选出的 `snapshot_records / snapshot_frames（含内嵌 sectorRows） / snapshot_stock_rows` 到新的 `ds_*` 派生数据集。
 5. 源数据集不被删除、覆盖或改写；派生数据集的 `metadata.sourceDatasetId` 和 `metadata.filters` 记录来源和筛选条件。
 6. 执行质量门禁，真实生成结果返回 `policy=snapshot_facts_derived_dataset`。
 7. MongoDB 模式下不登记新的 Supabase 备份对象。
@@ -133,7 +133,7 @@ snapshot_type = half_hour
 2. 识别 schema 版本和快照列表。
 3. 标准化快照 ID、日期、时间、类型。
 4. 写入原始 `snapshot_records`。
-5. 投影到 `snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows`。
+5. 投影到 `snapshot_frames`（含内嵌 sectorRows）、`snapshot_stock_rows`。
 6. 执行质量门禁。
 7. 更新 `datasets` 汇总统计。
 8. 返回迁移报告。
