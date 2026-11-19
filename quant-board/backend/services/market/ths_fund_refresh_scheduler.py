@@ -8,13 +8,8 @@ from zoneinfo import ZoneInfo
 
 from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.core.settings import get_settings
-from backend.data.repositories.fund_flow_repository import FundFlowRepository
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
-from backend.services.market.ths_fund_flow_buckets import (
-    aggregate_l2_buckets,
-    build_l2_persist_doc,
-    parse_l2_summary,
-)
+from backend.services.market.ths_fund_flow_buckets import parse_l2_summary
 from backend.services.market.ths_main_monitor_service import (
     ThsMainMonitorError,
     ThsMainMonitorService,
@@ -65,8 +60,6 @@ class ThsFundRefreshScheduler:
         systemic_cooldown_seconds: float = 30.0,
         retry_backoff_seconds: tuple[float, ...] = DEFAULT_RETRY_BACKOFF_SECONDS,
         enabled: bool = True,
-        fund_repo: FundFlowRepository | None = None,
-        mongo_write_timeout_seconds: float = 5.0,
     ) -> None:
         self._service = service
         self._cache = cache
@@ -98,9 +91,6 @@ class ThsFundRefreshScheduler:
         # 固定 1s 摊薄节奏（batch_size=5 + 并发 4 时每批约 1~2s），一轮 225 只约 1 分钟。
         self._batch_interval_seconds = 1.0
         self.enabled = enabled
-        self._fund_repo = fund_repo
-        # MongoDB upsert 超时：MongoDB 挂起（TCP 不响应）时不拖慢刷新节奏
-        self._mongo_write_timeout_seconds = max(0.5, float(mongo_write_timeout_seconds))
 
         self._next_refresh_at: dict[str, float] = {}
         self._retry_at: dict[str, float] = {}
@@ -112,9 +102,6 @@ class ThsFundRefreshScheduler:
         self._last_row_count = 0
         self._last_session_date: str | None = None
         self._task: asyncio.Task[None] | None = None
-        # L8（2026-08-11 审计）：MongoDB 唯一索引在首次 run_once 异步 ensure（带超时），
-        # 避免单例创建时同步阻塞启动
-        self._indexes_ensured = False
 
     def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
@@ -135,20 +122,10 @@ class ThsFundRefreshScheduler:
         # Redis latest key 丢失（2026-08-12 事故场景）时先从内存 last-good 写回，
         # 零上游请求；再走冷启动/交易时段判断，保证跨进程可读。
         await self._ensure_latest_cache_alive()
-        if not self._indexes_ensured and self._fund_repo is not None:
-            self._indexes_ensured = True
-            try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(self._fund_repo.ensure_indexes),
-                    timeout=5.0,
-                )
-            except Exception:
-                self._indexes_ensured = False  # 失败下次重试；缺唯一索引不影响本轮刷新
-                logger.exception("fund_flow_l2 ensure_indexes failed; continue without unique index")
         if not self._is_trading_time(now_dt) and not self._needs_cold_init():
             # 非交易时段（周末/午休/盘前盘后）且已初始化：暂停请求，保留 last-good。
             # 冷启动例外：非交易时段允许刷一轮——THS 接口返回最近交易日完整 L2，
-            # 用于 MongoDB 空库时首屏不空（见 test_outside_trading_hours_cold_start_initializes）。
+            # 用于冷缓存时首屏不空（见 test_outside_trading_hours_cold_start_initializes）。
             self._last_error = "outside_trading_hours"
             return False
         now_ts = now_dt.timestamp()
@@ -172,11 +149,8 @@ class ThsFundRefreshScheduler:
 
         raw_map = await self._load_raw_batch(batch, now_ts)
         cache_rows: list[dict[str, object]] = []
-        mongo_docs: list[dict[str, object]] = []
-        # 非交易时段冷启动刷的那轮只进 Redis 热缓存（首屏有值），
-        # 不写 MongoDB——避免依赖 THS 非交易时段行为产生垃圾文档；
-        # MongoDB 只固化交易时段的盘中校准数据。
-        persist_to_mongo = self._is_trading_time(now_dt) and self._fund_repo is not None
+        # fund_flow_l2 MongoDB 持久层已退役（2026-11-19 用户裁决，集合归档 drop）：
+        # 校准行只写 Redis/内存 last-good + publish，不再落 MongoDB。
         for code, raw in raw_map.items():
             summary = parse_l2_summary(code, raw)
             if summary is None:
@@ -184,31 +158,6 @@ class ThsFundRefreshScheduler:
                 self._record_failure(code, now_ts)
                 continue
             cache_rows.append(summary)
-            if persist_to_mongo and not raw.get("stale"):
-                # M2（2026-08-11 审计）：stale raw（上游失败回退的旧缓存）不写 MongoDB——
-                # MongoDB 只固化真实拉取的数据；Redis 侧有 _is_older 保护，Mongo 侧没有，
-                # stale 可能跨日，旧值不得入库。
-                buckets = aggregate_l2_buckets((raw.get("data") or {}).get("list") or [])
-                # M3（2026-08-11 审计）：THS list 为空或全部 <30 万时 buckets 全 0，
-                # 跳过 Mongo 写入——防止全 0 覆盖历史 7 档（MongoDB 侧无 _is_older 保护），
-                # Redis total 摘要照常落库（fail-visible：total 有值不空白）。
-                has_bucket_activity = any(
-                    (b.get("buyAmount") or 0)
-                    or (b.get("sellAmount") or 0)
-                    or (b.get("buyCount") or 0)
-                    or (b.get("sellCount") or 0)
-                    for b in buckets
-                )
-                if has_bucket_activity:
-                    mongo_docs.append(
-                        build_l2_persist_doc(
-                            code,
-                            raw,
-                            summary,
-                            buckets,
-                            now_ms=int(now_ts * 1000),
-                        )
-                    )
         batch_ok = bool(cache_rows)
         self._consecutive_batch_success = (
             self._consecutive_batch_success + 1 if batch_ok else 0
@@ -241,20 +190,6 @@ class ThsFundRefreshScheduler:
             # 前端才能实时收到 P0/P1 增量（此前只靠 300s idle 断线重连拿快照，滞后 ≤5 分钟）。
             # 推送行带单调 version（来自 ThemeFundCache.put 返回值），前端据此去重。
             self._stream.publish(published_rows)
-
-        if mongo_docs and self._fund_repo is not None:
-            try:
-                await asyncio.wait_for(
-                    asyncio.to_thread(self._fund_repo.upsert_many, mongo_docs),
-                    timeout=self._mongo_write_timeout_seconds,
-                )
-            except asyncio.TimeoutError:
-                # MongoDB 挂起：不阻塞刷新（Redis/内存 last-good 继续更新）；
-                # 后台线程幂等 upsert 完成后写入，无需额外处理
-                logger.warning("fund_flow_l2 upsert timed out; keep last-good in cache/redis")
-            except Exception:
-                # MongoDB 写失败不阻塞刷新：缓存/Redis last-good 继续可用
-                logger.exception("fund_flow_l2 upsert failed; keep last-good in cache/redis")
 
         if self._consecutive_batch_success >= 3 and self._effective_concurrency < self._base_concurrency:
             self._effective_concurrency = self._base_concurrency
@@ -336,7 +271,6 @@ class ThsFundRefreshScheduler:
             "enabled": self.enabled,
             "running": self._task is not None,
             "source": "ths_main_monitor",
-            "mongoPersistEnabled": self._fund_repo is not None,
             "universeCount": len(self._pool_codes()),
             "ownerState": self._owner_state(),
             "cachedCount": len(self._next_refresh_at),
@@ -390,8 +324,8 @@ class ThsFundRefreshScheduler:
 
         修复 2026-08-08 首屏只有数笔：原实现"从未刷过才刷一轮"（batch=5），
         233 只展示池只刷 5 只就暂停；现改为按展示池未刷新码持续补齐。
-        M1（2026-08-11 审计）：仅当缓存已有**最近交易日**行（MongoDB 冷启动
-        restore 或上次冷刷已补齐）时才视为已初始化——**TTL 内未失效的旧交易日
+        M1（2026-08-11 审计）：仅当缓存已有**最近交易日**行（Redis last-good
+        或上次冷刷已补齐）时才视为已初始化——**TTL 内未失效的旧交易日
         缓存不算**，否则盘后重启会一直显示旧数据直到下一交易时段（实盘验证
         2026-08-11：Redis 有 08-10 缓存，08-11 盘后重启后 cachedCount=0 且
         调度器暂停，页面显示旧值）。
@@ -490,19 +424,10 @@ _ths_fund_refresh_scheduler: ThsFundRefreshScheduler | None = None
 def get_ths_fund_refresh_scheduler() -> ThsFundRefreshScheduler:
     global _ths_fund_refresh_scheduler
     if _ths_fund_refresh_scheduler is None:
-        fund_repo = None
-        if get_settings().storage_backend == "mongodb":
-            from backend.data.repositories.fund_flow_repository import FundFlowRepository
-            from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-
-            fund_repo = FundFlowRepository(get_runtime_mongodb_database())
-            # L8（2026-08-11 审计）：ensure_indexes 移到 run_once 异步执行（带超时），
-            # 不在单例创建时同步阻塞启动；MongoDB 故障仅告警（Redis/内存 last-good 继续工作）
         _ths_fund_refresh_scheduler = ThsFundRefreshScheduler(
             service=get_ths_main_monitor_service(),
             cache=get_theme_fund_cache(),
             stream=get_market_fund_stream(),
-            fund_repo=fund_repo,
         )
     return _ths_fund_refresh_scheduler
 

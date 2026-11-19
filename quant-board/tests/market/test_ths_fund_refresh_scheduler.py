@@ -94,32 +94,6 @@ class FakeCache:
         return {code: row for code, row in self.rows.items() if code in codes}
 
 
-class FakeFundRepo:
-    def __init__(self) -> None:
-        self.docs: list[dict] = []
-
-    def upsert_many(self, docs: list[dict]) -> int:
-        self.docs.extend(docs)
-        return len(docs)
-
-
-class FailingFundRepo:
-    """模拟 MongoDB 故障：upsert 抛异常。"""
-
-    def upsert_many(self, docs: list[dict]) -> int:
-        raise RuntimeError("mongodb down")
-
-
-class HangingFundRepo:
-    """模拟 MongoDB TCP 挂起：upsert 长时间不返回（后台线程会自然结束）。"""
-
-    def upsert_many(self, docs: list[dict]) -> int:
-        import time
-
-        time.sleep(2.0)
-        return 0
-
-
 class FakeStream:
     def __init__(
         self,
@@ -161,7 +135,6 @@ def _scheduler(
     service: FakeThsService,
     cache: FakeCache | None = None,
     stream: FakeStream | None = None,
-    fund_repo: FakeFundRepo | None = None,
     now=None,
     current: datetime | None = None,
     **kwargs,
@@ -170,7 +143,6 @@ def _scheduler(
         service=service,
         cache=cache or FakeCache(),
         stream=stream or FakeStream([]),
-        fund_repo=fund_repo,
         now=now or (lambda: current),
         **kwargs,
     )
@@ -355,60 +327,6 @@ async def test_single_timeout_backs_off_without_blocking_others() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mongo_persist_writes_seven_buckets() -> None:
-    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
-    service = FakeThsService(titles=_titles("000001"))
-    fund_repo = FakeFundRepo()
-    scheduler = _scheduler(
-        service=service,
-        stream=FakeStream(["000001"]),
-        fund_repo=fund_repo,
-        current=current,
-    )
-
-    assert await scheduler.run_once() is True
-    assert len(fund_repo.docs) == 1
-    doc = fund_repo.docs[0]
-    assert doc["code"] == "000001"
-    assert doc["sessionDate"] == "2026-08-07"
-    assert doc["source"] == "ths_main_monitor"
-    assert doc["total"]["zlje"] == pytest.approx(-31_000_000.0)
-    assert doc["total"]["buyAmount"] == pytest.approx(268_000_000.0)
-    assert doc["total"]["sellAmount"] == pytest.approx(299_000_000.0)
-    assert [b["tier"] for b in doc["buckets"]] == [
-        "ge_1000w",
-        "700_1000w",
-        "500_700w",
-        "300_500w",
-        "100_300w",
-        "50_100w",
-        "30_50w",
-    ]
-    # list 两笔 500 万（买/卖各一）→ 500_700w 档；299999 低于 30 万不入档
-    b500 = next(b for b in doc["buckets"] if b["tier"] == "500_700w")
-    assert b500["buyCount"] == 1
-    assert b500["sellCount"] == 1
-    assert b500["net"] == 0.0
-
-
-@pytest.mark.asyncio
-async def test_mongo_persist_disabled_without_repo() -> None:
-    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
-    service = FakeThsService(titles=_titles("000001"))
-    cache = FakeCache()
-    scheduler = _scheduler(
-        service=service,
-        cache=cache,
-        stream=FakeStream(["000001"]),
-        current=current,
-    )
-
-    assert await scheduler.run_once() is True
-    assert "000001" in cache.rows
-    assert scheduler.status()["mongoPersistEnabled"] is False
-
-
-@pytest.mark.asyncio
 async def test_uniform_rotation_refreshes_all_codes_at_same_interval() -> None:
     # 均匀轮转（2026-08-11 方案 A）：无 P0/P1 分级，全列表统一 180s 周期
     box, now = _mutable_clock(datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ))
@@ -490,25 +408,21 @@ async def test_outside_trading_hours_cold_start_initializes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cold_start_outside_hours_writes_redis_but_skips_mongo() -> None:
-    # 非交易时段冷启动刷一轮：Redis/内存 last-good 有值（首屏不空），
-    # MongoDB 不写（避免垃圾文档；MongoDB 只固化交易时段数据）
+async def test_cold_start_outside_hours_writes_redis() -> None:
+    # 非交易时段冷启动刷一轮：Redis/内存 last-good 有值（首屏不空）
     current = datetime(2026, 8, 8, 10, 0, 0, tzinfo=TZ)  # 周六
     service = FakeThsService(titles=_titles("000001"))
     cache = FakeCache()
-    fund_repo = FakeFundRepo()
     scheduler = _scheduler(
         service=service,
         cache=cache,
         stream=FakeStream(["000001"]),
-        fund_repo=fund_repo,
         current=current,
     )
 
     assert await scheduler.run_once() is True
     assert "000001" in cache.rows  # Redis/内存热缓存有值
     assert cache.rows["000001"]["zlje"] == pytest.approx(-31_000_000.0)
-    assert fund_repo.docs == []  # MongoDB 不写
 
 
 @pytest.mark.asyncio
@@ -581,73 +495,6 @@ async def test_cold_start_not_stopped_by_partial_latest_day_coverage() -> None:
             "zlje": 1.0,
         }
     assert scheduler._needs_cold_init() is False
-
-
-@pytest.mark.asyncio
-async def test_trading_hours_persist_writes_mongo() -> None:
-    # 交易时段冷启动（周五 10:00）→ Redis + MongoDB 都写
-    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
-    service = FakeThsService(titles=_titles("000001"))
-    cache = FakeCache()
-    fund_repo = FakeFundRepo()
-    scheduler = _scheduler(
-        service=service,
-        cache=cache,
-        stream=FakeStream(["000001"]),
-        fund_repo=fund_repo,
-        current=current,
-    )
-
-    assert await scheduler.run_once() is True
-    assert "000001" in cache.rows
-    assert len(fund_repo.docs) == 1
-    assert fund_repo.docs[0]["sessionDate"] == "2026-08-07"
-    assert fund_repo.docs[0]["total"]["zlje"] == pytest.approx(-31_000_000.0)
-
-
-@pytest.mark.asyncio
-async def test_mongo_failure_does_not_block_redis_or_scheduler() -> None:
-    # 交易时段 MongoDB 故障（upsert 抛异常）：只记日志，Redis/内存 last-good
-    # 照常写入，调度器不崩——前端资金列仍显示有值（读取不经过 MongoDB）
-    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
-    service = FakeThsService(titles=_titles("000001"))
-    cache = FakeCache()
-    scheduler = _scheduler(
-        service=service,
-        cache=cache,
-        stream=FakeStream(["000001"]),
-        fund_repo=FailingFundRepo(),
-        current=current,
-    )
-
-    assert await scheduler.run_once() is True  # 不抛异常
-    assert "000001" in cache.rows  # Redis/内存行照常
-    assert cache.rows["000001"]["zlje"] == pytest.approx(-31_000_000.0)
-    assert scheduler.status()["lastError"] is None
-
-
-@pytest.mark.asyncio
-async def test_mongo_hang_does_not_slow_refresh() -> None:
-    # MongoDB TCP 挂起（upsert 长时间不返回）：超时后刷新继续，不拖慢 P0/P1 节奏
-    import time as _time
-
-    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
-    service = FakeThsService(titles=_titles("000001"))
-    cache = FakeCache()
-    scheduler = _scheduler(
-        service=service,
-        cache=cache,
-        stream=FakeStream(["000001"]),
-        fund_repo=HangingFundRepo(),
-        current=current,
-        mongo_write_timeout_seconds=0.1,
-    )
-
-    start = _time.monotonic()
-    assert await scheduler.run_once() is True
-    elapsed = _time.monotonic() - start
-    assert elapsed < 1.0  # 0.5s 超时后立即继续，未被 2.0s 挂起拖住
-    assert "000001" in cache.rows
 
 
 @pytest.mark.asyncio
@@ -750,23 +597,20 @@ async def test_run_once_publishes_written_rows_to_stream() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_raw_skips_cache_and_mongo() -> None:
+async def test_stale_raw_skips_cache() -> None:
     current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
     service = FakeThsService(titles=_titles("000001"))
     cache = FakeCache()
-    fund_repo = FakeFundRepo()
     scheduler = _scheduler(
         service=service,
         cache=cache,
         stream=FakeStream(["000001", "000002"]),
-        fund_repo=fund_repo,
         current=current,
     )
 
     assert await scheduler.run_once() is True
     assert "000001" in cache.rows
     assert "000002" not in cache.rows
-    assert [d["code"] for d in fund_repo.docs] == ["000001"]
     assert scheduler._retry_at["000002"] == current.timestamp() + 30
 
 @pytest.mark.asyncio

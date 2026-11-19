@@ -1,5 +1,11 @@
 # 最强风口红名观察预登记（2026-11-15，用户裁决「先观察再定」）
 
+> **已退役（2026-11-19 用户裁决）**：观察链整链淘汰——`kpl_fengkou_red_obs`
+> 日档（5 篇，2026-11-13~11-19）mongodump 归档
+> `quant-board/data/backups/kpl_fengkou_red_obs_retire_20261119/` 后单集合 drop；
+> `fengkou_red_observer.py`、schedule/scheduler 挂链、`GET /api/kpl/fengkou/observation`
+> 读口与对应测试同轮删除。下文为历史预登记存档（观察材料见归档）。
+
 > 性质：**观察采集预登记**，非合同变更。不改 vA3 选龙合同（`auction-leader-vA3-preregistration-20261114.md`
 > 双源并集原样）、不进锚人群、不烧 jev、不改打标链选样。采集器：
 > `backend/operations/fengkou_red_observer.py`（15:10 挂链，`kpl_fengkou_red_obs` 日档）。

@@ -418,7 +418,9 @@ ThemeTrend 研究集合：
 }
 ```
 
-### `fund_flow_l2`（2026-08-08 新增，运行态资金 L2 7 档）
+### `fund_flow_l2`（2026-08-08 新增；2026-11-19 退役 drop）
+
+**2026-11-19 用户裁决退役**：集合 mongodump 归档 `data/backups/fund_flow_l2_retire_20261119/` 后单集合 drop；写入（scheduler Mongo upsert）与读取（main.py 冷启动恢复）代码同轮删除，资金列运行态只靠 Redis last-good + 盘中 L2 校准。下文为历史结构存档。
 
 一行一股一日，唯一 `{ sessionDate: 1, code: 1 }`。文档：`code`、`sessionDate`、
 `tradingDate`、`source`（`ths_main_monitor`）、`sourceTs`、`updatedAt`、

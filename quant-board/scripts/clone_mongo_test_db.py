@@ -46,7 +46,6 @@ PROD_COLLECTIONS = [
     "backtest_signals",
     "backtest_trades",
     "datasets",
-    "fund_flow_l2",
     "golden_ranktrend_cases",
     "hotlist_sentiment",
     "migration_audit",

@@ -166,46 +166,6 @@ def prune_legacy_redis_ttl(redis_client: Any, prefix: str) -> dict[str, int]:
     return counts
 
 
-async def restore_fund_flow_from_mongodb() -> None:
-    """冷启动资金恢复：MongoDB fund_flow_l2 最近交易日 L2 行 → ThemeFundCache。
-
-    零第三方请求；失败不阻塞启动（回退为仅盘中校准）。完整 7 档 buckets
-    保留在 MongoDB，恢复只投影 total.zlje 摘要进 Redis/内存。
-
-    2026-08-14 修复：恢复行 source=ths_main_monitor（L2 主源），必须走
-    ``put`` 写 latest hash——不能走 ``put_many``（已改为写 akshare 题材源
-    独立 hash，会导致 L2 串线到题材源，实盘已出现 akshare hash 混入
-    ths_main_monitor 行）。
-    """
-    from backend.data.repositories.fund_flow_repository import (
-        FundFlowRepository,
-        project_cache_rows,
-    )
-    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-    from backend.services.theme.fund_cache import get_theme_fund_cache
-
-    repo = FundFlowRepository(get_runtime_mongodb_database())
-    session_date, docs = await asyncio.to_thread(repo.load_latest_session)
-    if not docs:
-        return
-    rows = project_cache_rows(docs)
-    if not rows:
-        return
-
-    def _restore() -> int:
-        cache = get_theme_fund_cache()
-        saved = 0
-        for row in rows:
-            try:
-                cache.put(dict(row))
-                saved += 1
-            except ValueError:
-                continue
-        return saved
-
-    saved = await asyncio.to_thread(_restore)
-    logger.info("fund_flow_l2 cold restore: %d rows from %s", saved, session_date)
-
 @app.on_event("startup")
 async def on_startup() -> None:
     # 2026-09-29 隔离裁决：生产入口 fail-fast——sqlite 后端未显式 opt-in 即拒绝启动
@@ -269,13 +229,8 @@ async def on_startup() -> None:
                 kpl_hotness_cache.start()
         except Exception:
             logger.exception("kpl hotness cache startup failed; continue startup")
-    # MongoDB L2 资金冷启动恢复（零第三方）：最近交易日 L2 行 → ThemeFundCache
-    # （Redis + 进程内 last-good），首屏资金列直接命中；失败不阻塞启动。
-    if get_settings().storage_backend == "mongodb":
-        try:
-            await restore_fund_flow_from_mongodb()
-        except Exception:
-            logger.exception("fund_flow_l2 cold restore failed; continue startup")
+    # 注：fund_flow_l2 MongoDB 持久层已退役（2026-11-19 用户裁决，集合归档 drop）；
+    # 资金列冷启动只靠 Redis last-good（TTL 3 天）+ 盘中 L2 校准/非交易时段冷刷。
     # 量比历史缓存预热（2026-08-13）：预装全市场 daily 历史成交量到 Redis，
     # 避免首次量比请求冷启动串行查 Mongo 造成量价字段长时间 --。
     # best-effort：后台线程执行，失败不阻断启动。

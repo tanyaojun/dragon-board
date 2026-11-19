@@ -2,6 +2,12 @@
 
 ## 状态
 
+**已退役（2026-11-19 用户裁决）**：`fund_flow_l2` 集合 mongodump 归档
+`quant-board/data/backups/fund_flow_l2_retire_20261119/` 后单集合 drop；
+持久化/冷启动恢复/7 档 buckets 代码同轮删除。资金列运行态链路保留：
+Redis/内存 last-good（TTL 3 天）+ 盘中 L2 校准 + 非交易时段冷刷；重启后
+首屏恢复不再走 MongoDB。下文为历史设计存档。
+
 **已实施（2026-08-08）**：见下方"## 9. 实施记录"。背景：东财排行接口风控确认
 不可用（`RemoteDisconnected`，IP 临时封禁），akshare/Tushare 只提供东财、同花顺
 两类第三方资金接口；本方案**放弃第三方全市场种子**，改为把可信的
