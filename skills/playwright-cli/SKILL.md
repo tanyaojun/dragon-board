@@ -1,6 +1,6 @@
 ---
 name: playwright-cli
-description: Use when 需要在真实 Chrome 浏览器中验收或调试 Dragon Board / QuantBoard 前端页面（面板、组件、表格、图表渲染、交互、控制台错误、截图），或其它 AI 协作者需要复现 playwright-cli 打开页面做浏览器验证的工作流时。适用于 Windows/PowerShell 环境，UI 或组件改动交付前必须做真实浏览器验证。
+description: Use when 需要在真实 Chrome 浏览器中验收或调试 Dragon Board / QuantBoard 前端页面（面板、组件、表格、图表渲染、交互、控制台错误、截图），或其它 AI 协作者需要复现 playwright-cli 打开页面做浏览器验证的工作流时。适用于 Windows/PowerShell 环境；UI 或组件改动交付前必须由主代理单线程做真实浏览器 e2e 验收并留证（含验收纪律与清单模板，原 e2e-verification skill 已并入本 skill）。
 ---
 
 # Playwright CLI 浏览器验收（Windows / PowerShell）
@@ -93,3 +93,23 @@ npx --yes --package @playwright/cli playwright-cli eval "async () => { const ite
 - 无新增控制台错误；环境性错误单独说明。
 - 需要时截图，并在最终回复中给出截图路径。
 - 浏览器验证不能替代 `pnpm test` 与类型检查；交付前仍需运行对应构建/类型验证。
+
+## E2E 验收纪律（主代理单线程；原 e2e-verification 并入）
+
+- UI/前端改动完成 ≠ 代码自查通过；交付前必须按真实浏览器流程验收并带回可复核证据（DOM/SVG/样式、Console、截图）。**证据先于结论**：逐条记录后才可声称完成，不得仅凭自查结论交付。
+- e2e 验收由主代理直接单线程执行，**不派发子代理**。
+- **先测试后 e2e**：先跑单元测试与类型检查，通过后再进入浏览器验收；服务未就绪不开跑。
+- 适用：修改任何前端页面/面板/表格/图表或交互状态后（主看板、QuantBoard 前端），交付/声称完成前；新流程 forward-test 与只在浏览器中出现的现象复核同样适用。不适用：纯后端/算法改动（跑 pytest）、文档-only 改动、dev server 无法启动的环境。
+- 验收前明确清单：目标页面/组件、可验证标准（关键字段/状态/样式/路径）、Console 错误基线、是否需要截图；不满足项先修复再重新验收，只截一张图不算验收完成。
+- 验收结果写入 PR 描述或相关文档；声称完成必须引用本次验收证据。
+
+验收清单模板：
+
+```text
+验收对象：<改动说明>
+服务：<URL>（主看板 5173 / QuantBoard 前端 5174；端口检查见「环境准备」）
+验收清单：
+- <可验证标准 1>
+- <可验证标准 2>
+输出：逐条证据（DOM/SVG/样式值/文本）、Console 错误数及分类、截图路径。
+```

@@ -1,225 +1,52 @@
 # Dragon Board Skills 使用指南
 
-本文定义 `dragon-board` 项目中 Codex/Superpowers skills 的推荐使用方式。项目入口规则仍以根目录 `AGENTS.md` 为准；本文只补充“遇到什么任务时应启用哪些 skills”。
+本文定义 `dragon-board` 项目中「遇到什么任务启用哪个 skill」。项目入口规则以根目录 `AGENTS.md` 为准（优先级最高）；本文只做索引与使用指南，不另立业务规则。
 
-项目级 skill 正文、模板、引用材料和工作流清单统一放在根目录 `skills/`。根 `SKILLS.md` 只保留总索引和使用指南；后续新增的 `SKILL.md` 不再散落到根目录、`docs/`、`src/`、`quant-board/` 或个人 `.codex/skills` 路径中。
+项目级 skill 正文统一放 `skills/<name>/SKILL.md`（references/templates/scripts 随子目录）；新增 skill 不散落到根目录、`docs/`、`src/`、`quant-board/` 或个人 skill 路径。项目 skill 由 Codex / Pi 共用（Codex 接口配置见各 skill 的 `agents/openai.yaml`）。
 
-## 1. 基本原则
+## 1. 调用方式（Pi）
 
-- 先遵守 `AGENTS.md`：中文沟通、先读代码和文档、小范围修改、禁止破坏性 Git 命令、禁止批量删除文件或目录。
-- Skills 用来约束工作流程，不替代项目业务规则。
-- 涉及 RankTrend、快照、QuantBoard、数据质量、存储/API 合同和 TDX L2 能力边界时，必须先确认现有源码和文档口径。
-- 不能用“应该可以”作为交付结论；完成前必须用对应验证命令拿到新鲜结果。
+- Pi 通过项目 `.pi/settings.json` 的 `"skills": ["../skills"]` 自动发现项目 skill：启动时只注入 name + description，任务匹配时再读 `SKILL.md` 全文执行。
+- 强制加载用 `/skill:<name>`（如 `/skill:fail-visible-data-pipelines`）；编辑 skill 后 `/reload` 刷新。
+- 通用流程 skill 在用户级 `~/.pi/skills/`（跨项目共享）：brainstorming、writing-plans、executing-plans、systematic-debugging、test-driven-development、using-git-worktrees、subagent-driven-development、writing-skills、playwright。
+- Skills 约束工作流程，不替代项目业务规则：不能覆盖用户明确指令，不能绕过 `AGENTS.md` 的删除、Git 和目录边界限制。
+- 业务事实以源码、根 `docs/`、`quant-board/docs/` 和当前测试为准；skill 不是业务事实来源，也不能替代真实验证命令。
 
-## 2. 核心必备 Skills
+## 2. 项目级 Skills（`skills/`）
 
-### 2.0 `fail-visible-data-pipelines`
+### 2.1 `fail-visible-data-pipelines`（数据链路强制）
 
-项目级正文：`skills/fail-visible-data-pipelines/SKILL.md`。
+凡涉及数据采集、清洗、写库、同步、迁移、缓存、读取、查询、回放、分析或界面观察，且需要处理缺字段、低覆盖率、部分来源失败、NaN、时间乱序、低样本或 fallback 时，**设计和编码前必须先读本 skill**（AGENTS §4.0 最高优先级）。它优先于通用的 defense-in-depth 输入拒绝模式：先识别所有可能丢弃、隐藏、归零或裁剪数据的分支再实现；质量异常保存并打标、不阻断；派生结论可停产，原始数据与缺失位置必须保留可观察；测试证明部分异常仍写入、仍可读取、仍可展示。
 
-凡涉及数据采集、清洗、写库、同步、迁移、缓存、读取、查询、回放、分析或界面观察，且需要处理缺字段、低覆盖率、部分来源失败、NaN、时间乱序、低样本或 fallback 时，必须在设计和编码前使用本 skill。它优先于通用的 defense-in-depth 输入拒绝模式：数据质量问题必须保存、展示并主动上报，不能阻断已有数据，也不能用 `0`、空结果、单帧或其他体系评分伪装缺失。
+### 2.2 `single-source-of-truth`（设计门禁）
 
-使用要求：
+设计、评审或规划任何可能在 Dragon Board 前端与 QuantBoard 后端之间创建/保留/复制事实源的改动（数据池、快照生产、热榜合并、业务口径、分析算法、派生指标）时使用。核心：新算法/口径/采集默认落后端，前端只消费展示；双源只允许「保留面/迁移面」两类且须登记；方案文档必须显式回答三问（消除还是新增双源/权威侧与收敛路径/前端独立演化是否让目标原理性不可达）。现状盘点唯一登记处：`docs/single-source-of-truth-architecture.md`。
 
-- 先识别所有可能丢弃、隐藏、归零或裁剪数据的分支，再决定实现。
-- 写操作与读操作遵循同一原则：质量异常不阻断；只有全源无任何原始记录时才报告本轮无数据。
-- 派生结论可以停产，但原始数据、可计算部分、缺失位置和结构化原因必须保留并可观察。
-- 测试必须覆盖部分异常仍写入、仍可读取、仍可展示，并证明缺失没有被伪造成零值。
+### 2.3 `playwright-cli`（浏览器验收，含 e2e 纪律）
 
-### 2.1 `superpowers:systematic-debugging`
+修改 `src/components/**`、`src/App.vue`、主题样式、面板布局、交互状态，或 QuantBoard 前端页面/报告/优化 UI 后，交付前必须用本 skill 做真实浏览器验收（渲染、字段值、控制台错误、必要截图），不能只靠单测和类型检查。Windows/PowerShell 命令速查、环境准备（5173 主看板 / 5174 QuantBoard / 3000 / 8000）、标准验收流程、常见坑都在 skill 正文。
 
-用于任何 bug、测试失败、构建失败、接口异常、数据异常或非预期行为。
+E2E 组织纪律（原 `e2e-verification` skill 已并入本 skill）：主代理单线程直接执行、不派发子代理；先测试后 e2e；证据先于结论，对照验收清单逐条留证（DOM/SVG/样式值、Console 错误分类、截图路径）后才可声称完成。
 
-典型场景：
+### 2.4 `ranktrend-signal-research`（信号研究流程）
 
-- `pnpm test`、`pnpm test:ranktrend`、`vue-tsc`、`pytest` 失败。
-- RankTrend 前后端结果不一致。
-- 快照读取、写入、迁移、覆盖率或数据质量异常。
-- QuantBoard optimization job 状态、结果或持久化异常。
-- Dragon Board 与 QuantBoard 桥接数据缺字段、NaN、时间乱序或样本不足。
-- TDX bridge、proxy-server 或行情数据链路异常。
+RankTrend 信号参数长测与因子算法研发：Track A 参数线 / Track B 因子算法线 / 统一收口（判定卡 → saEx 盲区检查 → 交易复核终判 → 一次一候选落默认）。含 golden 锁基线、数据窗口纪律、harness 工程范式与扫描资源纪律。现行章程为分相位验收体系（`quant-board/docs/ranktrend-tier-backtest/ranktrend-phase-acceptance-design.md`）；月度批次模式已封存，前置纪律仍有效。
 
-使用要求：
+### 2.5 `a-stock-data`（取数工具包）
 
-- 先复现，再定位根因，不能先猜测式修复。
-- 先读错误、调用链、近期改动和相似工作代码。
-- 多组件问题要沿边界收集证据，例如前端 facade、后端 API、数据库、job runner。
-- 修复必须针对根因，不做顺手重构。
+仅当任务需要**写代码实际获取** A 股及相关市场数据（行情/K线/逐笔、研报、龙虎榜、资金面、新闻、财务、公告、打板、期货期权、可转债等）时加载；概念解释、投资观点讨论、策略问答等无需取数的话题不要加载。优先用腾讯/交易所官方等不封 IP 源；频控遵守 AGENTS 红线 10（东财已封本机 IP，akshare 永久作废）。
 
-### 2.2 `superpowers:test-driven-development`
+## 3. 通用流程 Skills（用户级 `~/.pi/skills/`）
 
-用于实现功能或修复 bug，尤其是会影响业务计算、数据合同或边界条件的改动。
+- **`systematic-debugging`**：任何 bug、测试失败、构建失败、接口/数据异常或非预期行为。先复现再定位根因，先读错误、调用链、近期改动和相似工作代码；多组件问题沿边界收集证据（前端 facade、后端 API、数据库、job runner）；修复针对根因，不做顺手重构。协议/链路异常另遵守 AGENTS 红线 9（先读破译源码）。
+- **`test-driven-development`**：实现功能或修复 bug，尤其影响业务计算、数据合同或边界条件的改动（RankTrend 算法/默认参数/golden、快照 facade/ingest/frames、数据质量处理、回测/优化/随机种子）。优先补最小失败用例再实现；测试放被测模块邻近 `__tests__/*.test.ts`（QuantBoard 按现有 Python 测试结构）；不为测试方便绕过公开 facade；金融/回测测试覆盖空数据、样本不足、成本、T+1、止损止盈、随机种子等边界。测试禁调 jev 真实模型（AGENTS 红线 7）。
+- **`brainstorming`**：新功能、行为变更、UI/交互设计和需求不清的任务。先读项目上下文再提问，提出 2-3 个方案和取舍，设计确认后再进入计划与实现。明确 bugfix、测试/类型错误、小范围字段补齐不优先使用。
+- **`writing-plans` / `executing-plans`**：多步骤、跨模块或高风险改动（存储迁移、快照合同、RankTrend golden、优化主链）。计划必须含影响文件、改动顺序、测试策略、回退风险，每阶段有明确验收命令，不混入无关重构。
+- **`using-git-worktrees`**：需要隔离工作区时；隔离边界严格遵守 AGENTS §1.1 硬规则。
 
-典型场景：
+**完成前验证（纪律，无独立 skill）**：声称「完成、修好、通过、可交付」之前，必须运行能证明当前结论的完整验证命令（AGENTS §5），读取退出码和失败数量，不能只看部分日志；不能用旧运行结果、局部检查或「看起来没问题」代替验证。环境限制导致无法验证时，最终回复必须明确说明未验证项和风险。
 
-- RankTrend 算法、默认参数、golden case 或输出字段变化。
-- 快照 facade、ingest、frames、records、stock rows、sector rows 相关逻辑。
-- 数据质量、覆盖率、空数据、NaN、时间乱序和低样本量处理。
-- QuantBoard 回测、优化、交易规则、随机种子和任务状态。
-- 任何修复需要防止回归时。
+## 4. Git / 工作区保护与验证命令
 
-使用要求：
-
-- 优先补最小失败用例，再实现修复。
-- 测试放在被测模块邻近的 `__tests__/*.test.ts`，QuantBoard 按现有 Python 测试结构归类。
-- 不为了测试方便绕过公开 facade 或服务边界。
-- 金融和回测逻辑测试要覆盖空数据、样本不足、成本、T+1、止损止盈、随机种子等关键边界。
-
-### 2.3 `superpowers:verification-before-completion`
-
-用于每次准备声称“完成、修好、通过、可交付”之前。
-
-典型验证命令：
-
-```powershell
-# 根项目前端通用
-pnpm test
-pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false
-
-# RankTrend
-pnpm test:ranktrend
-pnpm typecheck:ranktrend
-
-# QuantBoard 后端
-cd quant-board
-.\.venv\Scripts\python.exe -m pytest
-
-# QuantBoard 前端
-cd quant-board\frontend
-npm run build
-```
-
-使用要求：
-
-- 必须运行能证明当前结论的完整命令。
-- 必须读取退出码和失败数量，不能只看部分日志。
-- 不能用旧运行结果、局部检查或“看起来没问题”代替验证。
-- 如果环境限制导致无法验证，最终回复必须明确说明未验证项和风险。
-
-## 3. 设计和范围控制 Skills
-
-### 3.1 `superpowers:brainstorming`
-
-用于新功能、行为变更、UI/交互设计和需求不清的任务。
-
-典型场景：
-
-- 新增市场情绪、题材轮动、快照管理、优化任务或报告展示面板。
-- 改变 RankTrend 信号解释、快照正式入库策略、数据质量门禁或 API 合同。
-- 设计 Dragon Board 与 QuantBoard 的新桥接能力。
-- 用户只给出方向，需要先确认目标、边界和验收标准。
-
-不优先使用的场景：
-
-- 明确 bugfix。
-- 明确测试或类型错误。
-- 小范围字段补齐、文档修正或按现有模式补参数。
-
-使用要求：
-
-- 先读项目上下文，再提问。
-- 提出 2-3 个方案和取舍。
-- 设计获得确认后，再进入计划和实现。
-
-### 3.2 `superpowers:writing-plans`
-
-用于多步骤、跨模块或高风险改动的实现计划。
-
-典型场景：
-
-- 同时涉及根前端、QuantBoard 后端、数据库/API 文档的改动。
-- 需要迁移存储、调整快照合同、修改 RankTrend golden 或优化任务主链。
-- 任务需要拆成可验证阶段。
-
-使用要求：
-
-- 计划必须包含影响文件、改动顺序、测试策略和回退风险。
-- 每个阶段都要有明确验收命令。
-- 不把无关重构混入计划。
-
-## 4. Git 和 GitHub 仓库管理
-
-Git/GitHub 操作必须先遵守 `AGENTS.md` 的工作区保护规则：不回滚用户改动、不使用破坏性 Git 命令、不批量删除文件或目录。
-
-### 4.1 允许的常规 Git 检查
-
-```powershell
-git status --short
-git diff -- <path>
-git diff --stat
-git log --oneline -n 20
-git branch --show-current
-git remote -v
-```
-
-这些命令只用于了解工作区、diff 和远端状态。发现无关改动时默认视为用户或其他协作者的内容，不覆盖、不格式化、不回滚。
-
-### 4.2 提交前检查
-
-提交前至少确认：
-
-- `git status --short` 中只包含本次任务应提交的文件。
-- `git diff` 已人工读过，未混入无关重构、格式化或本地运行产物。
-- 已按改动类型运行对应验证命令。
-- 文档、测试和实现的业务口径一致。
-
-提交建议使用非交互命令：
-
-```powershell
-git add <明确文件路径>
-git commit -m "<type>: <简短说明>"
-```
-
-不要使用会把所有改动一并纳入的命令，除非用户明确要求并且已确认工作区没有无关改动。
-
-### 4.3 禁止或需先确认的操作
-
-- 禁止使用 `git reset --hard`、`git checkout -- <path>` 等会回滚文件的命令，除非用户明确要求。
-- 禁止用 Git 命令或 shell 命令批量删除文件。
-- 不要自动执行 `git push`、创建 PR、合并 PR、删除分支或改远端配置，除非用户明确要求。
-- 不要把 `dist/`、`.tmp/`、`node_modules/`、`coverage/`、`playwright-report/`、`test-results/`、数据库文件或大体积运行产物提交进仓库。
-- 如果需要处理冲突、rebase、merge 或历史改写，先说明当前状态、风险和建议路径，再等用户确认。
-
-## 5. UI 和浏览器验证 Skills
-
-### 5.1 浏览器和 Playwright 验证
-
-遇到需要浏览器真实渲染、交互验证、截图或 Playwright 自动化的任务时，按本节规则或项目内 `skills/` 中的浏览器验证流程执行。
-
-项目级操作手册：`skills/playwright-cli/SKILL.md`（Windows/PowerShell 下 playwright-cli 的命令、标准验收流程与常见坑）。
-
-典型场景：
-
-- 修改 `src/components/**`、`src/App.vue`、主题样式、面板布局或交互状态。
-- 修改 QuantBoard 前端页面、报告展示、优化任务 UI 或 API 代理配置。
-- 需要验证移动端/桌面端布局、文本是否溢出、按钮是否可点击、图表是否渲染。
-- 修复只有浏览器中才能复现的问题。
-
-使用要求：
-
-- 优先用 Playwright 脚本验证关键用户路径，并在必要时截图。
-- 若应用需要 dev server，应先启动对应服务并报告本地 URL。
-- 检查桌面和移动端关键视口；有图表、canvas 或复杂面板时确认非空渲染和无明显遮挡。
-- 浏览器验证不能替代单元测试和类型检查；UI 改动完成前仍需运行对应构建或类型验证。
-
-### 5.2 E2E 验收流程（主代理单线程执行）
-
-UI/前端改动交付前，由主代理按真实浏览器流程做 e2e 验收（渲染、交互、控制台错误、截图），
-逐条留证后再声称完成，不能仅凭自查结论交付；不派发子代理。项目级流程规则：
-`skills/e2e-verification/SKILL.md`。
-
-## 6. 项目级验证速查
-
-- 普通 Vue/TypeScript 改动：`pnpm test`，必要时运行 `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false`。
-- RankTrend 改动：`pnpm test:ranktrend` 和 `pnpm typecheck:ranktrend`。
-- QuantBoard 后端改动：在 `quant-board` 目录运行 `.\.venv\Scripts\python.exe -m pytest`。
-- QuantBoard 前端改动：在 `quant-board\frontend` 目录运行 `npm run build`。
-- 文档-only 改动：检查相关文档与 `AGENTS.md`、源码常量、API/数据库口径是否一致。
-- UI/浏览器交互改动：结合浏览器和 Playwright 验证运行关键路径检查和必要截图，再运行相关构建或类型检查。
-
-## 7. 不适合用 Skills 代替的事项
-
-- Skills 不能覆盖用户明确指令。
-- Skills 不能绕过 `AGENTS.md` 的删除、Git 和目录边界限制。
-- Skills 不能作为业务事实来源；业务事实以源码、根 `docs/`、`quant-board/docs/` 和当前测试为准。
-- Skills 不能替代真实验证命令。
+- Git、删除、临时产物与工作区保护规则一律以 `AGENTS.md` §1 / §1.1 为准（不回滚用户改动、禁破坏性 Git 命令、禁批量删除、明确路径 `git add`、提交前人工读 diff），本文不重复立规。
+- 验证命令速查以 `AGENTS.md` §5 为准。补充口径：文档-only 改动检查相关文档与 `AGENTS.md`、源码常量、API/数据库口径一致；UI/浏览器交互改动按 §2.3 做真实浏览器验收后，仍需运行对应构建/类型检查。
