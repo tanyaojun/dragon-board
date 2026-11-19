@@ -633,7 +633,12 @@ def run_auction_leader_label_once(today: str | None = None, *,
             "degraded": result.get("degraded"), "tokensUsed": result.get("tokensUsed"),
             "estimatedTokensBudgetGuard": result.get("estimatedTokensBudgetGuard"),
             "skippedReason": result.get("skippedReason"),
-            "questionSetVersion": result.get("questionSetVersion")}
+            "questionSetVersion": result.get("questionSetVersion"),
+            # C 冻结披露透传（review 2026-11-19）：不透则 run_state.lastResult
+            # 看不到冻结态，save_failed 无从在调度审计面暴露（fail-visible）
+            "selectionFrozen": result.get("selectionFrozen"),
+            "freezeState": result.get("freezeState"),
+            "forcedOutsideSelection": result.get("forcedOutsideSelection")}
 
 
 def run_auction_leader_settle_once(today: str | None = None) -> dict[str, Any]:

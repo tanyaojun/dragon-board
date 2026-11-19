@@ -607,9 +607,12 @@ def _parse_iso(v: Any) -> datetime.datetime | None:
 # retry_due 判定与 attempts 记账搬到 MongoDB 日档，内存 state["done"] 降级为缓存。
 # 三链同构共用一集合，doc _id="{chain}:{date}"（勘察结论：missed-slot 走的
 # record_run 是快照槽专用通道，不复用；无 kpl_collector_events 集合）。
-# 单写者 = scheduler 本循环（§1.2-1）；读写失败 logger.exception 留痕不静默，
-# 读写失败时调度层降级为内存语义（fail-visible：不阻断主链，缺口在日志暴露）。
+# 单写者 = scheduler 本循环（§1.2-1）；读写失败 logger.exception 留痕不静默
+# （fail-visible）。读失败 = 「不可判定」，与「无档」严格区分：无档才允许按
+# first_run 处理；不可判定时本 tick 跳过（宁可不跑，不冒重启+DB 故障叠加
+# 误跑烧 jev 的风险——theme 链单次 ≈112k tokens），下一 tick DB 恢复后自然续上。
 _LABEL_RUN_STATE_COLLECTION = "hotlist_jev_label_run_state"
+_LOAD_FAILED: dict = {"__label_run_state_load_failed__": True}  # 读失败哨兵
 
 
 def _label_run_state_db() -> Any:
@@ -627,7 +630,7 @@ def _label_state_load(key: str, date: str) -> dict | None:
             {"_id": f"{key}:{date}"})
     except Exception:
         logger.exception("label run state load failed: %s %s", key, date)
-        return None
+        return _LOAD_FAILED
 
 
 def _label_state_terminal(doc: dict | None) -> bool:
@@ -637,10 +640,18 @@ def _label_state_terminal(doc: dict | None) -> bool:
 
 def _persisted_first_run(key: str, date: str, *,
                          in_memory_done: bool) -> tuple[bool, dict | None]:
-    """first_run = 持久层无当日 ok/已跑标记（attempts>0 也算已跑）；返回 (first_run, doc)。"""
+    """first_run = 持久层无当日 ok/已跑标记（attempts>0 也算已跑）；返回 (first_run, doc)。
+
+    读失败（不可判定）时：内存 done 则按内存语义不跑；否则本 tick 跳过（False），
+    防重启+DB 故障叠加误跑烧 token（D1 侧门，2026-11-19 review 修复）。
+    """
     if in_memory_done:
         return False, None
     doc = _label_state_load(key, date)
+    if doc is _LOAD_FAILED:
+        logger.warning("label run state 不可判定（读失败），本 tick 跳过：%s %s",
+                       key, date)
+        return False, None
     if doc is None:
         return True, None
     if _label_state_terminal(doc) or int(doc.get("attempts") or 0) > 0:
@@ -652,7 +663,7 @@ def _persisted_retry_due(key: str, date: str, *, max_attempts: int,
                          retry_after_s: float, now: datetime.datetime) -> bool:
     """retry_due 依持久化 attempts/lastOk/lastAt（重启后不失真）。"""
     doc = _label_state_load(key, date)
-    if doc is None or _label_state_terminal(doc):
+    if doc is None or doc is _LOAD_FAILED or _label_state_terminal(doc):
         return False
     if int(doc.get("attempts") or 0) >= max_attempts:
         return False
@@ -662,7 +673,9 @@ def _persisted_retry_due(key: str, date: str, *, max_attempts: int,
 
 def _label_state_mark_attempt(key: str, date: str, *, now: datetime.datetime) -> int:
     """执行前预写 attempts+1 / lastOk=False / lastAt（崩溃也留痕，重启依 lastAt 判重试）。"""
-    doc = _label_state_load(key, date) or {}
+    doc = _label_state_load(key, date)
+    if doc is None or doc is _LOAD_FAILED:
+        doc = {}
     attempts = int(doc.get("attempts") or 0) + 1
     iso = _label_state_iso(now)
     try:
@@ -682,7 +695,9 @@ def _label_state_mark_result(key: str, date: str, *, attempts: int, ok: bool,
                              result: Any, now: datetime.datetime,
                              abandoned: bool = False) -> None:
     """执行后落账 lastOk/lastResult(截断)/lastAt；abandoned=True 写窗外放弃终态。"""
-    doc = _label_state_load(key, date) or {}
+    doc = _label_state_load(key, date)
+    if doc is None or doc is _LOAD_FAILED:
+        doc = {}
     iso = _label_state_iso(now)
     # lastResult 存结构化 dict（供查询/审计）；非 dict 结果截断 JSON 串兑底
     if isinstance(result, dict):
@@ -721,7 +736,12 @@ async def _auction_leader_slot_tick(sched: "SnapshotCollectorScheduler",
         if not state.get("auction_leader_abandoned"):
             state["auction_leader_abandoned"] = True
             doc = _label_state_load(key, trading_date)
-            if not _label_state_terminal(doc):
+            if doc is _LOAD_FAILED:
+                # 读失败：当日状态不可判定，不落放弃终态（防 $set 覆写未知 ok 终态）；
+                # 下一 tick DB 恢复后由 terminal 守卫补齐（读失败已在 load 内留痕）
+                logger.warning("auction leader label 窗外放弃读状态失败，终态延后：%s",
+                               trading_date)
+            elif not _label_state_terminal(doc):
                 _label_state_mark_result(
                     key, trading_date,
                     attempts=max(int((doc or {}).get("attempts") or 0), 1),

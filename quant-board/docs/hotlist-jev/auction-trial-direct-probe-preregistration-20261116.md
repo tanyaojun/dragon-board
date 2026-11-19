@@ -759,3 +759,48 @@ dry_run 零读写/force 绕过+披露+不覆写）。既有 auction 4 套件 105
 1+2 须一并载入）。判据：09:25:20 首跑触发；selections 冻结档当日落库；leader computedAt
 ≤09:26；首跑后重启 :8001 不再补跑（run_state ok 标记在场）；重试 09:30:20 在窗内且人群=
 冻结档；09:35 后不再执行；auctionLeader.attempt 跨重启不回退。
+
+## 2026-11-19 增补五：竞价三零字段根因定案 + 投影层裁决（彻底版实施）
+
+> 单一实施依据 = `auction-bidding-zero-trio-fix-plan-20261119.md`（已实施，偏差见其 §11）。
+> 本节只钉根因定案与合同锚，不重复实施清单。
+
+**根因定案（三层叠加，非解析丢字段）**：① 服务端公布时点——净额/换手全市场、
+成交额沪市只于 09:25 撮合后公布（分阶段：额/换手 09:25:13 先到，净额逐股
+09:25:13–09:26:20 到齐）；深市成交额窗内有虚拟值且撮合前收敛=公布额。
+② 成员制——榜单截断排序，掉池股两通道（socket pid8 / HTTP MBL）均收不到公布。
+③ 消费层把未公布当事实 0（页面/聚合/语料 is not None 门）。
+④ **socket 陈旧页**（实施轮新发现）：同推送周期多页新鲜度不一，bid 终态/series
+末帧可能回放早退虚拟值（300857 案：终帧 8086800/net0 vs 公布 101707289/27741379；
+生产库持续自愈）——「09:25 后冻结」假设对终帧不成立，公布值选取须帧级证据。
+
+**三字段裁决（用户 2026-11-19，实证锚钉死）**：成交额=公布值→col10 窗内末帧
+（掉池前虚拟观测，600410=124381050@09:23:23）；换手=公布值→派生额/流通市值×100
+（002685→5.8622≡5.86、603030→1.0668≡1.07、600410→0.6132）；净额=公布值
+（**留池真 0 保留**，状态门而非值门）→否则 None+state 缺位（不伪造）。
+
+**投影层合同**：`backend/operations/auction_bidding_facts.py`（纯库读零外呼零写入，
+raw 四存档零改写，回退=git revert）。`resolve_bidding_trio(db,date,codes)` →
+{facts:{code:TrioFact}, census, state}；六态状态机 + reason；公布证据=完整公布帧
+成员/冻结/留池持久（last_seen 严格晚于额锚）+series 公布后帧对拍剔陈旧；
+`apply_trio` 三字段覆写+src/state（腾讯补源实测优先）；`rebuild_auction_bid_lines`
+语料外科重建（零 jev 零外呼，冻结守卫默认拒绝，单写者字段级 $set）。
+消费方：/daban-list、/daban-list-history、/daban-bidding 三读口 + trial derive
+jj_amount/jj_turnover + 龙头/板块 runner + relay 竞价页（tooltip/覆盖率/census）。
+写侧 collector/archiver/protocol 零改动。census 实证修正与陈旧页精化详见计划 §11。
+
+**2026-11-19 code review 修复（3 项 non-blocker 同轮修掉，12→15 例测试）**：
+- ① 冻结档读失败 ≠ 档缺席：save 增 `freezeState.state=="absent"` 守卫，load_failed
+  窗口内重算人群成功后不覆写已有冻结档（D3 经「瞬时 Mongo 读失败」复发向量）；
+  新增 test_c_load_failed_never_overwrites_freeze（档一字未动 + load_failed 透出）。
+- ② run_state 读失败 = 「不可判定」，与「无档」严格区分：无档才允许 first_run；
+  不可判定（重启+DB 故障叠加）本 tick 跳过并 logger.warning（防 theme 链
+  ≈112k tokens 经此侧门误跑，D1 复发向量）；窗外放弃遇读失败延后落终态
+  （防 $set 覆写未知 ok 状态）；新增 test_a_load_failed_is_undecidable_never_runs。
+- ③ `run_auction_leader_label_once` 投影补透传 selectionFrozen/freezeState/
+  forcedOutsideSelection（否则 run_state.lastResult 看不到冻结态、save_failed
+  无从在调度审计面暴露）；新增 test_b_abandoned_terminal_guard_survives_restart
+  （全新 state dict 直测持久层终态守卫，不依赖内存守卫）。
+- review 评定 OK with notes、无 blocker；遗留 note（attempts 记账把 0 次窗拒记 1 次、
+  theme/fengkou 内联接线无循环级测试）记录不在本轮修。测试 15 例全绿，
+  受影响域（operations/hotlist/api）2431 passed/6 skipped。

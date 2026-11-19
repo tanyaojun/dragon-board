@@ -1171,9 +1171,12 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         tokens += tk
     timings["total_s"] = round(time.monotonic() - _t0, 2)
     # C 冻结落档（首跑即冻结，2026-11-19 裁决 D3）：成功执行后写；冻结命中重试/
-    # 单股重跑（codes）/force 均不覆写（单写者=label run 全日跑，§1.2-1）
+    # 单股重跑（codes）/force 均不覆写（单写者=label run 全日跑，§1.2-1）。
+    # 读失败（load_failed）≠ 档缺席：不可判定时不写，防读失败窗口内重算人群
+    # 覆写已有冻结档（D3 经「瞬时 Mongo 读失败」复发向量，review 修复）。
     selection_frozen = frozen_doc is not None
-    if frozen_doc is None and not dry_run and not force and codes is None:
+    if (frozen_doc is None and freeze_state.get("state") == "absent"
+            and not dry_run and not force and codes is None):
         freeze_state = save_frozen_selection(db, date, freeze_rows, freeze_selection)
         selection_frozen = freeze_state.get("state") == "ok"
     result = {"ok": True, "date": date, "timings": timings,
