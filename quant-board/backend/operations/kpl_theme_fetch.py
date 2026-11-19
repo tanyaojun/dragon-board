@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """开盘啦（longhuvip）题材语料三端点 HTTP 封装（2026-10-23，v4 换源）。
 
-端点来源：`wzslinker.top/companys/js/longhuvip-proxy-common.js`（未混淆端点映射），
+端点 a/c 映射最初逆向自 wzslinker 代理 JS，但**实际调用一律 KPL 直连**
+（applhb/apparticle.longhuvip.com + 凭据；2026-11-19 全直连裁决复核：无 wzs 活依赖），
 2026-10-22/23 单发实测全部打通（证据 `data/backups/kpl-corpus-probe-20261022/`）：
 
 - `applhb.longhuvip.com  c=Topic&a=InfoList`      题材事件列表（按日分组，带热度/投票）

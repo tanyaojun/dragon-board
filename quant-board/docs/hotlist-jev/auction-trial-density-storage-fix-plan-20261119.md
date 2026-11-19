@@ -73,7 +73,7 @@ supplement/backfill 的 meta `$set` 写口（L78-84）零改动。derive/leader_
 
 **次日竞价窗预登记开火（红线 9/10，预算≤2500 帧，单窗）**：
 - 开 `KPL_PID8_REFRESH=1` 重启 :8002；观察 status：1002/rst 计数 vs 基线不升级、`bid_series_fail=0`。
-- `scripts/auction_window_check.py` 验收阈值更新：①首 tick ≤09:15:10；②窗内观测事件 ≥150；③gap 中位 ≤4s、max ≤15s（会话轮转上限）；④603324 类首开/首加与 Wzs 同日缓存对拍（窗后 1 GET，survey §6 合同，预算 1 发）值层收敛（首开差 ≤5%、首加同笔）。
+- `scripts/auction_window_check.py` 验收阈值更新：①首 tick ≤09:15:10；②窗内观测事件 ≥150；③gap 中位 ≤4s、max ≤15s（会话轮转上限）；④603324 类首开/首加与本地 kpl_auction_matched（KPL 直连盯盘 Type=7 终值档）对拍，纯本地零外呼（2026-11-19 全直连裁决清理 wzs）；值层收敛（首开差 ≤5%、首加同笔），档未落地结构化披露不伪 0。
 - 验收通过→翻默认 on+重启+README §3.11 勾选；不通过→env off 回退，残留登记，**不盲探**。
 
 ## 7. 残留登记（不在本轮，另立预登记）
@@ -138,7 +138,7 @@ supplement/backfill 的 meta `$set` 写口（L78-84）零改动。derive/leader_
   e((byte)4)；预算+预登记开火步骤）。
 
 **待办（次日竞价窗）**：按 README §3.11 预登记开火（KPL_PID8_REFRESH=1 重启 ：8002，
-预算 ≤2500 帧/单窗）→ window_check --wzs 四项验收 → 通过翻默认 on+重启+勾选；
+预算 ≤2500 帧/单窗）→ window_check --matched 四项验收 → 通过翻默认 on+重启+勾选；
 不通过 env off 回退残留登记，不盲探。
 
 ## 11. 复审轮（2026-11-19 盘后，双 fresh-context 只读 reviewer 并行）
@@ -162,5 +162,5 @@ relay tooltip 与 derive 枚举/转义对上、README §3.11 源码行号全部�
 - L2 长寿会话 registry 增长边界入 lane 注释登记 + README §3.11 开火观察项
   （sub_registry.evicted_n）。
 
-记录不修：S6 --wzs falsy 0 分支无自动化测试（脚本级诊断，次日窗才启用）；
+记录不修：S6 --matched falsy 0 分支无自动化测试（脚本级诊断，次日窗才启用）；
 L2 主体（改注册语义需红线 9 源码定案，开火窗先观察）。

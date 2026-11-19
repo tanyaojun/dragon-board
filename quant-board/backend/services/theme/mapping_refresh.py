@@ -81,79 +81,22 @@ _DIRECTORY_SCAN_AHEAD = 50
 # **低段补号**新建题材（397-402 连号新建，俄乌重建=402），落在已扫过的空洞区间
 # （cursor 已爬到 3496）永久漏掉；HTTP 侧 c=Theme 无列表端点（InfoList/GetList 均
 # 9999，题材目录走 App Socket 通道）。
-# 方案：wzslinker（开源 github.com/LibertyZero10/WzSLinker）的 KPL 题材库页每日
-# 自动生成全量目录 dump（kpl_theme_data.js，251 题材含 ID/Name）。本层拉它做
-# **目录提示源**——只用于发现新 ID/改名；成分数据一律仍从 longhuvip 官方 InfoGet
-# 拉（数据主体不依赖第三方）。拉取失败 → 结构化降级，盲扫保留兜底。
-WZS_THEME_DIRECTORY_URL = "https://wzslinker.top/companys/KPL/kpl_theme_data.js"
-
-
-def _fetch_wzs_theme_directory(timeout: int = _REQUEST_TIMEOUT_SECONDS) -> list[dict[str, Any]] | None:
-    """拉 wzslinker KPL 题材目录 dump → [{ID, Name, ...}]；失败/形状异常返回 None。"""
-    import re
-
-    try:
-        req = urllib.request.Request(WZS_THEME_DIRECTORY_URL, method="GET",
-                                     headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-    except Exception as exc:  # noqa: BLE001 — 第三方提示源，任何失败都走降级
-        raise RuntimeError(f"wzslinker 目录拉取失败: {exc}") from exc
-    m = re.search(r"window\.KPL_THEME_DATA\s*=\s*(\[.*?\])\s*;?\s*$", body, re.S)
-    if not m:
-        raise RuntimeError("kpl_theme_data.js 形状异常（无 KPL_THEME_DATA 数组）")
-    data = json.loads(m.group(1))
-    if not isinstance(data, list):
-        raise RuntimeError(f"kpl_theme_data.js 非数组: {type(data).__name__}")
-    return data
+# 2026-11-19 用户裁决：全部 KPL 直连，wzslinker 代理一律清理（代理随时断链=单点故障）。
+# 原 wzs 题材目录 dump（kpl_theme_data.js）仅作「新 ID/改名」提示源，成分主体本就走
+# 官方 InfoGet 直连；现退役该第三方提示源，新 ID/改名发现回落盲扫
+# （directory_scan_ahead）+ 官方 InfoGet，结构化披露不伪装（fail-visible）。
 
 
 def _apply_theme_directory_diff(database: Any, repo: Any, result: Any) -> None:
-    """目录 diff：wzslinker 目录 vs 库内 themes → 新 ID/改名逐个 InfoGet 入库。
+    """目录 diff 提示源已退役（2026-11-19 全直连裁决，wzs 目录 dump 清理）。
 
-    成分数据全部走 longhuvip 官方端点（第三方只贡献 ID/名字清单）。第三方失败
-    → result.directoryDiffError 结构化披露，不影响主刷新（fail-visible 不伪装）。
+    无第三方目录源；新 ID/改名发现由盲扫（directory_scan_ahead）+ 官方 InfoGet 承担。
+    保留 result 字段结构化披露退役状态，不影响主刷新（fail-visible 不伪装）。
     """
     result.directory_diff_attempted = True
-    try:
-        directory = _fetch_wzs_theme_directory()
-    except RuntimeError as exc:
-        result.directory_diff_error = str(exc)
-        return
-    ours: dict[str, str] = {}
-    for t in database["themes"].find({}, {"id": 1, "name": 1}):
-        ours[str(t.get("id") or "")] = str(t.get("name") or "")
-    for entry in directory:
-        if not isinstance(entry, dict):
-            continue
-        tid = str(entry.get("ID") or "").strip()
-        name = str(entry.get("Name") or "").strip()
-        if not tid or not name:
-            continue
-        if tid in ours and ours[tid] == name:
-            continue
-        # 新 ID 或改名 → 官方端点拉详情入库（成分主体不依赖第三方）
-        try:
-            api_data = _fetch_theme_detail(tid)
-        except Exception as exc:  # noqa: BLE001
-            result.directory_diff_failed_ids.append(f"{tid}: {exc}")
-            continue
-        if api_data is None or not str(api_data.get("Name") or "").strip():
-            result.directory_diff_failed_ids.append(f"{tid}: 官方端点空载荷")
-            continue
-        mappings = _extract_mappings(api_data)
-        existed = tid in ours
-        old_name = ours.get(tid, "")
-        repo.upsert_theme(tid, str(api_data["Name"]).strip(),
-                          str(api_data.get("ZSCode") or "").strip())
-        if mappings:
-            repo.replace_theme_mappings(tid, mappings)
-            result.mappings_updated += 1
-        if existed and old_name != str(api_data["Name"]).strip():
-            result.directory_diff_renamed += 1
-        elif not existed:
-            result.directory_diff_added += 1
-        ours[tid] = str(api_data["Name"]).strip()
+    result.directory_diff_error = (
+        "wzs_directory_hint_retired: 全直连裁决清理第三方目录源；"
+        "新ID/改名回落盲扫+官方InfoGet")
 
 
 def _fetch_theme_detail(theme_id: str) -> dict[str, Any] | None:
@@ -290,7 +233,7 @@ class ThemeMappingRefreshResult:
         self.directory_failed_ids: list[str] = []
         self.directory_empty_ids: list[str] = []
         self.directory_scan_cursor: int | None = None
-        # 目录 diff（wzslinker 提示源，2026-10-25 修复低段补号漏题）
+        # 目录 diff（提示源已退役 2026-11-19 全直连裁决；回落盲扫+官方 InfoGet）
         self.directory_diff_attempted: bool = False
         self.directory_diff_added: int = 0
         self.directory_diff_renamed: int = 0
@@ -345,7 +288,7 @@ def refresh_theme_stock_mappings(
     流程：
     1. 读取 MongoDB themes 表获取所有题材 ID
     2. 逐批调用 longhuvip API 获取每个题材的成分股
-    3. 目录 diff（2026-10-25 修复）：wzslinker 全量目录对照库内，新 ID/改名
+    3. 目录 diff（提示源已退役 2026-11-19 全直连裁决）：原第三方目录对照→现结构化退役披露，新 ID/改名
        逐个从官方端点拉详情入库——堵「KPL 低段补号 + 盲扫只前进不回头」的
        永久漏题（themes 曾 2026-07-18 起零新增，397-402 六题材漏采三个月）
     4. 按“当前最大题材 ID + 1”往后盲扫 50 个候选 ID，发现有效新题材时自动写入 themes
@@ -416,7 +359,7 @@ def refresh_theme_stock_mappings(
 
     result.total_stocks = total_stocks
 
-    # 3. 目录 diff（wzslinker 提示源）：低段补号新题材/改名的确定性发现，
+    # 3. 目录 diff（提示源已退役）：新 ID/改名回落盲扫+官方 InfoGet，
     #    先于盲扫跑（盲扫只管高段前进；两者互补，任一失败互不连坐）
     _apply_theme_directory_diff(database, repo, result)
 
@@ -541,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(description="longhuvip 题材映射刷新")
     ap.add_argument("--diff-only", action="store_true",
-                    help="只跑目录 diff（wzslinker 提示源→官方 InfoGet 回填新题材/改名）")
+                    help="只跑目录 diff（提示源已退役→结构化披露；新 ID/改名靠盲扫+官方 InfoGet）")
     args = ap.parse_args(argv)
     out = refresh_theme_stock_mappings(diff_only=args.diff_only)
     print(json.dumps(out, ensure_ascii=False, indent=1, default=str))

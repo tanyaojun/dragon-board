@@ -16,8 +16,9 @@
   F 验收四项（pid8 3s 重请求 lane 开火后）：
     ① 首 tick ≤09:15:10          ② 窗内观测事件 ≥150
     ③ gap 中位 ≤4s、max ≤15s（会话轮转上限）
-    ④ --wzs：603324 类首开/首加与 Wzs 同日缓存对拍（窗后 1 GET，survey §6 合同，
-      预算 1 发；首开差 ≤5%、首加同笔）——默认零外呼，显式 --wzs 才发
+    ④ --matched：603324 类首开/首加与本地 kpl_auction_matched（KPL 直连盯盘 Type=7
+      终值档，residual-3 wiring 后落地）对拍；首开差 ≤5%、首加同笔。纯本地零外呼；
+      档未落地时结构化披露不伪 0（2026-11-19 全直连裁决清理 wzs 代理）
   另：posture 翻转率 vs 涨停开盘 3/4 基线（首末帧比较，§7.9 语义）保留作健康度代理
 """
 from __future__ import annotations
@@ -67,9 +68,9 @@ def _db():
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=None)
-    ap.add_argument("--wzs", action="store_true",
-                    help="窗后 Wzs 同日缓存对拍（预算 1 GET，survey §6 合同；默认零外呼）")
-    ap.add_argument("--wzs-code", default="603324",
+    ap.add_argument("--matched", action="store_true",
+                    help="本地 kpl_auction_matched 终值档对拍（KPL 直连源；纯本地零外呼）")
+    ap.add_argument("--matched-code", default="603324",
                     help="对拍目标股（默认 603324 盛剑科技，11-19 复盘锚）")
     args = ap.parse_args()
     date = args.date or dt.datetime.now(TZ).strftime("%Y-%m-%d")
@@ -196,62 +197,39 @@ def main() -> int:
     # F 汇总
     print(f"\n[F] 判定汇总：①{'✅' if v1 else '❌'} ②{'✅' if v2 else '❌'} ③{'✅' if v3 else '❌'}"
           f" posture翻转率={f'{rate:.0%}' if rate is not None else '—'}"
-          f" ④{'见下' if args.wzs else '未跑（--wzs 显式开启，预算 1 GET）'}"
+          f" ④{'见下' if args.matched else '未跑（--matched 显式开启，纯本地）'}"
           f" 源头{'✅' if src_ok else '❌'}"
           f" 日档{'✅' if missing in ([], None) else '❌'}")
 
-    # ④ Wzs 同日缓存对拍（窗后 1 GET，survey §6 合同；预算 1 发，不带 refresh）
-    if args.wzs:
-        v4 = _wzs_compare(date, args.wzs_code, drows)
-        print(f"    ④Wzs对拍: {'✅' if v4 else '❌'}")
+    # ④ 本地终值档对拍（kpl_auction_matched，KPL 直连盯盘 Type=7；纯本地零外呼）
+    if args.matched:
+        v4 = _matched_compare(date, args.matched_code, drows)
+        print(f"    ④matched对拍: {'✅' if v4 else '❌'}")
     return 0
 
 
-def _wzs_compare(date: str, code: str, drows: dict) -> bool:
-    """603324 类首开/首加 vs Wzs 同日缓存（1 GET，fetched 回显披露）。
+def _matched_compare(date: str, code: str, drows: dict) -> bool:
+    """603324 类首开/首加 vs 本地 kpl_auction_matched（KPL 直连盯盘 Type=7 终值档）。
 
-    值层收敛判据（plan §6）：首开差 ≤5%、首加同笔（相对差 ≤5% 容差，
-    观测首帧时点差导致的尾差披露不阻断）。Wzs rank=数值原值（元）。
+    2026-11-19 全直连裁决：wzs 代理对拍清理，锚改为 KPL 直连终值档（residual-3
+    wiring 后落地）。纯本地零外呼；档未落地/无该股 → 结构化披露不伪 0。
+    值层收敛判据（plan §6）：首开差 ≤5%、首加同笔（相对差 ≤5% 容差）。
     """
-    url = ("http://wzslinker.top/companys/api-auction.php"
-           f"?page=limit_up_bidding&date={date}")
-    print(f"\n[W] Wzs 对拍 {code}（预算 1 GET，不带 refresh）：{url}")
-    resp = _get(url, timeout=15.0)
-    if not isinstance(resp, dict) or resp.get("_error"):
-        print(f"    ❌ 请求失败：{resp}")
-        return False
-    print(f"    fetched={resp.get('fetched')} saved_at={resp.get('saved_at')}"
-          f" actual_date={resp.get('actual_date')} is_fallback={resp.get('is_fallback')}")
     try:
-        sl = resp["data"]["data"]["stock_list"]
-        keys = [h.get("sort_key") for h in sl["head_info"]]
-        i_code = keys.index("stock_id")
-        i_first = keys.index("first_amount")
-        i_add = keys.index("first_add")
-    except (KeyError, TypeError, ValueError) as exc:
-        print(f"    ❌ 合同解析失败：{type(exc).__name__}: {exc}")
+        doc = _db()["kpl_auction_matched"].find_one({"_id": date})
+    except Exception as exc:  # noqa: BLE001 — 体检只报告
+        print(f"\n[W] matched 对拍 {code}：❌ 读档失败 {type(exc).__name__}: {exc}")
         return False
-    wzs_row = None
-    for row in sl.get("list") or []:
-        cell = row[i_code] if isinstance(row, list) and len(row) > i_code else {}
-        if str((cell.get("param") or {}).get("code") or "") == code:
-            wzs_row = row
-            break
-    if wzs_row is None:
-        print(f"    ❌ Wzs 当日榜无 {code}（掉池/未顶板均可能，留用户裁决）")
+    if not doc:
+        print(f"\n[W] matched 对拍 {code}：❌ kpl_auction_matched {date} 未落地"
+              f"（待直连盯盘 Type=7 wiring，不伪 0）")
         return False
-
-    def _num(cell):
-        try:
-            return float(cell.get("rank"))
-        except (TypeError, ValueError, AttributeError):
-            return None
-
-    w_first, w_add = _num(wzs_row[i_first]), _num(wzs_row[i_add])
+    row = (doc.get("rows") or {}).get(code) or {}
+    w_first, w_add = row.get("first_amount"), row.get("first_add")
     mine = drows.get(code) or {}
     m_first, m_add = mine.get("first_amount"), mine.get("first_add")
-    print(f"    Wzs: first={w_first} first_add={w_add}"
-          f"（start={wzs_row[keys.index('start_time')].get('rank') if 'start_time' in keys else '--'}）")
+    print(f"\n[W] matched 对拍 {code}（本地 KPL 直连终值档）：")
+    print(f"    matched: first={w_first} first_add={w_add}（start={row.get('start_time')}）")
     print(f"    我方: first={m_first} first_add={m_add}（start={mine.get('start_time')}）")
     ok = True
     if w_first and m_first is not None:

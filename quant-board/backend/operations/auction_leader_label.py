@@ -1069,7 +1069,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         # 命名 rerun_doc：与外层 C 冻结人群档 frozen_doc（2026-11-19 裁决 D3）区分
         rerun_doc = col.find_one({"_id": f"{date}:{r['code']}"}) if (codes and force) else None
         trow = trial_rows.get(r["code"])
-        trial = ({"row": trow, "source": "wzslinker_auction",
+        trial = ({"row": trow, "source": "kpl_auction_trial",
                   "fetchedAt": trial_state.get("saved_at"),
                   "prevPercentCross": None} if trow else None)
         built = build_one(db, date, prev_date, r,

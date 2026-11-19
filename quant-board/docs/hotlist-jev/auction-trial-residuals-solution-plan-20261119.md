@@ -95,8 +95,17 @@ Wzs 采集路径删除；单主链=官方 socket 序列派生；掉池股=col10 
 裁决①（已定）：退役 3006 lane（单主链对齐 App）；执行排在 B 窗内验证通过后。
 裁决②（已定）：B，KPL 直连盯盘 Type=7（kaipanla，复用 auction_bidding_direct），盘后 1 次/日；
 Wzs 代理退出接入路径。先预登记探针冻结列映射再 wiring。
-冲突护栏：collector/archiver/facts/routes/relay/window_check 归主计划会话；本会话只改
-当前干净文件（mapping_refresh/kpl_theme_fetch/auction_trial_derive/auction_leader_label）。
+冲突护栏：collector/archiver/facts/routes/relay 归主计划会话（已落地）；window_check 于
+主计划落地后由本会话清理；本会话另改干净文件（mapping_refresh/kpl_theme_fetch/
+auction_trial_derive/auction_leader_label）。
+
+**本会话已实施（2026-11-19，不提交留审查）**：derive 消费权威链对齐 App 单主链——
+pct0915=pid8 series_first（3006 存档权威移除）；pct0925/jj_percent/jj_amount/jj_turnover/
+end_time=Type=7(`kpl_auction_matched`)→TDX 应急（MBL/bid/末帧退出 jj 链）；头注/测试同轮
+同步（test_auction_trial_derive 31 过、auction 全子集 282 过）；mapping_refresh 过期 wzs
+注释/CLI help 清理。**跨会话合同**：`kpl_auction_matched.rows[code]={pct,price,amount,
+turnover,end_time}`；主计划探针冻结 Type=7 列映射后按此落库，derive 自动优先
+`dingpan_postmatch`，未落库回退 TDX 应急。3006 lane 退役与 Type=7 采集 wiring 归主计划会话。
 
 ## 附：wzslinker 代理全量清理台账（2026-11-19 用户裁决：全部直连，代理随时断链=单点故障）
 
@@ -106,9 +115,10 @@ Wzs 代理退出接入路径。先预登记探针冻结列映射再 wiring。
    改结构化退役披露；新 ID/改名回落盲扫(directory_scan_ahead)+官方 InfoGet（成分主体本就直连）。
    如需确定性目录发现，另立直连 KPL 题材目录探针（不盲探）。
 
-**活数据路径·待主计划会话清理（文件 M，所有权冲突不碰）**：
-2. `scripts/auction_window_check.py` `_wzs_compare`(--wzs, L216 api-auction.php) → 改读本地
-   `kpl_auction_matched`（直连 wiring 后）或直连 Type=7，删 wzs URL。
+**活数据路径·已清理（主计划落地后本会话）**：
+2. `scripts/auction_window_check.py` `_wzs_compare`→`_matched_compare`(--matched)：删 wzs URL，
+   改读本地 `kpl_auction_matched`（KPL 直连终值档），纯本地零外呼；档未落地结构化披露
+   不伪 0；--date 2026-11-19 --matched 运行验证通过。
 
 **非活依赖·标注已纠（本会话）**：
 3. `operations/kpl_theme_fetch.py` 头注：实际调用本就 KPL 直连（applhb/apparticle），wzs 仅逆向来源注释→澄清。
@@ -117,5 +127,5 @@ Wzs 代理退出接入路径。先预登记探针冻结列映射再 wiring。
 
 **披露文本·归主计划会话**：relay_page tooltip 提及 Wzs 语义属口径披露（非 fetch），随 C 同轮同步。
 
-**复核**：`rg -n "wzslinker.top|_fetch_wzs|WZS_.*URL" backend scripts --glob *.py` → 后端 0 命中，
-仅余 window_check（待清理）。编译/导入验证通过。
+**复核**：`rg -n "wzslinker.top|_fetch_wzs|_wzs_compare|WZS_.*URL|--wzs" backend scripts --glob *.py`
+→ **0 命中**（wzs 活依赖全清）。编译/运行验证通过。
