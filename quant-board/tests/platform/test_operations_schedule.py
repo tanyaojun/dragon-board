@@ -143,6 +143,37 @@ def test_after_market_job_in_mongodb_mode_surfaces_hotlist_sentiment_failure(mon
     assert "MongoDB connection lost" in result["results"]["hotlistSentiment"]["error"]["message"]
 
 
+_ADVISORY_STEP_STUBS = (
+    "_run_sector_nodes_step", "_run_phase_pulse_step", "_run_jiuyan_label_step",
+    "_run_zhaban_label_step", "_run_market_cycle_step", "_run_relay_index_step",
+    "_run_market_cycle_reference_step", "_run_leader_wzs_step", "_run_theme_cycle_step",
+    "_run_relay_band_step", "_run_phase_band_step", "_run_deep_valley_step",
+    "_run_peak_revalidate_step", "_run_jev_daily_line_step", "_run_calib_drift_step",
+    "_run_amount_vs_same_step", "_run_industry_alias_bridge_step", "_run_jiuyan_root_bridge_step",
+)
+
+
+def _stub_advisory_steps(monkeypatch: Any) -> None:
+    """盘后链 advisory 步全量打桩（2026-11-19 全量提速）：dry_run=False 时
+    run_after_market_once 会真跑全部 advisory 步——这些步真连本机 Mongo/Redis
+    带超时重试，单用例实测累积 ~400s（全量 17 分钟的真正长尾，xdist 下也是
+    单 worker 长尾）。本文件用例只断言 hotlistSentiment/mongodbBackup/
+    snapshotArchiveR2 三步与链序，advisory 步结果不参与断言。
+
+    与 2026-10-19 评审 F1 的 relayBand 单步打桩同款，扩成全量；各步自身行为
+    由各自专项测试覆盖（如 test_relay_band_schedule_step.py）。新增 advisory 步
+    时必须同步登记进 _ADVISORY_STEP_STUBS，否则本文件 dry_run=False 用例会
+    重新变慢（fail-visible：时长回归即可发现）。
+    """
+    for _name in _ADVISORY_STEP_STUBS:
+        monkeypatch.setattr(
+            f"backend.operations.schedule.{_name}",
+            lambda *args, _step=_name, **kwargs: {
+                "ok": True, "skipped": True, "reason": "test_stub", "step": _step,
+            },
+        )
+
+
 def test_after_market_job_in_mongodb_mode_hotlist_failure_still_backs_up(monkeypatch: Any) -> None:
     """hotlist 失败不阻断备份链：快照数据可能已入库，备份独立完成。"""
     calls: list[str] = []
@@ -179,13 +210,8 @@ def test_after_market_job_in_mongodb_mode_hotlist_failure_still_backs_up(monkeyp
         lambda *, dry_run=False: calls.append("archiveR2")
         or {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
     )
-    # 2026-10-19 评审 F1：本测试 dry_run=False 且 db stub 是字符串，新 advisory 步（relayBand）
-    # 若真执行会起真实子进程（实测截断 data/backups/relay-band-refresh.log）。显式打桩，保持用例
-    # 与其它 advisory 步一致的隔离性（步自身行为另见 tests/platform/test_relay_band_schedule_step.py）。
-    monkeypatch.setattr(
-        "backend.operations.schedule._run_relay_band_step",
-        lambda today, dry_run=False: {"ok": True, "skipped": True, "reason": "test_stub"},
-    )
+    # 2026-11-19 提速：advisory 步全量打桩（原仅 relayBand，见 _stub_advisory_steps）。
+    _stub_advisory_steps(monkeypatch)
 
     from backend.operations.schedule import run_after_market_once
 
@@ -233,11 +259,8 @@ def test_after_market_job_in_mongodb_mode_surfaces_backup_failure(monkeypatch: A
         "backend.operations.schedule.run_mongodb_snapshot_archive_once",
         lambda *, dry_run=False: {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
     )
-    # 2026-10-19 评审 F1：同上，隔离 relayBand advisory 步，避免真实子进程污染本地产物/日志。
-    monkeypatch.setattr(
-        "backend.operations.schedule._run_relay_band_step",
-        lambda today, dry_run=False: {"ok": True, "skipped": True, "reason": "test_stub"},
-    )
+    # 2026-11-19 提速：advisory 步全量打桩（原仅 relayBand，见 _stub_advisory_steps）。
+    _stub_advisory_steps(monkeypatch)
 
     from backend.operations.schedule import run_after_market_once
 

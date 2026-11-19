@@ -238,6 +238,29 @@ def _clear_io_caches():
     _dieban.reset_em_throttle_state()
 
 
+@pytest.fixture(autouse=True)
+def _collector_instance_lock_offline(monkeypatch):
+    """路由级实例锁离线护栏（2026-11-19 xdist 提速）：run-once/backfill-slots 路由
+    会抢真实 Redis 实例锁（key 固定 run-once/backfill-slots，TTL 600s，落在 pytest
+    共享前缀）。xdist 多 worker 并发 POST 这两个端点时互相推 409，导致只断言
+    200 路径 captured[0] 的用例随机 IndexError（flake 率 2/3 以上）。
+
+    这里把 _acquire_collection_lock 打成 RedisInstanceLock(None, ...) —— 该类本身
+    的 None-client 语义就是 fail-open（acquire 恒 True、release 安全），路由代码路径
+    完整保留，只是不再跨 worker 抢真锁。锁类自身语义（可抢/不可抢/过期回收/续期）
+    仍由 test_snapshot_collector_instance_lock.py 用 fake redis 全覆盖，不受影响。
+    """
+    from backend.api import snapshot_collector_routes as _routes
+    from backend.snapshot_collector.instance_lock import RedisInstanceLock
+
+    monkeypatch.setattr(
+        _routes,
+        "_acquire_collection_lock",
+        lambda lock_name: RedisInstanceLock(None, lock_name),
+    )
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_mongodb_test_database():
     """硬护栏：pytest 会话内配置必须指向 dragon_board_test 的 mongodb 后端，
