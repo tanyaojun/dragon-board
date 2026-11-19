@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""TDX 日线回补 kpl_auction_price.s0925（历史日 09:25 开盘价/涨幅）。
+"""TDX 日线回补 kpl_bidding_series.open_pct（历史日 09:25 开盘涨幅应急兜底）。
 
-背景（2026-11-18 用户裁决）：3006 现有流归档自上线日起新增；上线前的系列日档
-（kpl_bidding_series）无 s0925，derive 回退旧链时掉池股 jj_percent 是早退值（错）。
-收盘后本地 TDX 日线已落 → open/prevclose 零外呼回补 09:25 开盘涨幅（=App「匹配价」
-09:25 冻结同源语义）；s0915 无本地源，保持缺席（fail-visible，不伪造）。
+2026-11-19 裁决①/②：kpl_auction_price（3006 s0915/s0925）退役；终值权威=
+kpl_auction_matched（KPL 直连盯盘 Type=7），TDX open_pct 降应急兜底（仅披露）。
+本脚本为历史日补 open_pct 应急源（收盘后本地 TDX 日线零外呼）；09:15=pid8
+series_first，无本地回补源（fail-visible，不伪造）。
 
 纪律：
-- 只填缺失：live 3006 已收的 s0925 不覆盖；s0915 一律不碰。
+- 只填缺失：已有 open_pct 不覆盖。
 - 回补行带 src=tdx_lday 审计标记（与 live 快照区分）。
 - 停牌/缺棒/坏价：跳过并计数披露，不伪 0。
 - **除权 band 校验（review 2026-11-18 B1）**：TDX lday 不复权，除权日 raw 前收算出的
@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.core.limit_rules import limit_down_price, limit_up_price  # noqa: E402
 from backend.operations.market_dieban_tdx import _iso, read_lday, resolve_root  # noqa: E402
-from backend.services.kpl_daban_archiver import archive_auction_price, load_auction_price  # noqa: E402
+# kpl_auction_price 退役（2026-11-19）：改补 kpl_bidding_series.open_pct 应急兜底
 
 TAKE = 30  # 回补日必在尾部 30 棒内；多读 1 棒保 prevclose（目标日恰为窗首时不保守漏填）
 
@@ -68,7 +68,7 @@ def _intraday_forbidden(date: str, now: Any = None) -> bool:
 
 
 def backfill(db: Any, dates: list[str] | None = None, *, root: str | None = None) -> dict:
-    """逐日回补 s0925 缺失股 → 汇总 {date: {filled, skippedLive, noBar, samples}}。"""
+    """逐日回补 open_pct 缺失股 → 汇总 {date: {filled, skippedExisting, noBar, samples}}。"""
     if dates is None:
         dates = sorted(d["_id"] for d in db["kpl_bidding_series"].find(
             {"_id": {"$type": "string"}}, {"_id": 1}))   # meta _id=日期串（review S4，走 _id 索引）
@@ -81,13 +81,14 @@ def backfill(db: Any, dates: list[str] | None = None, *, root: str | None = None
         from backend.services.kpl_daban_archiver import load_bidding_series
         sdoc = load_bidding_series(db, date, codes_only=True) or {}
         universe.update(sdoc.get("codes") or [])
-        existing = (load_auction_price(db, date) or {}).get("s0925") or {}
+        existing = (db["kpl_bidding_series"].find_one(
+            {"_id": date}, {"open_pct": 1}) or {}).get("open_pct") or {}
         filled: dict[str, dict] = {}
         no_bar: list[str] = []
         band_suspect: list[dict] = []
         for code in sorted(universe):
             if code in existing:
-                continue  # live 3006 已收，不覆盖
+                continue  # 已有 open_pct，不覆盖
             if not root:
                 no_bar.append(code)
                 continue
@@ -104,15 +105,18 @@ def backfill(db: Any, dates: list[str] | None = None, *, root: str | None = None
                 band_suspect.append({"code": code, "pct": rec["pct"]})
                 continue
             filled[code] = rec
-        r: dict = {"ok": True, "n25": 0}   # 无可填=无操作成功（与真失败区分，review n2）
+        r: dict = {"ok": True, "n": 0}   # 无可填=无操作成功（与真失败区分）
         err = None
         if filled:
             try:
-                r = archive_auction_price(db, date, s0925=filled)
+                db["kpl_bidding_series"].update_one(
+                    {"_id": date},
+                    {"$set": {f"open_pct.{c}": v for c, v in filled.items()}})
+                r = {"ok": True, "n": len(filled)}
             except Exception as exc:  # noqa: BLE001 — 逐日隔离，一日失败不中断整轮
                 r, err = {"ok": False}, f"{type(exc).__name__}: {exc}"
-        summary[date] = {"universe": len(universe), "filled": r.get("n25", 0) if r.get("ok") else 0,
-                         "skippedLive": len(universe & set(existing)),
+        summary[date] = {"universe": len(universe), "filled": r.get("n", 0) if r.get("ok") else 0,
+                         "skippedExisting": len(universe & set(existing)),
                          "noBar": len(no_bar), "noBarSamples": no_bar[:8],
                          "bandSuspectN": len(band_suspect), "bandSuspectSamples": band_suspect[:8],
                          "writeOk": bool(r.get("ok")),

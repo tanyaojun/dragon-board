@@ -466,7 +466,8 @@ def test_trial_merge_into_push_missing_row(client):
             {"s": c, "bidding_pct": jp, "bidding_amount": 8e7,
              "bidding_turnover": 1.0, "zt_buy_amount": zb} for c, jp in pcts.items()]})
     seed_series(_series_col(db), DATE, ticks,
-                updated_at=f"{DATE}T09:26:09+08:00")
+                updated_at=f"{DATE}T09:26:09+08:00",
+                open_pct={c: {"pct": jp, "src": "tdx_bar"} for c, jp in pcts.items()})
     try:
         doc = c.get("/api/hotlist-jev/auction-leaders", params={"date": DATE}).json()
         rows_out = {x["code"]: x for x in doc["leaders"]}
@@ -500,9 +501,12 @@ def _seed_trial_series(db, date=DATE, codes=None):
             {"s": c, "bidding_pct": pcts.get(c, 5.0), "bidding_amount": 6e7,
              "bidding_turnover": 1.2, "zt_buy_amount": zb,
              "price": 10.0, "pct": pcts.get(c, 5.0), "real_float": 5e9} for c in use]})
+    # 裁决②：jj_percent 终值链=Type=7→TDX 应急；种子补 open_pct 保持断言不变
     seed_series(_series_col(db), date, ticks,
                 updated_at=f"{date}T09:26:09+08:00",
-                window=["09:15:00", "09:27:00"])
+                window=["09:15:00", "09:27:00"],
+                open_pct={c: {"pct": pcts.get(c, 5.0), "price": 10.0, "src": "tdx_bar"}
+                            for c in use})
 
 
 def test_auction_trial_derived_single_main_chain(client):

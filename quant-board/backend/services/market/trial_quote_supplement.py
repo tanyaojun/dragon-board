@@ -16,7 +16,8 @@
   prev_pct 既有 fetch_daily_bars 调用与频控预算）。背景：kpl_auction_price live
   归档覆盖⊆浏览器驱动 3006 订阅面（竞价试盘页不并宇宙入订阅面→竞价窗内零捕获），
   而 MBL/bid 成员制掉池股留早退值（11-16 预登记缺陷定案）不得作开盘涨幅回退；
-  TDX 当日棒非成员制、全宇宙覆盖，故为盘中开盘涨幅兜底权威（存档 s0925 仍第一权威）。
+  TDX 当日棒非成员制、全宇宙覆盖，故为开盘涨幅应急兜底（终值第一权威=
+  kpl_auction_matched 盯盘 Type=7，2026-11-19 裁决②；kpl_auction_price 存档已退役）。
   当日 09:25 CST 前 open 未撮合→不列 pending 不烧预算（fail-visible 缺席）。
 
 频控预算（§1.2-9，会话型 TDX + 轮询型 archiver 双形态登记）：

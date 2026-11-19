@@ -9371,7 +9371,7 @@ function kplPoolRender(view){
 const KPL_BID_TRIO_STATE = {in_pool_matched:'留池·撮合公布', in_pool_pre_match:'留池·窗内未公布',
   dropped_pre_match:'掉池·未收到公布', dropped_post_match:'掉池·已收到公布',
   not_in_auction_pool:'不在竞价榜', no_mbl_series_day:'历史日·无帧档回退'};
-const KPL_BID_TRIO_SRC = {mbl_postmatch:'MBL公布帧', mbl_frozen:'MBL冻结', bid_frozen:'socket终态',
+const KPL_BID_TRIO_SRC = {dingpan_postmatch:'盯盘Type=7终值', mbl_postmatch:'MBL公布帧', mbl_frozen:'MBL冻结', bid_frozen:'socket终态',
   series_postmatch:'socket公布帧', mbl_col10_virtual:'col10窗内虚拟', mbl_col10_preexit:'col10掉池前观测',
   bid_virtual:'socket窗内虚拟', bid_preexit_virtual:'socket掉池前观测',
   series_virtual:'series窗内虚拟', series_preexit_virtual:'series掉池前观测',
@@ -9682,8 +9682,8 @@ async function kplFetchBreadthHist(date){
 //      题材名，避免单列双口径）。
 //   KPL bk_name 仅作右表参考列（tooltip 标注不作分组）。
 // 语义警示（右表 tooltip 如实标注，不猜语义入叙事）：
-//   jj_percent = 09:25 开盘涨幅权威（s0925 存档→MBL→bid→序列末帧，jjSource 披露，
-//   打分/均值门口径）；竞价涨幅列 = pct0915（09:15 存档→序列首帧，jj915Src 披露）；
+//   jj_percent = 09:25 开盘涨幅终值权威（KPL 直连盯盘 Type=7 kpl_auction_matched→
+//   TDX open_pct 应急，jjSource 披露；3006 退役）；竞价涨幅列 = pct0915（pid8 序列首帧，jj915Src 披露）；
 //   circulated_value 流通值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生；
 //   first/first_add/max/last 金额 = 官方序列观测值口径（§7.9/§7.12），列名只用中性词。
 const AT = {doc: null, dates: [], nameMiss: 0, boardMiss: 0, boardMeta: null, unmapped: [], rootMeta: null,
@@ -9919,7 +9919,7 @@ async function atLoad(){
   }
   atRender();
 }
-const AT_PCT_TIP = '竞价涨幅=jj_percent，是试盘结束（end_time）时点匹配涨幅：结束=09:25 → 09:25 冻结值；结束<09:20 → 可撤窗（09:15–09:20）内撤单前时点值（勘察 §4）';
+const AT_PCT_TIP = '竞价涨幅＝试盘结束时点的匹配涨幅：09:25 结束为撮合冻结值；09:20 前结束为撤单前的时点值。';
 function atRender(){
   if (STATE.view !== 'kpltrial') return;
   const model = atBoardModel();
@@ -9930,7 +9930,7 @@ function atRender(){
   let ph = '<thead><tr><th>#</th>'
     + lbThSort('板块', 'name', AT.boardSort, 'atBoardSortBy')
     + lbThSort('试盘', 'n', AT.boardSort, 'atBoardSortBy')
-    + lbThSort('开盘涨幅均值', 'pct', AT.boardSort, 'atBoardSortBy', '开盘涨幅均值=成员 jj_percent（09:25 开盘涨幅权威，打分/均值门口径）均值；缺值不进分母（fail-visible）；与右表 09:15 竞价涨幅列不同时点')
+    + lbThSort('开盘涨幅均值', 'pct', AT.boardSort, 'atBoardSortBy', '开盘涨幅均值＝板块成员 09:25 开盘涨幅的平均（缺值不计入）；与右表 09:15 竞价涨幅不同时点。')
     + lbThSort('竞价成交额合计', 'amt', AT.boardSort, 'atBoardSortBy')
     + lbThSort('竞价换手均值', 'tur', AT.boardSort, 'atBoardSortBy')
     + '</tr></thead><tbody>';
@@ -9938,7 +9938,7 @@ function atRender(){
     const a = atAgg(members);
     return `<tr${sel === name ? ' class="on"' : ''} onclick="atSelect('${js(name)}')">`
       + `<td class="kpl-uni">${extra.idx}</td><td>${extra.label}</td>`
-      + `<td class="kpl-uni" title="试盘家数=该板块内竞价试盘个股数（打标分组/产业树多归属各计一次${name === '' ? '；全部行=按个股去重' : ''}）">${members.length}</td>`
+      + `<td class="kpl-uni" title="试盘家数＝该板块竞价试盘的个股数量（一股属多板块各计一次${name === '' ? '；全部行按个股去重' : ''}）。">${members.length}</td>`
       + `<td class="kpl-uni ${kcls(a.pct)}">${atPct(a.pct)}</td>`
       + `<td class="kpl-uni">${a.amt != null ? kfmtAmt(a.amt) : '--'}</td>`
       + `<td class="kpl-uni">${atPct(a.tur)}</td></tr>`;
@@ -10017,16 +10017,16 @@ function atRender(){
     return sdir * (cmp || String(a.code).localeCompare(String(b.code)));
   });
   const atDerived = (AT.doc || {}).source === 'kpl_bidding_series_derived';
-  const pctTip = atDerived ? '竞价涨幅=09:15 竞价涨幅（权威=3006 存档 s0915；缺档回退序列首帧观测值，时点见子标签）' : AT_PCT_TIP;
+  const pctTip = atDerived ? '竞价涨幅＝09:15 集合竞价起始的匹配涨幅（按竞价推送首帧观测，约 3 秒粒度）。' : AT_PCT_TIP;
   const amtTip = k => atDerived
-    ? (k === 'firstN' ? '首开额=首帧委买额（官方序列观测值，§7.9 派生口径），单位=元'
-      : k === 'firstAddN' ? '首加额=首笔观测追加委买增量（tick 分笔计算，2026-11-18 用户裁决；稀疏采样观测口径）'
-      : k === 'maxN' ? '峰值额=峰值帧委买额（官方序列观测值），单位=元'
-      : '最终额=末帧委买额（官方序列观测值），单位=元')
-    : k === 'firstN' ? '首开额=first_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
-    : k === 'firstAddN' ? '首加额=first_add：语义待 App 同屏核对（勘察 §6.4），单位=元'
-    : k === 'maxN' ? '峰值额=max_amount：语义待 App 同屏核对（勘察 §6.4），单位=元'
-    : '最终额=last_amount：语义待 App 同屏核对（勘察 §6.4），单位=元';
+    ? (k === 'firstN' ? '首开额＝竞价开始第一笔观测的委买金额（元，观测值）。'
+      : k === 'firstAddN' ? '首加额＝第一笔追加的委买增量（元，按逐笔观测计算）。'
+      : k === 'maxN' ? '峰值额＝竞价期间委买金额的最高观测值（元）。'
+      : '最终额＝竞价结束前最后一笔委买金额观测值（元）。')
+    : k === 'firstN' ? '首开额＝试盘开始的首笔委买金额（元）。'
+    : k === 'firstAddN' ? '首加额＝首笔追加的委买增量（元）。'
+    : k === 'maxN' ? '峰值额＝试盘期间委买金额峰值（元）。'
+    : '最终额＝试盘结束前最后的委买金额（元）。';
   let html = '<thead><tr><th>代码</th><th>名称</th>'
     + lbThSort('竞价涨幅', 'aucPctN', AT.stockSort, 'atStockSortBy')
     + lbThSort('开盘涨幅', 'openPctN', AT.stockSort, 'atStockSortBy')
@@ -10046,25 +10046,25 @@ function atRender(){
     + '</tr></thead><tbody>';
   for (const r of decorated){
     const name = r.name || r.jyName || '--';
-    const nameTip = r.name ? '' : r.jyName ? '名称=韭研打标组成员名（stock_names 字典 miss 兑底）'
-      : '名称不可考：stock_names 字典 miss 且未入韭研板块（不猜名）';
+    const nameTip = r.name ? '' : r.jyName ? '名称来自韭研板块成员（行情名称缺失时兜底）。'
+      : '名称缺失（无可靠来源，不猜测）。';
     html += `<tr><td class="kpl-uni">${esc(r.code || '--')}</td>`
       + `<td${nameTip ? ` title="${esc(nameTip)}"` : ''}>${esc(name)}</td>`
-      + `<td class="kpl-uni ${kcls(r.aucPctN)}" title="${esc(pctTip)}">${atPct(r.aucPctN)}${r.aucPctN != null ? (r.jj915Src === 'open0915_archive' ? '<div class=\"kpl-sub\">竞价 09:15</div>' : r.start_time ? '<div class=\"kpl-sub\">首帧 ' + esc(String(r.start_time)) + '</div>' : '') : ''}</td>`
-      + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅=09:25 撮合开盘涨幅（权威=kpl_auction_price 存档；缺位回退 TDX 盘中开盘棒 open_pct，open0925Src 逐行披露；不回退 MBL/bid/末帧——成员制早退值≠开盘；历史日=TDX 开盘回补 src=tdx_lday）${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}${r.openPctN != null && r.openSrc ? '<div class=\"kpl-sub\">' + (r.openSrc === 'open0925_archive' ? '存档 09:25' : r.openSrc === 'tdx_bar_open' ? 'TDX 开盘' : esc(String(r.openSrc))) + '</div>' : ''}</td>`
-      + `<td class="kpl-uni" title="${atDerived ? '竞价换手=投影状态机（2026-11-19 trio）：mbl_postmatch 撮合公布 / derived_cap 派生换手=额/流通市值×100；未公布缺位=None 不烘 0；jjTurnoverSrc 逐行披露' : '竞价换手=jj_turnover，同为 end_time 时点快照（勘察 §4）'}">${atPct(r.jjTurN)}${atDerived && r.jjTurN != null && r.jjTurnoverSrc ? '<div class=\"kpl-sub\">' + esc(KPL_BID_TRIO_SRC[r.jjTurnoverSrc] || String(r.jjTurnoverSrc)) + '</div>' : ''}</td>`
-      + `<td class="kpl-uni" title="${atDerived ? '竞价成交额=投影状态机（2026-11-19 trio）：mbl_postmatch 撮合公布 / mbl_col10_virtual 留池窗内虚拟 / mbl_col10_preexit 掉池前虚拟观测（≠撮合终值）；缺位=None 不烘 0；单位=元；jjAmountSrc 逐行披露' : '竞价成交额=jj_amount（元，rank 原值）'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}${atDerived && r.jjAmtN != null && r.jjAmountSrc ? '<div class=\"kpl-sub\">' + esc(KPL_BID_TRIO_SRC[r.jjAmountSrc] || String(r.jjAmountSrc)) + '</div>' : ''}</td>`
-      + `<td class="kpl-uni"${atDerived ? ' title="观测首帧时点（官方序列，≠Wzs 试盘开始语义）"' : ''}>${esc(String(r.start_time || '--'))}</td>`
-      + `<td class="kpl-uni"${atDerived ? ' title="观测末帧时点（官方序列，≠Wzs 试盘结束语义）"' : ''}>${esc(String(r.end_time || '--'))}</td>`
+      + `<td class="kpl-uni ${kcls(r.aucPctN)}" title="${esc(pctTip)}">${atPct(r.aucPctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.openPctN)}" title="开盘涨幅＝09:25 集合竞价撮合开盘价相对昨收的涨幅；无撮合数据时按当日开盘价应急推算。${r.openPrN != null ? '；开盘价 ' + r.openPrN : ''}">${atPct(r.openPctN)}</td>`
+      + `<td class="kpl-uni" title="${atDerived ? '竞价换手＝09:25 撮合成交量占流通股本的比例；无撮合公布时按成交额÷流通市值估算；无数据则缺失（不补零）。' : '竞价换手＝试盘结束时点的撮合换手率。'}">${atPct(r.jjTurN)}</td>`
+      + `<td class="kpl-uni" title="${atDerived ? '竞价成交额＝09:25 撮合成交金额（元）；掉池股取掉池前最后观测值（非最终撮合值）；无数据则缺失（不补零）。' : '竞价成交额＝试盘结束时点的撮合成交金额（元）。'}">${r.jjAmtN != null ? kfmtAmt(r.jjAmtN) : '--'}</td>`
+      + `<td class="kpl-uni"${atDerived ? ' title="试盘开始＝首次观测到试盘单的时间（观测值，可能晚于真实起点）。"' : ''}>${esc(String(r.start_time || '--'))}</td>`
+      + `<td class="kpl-uni"${atDerived ? ' title="试盘结束＝最后观测到试盘单的时间（观测值）。"' : ''}>${esc(String(r.end_time || '--'))}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('firstN'))}">${r.firstN != null ? kfmtAmt(r.firstN) : '--'}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('firstAddN'))}">${r.firstAddN != null ? kfmtAmt(r.firstAddN) : '--'}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('maxN'))}">${r.maxN != null ? kfmtAmt(r.maxN) : '--'}</td>`
       + `<td class="kpl-uni" title="${esc(amtTip('lastN'))}">${r.lastN != null ? kfmtAmt(r.lastN) : '--'}</td>`
-      + `<td class="kpl-uni"${atDerived ? ' title="现价=腾讯全市场实时快照（共享 Redis，写侧≥60s 刷新；缺位如实--）"' : ''}>${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
-      + `<td class="kpl-uni ${kcls(r.pctN)}" title="${atDerived ? '涨幅=末帧 pct（官方序列观测值）' : 'percent 当日涨幅（收盘口径以行情源为准）'}">${atPct(r.pctN)}</td>`
-      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅=TDX 日线落库独立源（kpl_bidding_series.prev_pct，未复权口径；缺位如实--）' : 'pre_percent 昨日涨幅%（独立源：可与池档交叉校准漏档，勘察 §4）'}">${atPct(r.prePctN)}</td>`
-      + `<td class="kpl-uni" title="${atDerived ? '流通值=末帧 real_float（bid 口径实际流通，≠Wzs 历史口径，禁止跨源派生比率）' : 'circulated_value 流通市值口径 ≠ bid 通道实际流通 real_float，禁止跨源派生比率（勘察 §4）'}">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
-      + `<td class="kpl-sub" title="KPL 题材概念 bk_name · 仅参考展示，不作本页分组（用户裁决：分组=韭研板块，未分板块不回推题材名） · 板块来源=${esc(r.bkNameSrc || '缺席')}（mbl_same=同日MBL/mbl_prev=前日MBL/bid_plate=pid8推送）">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
+      + `<td class="kpl-uni"${atDerived ? ' title="现价＝全市场实时行情快照（约每分钟刷新；无数据则--）。"' : ''}>${r.priceN != null ? kfmtNum(r.priceN) : '--'}</td>`
+      + `<td class="kpl-uni ${kcls(r.pctN)}" title="${atDerived ? '涨幅＝竞价结束前最后观测的当日涨幅。' : '涨幅＝当日涨幅（收盘口径以行情源为准）。'}">${atPct(r.pctN)}</td>`
+      + `<td class="kpl-uni ${kcls(r.prePctN)}" title="${atDerived ? '昨涨幅＝昨日涨幅（独立日线源，未复权；无数据则--）。' : '昨涨幅＝昨日涨幅（独立源，可与榜单交叉校准）。'}">${atPct(r.prePctN)}</td>`
+      + `<td class="kpl-uni" title="${atDerived ? '流通值＝实际流通市值（竞价推送口径；无数据则--）。' : '流通值＝流通市值（与竞价推送的实际流通口径可能不同，不跨源混算比率）。'}">${r.floatN != null ? kfmtAmt(r.floatN) : '--'}</td>`
+      + `<td class="kpl-sub" title="KPL 题材概念（仅参考，不作分组；分组以韭研板块为准）· 题材名来源：${r.bkNameSrc === 'mbl_same' ? '同日榜单' : r.bkNameSrc === 'mbl_prev' ? '前日榜单' : r.bkNameSrc === 'bid_plate' ? '竞价推送' : esc(r.bkNameSrc || '缺席')}">${esc(String(r.bk_name || '').slice(0, 16) || '--')}</td></tr>`;
   }
   $('atStockTable').innerHTML = decorated.length ? html + '</tbody>'
     : '<tbody><tr><td class="empty">' + (sq ? '无匹配个股（搜索词无命中）'
@@ -10082,9 +10082,9 @@ function atRender(){
       + (AT.nameMiss ? ` · 名称缺失 ${AT.nameMiss} 只` : '')
       + (model.unboarded.length ? ` · 未分板块 ${model.unboarded.length} 只` : '') + fb
       + (AT.trialState && AT.trialState.open0925N != null
-        ? ` · 0925存档 ${AT.trialState.open0925N}/TDX ${AT.trialState.open0925TdxN || 0}/缺 ${AT.trialState.open0925MissingN}` : '')
-      + (AT.trialState && AT.trialState.open0915N != null
-        ? ` · 0915存档 ${AT.trialState.open0915N}/首帧回退 ${AT.trialState.seriesFirst0915N}` : '');
+        ? ` · Type=7终值 ${AT.trialState.open0925N}/TDX ${AT.trialState.open0925TdxN || 0}/缺 ${AT.trialState.open0925MissingN}` : '')
+      + (AT.trialState && AT.trialState.seriesFirst0915N != null
+        ? ` · 0915首帧 ${AT.trialState.seriesFirst0915N}` : '');
   // 2026-11-14 用户裁决：页头长段「数据源：…」描述删除；fail-visible 收敛到
   // atStats 短计数（桥未收录词数）+ sbLog 错误日志（降级/回落/异常原因全量在状态栏）
   $('atStats').textContent += (AT.unmapped && AT.unmapped.length)

@@ -792,8 +792,13 @@ def _series_doc(date, rows):
                 {"s": c, "zt_buy_amount": r.get(zkey),
                  "bidding_pct": r.get("jj_percent"),
                  "bidding_amount": r.get("jj_amount")})
+    # 2026-11-19 裁决②：jj_percent 终值链=Type=7→TDX 应急（不再回退末帧）。
+    # 种子同步补 TDX open_pct（生产 archiver 顺带落库），保持选择断言不变。
+    open_pct = {c: {"pct": r.get("jj_percent"), "src": "tdx_bar"}
+                for c, r in rows.items() if r.get("jj_percent") is not None}
     return {"_id": date, "ticks": [{"ts": ts(hm), "it": its}
                                    for hm, its in sorted(frames.items())],
+            "open_pct": open_pct,
             "updated_at": f"{date}T09:25:30+08:00"}
 
 

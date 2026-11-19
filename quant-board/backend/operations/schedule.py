@@ -678,28 +678,42 @@ def run_auction_leader_settle_once(today: str | None = None) -> dict[str, Any]:
             "date": today, "settledDays": results}
 
 
-def fengkou_red_observation_enabled() -> bool:
-    """最强风口红名观察采集开关（2026-11-15 用户裁决「先观察再定」，默认开）。"""
-    return os.environ.get("FENGKOU_RED_OBS_ENABLED", "1") != "0"
+def run_auction_matched_once(today: str | None = None) -> dict[str, Any]:
+    """盯盘 Type=7 撮合终值直采（16:10 挂链，零 token；盘后 1 发/日）。
 
-
-def run_fengkou_red_observation_once(today: str | None = None, *,
-                                     dry_run: bool = False,
-                                     force: bool = False) -> dict[str, Any]:
-    """最强风口红名观察采集（15:10 挂链，零 token）：日内多时点快照落
-    kpl_fengkou_red_obs 日档 + 历史 pending 日 T+1 回填。
-
-    不进锚人群、不烧 jev、不改 vA3 选龙合同（预登记 2026-11-15）。失败结构化
-    返回交 scheduler 限次退避，不抛不兜底。
+    2026-11-19 裁决②：终值权威=kpl_auction_matched（掉池股撮合终值，socket 无此块）。
+    Type=7 为实时端点（请求无日期参数，仅返回最近交易日数据，review B1）→
+    每次运行只发 1 次请求，目标=最近一个缺档日；day 匹配守卫在 collect 层防错档。
+    更早缺档日本端点补不了，走 TDX 应急链（scripts/backfill_auction_price_tdx.py）。
+    已有 matched 档不重采；失败结构化返回（advisory 不阻断）。
     """
-    from backend.operations.fengkou_red_observer import run_fengkou_red_observation
     today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    results: list[dict[str, Any]] = []
     try:
-        return run_fengkou_red_observation(today, dry_run=dry_run, force=force)
+        db = repository_factory.get_runtime_mongodb_database()
+        from backend.operations.theme_leader_baseline import trading_dates
+        from backend.operations.auction_bidding_direct import (
+            COLLECTION_AUCTION_MATCHED, collect_auction_matched_direct)
+        days = [d for d in trading_dates(db, "2000-01-01", today) if d <= today][-5:]
+        missing = [d for d in days
+                   if not db[COLLECTION_AUCTION_MATCHED].count_documents({"_id": d})]
+        if not missing:
+            return {"ok": True, "date": today, "matchedDays": [],
+                    "state": "no_missing", "message": "近 5 交易日终值档齐全，零外呼"}
+        target = missing[-1]   # 最近缺档日 = 端点可服务的最近交易日
+        try:
+            r = collect_auction_matched_direct(db, target)
+            results.append({"ok": r.get("state") in ("ok", "day_mismatch"),
+                            "date": target, "n_rows": r.get("n_rows"),
+                            "state": r.get("state"),
+                            "fetchedDay": r.get("fetchedDay")})
+        except Exception as exc:  # noqa: BLE001 — 单日隔离
+            results.append({"ok": False, "date": target,
+                            "error": f"{type(exc).__name__}: {exc}"})
     except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
-        return {"ok": False, "date": today,
-                "errorCode": "fengkou_red_obs_error",
-                "error": f"{type(exc).__name__}: {exc}"}
+        results.append({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    return {"ok": all(r.get("ok") for r in results) if results else True,
+            "date": today, "matchedDays": results}
 
 
 def theme_leader_lhb_backfill_enabled() -> bool:

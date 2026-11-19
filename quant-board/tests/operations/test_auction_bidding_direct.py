@@ -235,3 +235,115 @@ def test_persist_fields_attempts_native_and_fetched_at_ts():
     doc = db.docs["2026-11-17"]
     assert isinstance(doc["attempts"], list) and doc["attempts"][0]["index"] == 0
     assert doc["fetchedAt"].endswith("+08:00") and doc["updatedAt"].endswith("+08:00")
+
+
+def test_fetch_matched_type7_params_and_list_key(monkeypatch):
+    """裁决②：Type=7 直采 a=DaBanList&c=HomeDingPan&Type=7&PidType=8，行键 list。"""
+    seen = {}
+
+    def fake_post(url, params):
+        seen.update(params)
+        return {"errcode": "0", "list": [_row("603324")], "day": "2026-11-19"}
+
+    monkeypatch.setattr(M, "_post", fake_post)
+    res = M.fetch_auction_matched_list()
+    assert res["state"] == "ok" and res["n_rows"] == 1
+    assert seen["a"] == "DaBanList" and seen["c"] == "HomeDingPan"
+    assert seen["Type"] == 7 and seen["PidType"] == 8
+
+
+def test_matched_terminal_contract_and_roundtrip():
+    """跨会话合同 rows[code]={pct,price,amount,turnover,end_time}；end_time 无列=None。"""
+    db = FakeMblDb()
+    res = {"state": "ok", "rows": M.parse_mbl_rows([_row("603324")]),
+           "n_rows": 1, "pages": 1, "day": "2026-11-19",
+           "attempts": [{"index": 0, "state": "ok"}]}
+    p = M.persist_auction_matched(db, "2026-11-19", res)
+    assert p["ok"] and p["n_rows"] == 1
+    rows = M.load_auction_matched(db, "2026-11-19")
+    r = rows["603324"]
+    assert r["pct"] == 10 and r["price"] == 11.0
+    assert r["amount"] == 2000000.0 and r["turnover"] == 0.5
+    assert r["end_time"] is None   # 17 列无时点列，fail-visible
+    assert M.load_auction_matched(db, "2099-01-01") is None
+
+
+class FakeMatchedDb(FakeMblDb):
+    """带 count_documents 的假库（run_auction_matched_once 缺档判定用）。"""
+
+    def count_documents(self, q):
+        return 1 if q.get("_id") in self.docs else 0
+
+
+def test_collect_matched_day_mismatch_no_write(monkeypatch):
+    """review B1：Type=7 实时端点无日期参数（仅返回最近交易日），请求日≠返回日
+    一律不落库，防当日数据错标成历史日污染终值权威档（fail-visible）。"""
+    monkeypatch.setattr(M, "_post", lambda url, params: {
+        "errcode": "0", "list": [_row("603324")], "day": "2026-11-19"})
+    db = FakeMatchedDb()
+    out = M.collect_auction_matched_direct(db, "2026-11-18")
+    assert out["state"] == "day_mismatch" and out["fetchedDay"] == "2026-11-19"
+    assert out["requested"] == "2026-11-18" and "persistState" not in out
+    assert db.docs == {}, "错档不写库"
+
+
+def test_collect_matched_day_missing_no_write(monkeypatch):
+    """响应缺 day 元数据无法核对归属日 → 不落库（fail-visible）。"""
+    monkeypatch.setattr(M, "_post", lambda url, params: {
+        "errcode": "0", "list": [_row("603324")]})
+    db = FakeMatchedDb()
+    out = M.collect_auction_matched_direct(db, "2026-11-19")
+    assert out["state"] == "day_missing" and db.docs == {}
+
+
+def _patch_run(monkeypatch, db, dates):
+    """run_auction_matched_once 测试脚手架：假库 + 假交易日历 + 假 _post（记录外呼）。"""
+    from backend.operations import schedule as S
+    from backend.operations import theme_leader_baseline as TB
+    calls: list[dict] = []
+
+    def fake_post(url, params):
+        calls.append(params)
+        return {"errcode": "0", "list": [_row("603324")], "day": "2026-11-19"}
+
+    monkeypatch.setattr(M, "_post", fake_post)
+    monkeypatch.setattr(S.repository_factory, "get_runtime_mongodb_database",
+                        lambda: db)
+    monkeypatch.setattr(TB, "trading_dates", lambda db_, start, end: list(dates))
+    return calls
+
+
+def test_run_matched_once_single_call_and_persist(monkeypatch):
+    """review B1/M5：多个缺档日也只发 1 次请求（目标=最近缺档日），当日命中即落库。"""
+    db = FakeMatchedDb()
+    db.docs["2026-11-18"] = {"_id": "2026-11-18", "rows": {}}   # 昨日已有档
+    calls = _patch_run(monkeypatch, db, ["2026-11-17", "2026-11-18", "2026-11-19"])
+    from backend.operations import schedule as S
+    out = S.run_auction_matched_once(today="2026-11-19")
+    assert len(calls) == 1, "1 发/日：缺档多个也只外呼 1 次"
+    assert out["ok"] is True and out["matchedDays"][0]["state"] == "ok"
+    assert "2026-11-19" in db.docs and db.docs["2026-11-19"]["day"] == "2026-11-19"
+    assert "2026-11-17" not in db.docs, "更早缺档日不写错档（端点补不了，走 TDX 应急）"
+
+
+def test_run_matched_once_stale_missing_no_pollution(monkeypatch):
+    """最新交易日已有档、更早日缺档 → 1 次外呼 day_mismatch 零写入（B1 污染防护）。"""
+    db = FakeMatchedDb()
+    db.docs["2026-11-19"] = {"_id": "2026-11-19", "rows": {}}
+    calls = _patch_run(monkeypatch, db, ["2026-11-18", "2026-11-19"])
+    from backend.operations import schedule as S
+    out = S.run_auction_matched_once(today="2026-11-19")
+    assert len(calls) == 1
+    assert out["ok"] is True and out["matchedDays"][0]["state"] == "day_mismatch"
+    assert set(db.docs) == {"2026-11-19"}, "不把 11-19 数据错标成 11-18"
+
+
+def test_run_matched_once_no_missing_zero_call(monkeypatch):
+    """近 5 交易日档齐全 → 零外呼（no_missing 短路）。"""
+    db = FakeMatchedDb()
+    for d in ("2026-11-17", "2026-11-18", "2026-11-19"):
+        db.docs[d] = {"_id": d, "rows": {}}
+    calls = _patch_run(monkeypatch, db, ["2026-11-17", "2026-11-18", "2026-11-19"])
+    from backend.operations import schedule as S
+    out = S.run_auction_matched_once(today="2026-11-19")
+    assert calls == [] and out["ok"] is True and out["state"] == "no_missing"

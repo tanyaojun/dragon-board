@@ -129,3 +129,27 @@ turnover,end_time}`；主计划探针冻结 Type=7 列映射后按此落库，de
 
 **复核**：`rg -n "wzslinker.top|_fetch_wzs|_wzs_compare|WZS_.*URL|--wzs" backend scripts --glob *.py`
 → **0 命中**（wzs 活依赖全清）。编译/运行验证通过。
+
+## 收尾（2026-11-19 用户裁决：lane 已退役、明早不验、清理干净、同步前端消费）
+
+- **collector 3006 lane 物理退役**：删 `_capture_auction_price`/`_persist_auction_price`/
+  `_feed_auction_lane`/`_drain_auction_subs`/`_auction_lane_status`/lane init/status 项/
+  3006 捕获与 pid8 喂入；3006 仅保留浏览器面。`_auction_window_active` 保留（B lane 复用）。
+- **冗余数据集 drop（红线 4）**：`kpl_auction_price` 先导出
+  `data/backups/kpl_auction_price_retire_20261119/kpl_auction_price.jsonl`（2 docs）后单集合 drop；
+  `auction_trial_raw` 早已 drop。archiver `archive_auction_price`/`load_auction_price` 删除。
+- **Type=7 直连终值 wiring**：`auction_bidding_direct` 增 fetch/persist/collect/load
+  `kpl_auction_matched`（a=DaBanList&c=HomeDingPan&Type=7&PidType=8，行键 list，复用
+  parse_mbl_rows 冻结 17 列映射；end_time 无列=None fail-visible）；盘后 1 发/日、≤MAX_PAGES、
+  `_post` ≥2s 锁；scheduler 16:10 advisory `run_auction_matched_once`（近 5 交易日、已有档跳过）。
+- **前端同步（业务语义，2026-11-19 用户裁决）**：relay_page 试盘表全部 tooltip 改业务语义
+  （去 pid8/Type=7/投影状态机/源编码/勘察章节号等开发术语，保留「观测值/估算/掉池前非最终/
+  缺失不补零」口径提示）；**逐行源子标签删除**（用户裁决：画蛇添足、致字段溢出）；bk_name 来源
+  改业务词（同日榜单/前日榜单/竞价推送）；KPL_BID_TRIO_SRC 映射保留供他处 kplBidTrioTip；
+  backfill 脚本改补 `kpl_bidding_series.open_pct` 应急。
+- **测试**：删退役 lane 测试与 collector 捕获用例；backfill/relay/direct 断言同步（relay 改断言
+  业务语义、删子标签断言）；新增 Type=7 合同测试。域测试 **1544 passed**。
+- **B（pid8 3s）默认 on**（2026-11-19 用户裁决：socket 无客户端频控——杀连真凶=协议非法帧归红线 9；
+  采集不烧 token 无「开火」一说，开火预登记仅 jev 真实模型调用红线 7）。App 自身 3s 重请求即
+  服务端接受证据；`KPL_PID8_REFRESH` 缺省 1，帧数仅 status 观测，1002/rst 走既有 fail-fast+退避，
+  env=0 可关。AGENTS 红线 10 已同轮区分 socket/HTTP 并澄清开火适用范围。

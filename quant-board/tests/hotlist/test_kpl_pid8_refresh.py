@@ -7,7 +7,8 @@ Xf(666)→Pg()→p.j0(firstVisible,count)→a0(i,i2,true)→y(2103,true)
 （0x40 订阅通道重发请求）。服务端按「请求-快照」回整页 burst，会话内无
 周期更新——App 靠 3s 定时重请求取密度。
 锁定：窗门控 [09:15,09:30)、3s 节拍、帧形态与 setup 6d 同款（pkg 0x40 +
-ext 02 0837）、会话重置、send 失败 fail-visible+fail-fast、默认 off。
+ext 02 0837）、会话重置、send 失败 fail-visible+fail-fast、默认 on
+（2026-11-19 用户裁决：socket 无客户端频控，采集不烧 token 无开火门）。
 """
 import struct
 
@@ -58,8 +59,14 @@ def _seq():
     return iter(range(1, 10000)).__next__
 
 
-def test_default_off_zero_frames(monkeypatch, in_window):
-    s = K(Codec())   # 实施轮默认 off（KPL_PID8_REFRESH 缺省 0）
+def test_default_on(monkeypatch):
+    # 2026-11-19 用户裁决：socket 无客户端频控，App 3s 即接受证据→默认 on
+    s = K(Codec())
+    assert s._pid8_refresh_status()["enabled"] is True
+
+
+def test_explicit_off_zero_frames(monkeypatch, in_window):
+    s = K(Codec(), pid8_refresh=False)   # env KPL_PID8_REFRESH=0 可关
     monkeypatch.setattr(s, "_human_pause", lambda *a, **k: None)
     sock = FakeSock()
     s._drain_pid8_refresh(sock, _seq(), now=1000.0)
@@ -80,7 +87,7 @@ def test_3s_cadence_and_frame_shape(svc, in_window):
     svc._drain_pid8_refresh(sock, _seq(), now=1002.9)
     assert sock.frames == [], "<3s 不重发（App 3000ms 周期同款）"
     svc._drain_pid8_refresh(sock, _seq(), now=1003.0)
-    assert len(sock.frames) == 7, "7 页×1 帧（频控预算 ≈2.33 帧/s）"
+    assert len(sock.frames) == 7, "7 页×1 帧（App 3s 周期同款 ≈2.33 帧/s，帧数仅观测非门控）"
     for i, fr in enumerate(sock.frames):
         assert fr[0] == proto.PKG_ROUTE, "pkg=0x40 订阅通道（setup 6d 同款）"
         assert struct.unpack(">H", fr[7:9])[0] == daban.CMD_DABAN_STOCK_LIST

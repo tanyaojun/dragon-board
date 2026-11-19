@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""TDX 日线回补 kpl_auction_price.s0925 测试（tmp .day 二进制 + 假库，零外呼）。
+"""TDX 日线回补 kpl_bidding_series.open_pct 应急兜底测试（tmp .day + 假库，零外呼）。
 
-锚：002652 11-18 真值 开4.40/0.00%（App 同屏）；prevclose=前一棒 close；
-live 已收不覆盖；缺棒/停牌不伪值（fail-visible）。
+2026-11-19 裁决①：kpl_auction_price 退役，改补 open_pct。锚：002652 11-18 开4.40/0.00%；
+prevclose=前一棒 close；已有 open_pct 不覆盖；缺棒/停牌不伪值（fail-visible）。
 """
 from __future__ import annotations
 
@@ -26,46 +26,32 @@ def _write_day(path, bars):
             fh.write(_REC.pack(d, o, h, l, c, 1.0, 1, 0))
 
 
-def _mkdb(series, auct_store):
-    """series = {date: [codes]}；auct_store 模拟 kpl_auction_price 点键 $set。"""
+def _mkdb(series, open_store):
+    """series = {date: [codes]}；open_store 模拟 kpl_bidding_series.open_pct 点键 $set。"""
 
     class Coll:
         def __init__(self, owner, name):
             self.owner, self.name = owner, name
 
         def find(self, q, p=None):
-            if self.name == "kpl_bidding_series":
-                # 2026-11-19 逐 tick 文档化：meta（无 it）/tick（有 it）两形态
-                if (q.get("it") or {}).get("$exists") is False:
-                    return iter([{"_id": d} for d in sorted(self.owner.series)])
-                date = q.get("date")
-                dates = [date] if date else sorted(self.owner.series)
-                return iter([{"date": d, "ts": 1,
-                              "it": [{"s": c} for c in self.owner.series.get(d, [])]}
-                             for d in dates])
-            date = q.get("_id")
+            # 逐 tick 文档化：meta（无 it）/tick（有 it）两形态
+            if (q.get("it") or {}).get("$exists") is False:
+                return iter([{"_id": d} for d in sorted(self.owner.series)])
+            date = q.get("date")
             dates = [date] if date else sorted(self.owner.series)
-            out = []
-            for d in dates:
-                ticks = [{"it": [{"s": c} for c in self.owner.series.get(d, [])]}]
-                out.append({"_id": d, "ticks": ticks})
-            return iter(out)
+            return iter([{"date": d, "ts": 1,
+                          "it": [{"s": c} for c in self.owner.series.get(d, [])]}
+                         for d in dates])
 
         def update_one(self, q, u, upsert=False):
-            flat = self.owner.auct.setdefault(q["_id"], {})
-            flat.update(u["$set"])
+            self.owner.open.setdefault(q["_id"], {}).update(u["$set"])
 
-        def find_one(self, q):
-            if self.name == "kpl_bidding_series":
-                d = q.get("_id")
-                if d in self.owner.series:
-                    return {"_id": d, "date": d, "tick_n": 1}
+        def find_one(self, q, projection=None, sort=None):
+            d = q.get("_id")
+            if d not in self.owner.series:
                 return None
-            flat = self.owner.auct.get(q["_id"]) or {}
-            if not flat:
-                return None
-            doc = {"_id": q["_id"]}
-            for k, v in flat.items():
+            doc = {"_id": d, "date": d, "tick_n": 1}
+            for k, v in (self.owner.open.get(d) or {}).items():
                 cur = doc
                 parts = k.split(".")
                 for p in parts[:-1]:
@@ -75,7 +61,7 @@ def _mkdb(series, auct_store):
 
     class DB:
         def __init__(self):
-            self.series, self.auct = series, auct_store
+            self.series, self.open = series, open_store
 
         def __getitem__(self, name):
             return Coll(self, name)
@@ -108,15 +94,15 @@ def test_backfill_fills_missing_skips_live(tmp_path):
     s = backfill(db, ["2026-11-18"], root=root)
     assert s["2026-11-18"]["filled"] == 1 and s["2026-11-18"]["writeOk"]
     assert s["2026-11-18"]["noBar"] == 1 and "600000" in s["2026-11-18"]["noBarSamples"]
-    doc = db["kpl_auction_price"].find_one({"_id": "2026-11-18"})
-    assert doc["s0925"]["002652"]["pct"] == 0.0
-    # live 已收 → 不覆盖，filled=0
+    doc = db["kpl_bidding_series"].find_one({"_id": "2026-11-18"})
+    assert doc["open_pct"]["002652"]["pct"] == 0.0
+    # 已有 open_pct → 不覆盖，filled=0
     db2 = _mkdb({"2026-11-18": ["002652"]},
-                {"2026-11-18": {"s0925.002652": {"price": 9.9, "pct": 5.0}}})
+                {"2026-11-18": {"open_pct.002652": {"price": 9.9, "pct": 5.0}}})
     s2 = backfill(db2, ["2026-11-18"], root=root)
-    assert s2["2026-11-18"]["filled"] == 0 and s2["2026-11-18"]["skippedLive"] == 1
-    doc2 = db2["kpl_auction_price"].find_one({"_id": "2026-11-18"})
-    assert doc2["s0925"]["002652"]["pct"] == 5.0, "live 值不被 TDX 回补覆盖"
+    assert s2["2026-11-18"]["filled"] == 0 and s2["2026-11-18"]["skippedExisting"] == 1
+    doc2 = db2["kpl_bidding_series"].find_one({"_id": "2026-11-18"})
+    assert doc2["open_pct"]["002652"]["pct"] == 5.0, "已有值不被 TDX 回补覆盖"
 
 
 def test_backfill_ex_rights_band_suspect_skipped(tmp_path):
@@ -130,7 +116,8 @@ def test_backfill_ex_rights_band_suspect_skipped(tmp_path):
     s = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
     assert s["filled"] == 0 and s["bandSuspectN"] == 1
     assert s["bandSuspectSamples"][0]["code"] == "002652"
-    assert db["kpl_auction_price"].find_one({"_id": "2026-11-18"}) is None, "嫌疑值不写库"
+    doc = db["kpl_bidding_series"].find_one({"_id": "2026-11-18"})
+    assert "002652" not in (doc.get("open_pct") or {}), "嫌疑值不写库"
 
 
 def test_backfill_band_allows_tick_rounding_low_price(tmp_path):
@@ -181,7 +168,7 @@ def test_backfill_noop_writeok_and_prevclose_not_persisted(tmp_path):
     db = _mkdb({"2026-11-18": ["002652"]}, {})
     s = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
     assert s["writeOk"] and s["filled"] == 1
-    rec = db["kpl_auction_price"].find_one({"_id": "2026-11-18"})["s0925"]["002652"]
+    rec = db["kpl_bidding_series"].find_one({"_id": "2026-11-18"})["open_pct"]["002652"]
     assert "prevClose" not in rec and rec["src"] == "tdx_lday"
     s2 = backfill(db, ["2026-11-18"], root=root)["2026-11-18"]
     assert s2["filled"] == 0 and s2["writeOk"], "全已存 → 无操作成功非失败"

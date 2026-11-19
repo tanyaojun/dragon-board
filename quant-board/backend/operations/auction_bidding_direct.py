@@ -198,3 +198,122 @@ def collect_mbl_frame_series(db: Any, date: str, now: Any = None) -> dict[str, A
          "$push": {"frames": {"$each": [frame], "$slice": -MBL_FRAME_MAX}}},
         upsert=True)
     return {"state": "ok", "frameN": len(frames) + 1, "n_rows": len(raw_rows)}
+
+
+# ══════ 盯盘 Type=7 撮合终值直采（2026-11-19 裁决②：全面对齐 App、单主链）══════
+# 终值权威源：掉池股离 pid8 池后 socket 无撮合终值，App 自身用盯盘 HTTP(Type=7) 补此块。
+# 合同复用 Type=4 冻结族（同 HomeDingPan 统一数组位 17 列，MITM 定案）：a=DaBanList&
+# c=HomeDingPan&Type=7&PidType=8；响应行键 list（survey §6 实抓 {list,day,ttag}）。
+# 盘后（≥09:25 撮合后）col5/2/8/7 = 撮合终值 竞价涨幅/价/成交额/换手；17 列无 end_time
+# 列→end_time=None（fail-visible，derive 回退 pid8 观测末帧披露）。
+# 频控预算（红线 10）：盘后 1 次/日（≤MAX_PAGES 页），走 _post_form 全局 ≥2s 锁；
+# 页面/读口只读库不触发上游。跨会话合同：rows[code]={pct,price,amount,turnover,end_time}。
+COLLECTION_AUCTION_MATCHED = "kpl_auction_matched"
+
+
+def fetch_auction_matched_list(page_size: int = 100, max_pages: int = MAX_PAGES) -> dict[str, Any]:
+    """盯盘 Type=7 分页拉全量（盘后终值；rows<page_size 即末页）。失败结构化返回。"""
+    all_rows: dict[str, dict] = {}
+    attempts: list[dict] = []
+    meta: dict[str, Any] = {}
+    truncated = False
+    for page in range(max_pages):
+        index = page * page_size
+        params = _base_params()
+        params.update({"a": "DaBanList", "c": "HomeDingPan", "Type": 7,
+                       "PidType": 8, "Order": 1, "st": page_size, "Index": index,
+                       "Is_st": 1})
+        try:
+            data = _post(KBL_MBL_HOST, params)
+        except Exception as exc:  # noqa: BLE001 — 红线 9：结构化记录不重试
+            attempts.append({"index": index, "state": f"http_error:{type(exc).__name__}"})
+            return {"state": f"http_error:{type(exc).__name__}", "rows": all_rows,
+                    "n_rows": len(all_rows), "pages": page, "attempts": attempts,
+                    "message": str(exc)[:120]}
+        errcode = data.get("errcode")
+        if errcode is not None and errcode not in (0, "0"):
+            attempts.append({"index": index, "state": f"kpl_errcode:{errcode}"})
+            return {"state": f"kpl_errcode:{errcode}", "rows": all_rows,
+                    "n_rows": len(all_rows), "pages": page, "attempts": attempts,
+                    "message": str(data.get("msg") or "")[:120]}
+        rows_raw = data.get("list")
+        if not isinstance(rows_raw, list):
+            rows_raw = data.get("info")   # 同族回退键（fail-visible 记录）
+        if not isinstance(rows_raw, list):
+            attempts.append({"index": index, "state": "parse_error:list_not_list"})
+            return {"state": "parse_error:list_not_list", "rows": all_rows,
+                    "n_rows": len(all_rows), "pages": page, "attempts": attempts}
+        page_rows = parse_mbl_rows(rows_raw)
+        all_rows.update(page_rows)
+        meta = {k: data.get(k) for k in ("day", "time", "status") if data.get(k) is not None}
+        attempts.append({"index": index, "state": "ok", "n_rows": len(page_rows)})
+        if len(rows_raw) < page_size or not page_rows:
+            break
+    else:
+        truncated = True
+    return {"state": "ok", "rows": all_rows, "n_rows": len(all_rows),
+            "pages": len(attempts), "attempts": attempts, "truncated": truncated, **meta}
+
+
+def _matched_terminal_rows(rows: dict[str, dict]) -> dict[str, dict]:
+    """17 列具名行 → 跨会话终值合同 {pct,price,amount,turnover,end_time}（缺列如实 None）。"""
+    out: dict[str, dict] = {}
+    for c6, r in (rows or {}).items():
+        out[c6] = {"pct": r.get("bidding_pct"), "price": r.get("price"),
+                   "amount": r.get("bidding_amount"), "turnover": r.get("bidding_turnover"),
+                   "end_time": None}   # 17 列无时点列，fail-visible
+    return out
+
+
+def persist_auction_matched(db: Any, date: str, result: dict[str, Any]) -> dict[str, Any]:
+    """终值日档落库（_id=date）。ok 照写（含空档事实）；部分 rows 也写(partial)；
+    非 ok 且 0 行不写（不覆盖既有好档）。"""
+    rows = _matched_terminal_rows(result.get("rows") or {})
+    state = result.get("state")
+    partial = bool(state and state != "ok")
+    now = datetime.now(_TZ_CST).isoformat(timespec="seconds")
+    doc = {"_id": date, "date": date, "source": "kpl_direct_dingpan_type7",
+           "rows": rows, "n_rows": len(rows), "pages": result.get("pages"),
+           "day": result.get("day"), "time": result.get("time"),
+           "state": state, "partial": partial,
+           "truncated": bool(result.get("truncated")),
+           "attempts": result.get("attempts") or [],
+           "fetchedAt": now, "updatedAt": now}
+    db[COLLECTION_AUCTION_MATCHED].replace_one({"_id": date}, doc, upsert=True)
+    return {"ok": True, "collection": COLLECTION_AUCTION_MATCHED, "n_rows": len(rows),
+            "partial": partial, "state": state}
+
+
+def collect_auction_matched_direct(db: Any, date: str) -> dict[str, Any]:
+    """采集+落库一体（盘后 16:10 挂链调用；dry-run 由调用方短路）。
+
+    红线护栏（2026-11-19 review B1）：Type=7 为实时端点（请求无日期参数，仅返回
+    最近交易日数据）；响应 day≠请求日或缺 day 时一律不落库，防当日数据错标成
+    历史日污染终值权威档（fail-visible 结构化返回）。
+    """
+    result = fetch_auction_matched_list()
+    out = {k: result.get(k) for k in ("state", "n_rows", "pages", "day", "time",
+                                      "message") if result.get(k) is not None}
+    out["attempts"] = result.get("attempts") or []
+    out["truncated"] = bool(result.get("truncated"))
+    fetched_day = str(result.get("day") or "")
+    out["fetchedDay"] = fetched_day or None
+    if result.get("state") == "ok" or result.get("rows"):
+        if not fetched_day:
+            out["state"] = "day_missing"
+            out["message"] = "Type=7 响应缺 day 元数据，无法核对归属日，不落库（fail-visible）"
+        elif fetched_day != date:
+            out["state"] = "day_mismatch"
+            out["requested"] = date
+            out["message"] = "Type=7 仅返回最近交易日数据，请求日≠返回日不落库（防错档污染）"
+        else:
+            out["persistState"] = persist_auction_matched(db, date, result)
+    return out
+
+
+def load_auction_matched(db: Any, date: str) -> dict[str, dict] | None:
+    """终值日档读（纯库读）；无档返回 None（调用方 fail-visible 回退应急链）。"""
+    doc = db[COLLECTION_AUCTION_MATCHED].find_one({"_id": date})
+    if not doc:
+        return None
+    return doc.get("rows") or {}

@@ -1653,10 +1653,6 @@ def load_bidding_series(db: Any, date: str, *, codes_only: bool = False) -> dict
     return {**meta, "ticks": ticks}
 
 
-# ── 09:15/09:25 集合竞价价格+涨幅存档（2026-11-18 用户裁决：3006 现有流归档）──
-# 真 09:25 = 撮合开盘价（App 个股竞价面板「匹配价」09:25 冻结=开）；试盘三源
-# （MBL/bid/pid8 序列）均成员制，掉池股无终值 → 以 3006 行情 09:25 快照为权威。
-# 09:15 快照同存（首帧竞价价/涨幅），供审计与「试盘顶板 vs 撮合回落」对照。
 # 逐 tick 日档集合名（新形态写路径唯一集合；读走 load_bidding_series）
 _SERIES_INDEXED_DBS: set[str] = set()
 
@@ -1676,31 +1672,6 @@ def _ensure_series_index(db: Any) -> None:
         pass
 
 
-_AUCTION_PRICE_COLLECTION = "kpl_auction_price"
-
-
-def archive_auction_price(db: Any, date: str, *,
-                          s0915: dict[str, dict] | None = None,
-                          s0925: dict[str, dict] | None = None) -> dict[str, Any]:
-    """09:15/09:25 价格+涨幅快照落库（单写者=collector；字段级 $set 不覆盖他股）。
-
-    s0915/s0925 = {code: {"price": 元, "pct": %, "ts": epoch}}；只写传入新股。
-    无 date/空入参 → 结构化拒绝（不猜不补）。"""
-    if not date:
-        return {"ok": False, "reason": "no_date"}
-    s0915 = s0915 or {}
-    s0925 = s0925 or {}
-    if not s0915 and not s0925:
-        return {"ok": False, "reason": "empty"}
-    doc: dict[str, Any] = {}
-    for code, rec in s0915.items():
-        doc[f"s0915.{code}"] = rec
-    for code, rec in s0925.items():
-        doc[f"s0925.{code}"] = rec
-    db[_AUCTION_PRICE_COLLECTION].update_one({"_id": date}, {"$set": doc}, upsert=True)
-    return {"ok": True, "n15": len(s0915), "n25": len(s0925)}
-
-
-def load_auction_price(db: Any, date: str) -> dict[str, Any] | None:
-    """09:15/09:25 价格存档读（纯库读）；无档返回 None。"""
-    return db[_AUCTION_PRICE_COLLECTION].find_one({"_id": date})
+# kpl_auction_price（3006 s0915/s0925 存档）2026-11-19 裁决①退役：终值权威=
+# kpl_auction_matched（KPL 直连盯盘 Type=7）+ TDX open_pct 应急；09:15=pid8 series_first。
+# 读写函数随退役删除（红线 1 单主链，回退靠 git）。

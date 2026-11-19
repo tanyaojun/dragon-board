@@ -1,6 +1,6 @@
 # 竞价试盘密度与序列存储修复实施计划（2026-11-19）
 
-> 状态：**已实施（A/C/D + 生产迁移，2026-11-19 盘后）；B 已落地默认 off，待次日窗预登记开火**
+> 状态：**已实施（A/C/D + 生产迁移 + B 默认 on，2026-11-19）；B 默认 on 依用户裁决（socket 无客户端频控、采集不烧 token 无开火门）——下文「预登记开火/默认 off/频控门」措辞作废，仅留窗内 fail-visible 观测**
 > （本文是实施单一依据；按 §8 顺序逐件落地，同轮同步展示/测试/文档，AGENTS §1.2-5；实施记录见 §10）。
 > 触发：603324 盛剑科技 11-19 早盘工作台试盘页 vs WzsLinker 对拍差异复盘。
 > 关联：`auction-trial-source-survey-20261114.md`（Wzs 上游=KPL 盯盘 Type=7 服务端统计）、
@@ -39,9 +39,9 @@
 
 - 源码依据链见 §0.1（计划评审即红线 9 源码核对记录；README §3.11 同轮增补，含 jadx 路径与行号）。
 - collector 新增 `_pid8_refresh` lane：**窗门控 [09:15,09:30)**（App「页可见且静止」语义的无头等价=竞价窗，披露）；每 **3s** 重发 pid=8 各页 2103 请求（帧形态与 setup 6d 完全同款：pkg0x40+ext `02 0837`、priority 前插逻辑复用）；帧间拟人停顿复用 C2/C3；会话重建随 setup 初始 burst 自然重置；**ErrResp 1002 → 既有 fail-fast+退避梯，不新增重试循环**。
-- **频控预算（红线 10，注释入代码）**：7 页×1 帧/3s≈2.33 帧/s；窗 15min≈2100 帧/日；每页周期=App 静止刷新周期（3s），非客户端自创轮询；超预算只披露不静默。
+- **帧数观测（非门控；2026-11-19 用户裁决 socket 无客户端频控）**：7 页×1 帧/3s≈2.33 帧/s；窗 15min≈2100 帧/日；每页周期=App 静止刷新周期（3s），非自创轮询；帧数进 status 只披露。
 - status 观测字段：`pid8_refresh:{enabled,frames_sent,last_ts,send_drops,window_active}`；`corpus_persist.bid_series_*` 既有。
-- 开关 `KPL_PID8_REFRESH`：**实施轮默认 off** → 次日窗预登记开火（§6）验收通过后同轮翻默认 on+重启；异常（1002/rst 升级）env 关+重启即回退，**禁止盲搜参数**（红线 9）。
+- 开关 `KPL_PID8_REFRESH`：**默认 on（缺省 1）**（2026-11-19 用户裁决：socket 无客户端频控，App 3s 即接受证据，采集不烧 token 无开火门）；1002/rst 走既有 fail-fast+退避；env=0 可关+重启回退，**禁止盲搜参数**（红线 9）。
 - 落库联动：2103 pid8 每帧即归档（既有钩子不变）→ 窗内 tick≈2100/日，逐 tick 文档无压力；derive 窗过滤/early-late 计数不变。
 
 ## 4. 改动 C：重启与披露同步（红线 5）
@@ -71,16 +71,16 @@ supplement/backfill 的 meta `$set` 写口（L78-84）零改动。derive/leader_
 - B lane 测试：mock socket，3s 节拍/窗门控/会话重置/1002 fail-fast/帧形态 pkg0x40+ext 断言（同 setup 6d 断言族）。
 - relay JS：node --check 提取脚本或既有 `_relay_js_check.js` 同款校验。
 
-**次日竞价窗预登记开火（红线 9/10，预算≤2500 帧，单窗）**：
-- 开 `KPL_PID8_REFRESH=1` 重启 :8002；观察 status：1002/rst 计数 vs 基线不升级、`bid_series_fail=0`。
+**窗内 fail-visible 观测（非门控；原「预登记开火」作废——socket 无频控、采集不烧 token 无开火，2026-11-19 用户裁决）**：
+- B 默认 on（`KPL_PID8_REFRESH` 缺省 1）；重启 :8002 后观察 status：1002/rst 计数 vs 基线、`bid_series_fail=0`（诊断披露，非验收门）。
 - `scripts/auction_window_check.py` 验收阈值更新：①首 tick ≤09:15:10；②窗内观测事件 ≥150；③gap 中位 ≤4s、max ≤15s（会话轮转上限）；④603324 类首开/首加与本地 kpl_auction_matched（KPL 直连盯盘 Type=7 终值档）对拍，纯本地零外呼（2026-11-19 全直连裁决清理 wzs）；值层收敛（首开差 ≤5%、首加同笔），档未落地结构化披露不伪 0。
-- 验收通过→翻默认 on+重启+README §3.11 勾选；不通过→env off 回退，残留登记，**不盲探**。
+- B 已默认 on；上述阈值作窗内诊断披露，异常 env=0 回退+残留登记，**不盲探**。
 
 ## 7. 残留登记（不在本轮，另立预登记）
 
 1. 会话 ~39s `eof_clean` 被杀（PC 适配残留）：B 落地后 pid8 密度不再依赖会话寿命；其余 lane 影响另评。
 2. 3006 lane s0915/s0925 零捕获：TDX 开盘棒/series_first 回退已披露；归因另立。
-3. 掉池股撮合终值（Wzs 1925万/0.58%）：盯盘 Type=7 HTTP 源为唯一现存源，接入需单主链裁决+频控登记，本轮不接；虚拟观测口径披露。
+3. 掉池股撮合终值（Wzs 1925万/0.58%）：盯盘 Type=7 HTTP 源为唯一现存源，接入需单主链裁决+频控登记，本轮不接（已于 2026-11-19 裁决②接入并定为终值权威，见 residuals 收尾）；虚拟观测口径披露。
 4. Wzs end_time/final 精确判据（服务端试盘结束统计）：勘察 §4 待窗内定案；我方观测末帧语义 tooltip 已披露。
 
 ## 8. 实施顺序与回退
@@ -88,15 +88,15 @@ supplement/backfill 的 meta `$set` 写口（L78-84）零改动。derive/leader_
 1. A 存储重构 + D 读口切换 + 迁移脚本（test 库干跑）→ pytest 全绿。
 2. C tooltip 同步 + 重启 :8000（trio 落地，零值消除）→ API 对拍 603324。
 3. 生产迁移（export 归档→逐档改写）→ window_check 读口验证。
-4. B lane（默认 off）+ 测试 → 重启 :8002 → 次日窗预登记开火验收 → 翻默认 on。
+4. B lane（默认 on）+ 测试 → 重启 :8002 → 窗内 fail-visible 观测（非门控）。
 5. README §3.11 增补（源码链+预算+验收结果）同轮落。
 回退：git revert；B=env off；存储=重导入 data/backups 归档；C=重启旧 commit。
 
 ## 9. 假设与默认
 
-- 假设服务端对 2103 每页 3s 重请求与 App 同款受理（源码假设，开火验证；1002 即停）。
+- 服务端对 2103 每页 3s 重请求与 App 同款受理（App 自身 3s 重请求即源码证据；1002 走 fail-fast+退避）。
 - 默认 storage 形态=逐 tick 文档+日 meta（技术裁决：append-only 时序标准形态，消费合同经 loader 同形，迁移有界）。
-- 默认 B 先 off 后 on（预登记方法论 §3.7）；窗门控 [09:15,09:30) 为 App 页可见语义的无头等价（披露）。
+- B 默认 on（2026-11-19 用户裁决：socket 无客户端频控、无开火门）；窗门控 [09:15,09:30) 为 App 页可见语义的无头等价（披露）。
 - 历史已丢 tick 不可恢复（同 11-18 披露口径），当日派生首开/首加不作交易判据。
 
 ## 10. 实施记录（2026-11-19 盘后，18:49-19:30）
@@ -137,9 +137,9 @@ supplement/backfill 的 meta `$set` 写口（L78-84）零改动。derive/leader_
   BiddingZTlQuotaPresenter.java:261-262/174-188、main_src SocketPresenter.java:193
   e((byte)4)；预算+预登记开火步骤）。
 
-**待办（次日竞价窗）**：按 README §3.11 预登记开火（KPL_PID8_REFRESH=1 重启 ：8002，
-预算 ≤2500 帧/单窗）→ window_check --matched 四项验收 → 通过翻默认 on+重启+勾选；
-不通过 env off 回退残留登记，不盲探。
+**窗内观测（非门控，原「预登记开火待办」作废）**：B 已默认 on（KPL_PID8_REFRESH 缺省 1）；
+重启 :8002 后 window_check --matched 四项作诊断披露（首 tick/事件数/gap/Type=7 对拍）；
+异常 env=0 回退+残留登记，不盲探。
 
 ## 11. 复审轮（2026-11-19 盘后，双 fresh-context 只读 reviewer 并行）
 

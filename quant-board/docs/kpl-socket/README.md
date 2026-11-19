@@ -565,26 +565,24 @@ ticks 实测 16,767,304B≈BSON 16MB 上限（tick 中位 26KB，旧 SERIES_MAX_
 改写→计数核对，幂等可重跑；test 库干跑验证后生产 11-17/18/19 三档 1488 tick
 全 ok，归档 data/backups/kpl_bidding_series_legacy_dragon_board_quant_*.json）。
 
-**pid8 3s 重请求 lane（B，已实施默认 off，待次日窗预登记开火）**：
+**pid8 3s 重请求 lane（B，已实施默认 on；2026-11-19 用户裁决：socket 无客户端频控、采集不烧 token 无开火门）**：
 `_drain_pid8_refresh` 窗门控 [09:15,09:30)（App「页可见且静止」语义的无头等价，
 披露），每 3s 重发 pid=8 各页 2103 请求（帧形态与 setup 6d 完全同款：pkg 0x40
 + ext 02 0837；读循环 2s recv 网格量化→实际节拍 3-4s，披露）；会话重建随 setup
 初始 burst 重置；ErrResp 1002 → 既有 fail-fast+退避梯，不新增重试循环。
-**频控预算（红线 10）**：7 页×1 帧/3s≈2.33 帧/s；窗 15min≈2100 帧/日（预登记
-验收预算 ≤2500 帧/单窗）；每页周期=App 静止刷新周期（3s），非客户端自创轮询。
-开关 `KPL_PID8_REFRESH`（默认 0）；status 观测 `pid8_refresh:{enabled,frames_sent,
-last_ts,send_drops,window_active}`。
+**帧数观测（非门控；2026-11-19 用户裁决 socket 无客户端频控，杀连真凶=协议非法帧归红线 9）**：
+7 页×1 帧/3s≈2.33 帧/s；窗 15min≈2100 帧/日；每页周期=App 静止刷新周期（3s），
+非自创轮询；App 自身 3s 重请求即服务端接受证据。开关 `KPL_PID8_REFRESH`（默认 1）；
+status 观测 `pid8_refresh:{enabled,frames_sent,last_ts,send_drops,window_active}`。
 
-**次日竞价窗预登记开火（预算 ≤2500 帧，单窗）**：
-1. `KPL_PID8_REFRESH=1` 重启 :8002；观察 status：1002/rst 计数 vs 基线不升级、
-   `corpus_persist.bid_series_fail=0`、`sub_registry.evicted_n` 零增长（review L2：
-   长寿会话下 pid8 lane 条目逼近 2000 上限会挤占其他 lane pending，先观察后定案）。
-2. 窗后 `scripts/auction_window_check.py --date <当日> --wzs`（④ 预算 1 GET，
-   survey §6 合同不带 refresh）：①首 tick ≤09:15:10；②窗内观测事件 ≥150；
-   ③gap 中位 ≤4s、max ≤15s（会话轮转上限）；④603324 类首开/首加与 Wzs 同日
-   缓存对拍值层收敛（首开差 ≤5%、首加同笔）。
-3. 验收通过 → 翻默认 on（serve_kpl_socket `_PID8_REFRESH` 缺省改 1）+重启+
-   本节勾选；不通过 → env off 回退，残留登记，**不盲探**（红线 9）。
+**窗内 fail-visible 观测（非门控；原「预登记开火」作废——采集不烧 token 无开火，开火预登记仅 jev 红线 7）**：
+1. B 默认 on（`_PID8_REFRESH` 缺省 1）；重启 :8002 后观察 status：1002/rst 计数 vs 基线、
+   `corpus_persist.bid_series_fail=0`、`sub_registry.evicted_n`（review L2：长寿会话下
+   pid8 lane 条目逼近 2000 上限会挤占其他 lane pending，诊断披露后定案）。
+2. 窗后 `scripts/auction_window_check.py --date <当日> --matched`（纯本地零外呼，读
+   kpl_auction_matched Type=7 终值档）：①首 tick ≤09:15:10；②窗内观测事件 ≥150；
+   ③gap 中位 ≤4s、max ≤15s；④603324 类首开/首加与本地终值档对拍（档未落地结构化披露不伪 0）。
+3. B 已默认 on；上述阈值作诊断披露，异常 env=0 回退+残留登记，**不盲探**（红线 9）。
 
 **同轮披露同步（C/D，已实施）**：:8000 重启落地 trio 投影（603324 jj_amount
 0→14187008 src=mbl_col10_preexit、jj_turnover 0→1.0974 src=derived_cap、net=None

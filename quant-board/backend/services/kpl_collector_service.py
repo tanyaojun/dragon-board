@@ -317,9 +317,10 @@ class KplCollectorService:
         # 默认周期 3000ms，Xf(666)→Pg()→p.j0(firstVisible,count)→a0(i,i2,true)
         # →y(2103,true) 0x40 订阅通道重发请求；.tmp_review/jadx_out_signsvc）。
         # 服务端对 2103 按「请求-快照」回整页 burst，会话内无周期更新——
-        # App 靠 3s 定时重请求取密度，不是靠服务端周期推送。实施轮默认 off，
-        # 次日窗预登记开火验收通过后翻默认 on（KPL_PID8_REFRESH）。
-        pid8_refresh: bool = False,
+        # App 靠 3s 定时重请求取密度，不是靠服务端周期推送。socket 无客户端频控
+        # （2026-11-19 用户裁决；App 3s 即接受证据），默认 on；协议正确性归红线 9，
+        # 1002/rst 走既有 fail-fast+退避，帧数/evicted_n fail-visible 观测（=0 可关）。
+        pid8_refresh: bool = True,
     ):
         if ka_mode not in ("610", "off", "none"):
             raise ValueError(f"ka_mode 非法值 {ka_mode!r}（仅支持 610|off|none）")
@@ -465,39 +466,14 @@ class KplCollectorService:
             "abn_ok": 0, "abn_fail": 0, "rplate_ok": 0, "rplate_fail": 0,
             # 竞价过程事实序列（2026-11-16 用户裁决：页面实时看竞价过程→事实采集落库）
             "bid_series_ok": 0, "bid_series_fail": 0,
-            # 09:15/09:25 集合竞价价格+涨幅存档（2026-11-18 用户裁决：3006 现有流）
-            "auct15_ok": 0, "auct25_ok": 0, "auct_fail": 0,
             "last_error": ""}
-        # 09:15/09:25 快照首帧去重（跨日重置；单写者=本采集线程）
-        self._auct_date: str = ""
-        self._auct15: set = set()
-        self._auct25: set = set()
-        # 竞价订阅 lane（2026-11-19 用户裁决：live 归档不得依赖浏览器竞价窗在线，
-        # 09:26 前出竞价龙头）：宇宙=pid=8 竞价池 2103 推送成员（服务端默认订阅面，
-        # 与浏览器无关）；窗 [09:15,09:30) 内会话中途增量补订 3006 + 并入 setup 面。
-        # 源码合同（红线 9，.tmp_review/main_src 零猜测）：w30.java:230 /
-        # StockInfoBottomSelectBar.java:175 App 会话中途 m(3006, ux0.c(3006).e((byte)4))
-        # 原行为；SelectedStockPresenter.k()/QuotationLandPresenter 面变重发同款。
-        # 频控预算（预登记 docs/hotlist-jev/auction-trial-direct-probe-preregistration-
-        # 20261116.md 增补二）：零新增连接（复用现有会话轮转）；面增量 ≤800 id 且仅
-        # 窗内；中途帧走 _drain_send 拟人停顿、≤200 id/帧（实测 1106 护栏）；
-        # 窗外 lane 不入面不发送（离屏生命周期，reset_subscriptions_to_default 同款教训）。
-        self._auction_lane_ids: List[str] = []      # 保序去重宇宙（窗内累积，跨日重置）
-        self._auction_lane_set: set = set()
-        self._auction_subscribed: set = set()       # 本会话已发面基线（setup 重置）
-        self._pending_auction_sub: List[str] = []   # 待中途补订（读循环 drain）
-        self._auction_lock = threading.Lock()
-        self._auction_lane_date: str = ""
-        self._auction_lane_cap = 800                # 订阅面预算上限（超帽只披露不静默）
-        self._auction_stats: Dict[str, Any] = {
-            "sub_frames": 0, "send_drops": 0, "cap_dropped_n": 0, "last_sub_ts": 0.0}
         # pid8 3s 重请求 lane（2026-11-19，App BaseTimerTaskFragment 3000ms 同款）。
-        # 频控预算（红线 10）：7 页×1 帧/3s≈2.33 帧/s；窗 [09:15,09:30) 15min≈2100
-        # 帧/日（预登记验收预算 ≤2500 帧/单窗）；每页周期=App 静止刷新周期（3s），
-        # 非客户端自创轮询；读循环 2s recv 网格量化→实际节拍 3-4s（披露）；
-        # 超预算只披露不静默（frames_sent/send_drops 进 status）。窗门控=App
-        # 「页可见且静止」语义的无头等价（披露）；ErrResp 1002 → 既有 fail-fast+
-        # 退避梯，不新增重试循环（红线 9）。
+        # socket 无客户端频控（2026-11-19 用户裁决）：7 页×1 帧/3s≈2.33 帧/s、窗
+        # [09:15,09:30)≈2100 帧/日仅作 status 观测预算（非门控）；每页周期=App 静止
+        # 刷新周期（3s），非自创轮询；读循环 2s recv 网格量化→实际节拍 3-4s（披露）；
+        # frames_sent/send_drops 进 status fail-visible。窗门控=App「页可见且静止」
+        # 语义的无头等价（披露）；ErrResp 1002 → 既有 fail-fast+退避梯，不新增重试
+        # 循环（红线 9）。
         self._pid8_refresh = bool(pid8_refresh)
         self._pid8_refresh_stats: Dict[str, Any] = {
             "frames_sent": 0, "last_ts": 0.0, "send_drops": 0}
@@ -703,178 +679,18 @@ class KplCollectorService:
             return None
         return get_runtime_mongodb_database()
 
-    def _capture_auction_price(self, quotes: Dict[str, Any]) -> None:
-        """3006 现有流归档 09:15/09:25 价格+涨幅（2026-11-18 用户裁决，零新增订阅）。
-
-        09:15 窗 [09:15,09:25) 首帧=竞价价/涨幅；09:25 窗 [09:25,09:30) 首帧=开盘价/涨幅
-        （真 09:25 撮合终值，掉池股亦有）。缩放协议锚（反编译 Hq.java descriptor +
-        DataStyleHelper 核实）：price uint32 ×10000→元（App S0=i/10000.0f）；
-        incRate proto **float**，本身即百分数（App b() 直显 "#0.00"+"%"，不缩放——
-        2026-11-18 复核推翻早期 ×100 错锚，未 live 前修正，零污染）。
-        启动晚于 09:25 → s0915 缺席（fail-visible，不拿 09:25 值冒充 09:15）。"""
-        from datetime import datetime, timedelta, timezone
-        now = time.time()
-        dt = datetime.fromtimestamp(now, timezone(timedelta(hours=8)))
-        hm = dt.hour * 3600 + dt.minute * 60 + dt.second
-        if not (9 * 3600 + 15 * 60 <= hm < 9 * 3600 + 30 * 60):
-            return
-        date = dt.strftime("%Y-%m-%d")
-        if date != self._auct_date:
-            self._auct_date = date
-            self._auct15 = set()
-            self._auct25 = set()
-        new15: Dict[str, dict] = {}
-        new25: Dict[str, dict] = {}
-        for it in (quotes or {}).get("items") or []:
-            code = str(it.get("stock_id") or "")[-6:]
-            # review m2：订阅面含板块 801044/885423 等——只收个股（A 股前缀白名单：
-            # 沪深主板 60/00、创 30、科 68、北交 43/83/87/92；勿用 ^8 粗匹配误伤板块）
-            if not code or not code.startswith(("60", "00", "30", "68", "43", "83", "87", "92")):
-                continue
-            rec: Dict[str, Any] = {"ts": now}
-            try:
-                p = float(it.get("price"))
-                if p > 0 and math.isfinite(p):
-                    rec["price"] = round(p / 10000.0, 4)
-            except (TypeError, ValueError, OverflowError):
-                pass
-            try:
-                pct = float(it.get("inc_rate"))   # float 原值即百分数，不缩放
-                if math.isfinite(pct):            # review M1：NaN/Inf 不占首帧名额
-                    rec["pct"] = round(pct, 4)
-            except (TypeError, ValueError, OverflowError):
-                pass
-            if not ({"price", "pct"} & rec.keys()):
-                continue   # price/inc_rate 全缺帧不占首帧名额（fail-visible 不伪存）
-            if hm < 9 * 3600 + 25 * 60:
-                if code not in self._auct15:
-                    self._auct15.add(code)
-                    new15[code] = rec
-            elif code not in self._auct25:
-                self._auct25.add(code)
-                new25[code] = rec
-        if new15 or new25:
-            self._persist_auction_price(date, new15, new25)
-
-    def _persist_auction_price(self, date: str, new15: dict, new25: dict) -> None:
-        try:
-            db = self._corpus_db()
-            if db is None:
-                raise RuntimeError("corpus_db_unavailable")
-            from backend.services.kpl_daban_archiver import archive_auction_price
-            r = archive_auction_price(db, date, s0915=new15, s0925=new25)
-            if not r.get("ok"):
-                raise RuntimeError(str(r.get("reason")))
-            self._corpus_persist_stats["auct15_ok"] += r.get("n15", 0)
-            self._corpus_persist_stats["auct25_ok"] += r.get("n25", 0)
-        except Exception as exc:  # noqa: BLE001 — 落库失败不阻断收流（fail-visible）
-            self._corpus_persist_stats["auct_fail"] += 1
-            self._corpus_persist_stats["last_error"] = f"auction_price:{type(exc).__name__}"
-            # review m1：失败批次退回名额（archive 单批 update_one 原子，失败=零写入，
-            # 下帧重试安全），不永久锁死当日存档；镜像 _persist_corpus 的 _err 披露
-            self._auct15.difference_update(new15.keys())
-            self._auct25.difference_update(new25.keys())
-            self._err(f"auction_price persist failed: {exc}")
-
     @staticmethod
     def _auction_window_active(now: Optional[float] = None) -> bool:
-        """竞价订阅 lane 语义窗 [09:15,09:30) CST（与 _capture_auction_price 同窗）。"""
+        """pid8 3s 重请求 lane 语义窗 [09:15,09:30) CST（3006 lane 退役后仅 B 复用）。"""
         from datetime import datetime, timedelta, timezone
         dt = datetime.fromtimestamp(now if now is not None else time.time(),
                                     timezone(timedelta(hours=8)))
         hm = dt.hour * 3600 + dt.minute * 60 + dt.second
         return 9 * 3600 + 15 * 60 <= hm < 9 * 3600 + 30 * 60
 
-    def _feed_auction_lane(self, items: List[Dict[str, Any]]) -> int:
-        """pid=8 竞价池推送成员 → 订阅 lane 宇宙（服务端供料，浏览器无关）。
-
-        窗内才累积（窗外池推送无竞价语义，不膨胀订阅面）；跨日重置；个股白名单
-        与 _capture_auction_price 同款（板块 id 不入 3006 面）；超帽=订阅面预算
-        决策（非数据拒收：已订面推送仍全量收），cap_dropped_n 披露。
-        新成员入 _pending_auction_sub 由读循环 drain 中途补订（App 原行为）。"""
-        if not self._auction_window_active():
-            return 0
-        from datetime import datetime, timedelta, timezone
-        date = datetime.fromtimestamp(time.time(), timezone(timedelta(hours=8)))\
-            .strftime("%Y-%m-%d")
-        added: List[str] = []
-        with self._auction_lock:
-            if date != self._auction_lane_date:
-                self._auction_lane_date = date
-                self._auction_lane_ids = []
-                self._auction_lane_set = set()
-                self._pending_auction_sub = []
-            for it in items or []:
-                sid = str(it.get("stock_id") or "").strip()
-                code = sid[-6:]
-                if not code.startswith(("60", "00", "30", "68", "43", "83", "87", "92")):
-                    continue
-                if sid in self._auction_lane_set:
-                    continue
-                if len(self._auction_lane_ids) >= self._auction_lane_cap:
-                    self._auction_stats["cap_dropped_n"] += 1
-                    continue
-                self._auction_lane_set.add(sid)
-                self._auction_lane_ids.append(sid)
-                self._pending_auction_sub.append(sid)
-                added.append(sid)
-        if added:
-            self._emit(KplEvent(type="auction_lane_status", ts=time.time(),
-                                note=f"queued {len(added)} new 3006 auction subscriptions",
-                                n=len(self._auction_lane_ids), stock_ids=added))
-        return len(added)
-
     def _effective_stock_ids(self) -> List[str]:
-        """3006 setup 面 = 浏览器面 ∪ 竞价 lane（仅窗内；lane 服务端自有，
-        reset_subscriptions_to_default 只回落浏览器面不抹 lane）。"""
-        base = list(self._stock_ids)
-        if not self._auction_window_active():
-            return base
-        seen = set(base)
-        with self._auction_lock:
-            base += [s for s in self._auction_lane_ids if s not in seen]
-        return base
-
-    def _drain_auction_subs(self, sock: Any, next_seq: Any) -> None:
-        """发送待补订 3006 帧（仅会话线程；与 _drain_zt_reason_subs 同款合同：
-        整队一次发完、帧间拟人停顿、send 失败 fail-visible 后 fail-fast 重连，
-        下一会话 setup 全面自愈）。窗外清空不发送（面预算）。"""
-        if not self._auction_window_active():
-            with self._auction_lock:
-                self._pending_auction_sub = []
-            return
-        with self._auction_lock:
-            pending = list(self._pending_auction_sub)
-            self._pending_auction_sub = []
-        if not pending:
-            return
-        ext6 = bytes([0x02]) + struct.pack(">H", proto.CMD_HQ_ID_LIST)
-        chunks = list(self._chunks(pending))
-        items = [{"cmd": proto.CMD_HQ_ID_LIST,
-                  "req": b"".join(proto.pb_bytes(1, sid.encode()) for sid in chunk),
-                  "ext": ext6, "key": ",".join(chunk)}
-                 for chunk in chunks]
-        try:
-            self._drain_send(sock, next_seq, items, "auction")
-        except OSError as exc:
-            # _drain_send sent_count 计帧数（item=块）→ 换算 id 数披露
-            sent = sum(len(c) for c in chunks[:getattr(exc, "sent_count", 0)])
-            dropped = len(pending) - sent
-            self._auction_stats["send_drops"] += dropped
-            self._err(f"3006 auction subscribe send failed: {exc} "
-                      f"(sent={sent} dropped={dropped}, fail-fast reconnect)")
-            self._emit(KplEvent(type="subscribe_send_dropped", ts=time.time(),
-                                lane="auction", cmd=proto.CMD_HQ_ID_LIST,
-                                sent=sent, dropped=dropped, session=self._session_no,
-                                error=str(exc)))
-            raise
-        with self._auction_lock:
-            self._auction_subscribed.update(pending)
-        self._auction_stats["sub_frames"] += len(items)
-        self._auction_stats["last_sub_ts"] = time.time()
-        self._emit(KplEvent(type="auction_lane_status", ts=time.time(),
-                            note=f"sent {len(items)} mid-session 3006 frames",
-                            n=len(self._auction_subscribed), frames=len(items)))
+        """3006 setup 面=浏览器面（2026-11-19 3006 竞价 lane 退役，单主链对齐 App）。"""
+        return list(self._stock_ids)
 
     _PID8_REFRESH_INTERVAL_S = 3.0   # App BaseTimerTaskFragment 默认 3000ms 同款
 
@@ -940,21 +756,6 @@ class KplCollectorService:
                 "last_ts": self._pid8_refresh_stats["last_ts"],
                 "send_drops": self._pid8_refresh_stats["send_drops"],
                 "window_active": self._auction_window_active()}
-
-    def _auction_lane_status(self) -> Dict[str, Any]:
-        """竞价 lane 结构化观测（status 透出；不藏状态）。"""
-        with self._auction_lock:
-            n = len(self._auction_lane_ids)
-            pending = len(self._pending_auction_sub)
-            subscribed = len(self._auction_subscribed)
-            date = self._auction_lane_date
-        return {"window_active": self._auction_window_active(), "date": date,
-                "universe_n": n, "subscribed_n": subscribed, "pending_n": pending,
-                "cap": self._auction_lane_cap,
-                "cap_dropped_n": self._auction_stats["cap_dropped_n"],
-                "sub_frames": self._auction_stats["sub_frames"],
-                "send_drops": self._auction_stats["send_drops"],
-                "last_sub_ts": self._auction_stats["last_sub_ts"]}
 
     def _persist_corpus(self, lane: str, payload: Dict[str, Any]) -> None:
         """单条推送即时落库（线程内同步写，单写者=本采集线程；失败不阻断收流）。
@@ -1574,8 +1375,6 @@ class KplCollectorService:
                               if not (len(i) == 6 and i.startswith("8"))),
                 "chunks": len(self._sub_prio) + len(self._sub_rest),
             },
-            # 竞价订阅 lane 观测（2026-11-19 fail-visible：宇宙/已订/待订/窗/帽丢弃）
-            "auction_lane": self._auction_lane_status(),
             # pid8 3s 重请求 lane 观测（2026-11-19 密度修复，fail-visible）
             "pid8_refresh": self._pid8_refresh_status(),
             "corpus_persist": dict(self._corpus_persist_stats),
@@ -2138,12 +1937,6 @@ class KplCollectorService:
                 self._sub_registry.register(SubEntry(
                     cmd=proto.CMD_HQ_ID_LIST, req=hq, ext=ext6, seq=hq_seq,
                     lane="setup", key=",".join(chunk), sent_at=time.time()))
-            # 竞价 lane：setup 已覆盖当前全宇宙 → 重置本会话已发基线、清中途待队
-            # （setup 后新入池成员由 pid8 推送入队走 drain 补订）
-            with self._auction_lock:
-                self._auction_subscribed = set(face6)
-                self._pending_auction_sub = [
-                    s for s in self._auction_lane_ids if s not in self._auction_subscribed]
             # 分波订阅（KPL_SUB_STAGED=1）：wave2 收集非竞价 2103 页 + lhb 帧
             staged_wave2_frames: List[Dict[str, Any]] = []
             # 6c) 打板/情绪订阅（service_hq_daban.proto，2026-10-27 逆向）：
@@ -2401,9 +2194,6 @@ class KplCollectorService:
                 # 与原顺序下块在会话中段 stall 同量级，无新增风控面）。
                 # 分波订阅到点释放（KPL_SUB_STAGED=1；iso1 体积阈值定案，+150s failsafe）
                 self._release_staged_waves(now)
-                # 竞价 lane 补订排最前（仅窗内活跃，≤4 帧/次≈1.2s；09:25 撮合推送
-                # 时效优先于 detail flush 合同；窗外零帧零开销）
-                self._drain_auction_subs(sock, next_seq)
                 # pid8 3s 重请求（仅窗内+开关开；密度根因修复，plan §3）
                 self._drain_pid8_refresh(sock, next_seq, now)
                 self._drain_detail_subs(sock, next_seq)
@@ -2769,7 +2559,6 @@ class KplCollectorService:
             self._emit(KplEvent(type="stock_quotes", ts=time.time(),
                                 source="push" if fr.get("fmt") == "push" else "resp",
                                 **quotes))
-            self._capture_auction_price(quotes)
             return
         if cmd == proto.CMD_HQ_REASONS:
             # 2203 涨停原因推送（试点）：dec/解析 fail-visible，不静默丢弃
@@ -2931,9 +2720,6 @@ class KplCollectorService:
                 except (TypeError, ValueError):
                     pass
                 if int(data.get("pid_type", 0) or 0) == 8 and new_items:
-                    # 竞价订阅 lane 供料（2026-11-19）：先入订阅队再落库——
-                    # 补订时效不被 DB 写延迟拖后（09:26 龙头 deadlines）
-                    self._feed_auction_lane(new_items)
                     # 竞价过程事实序列（2026-11-16 事实采集裁决；2026-11-18 用户裁决
                     # 拆窗门控+节流）：pid=8 推送即全量落库，无 09:15-09:27 粗门、无
                     # ≥5s 节流（§4.0 数据链禁硬门禁：全量保存；竞价语义窗过滤由消费层

@@ -112,12 +112,13 @@ if _KA_MODE not in ("610", "off", "none"):
 #   而非 cmd，使服务端授予每股独立 subId → 402 精准退单股（方案 §12，探针裁决后启用）。
 _SUB_UNIQUE_ID = os.environ.get("KPL_SUB_UNIQUE_ID", "0").strip().lower() in (
     "1", "true", "on", "yes")
-# KPL_PID8_REFRESH=1 → App 同款 pid8 3s 重请求 lane（2026-11-19 密度根因修复，
-# auction-trial-density-storage-fix-plan §3；源码：BaseTimerTaskFragment 3000ms
-# 定时重发 2103 pid=8 各页请求）。频控预算（红线 10）：7 页×1 帧/3s≈2.33 帧/s，
-# 窗 [09:15,09:30) ≈2100 帧/日（预登记验收预算 ≤2500 帧/单窗）。实施轮默认 off，
-# 次日窗预登记开火验收通过后翻默认 on；异常（1002/rst 升级）env 关+重启即回退。
-_PID8_REFRESH = os.environ.get("KPL_PID8_REFRESH", "0").strip().lower() in (
+# KPL_PID8_REFRESH（默认 1=on）→ App 同款 pid8 3s 重请求 lane（2026-11-19 密度根因
+# 修复，auction-trial-density-storage-fix-plan §3；源码：BaseTimerTaskFragment 3000ms
+# 定时重发 2103 pid=8 各页请求）。socket 无客户端频控（2026-11-19 用户裁决）：App
+# 自身 3s 重请求即服务端接受证据；约束=协议正确(红线9)+订阅面预算+重连退避，非频率
+# 门控；采集不烧 token 无「开火」一说。帧数（7 页×1/3s≈2.33 帧/s，窗≈2100 帧/日）
+# 仅作 status 观测；1002/rst 走既有 fail-fast+退避；env=0 可关+重启回退。
+_PID8_REFRESH = os.environ.get("KPL_PID8_REFRESH", "1").strip().lower() in (
     "1", "true", "on", "yes")
 # 3004 单帧拉取条数（2026-10-30 用户裁决 30→120，覆盖实际上榜全名单 ~83 只；
 # 切换需重启进程；开火验证记录见 docs/kpl-socket/README.md §13.2）

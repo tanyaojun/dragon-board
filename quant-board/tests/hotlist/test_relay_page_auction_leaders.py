@@ -179,31 +179,28 @@ def test_series_cache_no_refetch(html):
 
 
 def test_trial_two_pct_columns_20261118(html):
-    """review m5：竞价涨幅(0915)/开盘涨幅(0925) 两列拆分守卫——映射/表头/排序键/
-    子标签门控（aucPctN null 不出「首帧」假暗示，review n1）。"""
+    """竞价涨幅(0915)/开盘涨幅(0925) 两列拆分守卫——映射/表头/排序键/业务语义 tooltip。
+    2026-11-19 用户裁决：逐行源子标签删除（画蛇添足致字段溢出）；tooltip 改业务语义。"""
     fn = _fn(html, "atRender")
     assert "aucPctN: atNum(r.pct0915)" in fn
     assert "openPctN: atNum(r.pct0925)" in fn and "openPrN: atNum(r.p0925)" in fn
     assert "lbThSort('竞价涨幅', 'aucPctN'" in fn
     assert "lbThSort('开盘涨幅', 'openPctN'" in fn
-    assert "r.aucPctN != null ? (r.jj915Src === 'open0915_archive'" in fn, \
-        "子标签以值在场门控（null 不暗示存在观测）"
-    assert "开盘涨幅=09:25 撮合开盘涨幅" in fn and "src=tdx_lday" in fn
+    assert "开盘涨幅＝09:25 集合竞价撮合开盘价相对昨收的涨幅" in fn
     assert "stockSort: {key: 'aucPctN', dir: -1}" in html, "默认排序键与竞价涨幅列一致"
-    # 2026-11-19：开盘涨幅源逐行披露（存档/TDX 开盘棒）+ 值在场门控子标签
     assert "openSrc: r.open0925Src" in fn
-    assert "r.openPctN != null && r.openSrc ?" in fn
-    assert "'TDX 开盘'" in fn and "'存档 09:25'" in fn
     assert "open0925TdxN" in fn, "页头 0925 覆盖计数含 TDX 兜底档（fail-visible）"
+    # 子标签已删（用户裁决）：单元格只留值，不再渲染源标签
+    assert "kpl-sub>首帧" not in fn and "KPL_BID_TRIO_SRC[r.jjTurnoverSrc]" not in fn
 
 
 def test_trial_board_mean_label_0925(html):
-    """review m4：左板均值列=jj_percent(09:25 打分口径)——标签改「开盘涨幅均值」
-    消除与右表 09:15 竞价涨幅的同名两时点漂移，tooltip 披露口径。"""
+    """左板均值列标签「开盘涨幅均值」（09:25 口径），与右表 09:15 竞价涨幅区分；
+    tooltip 业务语义（2026-11-19 用户裁决：去开发术语）。"""
     fn = _fn(html, "atRender")
     assert "lbThSort('开盘涨幅均值', 'pct'" in fn
     assert "竞价涨幅均值" not in fn
-    assert "打分/均值门口径" in fn
+    assert "开盘涨幅均值＝板块成员 09:25 开盘涨幅的平均" in fn
 
 
 def test_trial_null_last_sort(html):
@@ -218,32 +215,31 @@ def test_trial_state_coverage_in_stats(html):
     """review n4：trialState 0925/0915 覆盖计数进页头（fail-visible 页面层补齐）。"""
     assert "AT.trialState = (r && r.trialState) || null;" in html
     fn = _fn(html, "atRender")
-    assert "0925存档" in fn and "0915存档" in fn and "seriesFirst0915N" in fn
+    assert "Type=7终值" in fn and "0915首帧" in fn and "seriesFirst0915N" in fn
+    assert "0915存档" not in fn, "0915 死计数器已随 3006 退役删除（review M1）"
 
 
 def test_bk_name_src_disclosure_20261119(html):
-    """2026-11-19 裁决 1+2：bk_name 回退链逐股源披露（mbl_same/mbl_prev/bid_plate）。"""
-    assert "板块来源=" in html
+    """bk_name 来源逐股披露，业务语义（同日榜单/前日榜单/竞价推送；2026-11-19 去源编码）。"""
+    assert "题材名来源：" in html
     assert "esc(r.bkNameSrc" in html
-    assert "r.bkNameSrc" in html
-    assert "mbl_prev=前日MBL" in html and "bid_plate=pid8推送" in html
+    assert "同日榜单" in html and "前日榜单" in html and "竞价推送" in html
 
 
-def test_trial_jj_trio_tooltip_projection_20261119(html):
-    """改动 C（density-storage-fix-plan §4）：jj 换手/成交额 tooltip 同步投影
-    状态机口径 + jjAmountSrc/jjTurnoverSrc 逐行 sub 披露（open0925Src 同款）；
-    旧措辞「09:25 冻结（MBL→bid）优先，缺位=末帧观测值」退役；start/end 观测
-    首末帧 tooltip 保留不动。"""
+def test_trial_jj_tooltip_business_semantics_20261119(html):
+    """jj 换手/成交额 + start/end tooltip 业务语义（2026-11-19 用户裁决：去开发术语
+    pid8/Type=7/投影状态机/源编码；保留观测值/估算/掉池前非最终/缺失不补零口径提示）；
+    逐行源子标签删除（致字段溢出）。"""
     fn = _fn(html, "atRender")
-    assert "投影状态机（2026-11-19 trio）" in fn
-    assert "mbl_postmatch 撮合公布" in fn
-    assert "mbl_col10_virtual 留池窗内虚拟" in fn
-    assert "mbl_col10_preexit 掉池前虚拟观测（≠撮合终值）" in fn
-    assert "derived_cap 派生换手=额/流通市值×100" in fn
-    assert "None 不烘 0" in fn
-    assert "KPL_BID_TRIO_SRC[r.jjTurnoverSrc]" in fn
-    assert "KPL_BID_TRIO_SRC[r.jjAmountSrc]" in fn
+    assert "竞价成交额＝09:25 撮合成交金额（元）" in fn
+    assert "掉池股取掉池前最后观测值（非最终撮合值）" in fn
+    assert "竞价换手＝09:25 撮合成交量占流通股本的比例" in fn
+    assert "按成交额÷流通市值估算" in fn
+    assert "缺失（不补零）" in fn
+    assert "试盘开始＝首次观测到试盘单的时间" in fn
+    assert "试盘结束＝最后观测到试盘单的时间" in fn
+    # 开发术语退出试盘表 tooltip（源编码映射 KPL_BID_TRIO_SRC 仍供他处 kplBidTrioTip 用）
+    assert "投影状态机" not in fn and "dingpan_postmatch" not in fn
+    assert "mbl_postmatch" not in fn and "derived_cap" not in fn
     assert "09:25 冻结 bidding_turnover（MBL→bid）优先" not in html
     assert "09:25 冻结 bidding_amount（MBL→bid）优先" not in html
-    assert "观测首帧时点（官方序列，≠Wzs 试盘开始语义）" in fn
-    assert "观测末帧时点（官方序列，≠Wzs 试盘结束语义）" in fn

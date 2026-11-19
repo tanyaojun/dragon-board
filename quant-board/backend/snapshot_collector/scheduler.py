@@ -88,8 +88,7 @@ class SnapshotCollectorScheduler:
         # 竞价龙头晨间链（vA1，2026-11-13 预登记：09:26 投喂 + 16:10 结局回填）
         self._auction_leader_last: dict[str, Any] | None = None
         self._auction_leader_settle_last: dict[str, Any] | None = None
-        # 最强风口红名观察（2026-11-15 用户裁决「先观察再定」：15:10 采集 + T+1 回填）
-        self._fengkou_red_obs_last: dict[str, Any] | None = None
+        self._auction_matched_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -166,7 +165,7 @@ class SnapshotCollectorScheduler:
             "themeLeaderLhbBackfill": self._theme_leader_lhb_backfill_last,
             "auctionLeader": self._auction_leader_last,
             "auctionLeaderSettle": self._auction_leader_settle_last,
-            "fengkouRedObs": self._fengkou_red_obs_last,
+            "auctionMatched": self._auction_matched_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -575,8 +574,8 @@ _THEME_LEADER_LHB_BACKFILL_SLOTS = (
 )
 
 # 竞价龙头晨间投喂时点（vA1，2026-11-13 预登记 A1；2026-11-19 用户裁决 1+2 前移）：
-# 09:25:20 = 9:25 撮合冻结 + pid8 首帧实测 09:25:13 在库 + 竞价 lane s0925 ≈09:25:10
-# 在库；run 内并行取数 + 40s join 预算保 09:26 deadline（实测旧 09:26 槽因 run 串行
+# 09:25:20 = 9:25 撮合冻结 + pid8 首帧实测 09:25:13 在库（3006 竞价 lane 已于
+# 2026-11-19 退役，时点依据=pid8 首帧 + Type=7 终值档）；run 内并行取数 + 40s join 预算保 09:26 deadline（实测旧 09:26 槽因 run 串行
 # 耗时投喂完成 09:28:28–09:29:14，见预登记增补三）。失败重试每日最多 3 次、间隔 ≥5 分钟
 # （重试日 ≥09:30:20 出 MBL 窗 → MBL 审计层 parallel_pending/skipped 披露，不阻断）。
 _AUCTION_LEADER_LABEL_AT = datetime.time(9, 25, 20)
@@ -586,9 +585,6 @@ _AUCTION_LEADER_LABEL_AT = datetime.time(9, 25, 20)
 _AUCTION_LEADER_WINDOW_END = datetime.time(9, 35)
 _AUCTION_LEADER_MAX_ATTEMPTS = 3
 _AUCTION_LEADER_RETRY_AFTER = datetime.timedelta(minutes=5)
-_FENGKOU_RED_OBS_AT = datetime.time(15, 10)
-_FENGKOU_RED_OBS_MAX_ATTEMPTS = 2
-_FENGKOU_RED_OBS_RETRY_AFTER = datetime.timedelta(minutes=15)
 # 当日结局回填时点（16:10 盘后：daban pool 日档已收全；零 token，lookback 自愈）
 _AUCTION_LEADER_SETTLE_AT = datetime.time(16, 10)
 
@@ -602,10 +598,10 @@ def _parse_iso(v: Any) -> datetime.datetime | None:
 
 # ── 日级 run 状态持久化（A，2026-11-19 用户裁决 D1）────────────────────────────
 # scheduler 纯内存 state（{date, done}）任何重启后 first_run=True → 补跑（事故：
-# 12:33:10 重启 → 12:33:40 补跑竞价链烧 jev token + 双龙头）。本节把三链
-# （auction_leader_label / theme_leader_label / fengkou_red_obs）的 first_run /
+# 12:33:10 重启 → 12:33:40 补跑竞价链烧 jev token + 双龙头）。本节把两链
+# （auction_leader_label / theme_leader_label）的 first_run /
 # retry_due 判定与 attempts 记账搬到 MongoDB 日档，内存 state["done"] 降级为缓存。
-# 三链同构共用一集合，doc _id="{chain}:{date}"（勘察结论：missed-slot 走的
+# 两链同构共用一集合，doc _id="{chain}:{date}"（勘察结论：missed-slot 走的
 # record_run 是快照槽专用通道，不复用；无 kpl_collector_events 集合）。
 # 单写者 = scheduler 本循环（§1.2-1）；读写失败 logger.exception 留痕不静默
 # （fail-visible）。读失败 = 「不可判定」，与「无档」严格区分：无档才允许按
@@ -888,41 +884,6 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                         await _auction_leader_slot_tick(
                             sched, state, now, trading_date,
                             run_auction_leader_label_once)
-                # 最强风口红名观察（15:10，2026-11-15 用户裁决「先观察再定」）：盘后一次性
-                # 6 发快照落 kpl_fengkou_red_obs + 历史 pending 日 T+1 回填；纯观察，
-                # 不进锚人群不烧 jev（预登记 fengkou-red-name-observation-20261115）。
-                # 限次退避镜像上方链；全源降级 → ok=False 重试一愆后放弃当日（fail-visible）。
-                if now.time() >= _FENGKOU_RED_OBS_AT:
-                    from backend.operations.schedule import (
-                        run_fengkou_red_observation_once, fengkou_red_observation_enabled)
-                    if fengkou_red_observation_enabled():
-                        # A 持久化（2026-11-19 用户裁决，同构推广）：first_run/retry
-                        # 走 MongoDB 日档，重启不再失忆补跑；内存 done 降级缓存。
-                        fk_first, _fk_doc = _persisted_first_run(
-                            "fengkou_red_obs", trading_date,
-                            in_memory_done="fengkou_red_obs" in state["done"])
-                        fk_retry = (False if fk_first else _persisted_retry_due(
-                            "fengkou_red_obs", trading_date,
-                            max_attempts=_FENGKOU_RED_OBS_MAX_ATTEMPTS,
-                            retry_after_s=_FENGKOU_RED_OBS_RETRY_AFTER.total_seconds(),
-                            now=now))
-                        if fk_first or fk_retry:
-                            state["done"].add("fengkou_red_obs")
-                            obs_attempts = _label_state_mark_attempt(
-                                "fengkou_red_obs", trading_date, now=now)
-                            state["fengkou_red_obs_attempts"] = obs_attempts
-                            obs_result = await asyncio.to_thread(
-                                run_fengkou_red_observation_once, trading_date)
-                            _label_state_mark_result(
-                                "fengkou_red_obs", trading_date,
-                                attempts=obs_attempts, ok=bool(obs_result.get("ok")),
-                                result=obs_result, now=now)
-                            sched._fengkou_red_obs_last = {
-                                **obs_result, "attempt": obs_attempts,
-                                "at": now.isoformat(timespec="seconds")}
-                            logger.info("fengkou red observation %s: %s", trading_date,
-                                        json.dumps(obs_result, ensure_ascii=False,
-                                                   default=str)[:200])
                 # 题材层龙头投喂（17:30，2026-10-30 用户裁决改时）：独立集合/独立题集代际。
                 # **限次退避重试**：失败（通道/取数/子进程）不一次判死——否则 8001 重启撞上
                 # 通道短暂不可用就会让那一天永远补不上（2026-10-20 实测：代理挂 → 9/9 degraded）。
@@ -995,6 +956,19 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                             logger.info("auction leader settle %s: %s", trading_date,
                                         json.dumps(st_result, ensure_ascii=False,
                                                    default=str)[:300])
+                # 盯盘 Type=7 撮合终值（2026-11-19 裁决②，16:10 盘后 1 发/日，advisory）
+                if now.time() >= _AUCTION_LEADER_SETTLE_AT:
+                    mt_key = "auction_matched"
+                    if mt_key not in state["done"]:
+                        state["done"].add(mt_key)
+                        from backend.operations.schedule import run_auction_matched_once
+                        mt_result = await asyncio.to_thread(
+                            run_auction_matched_once, trading_date)
+                        sched._auction_matched_last = {
+                            **mt_result, "at": now.isoformat(timespec="seconds")}
+                        logger.info("auction matched %s: %s", trading_date,
+                                    json.dumps(mt_result, ensure_ascii=False,
+                                               default=str)[:300])
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             raise

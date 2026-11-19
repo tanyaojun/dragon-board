@@ -37,8 +37,8 @@ class _Coll:
             if isinstance(q.get("_id"), dict) and "$lt" in q["_id"]:
                 return copy.deepcopy(self.owner.mbl_prev) if self.owner.mbl_prev else None
             return copy.deepcopy(self.owner.mbl) if self.owner.mbl else None
-        if self.name == "kpl_auction_price":
-            return copy.deepcopy(self.owner.auct) if self.owner.auct else None
+        if self.name == "kpl_auction_matched":
+            return copy.deepcopy(self.owner.matched) if self.owner.matched else None
         if self.name == "kpl_daban_pool":
             return {"bid_items": copy.deepcopy(self.owner.bid_items or [])}
         return None
@@ -47,15 +47,15 @@ class _Coll:
 class FakeSeriesDb:
     """三集合假库：kpl_bidding_series（2026-11-19 逐 tick 文档化，旧嵌入
     fixture 经 seed_series_legacy 适配为新形态）+ kpl_morning_bidding_raw
-    （bk_name join）+ kpl_auction_price（09:15/09:25 价格存档）。"""
+    （bk_name join）+ kpl_auction_matched（Type=7 终值）。"""
 
-    def __init__(self, doc=None, mbl_rows=None, auct=None, mbl_prev=None,
-                 bid_items=None):
+    def __init__(self, doc=None, mbl_rows=None, mbl_prev=None,
+                 bid_items=None, matched=None):
         self.series = FakeSeriesCol()
         if doc:
             seed_series_legacy(self.series, doc)
         self.mbl = {"rows": mbl_rows} if mbl_rows is not None else None
-        self.auct = auct
+        self.matched = {"rows": matched} if matched is not None else None
         self.mbl_prev = {"rows": mbl_prev} if mbl_prev is not None else None
         self.bid_items = bid_items
 
@@ -100,10 +100,10 @@ def test_derive_fields_from_series():
     # 委买额时序统计：首帧/峰值/末帧
     assert r["first_amount"] == 7.0e6 and r["max_amount"] == 9.0e6
     assert r["last_amount"] == 8.98e6
-    # 末帧语义：jj_percent 取末帧（pct 链不接投影）；jj_amount/jj_turnover 接投影层
-    # （2026-11-19：本 fixture 无公布锚（仅窗内 tick）→ in_pool_pre_match 态，
-    # 额=series 窗内虚拟观测（可计算部分保全），换手缺市值→None+no_float_cap）
-    assert r["jj_percent"] == 4.78
+    # 终值语义（2026-11-19 裁决②）：jj_percent=Type=7→TDX 应急；本 fixture 无
+    # matched/open_pct → 如实 None（不回退末帧）；jj_amount/jj_turnover 接投影层
+    # （无公布锚→series 窗内虚拟观测；换手缺市值→None+no_float_cap）
+    assert r["jj_percent"] is None and r["jjSource"] is None
     assert r["jj_amount"] == 1.3979616e7
     assert r["jjAmountSrc"] == "series_virtual"
     assert r["jj_turnover"] is None and r["jjTurnoverSrc"] is None
@@ -168,22 +168,23 @@ def test_derive_nan_not_zero():
     doc = _doc()
     doc["ticks"][0]["it"][0]["bidding_pct"] = float("nan")
     rows, _ = M.derive_trial_rows_from_series(FakeSeriesDb(doc), "2026-11-17")
-    # NaN 只污染首帧 bidding_pct；jj_percent 取末帧 → 正常值
-    assert rows["605255"]["jj_percent"] == 4.78
+    # NaN 污染首帧 bidding_pct → pct0915=None（不伪装 0）；终值无源 jj_percent=None
+    assert rows["605255"]["pct0915"] is None
+    assert rows["605255"]["jj_percent"] is None
 
 
-def test_derive_jj_frozen_mbl_primary():
-    """存档缺位时回退链：MBL 冻结值优先（jjSource=mbl_frozen）；
-    存档在则 open0925_archive 权威（见 test_derive_jj_authority_open0925_archive）。"""
-    mbl = _mbl_rows()
-    mbl["605255"].update({"bidding_pct": 5.5, "bidding_amount": 2e7,
-                          "bidding_turnover": 0.2})
+def test_derive_jj_terminal_matched_priority():
+    """裁决②：Type=7 终值（kpl_auction_matched）为 jj_percent/额/换手第一权威，
+    掉池股亦有；MBL/bid/末帧不再入 jj 链（3006 退役、单主链对齐 App）。"""
+    matched = {"605255": {"pct": 0.0, "price": 4.40, "amount": 1.925e7,
+                          "turnover": 0.58, "end_time": "09:25:00"}}
     rows, state = M.derive_trial_rows_from_series(
-        FakeSeriesDb(_doc(), mbl), "2026-11-17")
+        FakeSeriesDb(_doc(), _mbl_rows(), matched=matched), "2026-11-17")
     r = rows["605255"]
-    assert r["jj_percent"] == 5.5 and r["jj_amount"] == 2e7
-    assert r["jj_turnover"] == 0.2
-    assert r["jjSource"] == "mbl_frozen" and r["jjFrozen"] is True
+    assert r["jj_percent"] == 0.0 and r["jjSource"] == "dingpan_postmatch"
+    assert r["jj_amount"] == 1.925e7 and r["jjAmountSrc"] == "dingpan_postmatch"
+    assert r["jj_turnover"] == 0.58 and r["jjTurnoverSrc"] == "dingpan_postmatch"
+    assert r["jjFrozen"] is True and r["end_time"] == "09:25:00"
     assert state["frozenJoinedN"] == 1
     assert r["last_amount"] == 8.98e6
 
@@ -219,9 +220,9 @@ def test_derive_jj_bid_frozen_for_mbl_absent():
     rows, state = M.derive_trial_rows_from_series(
         DbWithBid(_doc(), _mbl_rows()), "2026-11-17")
     r = rows["605255"]
-    assert r["jj_percent"] == 6.6 and r["jj_amount"] == 3e7
-    assert r["jjAmountSrc"] == "bid_frozen"
-    assert r["jjSource"] == "bid_frozen" and r["jjFrozen"] is True
+    assert r["jj_amount"] == 3e7 and r["jjAmountSrc"] == "bid_frozen"
+    # jj_percent 不再回退 bid（终值链=Type=7→TDX）；无源→None
+    assert r["jj_percent"] is None and r["jjSource"] is None
 
 
 def test_derive_jj_frozen_partial_fallback():
@@ -232,10 +233,9 @@ def test_derive_jj_frozen_partial_fallback():
     rows, _ = M.derive_trial_rows_from_series(
         FakeSeriesDb(_doc(), mbl), "2026-11-17")
     r = rows["605255"]
-    assert r["jj_percent"] == 5.5
+    assert r["jj_percent"] is None and r["jjSource"] is None  # MBL 不再入 jj 链
     assert r["jj_amount"] == 1.3979616e7
     assert r["jjAmountSrc"] == "series_virtual"
-    assert r["jjSource"] == "mbl_frozen"
 
 
 def test_derive_jj_amount_turnover_projection_600410():
@@ -384,7 +384,7 @@ def test_derive_filters_late_ticks():
     assert state["tickN"] == 3
     r = rows["605255"]
     assert r["last_amount"] == 8980000.0, "末帧必须是 09:16:20 tick，非 09:32 开盘后污染帧"
-    assert r["jj_percent"] == 4.78
+    assert r["jj_percent"] is None  # 终值无源（末帧不再入 jj 链）
 
 
 def test_derive_filters_early_ticks():
@@ -411,47 +411,42 @@ def test_derive_filters_early_ticks():
 
 # ── 09:15/09:25 价格存档权威（2026-11-18 用户裁决：掉池股真 09:25 = 撮合开盘涨幅）──
 
-def test_derive_jj_authority_open0925_archive():
-    """存档在 → jj_percent=09:25 开盘涨幅（掉池股亦有），09:15/09:25 价格涨幅全披露。
-    锚：002652 11-18 真值 09:15=10.00%/09:25=0.00%，旧链给 9.77（早退值）错。"""
-    auct = {"_id": "2026-11-17",
-            "s0915": {"605255": {"price": 4.84, "pct": 10.0, "ts": 1.0}},
-            "s0925": {"605255": {"price": 4.40, "pct": 0.0, "ts": 2.0}}}
+def test_derive_jj_authority_dingpan_postmatch():
+    """Type=7 终值在 → jj_percent/p0925/pct0925 权威（掉池股亦有）；09:15 仍=pid8
+    首帧（3006 退役）。锚：002652 09:25=0.00%（早退值 9.77 错，终值纠正）。"""
+    matched = {"605255": {"price": 4.40, "pct": 0.0}}
     rows, state = M.derive_trial_rows_from_series(
-        FakeSeriesDb(_doc(), _mbl_rows(), auct=auct), "2026-11-17")
+        FakeSeriesDb(_doc(), _mbl_rows(), matched=matched), "2026-11-17")
     r = rows["605255"]
-    assert r["jj_percent"] == 0.0 and r["jjSource"] == "open0925_archive"
-    assert r["p0915"] == 4.84 and r["pct0915"] == 10.0
+    assert r["jj_percent"] == 0.0 and r["jjSource"] == "dingpan_postmatch"
     assert r["p0925"] == 4.40 and r["pct0925"] == 0.0
+    assert r["pct0915"] == 4.0 and r["jj915Src"] == "series_first"
     assert state["open0925N"] == 1 and state["open0925MissingN"] == 0
 
 
-def test_derive_pct0915_series_first_fallback_and_archive_priority():
-    """竞价涨幅（0915）：存档缺 → 回退序列首帧观测值（p0915 缺席不伪）；
-    存档在 → 权威覆盖（open0915_archive）。与 0925 开盘涨幅两时点分列。"""
+def test_derive_pct0915_series_first():
+    """竞价涨幅（0915）权威=pid8 序列首帧（3006 退役）；p0915=首帧 price，
+    首帧无 price 则缺席不伪。与 0925 开盘涨幅两时点分列。"""
     rows, st = M.derive_trial_rows_from_series(
         FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
     r = rows["605255"]
     assert r["pct0915"] == 4.0 and r["jj915Src"] == "series_first"
-    assert r["p0915"] is None, "无存档价 → p0915 缺席（不伪）"
-    assert st["seriesFirst0915N"] == 1 and st["open0915N"] == 0
-    auct = {"s0915": {"605255": {"price": 4.84, "pct": 10.0}}}
-    rows2, st2 = M.derive_trial_rows_from_series(
-        FakeSeriesDb(_doc(), _mbl_rows(), auct=auct), "2026-11-17")
-    r2 = rows2["605255"]
-    assert r2["pct0915"] == 10.0 and r2["jj915Src"] == "open0915_archive"
-    assert r2["p0915"] == 4.84
-    assert st2["open0915N"] == 1 and st2["seriesFirst0915N"] == 0
+    assert r["p0915"] is None, "首帧无 price → p0915 缺席（不伪）"
+    assert st["seriesFirst0915N"] == 1 and "open0915N" not in st, "死计数器已随 3006 退役删除"
+    doc = _doc()
+    doc["ticks"][0]["it"][0]["price"] = 4.84
+    rows2, _ = M.derive_trial_rows_from_series(FakeSeriesDb(doc, _mbl_rows()), "2026-11-17")
+    assert rows2["605255"]["p0915"] == 4.84
 
 
 def test_derive_open0925_missing_fallback_disclosure():
-    """存档缺且无 TDX 开盘棒 → 开盘涨幅列如实缺席（不回退 MBL/bid/末帧：
-    成员制早退值≠开盘，11-16 缺陷定案）；jj_percent 仍走旧链披露。"""
+    """Type=7 终值缺且无 TDX 开盘棒 → 开盘涨幅列如实缺席（不回退 MBL/bid/末帧：
+    成员制早退值≠开盘，11-16 缺陷定案）；jj 链同源缺席（jjSource=None）。"""
     rows, state = M.derive_trial_rows_from_series(
         FakeSeriesDb(_doc(), _mbl_rows()), "2026-11-17")
     assert state["open0925N"] == 0 and state["open0925MissingN"] == 1
     assert state["open0925TdxN"] == 0
-    assert rows["605255"]["jjSource"] != "open0925_archive"
+    assert rows["605255"]["jjSource"] is None
     assert rows["605255"]["pct0925"] is None and rows["605255"]["p0925"] is None
     assert rows["605255"]["open0925Src"] is None
 
@@ -485,214 +480,14 @@ def test_derive_open0925_price_without_pct_not_half_broken():
     assert state["open0925TdxN"] == 0 and state["open0925MissingN"] == 1
 
 
-def test_derive_open0925_archive_priority_over_tdx_bar():
-    """存档在 → 第一权威不被 TDX 开盘棒压过（逐行 src 披露）。"""
+def test_derive_open0925_matched_priority_over_tdx():
+    """Type=7 终值在 → 第一权威不被 TDX 应急棒压过（逐行 src 披露）。"""
     doc = _doc()
     doc["open_pct"] = {"605255": {"price": 4.40, "pct": 0.0, "src": "tdx_bar"}}
-    auct = {"s0925": {"605255": {"price": 4.50, "pct": 2.27, "ts": 2.0}}}
+    matched = {"605255": {"price": 4.50, "pct": 2.27}}
     rows, state = M.derive_trial_rows_from_series(
-        FakeSeriesDb(doc, _mbl_rows(), auct=auct), "2026-11-17")
+        FakeSeriesDb(doc, _mbl_rows(), matched=matched), "2026-11-17")
     r = rows["605255"]
     assert r["pct0925"] == 2.27 and r["p0925"] == 4.50
-    assert r["open0925Src"] == "open0925_archive"
+    assert r["open0925Src"] == "dingpan_postmatch"
     assert state["open0925N"] == 1 and state["open0925TdxN"] == 0
-
-
-def test_collector_capture_auction_price_0915_0925(monkeypatch):
-    """3006 现有流捕获：09:15 窗首帧/09:25 窗首帧各一次；price×10000→元、
-    incRate=float 百分数直用不缩放（App DataStyleHelper.b 直显，2026-11-18
-    源码核实，推翻早期 ×100 错锚）；各自只首帧不覆盖。"""
-    from backend.services import kpl_collector_service as CS
-    inst = object.__new__(CS.KplCollectorService)
-    inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
-                                  "auct_fail": 0, "last_error": ""}
-    inst._auct_date, inst._auct15, inst._auct25 = "", set(), set()
-    store: dict = {}
-
-    class AuctColl:
-        def update_one(self, q, u, upsert=False):
-            store.setdefault(q["_id"], {}).update(u["$set"])
-
-    class AuctDb:
-        def __getitem__(self, name):
-            return AuctColl()
-
-    inst._corpus_db_factory = lambda: AuctDb()
-    t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
-    t25 = _dt.datetime(2026, 11, 17, 9, 26, tzinfo=_TZ).timestamp()
-    q1 = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 10.0},
-                    {"stock_id": "300786", "price": 200000, "inc_rate": 20.0}]}
-    monkeypatch.setattr(CS.time, "time", lambda: t15)
-    inst._capture_auction_price(q1)
-    # 09:15 窗第二帧：同股不覆盖（首帧语义）
-    monkeypatch.setattr(CS.time, "time", lambda: t15 + 20)
-    inst._capture_auction_price({"items": [{"stock_id": "002652",
-                                            "price": 44000, "inc_rate": 0}]})
-    monkeypatch.setattr(CS.time, "time", lambda: t25)
-    inst._capture_auction_price({"items": [{"stock_id": "002652",
-                                            "price": 44000, "inc_rate": 0}]})
-    d = store["2026-11-17"]
-    assert d["s0915.002652"]["price"] == 4.84 and d["s0915.002652"]["pct"] == 10.0
-    assert d["s0915.300786"]["price"] == 20.0 and d["s0915.300786"]["pct"] == 20.0
-    assert d["s0925.002652"]["price"] == 4.40 and d["s0925.002652"]["pct"] == 0.0
-    assert inst._corpus_persist_stats["auct15_ok"] == 2
-    assert inst._corpus_persist_stats["auct25_ok"] == 1
-
-
-def test_collector_capture_late_start_no_fake_0915(monkeypatch):
-    """启动晚于 09:25 → s0915 缺席（不拿 09:25 值冒充 09:15，fail-visible）。"""
-    from backend.services import kpl_collector_service as CS
-    inst = object.__new__(CS.KplCollectorService)
-    inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
-                                  "auct_fail": 0, "last_error": ""}
-    inst._auct_date, inst._auct15, inst._auct25 = "", set(), set()
-    store: dict = {}
-
-    class AuctColl:
-        def update_one(self, q, u, upsert=False):
-            store.setdefault(q["_id"], {}).update(u["$set"])
-
-    class AuctDb:
-        def __getitem__(self, name):
-            return AuctColl()
-
-    inst._corpus_db_factory = lambda: AuctDb()
-    t26 = _dt.datetime(2026, 11, 17, 9, 26, tzinfo=_TZ).timestamp()
-    monkeypatch.setattr(CS.time, "time", lambda: t26)
-    inst._capture_auction_price({"items": [{"stock_id": "002652",
-                                            "price": 44000, "inc_rate": 0}]})
-    d = store["2026-11-17"]
-    assert "s0925.002652" in d and not any(k.startswith("s0915.") for k in d)
-
-
-def test_archive_auction_price_field_set_and_load():
-    """字段级 $set 不覆盖他股；load 回读同形。"""
-    from backend.services import kpl_daban_archiver as AR
-    store: dict = {}
-
-    class AuctColl:
-        def update_one(self, q, u, upsert=False):
-            store.setdefault(q["_id"], {}).update(u["$set"])
-
-        def find_one(self, q):
-            flat = store.get(q["_id"]) or {}
-            if not flat:
-                return None
-            doc: dict = {"_id": q["_id"]}
-            for k, v in flat.items():   # 点键还原嵌套（模拟 Mongo $set 语义）
-                cur = doc
-                parts = k.split(".")
-                for p in parts[:-1]:
-                    cur = cur.setdefault(p, {})
-                cur[parts[-1]] = v
-            return doc
-
-    class AuctDb:
-        def __getitem__(self, name):
-            return AuctColl()
-
-    db = AuctDb()
-    r1 = AR.archive_auction_price(db, "2026-11-17",
-                                  s0915={"002652": {"price": 4.84, "pct": 10.0}})
-    r2 = AR.archive_auction_price(db, "2026-11-17",
-                                  s0925={"002652": {"price": 4.40, "pct": 0.0},
-                                         "600000": {"price": 9.0, "pct": 1.0}})
-    assert r1["ok"] and r1["n15"] == 1 and r2["ok"] and r2["n25"] == 2
-    doc = AR.load_auction_price(db, "2026-11-17")
-    assert doc["s0915"]["002652"]["price"] == 4.84
-    assert doc["s0925"]["600000"]["pct"] == 1.0
-    assert AR.archive_auction_price(db, "") == {"ok": False, "reason": "no_date"}
-    assert AR.archive_auction_price(db, "2026-11-17") == {"ok": False, "reason": "empty"}
-
-
-def _mk_capture_inst(CS, db_factory):
-    inst = object.__new__(CS.KplCollectorService)
-    inst._corpus_persist_stats = {"auct15_ok": 0, "auct25_ok": 0,
-                                  "auct_fail": 0, "last_error": ""}
-    inst._auct_date, inst._auct15, inst._auct25 = "", set(), set()
-    inst._corpus_db_factory = db_factory
-    inst._last_error, inst._stats, inst._emit = "", {"errors": 0}, lambda ev: None
-    return inst
-
-
-class _AuctStoreDb:
-    """点键 $set 假库（capture 测试共用）。"""
-
-    def __init__(self):
-        self.store: dict = {}
-
-    def __getitem__(self, name):
-        outer = self
-
-        class Coll:
-            def update_one(self, q, u, upsert=False):
-                outer.store.setdefault(q["_id"], {}).update(u["$set"])
-
-        return Coll()
-
-
-def test_collector_capture_pct_only_bad_floats_and_board_filter(monkeypatch):
-    """review M1/m2/m5：pct-only rec 可存；NaN/Inf 按缺字段不占名额；板块 id 不入个股档。"""
-    from backend.services import kpl_collector_service as CS
-    db = _AuctStoreDb()
-    inst = _mk_capture_inst(CS, lambda: db)
-    t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
-    monkeypatch.setattr(CS.time, "time", lambda: t15)
-    inst._capture_auction_price({"items": [
-        {"stock_id": "002652", "price": 0, "inc_rate": 10.0},          # pct-only
-        {"stock_id": "300786", "price": 200000, "inc_rate": float("nan")},
-        {"stock_id": "600000", "price": 48400, "inc_rate": float("inf")},
-        {"stock_id": "600001", "price": float("nan"), "inc_rate": float("nan")},
-        {"stock_id": "801044", "price": 100000, "inc_rate": 1.0},      # 板块 → 拒
-    ]})
-    d = db.store["2026-11-17"]
-    assert d["s0915.002652"]["pct"] == 10.0 and "price" not in d["s0915.002652"]
-    assert d["s0915.300786"]["price"] == 20.0 and "pct" not in d["s0915.300786"]
-    assert "pct" not in d["s0915.600000"]
-    assert not any(k.startswith("s0915.600001") for k in d), "全 NaN 帧不占首帧名额"
-    assert not any(k.startswith("s0915.801044") for k in d), "板块 id 不入个股双价档"
-    # 600001 后续有效帧仍可收（名额未被坏帧锁死）
-    inst._capture_auction_price({"items": [
-        {"stock_id": "600001", "price": 50000, "inc_rate": 5.0}]})
-    assert db.store["2026-11-17"]["s0915.600001"]["pct"] == 5.0
-
-
-def test_collector_capture_cross_day_reset(monkeypatch):
-    """跨日重置去重集：次日同股重新开档（review m5）。"""
-    from backend.services import kpl_collector_service as CS
-    db = _AuctStoreDb()
-    inst = _mk_capture_inst(CS, lambda: db)
-    q = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 10.0}]}
-    monkeypatch.setattr(CS.time, "time",
-                        lambda: _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp())
-    inst._capture_auction_price(q)
-    monkeypatch.setattr(CS.time, "time",
-                        lambda: _dt.datetime(2026, 11, 18, 9, 16, tzinfo=_TZ).timestamp())
-    inst._capture_auction_price(q)
-    assert "s0915.002652" in db.store["2026-11-17"]
-    assert "s0915.002652" in db.store["2026-11-18"]
-
-
-def test_collector_capture_persist_fail_retries_next_frame(monkeypatch):
-    """review m1：落库失败退回名额（下帧重试），不永久锁死当日存档；_err 披露。"""
-    from backend.services import kpl_collector_service as CS
-    db = _AuctStoreDb()
-    calls = {"n": 0}
-
-    def factory():
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("mongo down")
-        return db
-
-    inst = _mk_capture_inst(CS, factory)
-    t15 = _dt.datetime(2026, 11, 17, 9, 16, tzinfo=_TZ).timestamp()
-    monkeypatch.setattr(CS.time, "time", lambda: t15)
-    q = {"items": [{"stock_id": "002652", "price": 48400, "inc_rate": 10.0}]}
-    inst._capture_auction_price(q)
-    assert inst._corpus_persist_stats["auct_fail"] == 1
-    assert "002652" not in inst._auct15, "失败批次退回名额"
-    assert inst._last_error, "_err 披露（镜像 _persist_corpus）"
-    inst._capture_auction_price(q)   # 下帧重试成功
-    assert db.store["2026-11-17"]["s0915.002652"]["pct"] == 10.0
-    assert inst._corpus_persist_stats["auct15_ok"] == 1
